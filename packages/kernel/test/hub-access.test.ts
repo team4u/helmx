@@ -12,6 +12,8 @@ import type { NetworkInterfaceInfo } from 'node:os'
 import { test } from 'node:test'
 import { useTempDir } from '@helmx/test-kit/node'
 import { KernelRuntime } from '../src/runtime/index.js'
+import { NodeManager } from '../src/runtime/node-manager.js'
+import { SecretStash } from '../src/services/index.js'
 import { buildHubAccessInfo, isUsableFqdn, parseHostsFileForFqdn, resolveHostFqdn } from '../src/runtime/hub-access.js'
 import { startHub } from '../src/http/index.js'
 import { makeFauxModels } from './helpers.js'
@@ -389,4 +391,114 @@ test('buildHubAccessInfo hostFqdn: prefers valid FQDN over short osHostname and 
     stubRejected?.endpoints.filter((e) => e.kind === 'hostname'),
     [{ url: 'http://code2:3202', host: 'code2', kind: 'hostname' }],
   )
+})
+
+test('GET /api/nodes/endpoints and POST /api/nodes/issue: server connectGuide, explicit --hub validation, and 503 unavailable', { timeout: 60_000 }, async (t) => {
+  const dir = useTempDir(t, 'helmx-hub-endpoints-')
+  const bareManager = new NodeManager({
+    dataDir: dir,
+    envFabric: {} as never,
+    configSvc: {} as never,
+    stash: new SecretStash(),
+    toolDeps: {} as never,
+    hubListenInfo: () => undefined,
+    events: { publish() {} },
+    nodeUpgradeTimeoutMs: 1000,
+    convOf: () => ({ cwd: dir }),
+  })
+  assert.throws(
+    () => bareManager.getHubAccess(),
+    (err: { code?: string; status?: number }) => err.code === 'hub_access_unavailable' && err.status === 503,
+  )
+
+  const models = makeFauxModels()
+  const kernel = await KernelRuntime.open({
+    dataDir: dir,
+    cwd: dir,
+    model: 'faux/faux-1',
+    models: models as never,
+    autoResume: false,
+  })
+  const hub = await startHub({ kernel, port: 0, hostname: '127.0.0.1' })
+  try {
+    await kernel.start()
+    const setupRes = await fetch(`${hub.url}/api/auth/setup`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ password: 'hub-access-test-pass' }),
+    })
+    assert.equal(setupRes.status, 200)
+    const { token } = (await setupRes.json()) as { token: string }
+    const headers = { 'content-type': 'application/json', authorization: `Bearer ${token}` }
+
+    const endpointsRes = await fetch(`${hub.url}/api/nodes/endpoints`, { headers })
+    assert.equal(endpointsRes.status, 200)
+    const endpointsJson = (await endpointsRes.json()) as {
+      listenHost: string
+      listenPort: number
+      loopbackOnly: boolean
+      endpoints: Array<{ url: string; kind: string }>
+    }
+    const actualPort = Number(new URL(hub.url).port)
+    assert.equal(endpointsJson.listenHost, '127.0.0.1')
+    assert.equal(endpointsJson.listenPort, actualPort)
+    assert.equal(endpointsJson.loopbackOnly, true)
+    assert.deepEqual(endpointsJson.endpoints, [
+      { url: `http://127.0.0.1:${actualPort}`, host: '127.0.0.1', kind: 'loopback' },
+    ])
+
+    // Explicit hubUrl with trailing slash -> stripped, validated, and reflected in connectGuide
+    const customIssueRes = await fetch(`${hub.url}/api/nodes/issue`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ nodeId: 'edge-1', hubUrl: 'https://hub.example.com:8443/' }),
+    })
+    assert.equal(customIssueRes.status, 201)
+    assert.equal(customIssueRes.headers.get('cache-control'), 'no-store')
+    const customIssued = (await customIssueRes.json()) as {
+      nodeId: string
+      token: string
+      connectGuide: {
+        hubUrl: string
+        loopbackWarning: boolean
+        oneLineCommand: string
+        connectCommand: string
+      }
+    }
+    assert.equal(customIssued.nodeId, 'edge-1')
+    assert.ok(customIssued.token.startsWith('edge-1:'))
+    assert.equal(customIssued.connectGuide.hubUrl, 'https://hub.example.com:8443')
+    assert.equal(customIssued.connectGuide.loopbackWarning, false)
+    assert.equal(
+      customIssued.connectGuide.oneLineCommand,
+      `helmx-node start -d --hub https://hub.example.com:8443 --token ${customIssued.token}`,
+    )
+
+    // Omitted hubUrl on loopback-only listener picks loopback endpoint and flags loopbackWarning
+    const defaultIssueRes = await fetch(`${hub.url}/api/nodes/issue`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ nodeId: 'edge-lo' }),
+    })
+    assert.equal(defaultIssueRes.status, 201)
+    const defaultIssued = (await defaultIssueRes.json()) as {
+      token: string
+      connectGuide: { hubUrl: string; loopbackWarning: boolean }
+    }
+    assert.equal(defaultIssued.connectGuide.hubUrl, `http://127.0.0.1:${actualPort}`)
+    assert.equal(defaultIssued.connectGuide.loopbackWarning, true)
+
+    // Invalid hubUrl fails with 400 validation_error before generating any token
+    const badIssueRes = await fetch(`${hub.url}/api/nodes/issue`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ nodeId: 'edge-bad', hubUrl: 'ftp://hub.example.com' }),
+    })
+    assert.equal(badIssueRes.status, 400)
+    const badJson = (await badIssueRes.json()) as { error?: { code?: string } }
+    assert.equal(badJson.error?.code, 'validation_error')
+  } finally {
+    await hub.close()
+    await kernel.close()
+  }
 })

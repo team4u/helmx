@@ -36,7 +36,7 @@
 
 **`helmx events watch`** — 订阅全局 SSE（`GET /api/events`）。首帧 `snapshot` 含会话、待答提问、插件、UI 贡献与 `pluginDocs` 公共文档；此后逐条增量。`--json` 模式逐帧 NDJSON。
 
-**`helmx search <query>`** — 会话条目全库全文检索（`GET /api/search?q=`，FTS5）。
+**`helmx search <query> [--profile <id>] [--owned-by human|helmx] [--top-level] [--limit <n>] [--max-per-conversation <1..20>]`** — 会话条目全库全文检索（`GET /api/search?q=`，FTS5）。
 
 **`helmx api <method> <path> [--input <json>] [--field <k=v>]`** — 原始 HTTP 逃生舱。method 为 `GET|POST|PUT|PATCH|DELETE`（大小写不敏感）；path 自动补齐前导 `/`；`--field` 可重复且值按 JSON boolean/number 解析，与 `--input` 混用时仅对象基底可合并；GET 不接受请求体。
 
@@ -59,15 +59,15 @@
 
 ### 会话与输入
 
-**`helmx conversations list [--profile <id>] [--status <st>] [--tag <tag>] [--all | --parent <id>]`** — 列出会话。`--status` 取值 `working|blocked|done|idle|error`。默认仅顶层会话；`--all` 全量；`--parent <id>` 仅列出直接子会话（与 `--all` 互斥）。
+**`helmx conversations list [--profile <id>] [--status <st>] [--tag <tag>] [--owned-by human|helmx] [--top-level | --all | --parent <id>]`** — 列出会话。`--status` 取值 `working|blocked|done|idle|error`。默认仅顶层人类会话；`--top-level` 显式仅顶层（`--top-level=false` 包含子会话）；`--all` 全量；`--parent <id>` 仅列出直接子会话（与 `--all`、`--top-level` 互斥）。
 
 **`helmx conversations get [id] [--current] [--limit <n> | --turns <n>] [--cursor <str>]`** — 会话详情与分页时间线；`--limit`（`1..500`，服务端缺省 100）与按轮次分页 `--turns`（`1..50`）互斥。详情对超长纯文本 tool-result 做头尾截断（携带 `truncated/totalChars/totalLines`），过滤 `pi.system` 与剥离供应商签名载荷。
 
 **`helmx conversations entry [id] <entryId> [--current]`** — 单条时间线条目全文（详情投影截断后的未截断原文；被 rewind 隐藏的条目 404）。
 
-**`helmx conversations create [--title] [--profile-id] [--node <id>] [--cwd] [--model] [--tags]`** — 创建会话；`--node` 绑定计算节点（缺省继承 Profile 或 `local`）；`--tags` 接受 JSON 数组或逗号分隔。
+**`helmx conversations create [--title] [--profile-id] [--node <id>] [--cwd] [--model] [--tags] [--parent-conversation-id <id>]`** — 创建会话；`--node` 绑定计算节点（缺省继承 Profile 或 `local`）；`--tags` 接受 JSON 数组或逗号分隔。
 
-**`helmx conversations update [id] [--current] [--title] [--model] [--thinking] [--profile-id] [--node] [--cwd] [--pinned] [--unread]`** — 部分更新。`--model`/`--thinking` 传空串清除覆盖并重算继承链；`--thinking` 取值 `off|minimal|low|medium|high|xhigh|max`。
+**`helmx conversations update [id] [--current] [--title] [--model] [--thinking] [--profile-id] [--node] [--cwd] [--tags] [--pinned] [--unread]`** — 部分更新。`--model`/`--thinking` 传空串清除覆盖并重算继承链；`--thinking` 取值 `off|minimal|low|medium|high|xhigh|max`。
 
 **`helmx conversations delete [id...] [--current]`** — 删除一个或多个会话（单次批量请求）。删除会级联其派生子会话（`parentConversationId` 子树，叶子先行）；插件受管会话逐项返回 `conversation_managed_by_plugin` 并计入 `failures`，退出码 1。`--json` 输出 `{deleted: number[], failures: [{id, code, message}]}`。受管回合内删除自身会话被拒（`self_delete_forbidden`）。
 
@@ -75,7 +75,7 @@
 
 **`helmx conversations compact [id] [--current] [--instructions <str>]`** — 触发后台压缩摘要任务。
 
-**`helmx conversations fork [id] [--current] --entry-id <n> [--title <str>]`** — 从指定条目分叉（`--entry-id` 必填正整数）。
+**`helmx conversations fork [id] [--current] [--entry-id <n>] [--title <str>]`** — 从指定条目或最新安全锚点分叉（`--entry-id` 可选正整数）。
 
 **`helmx conversations watch <id> [--timeout <ms>] [--quiet]`** — 阻塞观察一个会话直到当前回合 settle（订阅全局 SSE 并按 id 过滤），类似 `gh run watch`。实时打印 `doing` 动作行与状态迁移行；`done/idle` settle 退出码 `0`，`error` settle 退出码 `1`（两种模式都仍输出最终结果），`--timeout <ms>` 超时退出码 `124`（`watch_timeout`）。观察中会话被删除显式报错 `conversation_deleted`；流在 snapshot 前中断或未 settle 即断开报 `stream_closed`，绝不静默猜测状态。`blocked`（等待人类审批）不算 settle，继续等待。`--quiet` 只输出最终一行；`--json` 输出 NDJSON 进度帧（`watch`/`status`/`doing`）加最终 `result` 对象（`--quiet` 时仅 `result`）；Ctrl-C 干净退出。适合脚本串联：`helmx conversations watch 42 --quiet && next-step`。
 
@@ -124,6 +124,7 @@
 | 标志 | 说明 |
 | :--- | :--- |
 | `--name / --model / --thinking / --node / --cwd` | 基础字段 |
+| `--tags <t>` | 标签列表（逗号分隔或 JSON 字符串数组，空串或 `[]` 清空） |
 | `--system <str>` / `--system-file <f>` | SYSTEM.md 全文（内联优先） |
 | `--skills <json>` | 技能白名单字符串数组；`[]` 禁用全部；与 `--all-skills` 互斥 |
 | `--all-skills` | 删除 `skills` 键恢复加载全部；与 `--skills` 互斥 |
@@ -135,7 +136,7 @@ PUT 为整体替换契约：update 走语义化标志时 CLI 先 GET 完整 Prof
 
 ### 模型与网关
 
-**`helmx models list`** — 可用模型目录。**`helmx models providers`** — PI 供应商与认证方式。**`helmx models default [--set <model>] [--thinking <level>] [--model-thinking <provider/model=level>] [--compaction <model>] [--compaction-thinking <level>]`** — 查看或设置全局默认（空串清除；`--model-thinking` 设置按模型思考默认，modelId 可含斜杠，空档位如 `provider/model=` 清除单项）。**`helmx models refresh [--provider <id>]`** — 刷新动态供应商目录。**`helmx models filter [--provider <id> [--disable <modelId>... | --clear]]`** — 查看或设置模型禁用集。
+**`helmx models list`** — 可用模型目录。**`helmx models providers`** — PI 供应商与认证方式。**`helmx models default [--set <model>] [--thinking <level>] [--model-thinking <provider/model=level>] [--compaction <model>] [--compaction-thinking <level>]`** — 查看或设置全局默认（空串清除；`--model-thinking` 设置按模型思考默认，modelId 可含斜杠，空档位如 `provider/model=` 清除单项）。**`helmx models refresh [--provider <id> | --providers <list>] [--force]`** — 刷新动态供应商目录。**`helmx models filter [--provider <id> [--disable <modelId>... | --clear]]`** — 查看或设置模型禁用集。
 
 **`helmx providers list` / `helmx providers set --input <json>`** — 模型网关列表查看与整体替换（`ProviderConfig[]`，密钥置于环境变量，严禁写入配置体）。
 
@@ -145,7 +146,9 @@ PUT 为整体替换契约：update 走语义化标志时 CLI 先 GET 完整 Prof
 
 **`helmx nodes list`** — 节点列表（id/kind/online/version/hostname/platform/health 紧凑摘要）。
 
-**`helmx nodes issue <nodeId>`** — 签发接入令牌，明文 `<nodeId>:<secret>` 仅返回一次，并输出可直接复制的 `helmx-node start -d --hub ... --token ...` 命令（若 Hub 地址为回环地址则显式警告）。
+**`helmx nodes endpoints`** — 查看 Hub 监听摘要及全部可达接入地址（url/kind/interface/host 表格，`--json` 返回 `HubAccessInfo`）。
+
+**`helmx nodes issue <nodeId> [--hub <url>]`** — 签发接入令牌，明文 `<nodeId>:<secret>` 仅返回一次，并由服务端生成可直接复制的 `helmx-node start -d --hub ... --token ...` 命令（省略 `--hub` 时按非回环地址优先自动选取；若最终 Hub 地址为回环地址则显式警告）。
 
 **`helmx nodes remove <nodeId>`** — 注销节点并断开连接。
 

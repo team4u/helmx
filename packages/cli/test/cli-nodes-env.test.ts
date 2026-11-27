@@ -9,7 +9,12 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
-import { coreCommands } from '../src/commands/index.js'
+import { buildNodeConnectGuide, type CoreOperationSpec } from '@helmx/protocol'
+import { parseFlags } from '../src/args.js'
+import { commandsFromOperations } from '../src/commands/from-operations.js'
+import { coreCommands, parsePositiveInt } from '../src/commands/index.js'
+import { HubClient } from '../src/hub-client.js'
+import type { Io } from '../src/options.js'
 import { updateCliCredentials } from '../src/credentials.js'
 import { CliError } from '../src/errors.js'
 import {
@@ -97,9 +102,14 @@ test('nodes list --json: passes through node health snapshots (local and online 
   assert.equal('health' in offline, false)
 })
 
-test('nodes issue: POST /api/nodes/issue {nodeId}; --json prints full object, human mode outputs token', { timeout: 60_000 }, async (t) => {
+test('nodes issue: POST /api/nodes/issue {nodeId}; --json prints full object, human mode renders connectGuide', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helmx-cli-nodes-')
-  const issued = { nodeId: 'dev-1', token: 'dev-1:sec-abc', createdAt: 123 }
+  const issued = {
+    nodeId: 'dev-1',
+    token: 'dev-1:sec-abc',
+    createdAt: 123,
+    connectGuide: buildNodeConnectGuide('http://127.0.0.1:3202', { nodeId: 'dev-1', token: 'dev-1:sec-abc' }),
+  }
   const hub = await startMockHub({ 'POST /api/nodes/issue': () => ({ body: issued }) }, { autoRegisterCleanup: t })
   const env = makeCliEnv(hub.url, dir)
 
@@ -112,8 +122,33 @@ test('nodes issue: POST /api/nodes/issue {nodeId}; --json prints full object, hu
   assert.equal(human.code, 0, human.err)
   assert.match(human.out, /dev-1:sec-abc/)
   assert.match(human.out, /npm install -g @helmx\/node/)
-  assert.match(human.out, /helmx-node start -d --hub/)
+  assert.match(human.out, /helmx-node start -d --hub http:\/\/127\.0\.0\.1:3202 --token dev-1:sec-abc/)
   assert.match(human.out, /loopback address/i)
+
+  // --hub forwards optional hubUrl override and renders quoted IPv6 command cleanly
+  const ipv6Issued = {
+    nodeId: 'dev-1',
+    token: 'dev-1:sec-v6',
+    createdAt: 124,
+    connectGuide: buildNodeConnectGuide('http://[::1]:3202', { nodeId: 'dev-1', token: 'dev-1:sec-v6' }),
+  }
+  const ipv6Hub = await startMockHub({ 'POST /api/nodes/issue': () => ({ body: ipv6Issued }) }, { autoRegisterCleanup: t })
+  const withHub = await runCliCaptured(
+    ['nodes', 'issue', 'dev-1', '--hub', 'http://[::1]:3202'],
+    makeCliEnv(ipv6Hub.url, dir),
+  )
+  assert.equal(withHub.code, 0, withHub.err)
+  assert.deepEqual(ipv6Hub.hits.at(-1)?.body, { nodeId: 'dev-1', hubUrl: 'http://[::1]:3202' })
+  assert.match(withHub.out, /helmx-node start -d --hub 'http:\/\/\[::1\]:3202' --token dev-1:sec-v6/)
+
+  // Missing connectGuide in human mode fails explicitly rather than fabricating fallback commands
+  const missingGuideHub = await startMockHub(
+    { 'POST /api/nodes/issue': () => ({ body: { nodeId: 'dev-1', token: 'dev-1:sec-noguide', createdAt: 125 } }) },
+    { autoRegisterCleanup: t },
+  )
+  const missingGuide = await runCliCaptured(['nodes', 'issue', 'dev-1'], makeCliEnv(missingGuideHub.url, dir))
+  assert.equal(missingGuide.code, 1)
+  assert.match(missingGuide.err, /invalid_response/)
 
   // Missing positional argument fails explicitly
   const missing = await runCliCaptured(['nodes', 'issue', '--json'], env)
@@ -140,19 +175,20 @@ test('nodes issue with hubAccess: chooses reachable primary URL, lists alternati
         { url: 'http://127.0.0.1:3202', host: '127.0.0.1', kind: 'loopback' },
       ],
     },
+    connectGuide: buildNodeConnectGuide('http://192.168.1.10:3202', { nodeId: 'gpu-1', token: 'gpu-1:sec-xyz' }),
   }
   let currentResponse: unknown = wildcardIssued
   const hub = await startMockHub({ 'POST /api/nodes/issue': () => ({ body: currentResponse }) }, { autoRegisterCleanup: t })
   const env = makeCliEnv(hub.url, dir)
 
-  // 1. Wildcard 0.0.0.0 with loopback CLI hub URL: promotes primary LAN IP and lists alternatives
+  // 1. Wildcard 0.0.0.0: renders server connectGuide with unquoted primary LAN IP and lists alternatives
   const json = await runCliCaptured(['nodes', 'issue', 'gpu-1', '--json'], env)
   assert.equal(json.code, 0, json.err)
   assert.deepEqual(JSON.parse(json.out), wildcardIssued)
 
   const human = await runCliCaptured(['nodes', 'issue', 'gpu-1'], env)
   assert.equal(human.code, 0, human.err)
-  assert.match(human.out, /helmx-node start -d --hub 'http:\/\/192\.168\.1\.10:3202' --token 'gpu-1:sec-xyz'/)
+  assert.match(human.out, /helmx-node start -d --hub http:\/\/192\.168\.1\.10:3202 --token gpu-1:sec-xyz/)
   assert.match(human.out, /Other reachable Hub URLs \(listening on 0\.0\.0\.0:3202\):/)
   assert.match(human.out, /http:\/\/100\.88\.1\.5:3202\s+\(vpn, tailscale0\)/)
   assert.match(human.out, /http:\/\/dev-box\.local:3202\s+\(hostname\)/)
@@ -175,10 +211,11 @@ test('nodes issue with hubAccess: chooses reachable primary URL, lists alternati
         { url: 'http://dev-box.local:3202', host: 'dev-box.local', kind: 'hostname' },
       ],
     },
+    connectGuide: buildNodeConnectGuide('http://192.168.1.10:3202', { nodeId: 'gpu-1', token: 'gpu-1:sec-spec' }),
   }
   const specificHuman = await runCliCaptured(['nodes', 'issue', 'gpu-1'], env)
   assert.equal(specificHuman.code, 0, specificHuman.err)
-  assert.match(specificHuman.out, /helmx-node start -d --hub 'http:\/\/192\.168\.1\.10:3202'/)
+  assert.match(specificHuman.out, /helmx-node start -d --hub http:\/\/192\.168\.1\.10:3202 --token gpu-1:sec-spec/)
   assert.match(specificHuman.out, /Other reachable Hub URLs \(listening on 192\.168\.1\.10:3202\):/)
   assert.match(specificHuman.out, /http:\/\/dev-box\.local:3202\s+\(hostname\)/)
   assert.doesNotMatch(specificHuman.out, /loopback address/i)
@@ -197,11 +234,150 @@ test('nodes issue with hubAccess: chooses reachable primary URL, lists alternati
         { url: 'http://127.0.0.1:3202', host: '127.0.0.1', kind: 'loopback' },
       ],
     },
+    connectGuide: buildNodeConnectGuide('http://127.0.0.1:3202', { nodeId: 'gpu-1', token: 'gpu-1:sec-lo' }),
   }
   const loopbackHuman = await runCliCaptured(['nodes', 'issue', 'gpu-1'], env)
   assert.equal(loopbackHuman.code, 0, loopbackHuman.err)
   assert.doesNotMatch(loopbackHuman.out, /Other reachable Hub URLs/)
   assert.match(loopbackHuman.out, /loopback address/i)
+})
+
+test('nodes endpoints: GET /api/nodes/endpoints outputs listen summary and endpoint table', { timeout: 60_000 }, async (t) => {
+  const dir = useTempDir(t, 'helmx-cli-nodes-endpoints-')
+  const info = {
+    listenHost: '0.0.0.0',
+    listenPort: 3202,
+    wildcard: true,
+    loopbackOnly: false,
+    endpoints: [
+      { url: 'http://192.168.1.10:3202', host: '192.168.1.10', kind: 'lan', interface: 'eth0' },
+      { url: 'http://127.0.0.1:3202', host: '127.0.0.1', kind: 'loopback' },
+    ],
+  }
+  const hub = await startMockHub({ 'GET /api/nodes/endpoints': () => ({ body: info }) }, { autoRegisterCleanup: t })
+  const env = makeCliEnv(hub.url, dir)
+
+  const json = await runCliCaptured(['nodes', 'endpoints', '--json'], env)
+  assert.equal(json.code, 0, json.err)
+  assert.deepEqual(JSON.parse(json.out), info)
+
+  const human = await runCliCaptured(['nodes', 'endpoints'], env)
+  assert.equal(human.code, 0, human.err)
+  assert.match(human.out, /Listening on 0\.0\.0\.0:3202/)
+  assert.match(human.out, /http:\/\/192\.168\.1\.10:3202/)
+  assert.match(human.out, /eth0/)
+  assert.match(human.out, /127\.0\.0\.1/)
+
+  const badExtra = await runCliCaptured(['nodes', 'endpoints', 'extra', '--json'], env)
+  assert.equal(badExtra.code, 1)
+  assert.equal(parseCliError(badExtra).code, 'unexpected_positional')
+})
+
+test('commandsFromOperations: deduplicates extraFlags overrides, interpolates queryAliases, and supports coercePositionals', { timeout: 60_000 }, async (t) => {
+  const dir = useTempDir(t, 'helmx-cli-from-ops-')
+  const ops = [
+    {
+      key: 'items.create',
+      domain: 'items',
+      id: 'create',
+      description: 'Create item',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          itemId: { type: 'integer' },
+          parentId: { type: 'integer' },
+          tags: { type: 'array', items: { type: 'string' } },
+        },
+        additionalProperties: false,
+      },
+      outputSchema: { type: 'object' },
+      http: {
+        method: 'POST',
+        path: '/api/items/:id',
+        pathParams: { id: 'itemId' },
+        queryParams: { parent: 'parentId' },
+        bodyMode: 'optional',
+      },
+      cli: {
+        command: ['items', 'create'],
+        positional: [{ field: 'itemId', required: true }],
+        flagAliases: { parentId: 'parent' },
+      },
+      action: false,
+    },
+  ] as const satisfies readonly CoreOperationSpec[]
+
+  const cmds = commandsFromOperations(ops, {
+    extraFlags: {
+      'items.create': [{ name: 'tags', type: 'string', help: 'comma-separated tags' }],
+    },
+    coercePositionals: {
+      'items.create': {
+        itemId: (raw) => parsePositiveInt(raw, 'itemId'),
+      },
+    },
+    validateInput: {
+      'items.create': (input, ctx) => {
+        const rawTags = ctx.flags.get('tags')
+        if (typeof rawTags === 'string') {
+          input.tags = rawTags.split(',').filter(Boolean)
+        }
+        return input
+      },
+    },
+  })
+
+  assert.equal(cmds.length, 1)
+  const cmd = cmds[0]!
+  // `--tags` appears exactly once (overridden from json -> string), not duplicated.
+  assert.deepEqual(
+    cmd.flags!.map((f) => [f.name, f.type]),
+    [['parent', 'number'], ['tags', 'string']],
+  )
+
+  const hub = await startMockHub({ 'POST /api/items/42?parent=7': () => ({ body: { ok: true } }) }, { autoRegisterCleanup: t })
+  const env = makeCliEnv(hub.url, dir)
+  const parsedOk = parseFlags(cmd.flags!, ['42', '--parent', '7', '--tags', 'alpha,beta'])
+  const out: string[] = []
+  const io: Io = {
+    env,
+    out: (s) => out.push(s),
+    err: () => {},
+    fetchImpl: fetch,
+    stdin: { isTTY: false, readAll: async () => '' },
+  }
+  await cmd.run({
+    io,
+    env,
+    json: true,
+    args: ['42', '--parent', '7', '--tags', 'alpha,beta'],
+    flags: parsedOk.flags,
+    positionals: parsedOk.positionals,
+    dataDir: dir,
+    cwd: dir,
+    hub: async () => new HubClient({ baseUrl: hub.url, token: 'test-token' }, io),
+  })
+  assert.equal(hub.hits[0]?.path, '/api/items/42?parent=7')
+  assert.deepEqual(hub.hits[0]?.body, { tags: ['alpha', 'beta'] })
+
+  const parsedBad = parseFlags(cmd.flags!, ['not-an-int'])
+  await assert.rejects(
+    () =>
+      cmd.run({
+        io,
+        env,
+        json: true,
+        args: ['not-an-int'],
+        flags: parsedBad.flags,
+        positionals: parsedBad.positionals,
+        dataDir: dir,
+        cwd: dir,
+        hub: async () => {
+          throw new Error('should fail before hub call')
+        },
+      }),
+    (err: unknown) => err instanceof CliError && err.code === 'invalid_id',
+  )
 })
 
 test('nodes remove: DELETE /api/nodes/:id; rejects extra positional arguments', { timeout: 60_000 }, async (t) => {

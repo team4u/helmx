@@ -15,7 +15,8 @@
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { HelmxError } from '@helmx/protocol'
+import { HelmxError, type CoreOperationSpec } from '@helmx/protocol'
+import { createCoreOperationRouter } from '../src/http/core-operation-router.js'
 import { handleApi } from '../src/http/routes.js'
 import {
   parseConversationCompactBody,
@@ -193,11 +194,11 @@ function makeKernel(calls: CallLog = newCallLog()): CoreRoutesTarget {
     },
     nodes: {
       listNodes: async () => [],
-      issueNodeToken: async (nodeId: string) => {
+      issueNodeToken: async (nodeId: string, opts?: { hubUrl?: string }) => {
         if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(nodeId)) {
           throw new HelmxError('validation_error', 'nodeId must match node ID format', 400, { nodeId })
         }
-        calls.issueNodeToken!.push(nodeId)
+        calls.issueNodeToken!.push(opts !== undefined ? [nodeId, opts] : nodeId)
         return { nodeId, token: 'node-token', createdAt: 0 } as never
       },
       removeNode: async () => {},
@@ -652,16 +653,127 @@ test('plugins config PUT: values map scalars; arrays, nested objects, and unknow
 // Node bodies (issue / upgrade / forward / env exec)
 // ---------------------------------------------------------------------------
 
-test('nodes issue: non-empty nodeId required; unknown fields rejected at HTTP boundary (pattern check falls back to service)', { timeout: 60_000 }, async () => {
+test('nodes issue: non-empty nodeId required; optional hubUrl validated; unknown fields rejected at HTTP boundary', { timeout: 60_000 }, async () => {
   const calls = newCallLog()
   const kernel = makeKernel(calls)
   const ok = await call(kernel, 'POST', '/api/nodes/issue', { nodeId: 'node.a-1' })
   assert.equal(ok.status, 201)
   assert.equal(calls.issueNodeToken![0], 'node.a-1')
+  const withHub = await call(kernel, 'POST', '/api/nodes/issue', { nodeId: 'node.a-2', hubUrl: 'https://hub.example.com:3202' })
+  assert.equal(withHub.status, 201)
+  assert.deepEqual(calls.issueNodeToken![1], ['node.a-2', { hubUrl: 'https://hub.example.com:3202' }])
   await expect400(kernel, 'POST', '/api/nodes/issue', {})
   await expect400(kernel, 'POST', '/api/nodes/issue', { nodeId: '' })
   await expect400(kernel, 'POST', '/api/nodes/issue', { nodeId: 1 })
+  await expect400(kernel, 'POST', '/api/nodes/issue', { nodeId: 'node.a-1', hubUrl: 'not-a-url' })
+  await expect400(kernel, 'POST', '/api/nodes/issue', { nodeId: 'node.a-1', hubUrl: 'ftp://hub.example.com' })
+  await expect400(kernel, 'POST', '/api/nodes/issue', { nodeId: 'node.a-1', hubUrl: 123 })
   await expect400(kernel, 'POST', '/api/nodes/issue', { nodeId: 'x', extra: 1 })
+})
+
+test('nodes endpoints: returns 501 not_implemented when stub omits getHubAccess and 404 on wrong methods', { timeout: 60_000 }, async () => {
+  const kernel = makeKernel()
+  const res = await call(kernel, 'GET', '/api/nodes/endpoints')
+  assert.equal(res.status, 501)
+  assert.equal(res.code, 'not_implemented')
+  const postEndpoints = await call(kernel, 'POST', '/api/nodes/endpoints')
+  assert.equal(postEndpoints.status, 404)
+  const delIssue = await call(kernel, 'DELETE', '/api/nodes/issue')
+  assert.equal(delIssue.status, 404)
+})
+
+test('core-operation-router: supports per-route pathParams/validators, query aliases, pre-merge bodySchema, and raw body/query/path ctx', { timeout: 60_000 }, async () => {
+  const ops = [
+    {
+      key: 'items.get',
+      domain: 'items',
+      id: 'get',
+      description: 'Get item',
+      inputSchema: {
+        type: 'object',
+        properties: { itemId: { type: 'integer', minimum: 1 }, parentId: { type: 'integer', minimum: 1 } },
+        required: ['itemId'],
+        additionalProperties: false,
+      },
+      outputSchema: { type: 'object' },
+      http: {
+        method: 'GET',
+        path: '/api/items/:id',
+        pathParams: { id: 'itemId' },
+        pathValidators: { id: 'positiveInt' },
+        queryParams: { parent: 'parentId' },
+        bodyMode: 'none',
+      },
+      cli: { command: ['items', 'get'] },
+      action: false,
+    },
+    {
+      key: 'items.send',
+      domain: 'items',
+      id: 'send',
+      description: 'Send to item',
+      inputSchema: {
+        type: 'object',
+        properties: { targetId: { type: 'string' }, text: { type: 'string' }, wait: { type: 'boolean' } },
+        required: ['targetId', 'text'],
+        additionalProperties: false,
+      },
+      outputSchema: { type: 'object' },
+      http: {
+        method: 'POST',
+        path: '/api/items/:id',
+        pathParams: { id: 'targetId' },
+        pathValidators: { id: 'id' },
+        queryParams: ['wait'],
+        bodyMode: 'required',
+        bodySchema: {
+          type: 'object',
+          properties: { text: { type: 'string' } },
+          required: ['text'],
+          additionalProperties: false,
+        },
+      },
+      cli: { command: ['items', 'send'] },
+      action: false,
+    },
+  ] as const satisfies readonly CoreOperationSpec[]
+
+  const dispatch = createCoreOperationRouter(ops, {
+    'items.get': (input, ctx) => ({ input, ctxPath: ctx.path, ctxQuery: ctx.query }),
+    'items.send': (input, ctx) => ({ input, ctxBody: ctx.body, ctxQuery: ctx.query, ctxPath: ctx.path }),
+  })
+
+  const callRouter = async (method: string, path: string, body?: unknown) => {
+    const url = new URL(`http://127.0.0.1${path}`)
+    const req = new Request(url, {
+      method,
+      ...(body !== undefined ? { headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) } : {}),
+    })
+    const segments = url.pathname.split('/').filter(Boolean)
+    if (segments[0] === 'api') segments.shift()
+    return (await dispatch({ request: req, method, segments, url }, undefined))!
+  }
+
+  // GET uses positiveInt validator -> rejects 'abc' with 400
+  await assert.rejects(() => callRouter('GET', '/api/items/abc'), (err: { code?: string; status?: number }) => err.code === 'validation_error' && err.status === 400)
+  // GET maps ?parent=9 -> parentId: 9
+  const got = await (await callRouter('GET', '/api/items/42?parent=9')).json() as Record<string, unknown>
+  assert.deepEqual(got.input, { itemId: 42, parentId: 9 })
+  assert.deepEqual(got.ctxPath, { itemId: 42 })
+  assert.deepEqual(got.ctxQuery, { parentId: 9 })
+
+  // POST uses its own route pathParams (targetId) & 'id' validator (accepts 'alpha-1')
+  const sent = await (await callRouter('POST', '/api/items/alpha-1?wait=1', { text: 'hello' })).json() as Record<string, unknown>
+  assert.deepEqual(sent.input, { targetId: 'alpha-1', text: 'hello', wait: true })
+  assert.deepEqual(sent.ctxBody, { text: 'hello' })
+  assert.deepEqual(sent.ctxQuery, { wait: true })
+  assert.deepEqual(sent.ctxPath, { targetId: 'alpha-1' })
+
+  // Query-only `wait` rejected when placed in JSON body via pre-merge bodySchema
+  await assert.rejects(
+    () => callRouter('POST', '/api/items/alpha-1', { text: 'hello', wait: true }),
+    (err: { code?: string; status?: number }) => err.code === 'validation_error' && err.status === 400,
+  )
 })
 
 test('nodes upgrade: attemptId disallowed; targetVersion preserves leading/trailing whitespace passthrough; strict SemVer and URL checks', { timeout: 60_000 }, async () => {
@@ -973,4 +1085,115 @@ test('Profile HTTP accepts boolean restrictToCwd; non-boolean rejects', { timeou
   for (const restrictToCwd of [null, 1, 'true']) {
     assert.throws(() => parseProfileBody({ id: 'worker', restrictToCwd }, { requireId: true }))
   }
+})
+
+test('conversations/asks router parity: strict ?wait=1, bodySchema separation, non-empty PATCH, 405 vs 404, and 501 optional ports', { timeout: 60_000 }, async () => {
+  const calls = newCallLog()
+  const kernel = makeKernel(calls)
+
+  // 1. POST /api/conversations/:id/input rejects `wait` in JSON body and `?wait=0` / `?wait=false`.
+  await expect400(kernel, 'POST', '/api/conversations/1/input', { text: 'hi', wait: true })
+  await expect400(kernel, 'POST', '/api/conversations/1/input?wait=0', { text: 'hi' })
+  await expect400(kernel, 'POST', '/api/conversations/1/input?wait=false', { text: 'hi' })
+
+  // 2. PATCH /api/conversations/:id rejects empty {} body and path-param `conversationId` in body.
+  await expect400(kernel, 'PATCH', '/api/conversations/1', {})
+  await expect400(kernel, 'PATCH', '/api/conversations/1', { conversationId: 1, title: 'x' })
+
+  // 3. 405 on /api/conversations/bulk-delete and /api/conversations/:id/files/content; 404 on asks/cancel wrong method.
+  for (const [m, p] of [
+    ['GET', '/api/conversations/bulk-delete'],
+    ['POST', '/api/conversations/1/files/content'],
+  ] as const) {
+    const res = await call(kernel, m, p)
+    assert.equal(res.status, 405, `${m} ${p} should 405`)
+    assert.equal(res.code, 'method_not_allowed')
+  }
+  const getCancel = await call(kernel, 'GET', '/api/asks/ask-1/cancel')
+  assert.equal(getCancel.status, 404)
+
+  // 4. Optional conversation ports (getConversationEntry, withdrawQueuedInput) return 501 not_implemented when omitted.
+  const bareKernel = makeKernel(calls)
+  delete (bareKernel.conversations as { getConversationEntry?: unknown }).getConversationEntry
+  delete (bareKernel.conversations as { withdrawQueuedInput?: unknown }).withdrawQueuedInput
+  const entry501 = await call(bareKernel, 'GET', '/api/conversations/1/entries/1')
+  assert.equal(entry501.status, 501)
+  assert.equal(entry501.code, 'not_implemented')
+  const withdraw501 = await call(bareKernel, 'POST', '/api/conversations/1/withdraw', { submissionId: 1 })
+  assert.equal(withdraw501.status, 501)
+  assert.equal(withdraw501.code, 'not_implemented')
+})
+
+test('profiles PUT validates matching/optional body.id while rejecting mismatched body.id or unknown profileId', { timeout: 60_000 }, async () => {
+  const kernel = makeKernel()
+  const savedProfiles = new Map<string, Record<string, unknown>>([
+    ['worker', { id: 'worker', name: 'Initial' }],
+  ])
+  ;(kernel.profiles as unknown as Record<string, unknown>).get = async (id: string) => savedProfiles.get(id)
+  ;(kernel.profiles as unknown as Record<string, unknown>).save = async (p: Record<string, unknown>) => {
+    savedProfiles.set(p.id as string, p)
+    return p
+  }
+
+  const withMatchingId = await call(kernel, 'PUT', '/api/profiles/worker', { id: 'worker', name: 'Renamed' })
+  assert.equal(withMatchingId.status, 200)
+  assert.equal(withMatchingId.json.name, 'Renamed')
+
+  const withoutId = await call(kernel, 'PUT', '/api/profiles/worker', { name: 'No Body Id' })
+  assert.equal(withoutId.status, 200)
+  assert.equal(withoutId.json.name, 'No Body Id')
+
+  await expect400(kernel, 'PUT', '/api/profiles/worker', { id: 'other', name: 'Mismatch' })
+  await expect400(kernel, 'PUT', '/api/profiles/worker', { profileId: 'worker', name: 'Forbidden Field' })
+  await expect400(kernel, 'PUT', '/api/profiles/worker', { memory: 'removed field' })
+})
+
+// ---------------------------------------------------------------------------
+// Plugins & Skills CoreOperationRouter parity (501/400/static-before-param)
+// ---------------------------------------------------------------------------
+
+test('plugins & skills router parity: unwired 501 not_supported, static routes, doc query, and skills query validation', { timeout: 60_000 }, async () => {
+  const calls = newCallLog()
+  const kernel = makeKernel(calls)
+
+  // Unwired optional plugin DX/package methods return 501 not_supported
+  for (const [m, p, body] of [
+    ['POST', '/api/plugins/doctor', { id: 'builtin:x' }],
+    ['POST', '/api/plugins/rescan', undefined],
+    ['POST', '/api/plugins/install', { source: '/abs/plugin' }],
+    ['POST', '/api/plugins/builtin:x/reload', undefined],
+    ['POST', '/api/plugins/builtin:x/update', undefined],
+    ['POST', '/api/plugins/builtin:x/remove', undefined],
+  ] as const) {
+    const res = await call(kernel, m, p, body)
+    assert.equal(res.status, 501, `${m} ${p} should return 501 when unwired`)
+    assert.equal(res.code, 'not_supported')
+  }
+
+  // Body schema + path param guards on plugins doctor/disable/config
+  await expect400(kernel, 'POST', '/api/plugins/doctor', { target: 'builtin:x' })
+  await expect400(kernel, 'POST', '/api/plugins/doctor', { path: '/abs/p', id: 'builtin:x' })
+  await expect400(kernel, 'POST', '/api/plugins/builtin:x/disable?force=maybe')
+  await expect400(kernel, 'PUT', '/api/plugins/builtin:x/config', { id: 'other', values: { a: 1 } })
+
+  // GET /api/plugins/:id/docs/:name?conversationId=N switches between global and session docs
+  const globalDoc = await call(kernel, 'GET', '/api/plugins/builtin:x/docs/board')
+  assert.equal(globalDoc.status, 200)
+  const badDocName = await call(kernel, 'GET', '/api/plugins/builtin:x/docs/.bad')
+  assert.equal(badDocName.status, 400)
+  const badConvId = await call(kernel, 'GET', '/api/plugins/builtin:x/docs/board?conversationId=0')
+  assert.equal(badConvId.status, 400)
+  const sessionDoc = await call(kernel, 'GET', '/api/plugins/builtin:x/docs/board?conversationId=3')
+  assert.equal(sessionDoc.status, 404) // makeKernel stub throws 404 from getPublicSessionDoc
+
+  // Skills GET + path traversal / empty path / invalid id validation
+  const skillsList = await call(kernel, 'GET', '/api/skills')
+  assert.equal(skillsList.status, 200)
+  const skillRead = await call(kernel, 'GET', '/api/skills/demo-skill')
+  assert.equal(skillRead.status, 200)
+  const skillTraversal = await call(kernel, 'GET', '/api/skills/demo-skill?path=../secret.txt')
+  assert.equal(skillTraversal.status, 400)
+  assert.equal(skillTraversal.code, 'path_traversal')
+  await expect400(kernel, 'GET', '/api/skills/demo-skill?path=')
+  await expect400(kernel, 'GET', '/api/skills/.invalid')
 })

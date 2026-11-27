@@ -98,6 +98,8 @@ test('conversations list noise-free query contract: omits default params, --all 
       'GET /api/conversations?parent=3&profileId=worker': () => ({ body: listBody }),
       'GET /api/conversations?ownedBy=helmx': () => ({ body: listBody }),
       'GET /api/conversations?all=1&ownedBy=human': () => ({ body: listBody }),
+      'GET /api/conversations?topLevelOnly=1': () => ({ body: listBody }),
+      'GET /api/conversations?topLevelOnly=0': () => ({ body: listBody }),
     },
     { autoRegisterCleanup: t },
   )
@@ -139,6 +141,19 @@ test('conversations list noise-free query contract: omits default params, --all 
   const badOwner = await runCliCaptured(['conversations', 'list', '--owned-by', 'bot', '--json'], env)
   assert.equal(badOwner.code, 1)
   assert.ok(badOwner.err.includes('owned-by'), `error should mention owned-by: ${badOwner.err}`)
+  // --top-level passes topLevelOnly=1/0 and rejects mutual exclusion with --all / --parent
+  const topTrue = await runCliCaptured(['conversations', 'list', '--top-level', '--json'], env)
+  assert.equal(topTrue.code, 0, topTrue.err)
+  assert.equal(hub.hits.at(-1)?.path, '/api/conversations?topLevelOnly=1')
+  const topFalse = await runCliCaptured(['conversations', 'list', '--top-level=false', '--json'], env)
+  assert.equal(topFalse.code, 0, topFalse.err)
+  assert.equal(hub.hits.at(-1)?.path, '/api/conversations?topLevelOnly=0')
+  const topAllConflict = await runCliCaptured(['conversations', 'list', '--top-level', '--all', '--json'], env)
+  assert.equal(topAllConflict.code, 1)
+  assert.ok(topAllConflict.err.includes('mutually exclusive'))
+  const topParentConflict = await runCliCaptured(['conversations', 'list', '--top-level', '--parent', '3', '--json'], env)
+  assert.equal(topParentConflict.code, 1)
+  assert.ok(topParentConflict.err.includes('mutually exclusive'))
 })
 
 test('thinkingLevel CLI passthrough: global default, current conversation override, and Profile merge', { timeout: 60_000 }, async (t) => {
@@ -2813,10 +2828,7 @@ const SCHEMA_CLI_MAPPINGS: Readonly<Record<string, SchemaCliMapping>> = {
   },
   conversationListQuery: {
     command: ['conversations', 'list'],
-    aliases: { profileId: 'profile', parentConversationId: 'parent' },
-    exempt: {
-      topLevelOnly: 'Derived server-side when --all and --parent are omitted.',
-    },
+    aliases: { profileId: 'profile', parentConversationId: 'parent', topLevelOnly: 'top-level' },
   },
   profileCreate: {
     command: ['profiles', 'create'],
@@ -2824,7 +2836,6 @@ const SCHEMA_CLI_MAPPINGS: Readonly<Record<string, SchemaCliMapping>> = {
     positionals: { id: '[id]' },
     exempt: {
       managedByPlugin: 'Plugin-managed ownership marker set by plugin registration (also accepted via --input JSON).',
-      tags: 'Supplied via --input <json> on profiles create; no dedicated semantic flag in profiles.ts.',
     },
   },
   profileUpdate: {
@@ -2833,7 +2844,6 @@ const SCHEMA_CLI_MAPPINGS: Readonly<Record<string, SchemaCliMapping>> = {
     positionals: { id: '<id>' },
     exempt: {
       managedByPlugin: 'Plugin-managed ownership marker set by plugin registration (also accepted via --input JSON).',
-      tags: 'Supplied via --input <json> on profiles update; no dedicated semantic flag in profiles.ts.',
     },
   },
   providersPut: {
@@ -2886,6 +2896,7 @@ const SCHEMA_CLI_MAPPINGS: Readonly<Record<string, SchemaCliMapping>> = {
   },
   nodeIssue: {
     command: ['nodes', 'issue'],
+    aliases: { hubUrl: 'hub' },
     positionals: { nodeId: '<nodeId>' },
   },
   nodeUpgrade: {
@@ -3080,4 +3091,82 @@ test('coerceTags invalid JSON, profiles --system-file cwd resolution, and extra 
     assert.equal(parseCliError(res).code, 'unexpected_positional', `wrong error code for ${argv.join(' ')}`)
   }
   assert.equal(hub.recorded.hits.length, hitsBefore)
+})
+
+test('profiles create/update --tags: accepts CSV and JSON arrays, preserves fields on GET-merge PUT, and rejects malformed JSON client-side', { timeout: 60_000 }, async (t) => {
+  const dataDir = useTempDir(t, 'helmx-cli-profile-tags-')
+  const hub = await startMockHub(
+    {
+      'POST /api/profiles': (body) => ({ status: 201, body }),
+      'GET /api/profiles/worker': () => ({
+        body: { id: 'worker', name: 'Worker', nodeId: 'gpu-box', tags: ['old'], system: '# system' },
+      }),
+      'PUT /api/profiles/worker': (body) => ({ body }),
+    },
+    { autoRegisterCleanup: t },
+  )
+  const env = makeCliEnv(hub.url, dataDir)
+
+  const createdCsv = await runCliCaptured(
+    ['profiles', 'create', 'tagged', '--tags', 'alpha, beta', '--json'],
+    env,
+  )
+  assert.equal(createdCsv.code, 0, createdCsv.err)
+  assert.deepEqual(JSON.parse(createdCsv.out), { id: 'tagged', tags: ['alpha', 'beta'] })
+
+  const updatedJson = await runCliCaptured(
+    ['profiles', 'update', 'worker', '--tags', '["ops","canary"]', '--json'],
+    env,
+  )
+  assert.equal(updatedJson.code, 0, updatedJson.err)
+  assert.deepEqual(JSON.parse(updatedJson.out), {
+    id: 'worker',
+    name: 'Worker',
+    nodeId: 'gpu-box',
+    tags: ['ops', 'canary'],
+  })
+
+  const clearedTags = await runCliCaptured(
+    ['profiles', 'update', 'worker', '--tags', '', '--json'],
+    env,
+  )
+  assert.equal(clearedTags.code, 0, clearedTags.err)
+  assert.deepEqual((JSON.parse(clearedTags.out) as { tags?: string[] }).tags, [])
+
+  const hitsBeforeBad = hub.recorded.hits.length
+  const badTags = await runCliCaptured(
+    ['profiles', 'update', 'worker', '--tags', '[bad-json', '--json'],
+    env,
+  )
+  assert.equal(badTags.code, 1)
+  assert.equal(parseCliError(badTags).code, 'invalid_flag_value')
+  assert.equal(hub.recorded.hits.length, hitsBeforeBad, 'invalid --tags must reject before contacting Hub')
+})
+
+test('plugins enable & plugins config optional --input parity', { timeout: 60_000 }, async (t) => {
+  const dir = useTempDir(t, 'helmx-cli-plugin-enable-')
+  const hub = await startMockHub(
+    {
+      'POST /api/plugins/ext%3Ademo/enable': () => ({
+        body: [makePluginSummary({ id: 'ext:demo', name: 'Demo', enabled: true })],
+      }),
+      'GET /api/plugins/ext%3Ademo/config': () => ({
+        body: { values: { mode: 'fast' }, schema: {} },
+      }),
+    },
+    { autoRegisterCleanup: t },
+  )
+  const env = makeCliEnv(hub.url, dir)
+
+  const en = await runCliCaptured(['plugins', 'enable', 'ext:demo', '--json'], env)
+  assert.equal(en.code, 0, en.err)
+  assert.equal(hub.recorded.hits[0]?.method, 'POST')
+  assert.equal(hub.recorded.hits[0]?.path, '/api/plugins/ext%3Ademo/enable')
+  assert.equal(hub.recorded.hits[0]?.body, undefined)
+
+  // Shared `plugins config` read mode works without `--input`
+  const cfgRead = await runCliCaptured(['plugins', 'config', 'ext:demo', '--json'], env)
+  assert.equal(cfgRead.code, 0, cfgRead.err)
+  assert.deepEqual(JSON.parse(cfgRead.out), { values: { mode: 'fast' }, schema: {} })
+  assert.equal(hub.recorded.hits[1]?.method, 'GET')
 })

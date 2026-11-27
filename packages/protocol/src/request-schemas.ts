@@ -307,7 +307,10 @@ const AuthPasswordSchema = Type.Object(
 )
 
 const NodeIssueSchema = Type.Object(
-  { nodeId: NonEmptyString },
+  {
+    nodeId: NonEmptyString,
+    hubUrl: Type.Optional(Type.String()),
+  },
   { additionalProperties: false },
 )
 

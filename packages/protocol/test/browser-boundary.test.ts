@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url'
 import test from 'node:test'
 import * as browserExports from '../src/browser.js'
 import * as rootExports from '../src/index.js'
+import type { CoreOperationSpec } from '../src/index.js'
 import {
   KNOWN_PLUGIN_UI_SURFACES,
   parsePluginUiContribution,
@@ -101,6 +102,10 @@ test('@helmx/protocol/browser: export declarations aligned with the root entry\'
     'assertJsonSafe',
     'resolveConversationTiming',
     'compareCodeUnit',
+    'isLoopbackHubUrl',
+    'formatHubListenSummary',
+    'resolveDefaultHubUrl',
+    'buildNodeConnectGuide',
   ] as const
 
   /** Server-only contract validators and TypeBox UI/request schemas that must NOT bloat `@helmx/protocol/browser`. */
@@ -114,6 +119,17 @@ test('@helmx/protocol/browser: export declarations aligned with the root entry\'
     'validateOrThrow',
     'validatePluginConfigFieldSchema',
     'validatePluginConfigFieldValue',
+    'NODE_CORE_OPERATIONS',
+    'CONVERSATION_CORE_OPERATIONS',
+    'ASK_CORE_OPERATIONS',
+    'PROFILE_CORE_OPERATIONS',
+    'MODEL_CORE_OPERATIONS',
+    'PROVIDER_CORE_OPERATIONS',
+    'CREDENTIAL_CORE_OPERATIONS',
+    'AUTH_CORE_OPERATIONS',
+    'PLUGIN_CORE_OPERATIONS',
+    'SKILL_CORE_OPERATIONS',
+    'CORE_OPERATIONS',
   ] as const
 
   const browserRecord = browserExports as Record<string, unknown>
@@ -296,4 +312,58 @@ test('validatePluginConfigFieldSchema and validatePluginConfigFieldValue enforce
   const sparse: unknown[] = []
   sparse[1] = 'alpha'
   assert.ok(validatePluginConfigFieldValue(enumTags, sparse) !== undefined)
+})
+
+test('core-ops/plugins & skills: declarative specs stay structurally valid and security-compliant', { timeout: 60_000 }, () => {
+  const {
+    CORE_CLI_COMMAND_PATHS,
+    CORE_OPERATIONS,
+    PLUGIN_CORE_OPERATIONS,
+    SKILL_CORE_OPERATIONS,
+    assertSchemaCompilable,
+  } = rootExports
+
+  assert.equal(PLUGIN_CORE_OPERATIONS.length, 13)
+  assert.equal(SKILL_CORE_OPERATIONS.length, 2)
+  assert.ok(CORE_OPERATIONS.length >= PLUGIN_CORE_OPERATIONS.length + SKILL_CORE_OPERATIONS.length)
+
+  const seenKeys = new Set<string>()
+  const seenHttpRoutes = new Set<string>()
+  const cliPathSet = new Set<string>(CORE_CLI_COMMAND_PATHS)
+
+  const ops: readonly CoreOperationSpec[] = CORE_OPERATIONS
+  const pluginOps: readonly CoreOperationSpec[] = PLUGIN_CORE_OPERATIONS
+  const skillOps: readonly CoreOperationSpec[] = SKILL_CORE_OPERATIONS
+
+  for (const op of ops) {
+    assert.ok(!seenKeys.has(op.key), `duplicate core operation key: ${op.key}`)
+    seenKeys.add(op.key)
+
+    const httpRoute = `${op.http.method} ${op.http.path}`
+    assert.ok(!seenHttpRoutes.has(httpRoute), `duplicate core HTTP route: ${httpRoute}`)
+    seenHttpRoutes.add(httpRoute)
+
+    assertSchemaCompilable(op.inputSchema)
+    assertSchemaCompilable(op.outputSchema)
+    if (op.http.bodySchema !== undefined) assertSchemaCompilable(op.http.bodySchema)
+    if (op.action !== false && op.action.inputSchema !== undefined) {
+      assertSchemaCompilable(op.action.inputSchema)
+    }
+    assert.ok(cliPathSet.has(op.cli.command.join(' ')), `CLI command missing in CORE_CLI_COMMAND_PATHS: ${op.cli.command.join(' ')}`)
+  }
+
+  for (const key of ['plugins.install', 'plugins.update', 'plugins.remove'] as const) {
+    const op = pluginOps.find((item) => item.key === key)
+    assert.ok(op, `missing plugin operation: ${key}`)
+    assert.equal(op.action, false, `${key} must remain excluded from core:* actions`)
+  }
+  for (const key of ['plugins.config_set', 'plugins.enable', 'plugins.disable', 'plugins.reload', 'plugins.rescan'] as const) {
+    const op = pluginOps.find((item) => item.key === key)
+    assert.ok(op && op.action !== false, `missing actionable plugin operation: ${key}`)
+    assert.deepEqual(op.action.scope, { topLevelOnly: true, ownedBy: 'human' })
+  }
+  for (const op of skillOps) {
+    assert.ok(op.action !== false)
+    assert.deepEqual(op.action.scope, { conversationIds: [] })
+  }
 })

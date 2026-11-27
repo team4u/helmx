@@ -155,6 +155,11 @@ describe('Core actions (core:*) parity, discovery, and security invariants', { t
         'core:skills',
       ])
 
+      const profileActionIds = coreManifests.filter((m) => m.pluginId === 'core:profiles').map((m) => m.id)
+      assert.deepEqual(profileActionIds, ['list', 'get', 'create', 'update', 'delete'])
+      const modelActionIds = coreManifests.filter((m) => m.pluginId === 'core:models').map((m) => m.id)
+      assert.deepEqual(modelActionIds, ['list', 'providers', 'refresh', 'default_get', 'default', 'filter'])
+
       // Every core:* action must set exposeToPrompt: false and declare an explicit static cli.command
       // matching CORE_CLI_COMMAND_PATHS (never lying with cli.hidden: true), and actionCliCommand must
       // render the real `helmx ...` command while CLI dynamic mounting skips core:* by namespace.
@@ -195,8 +200,16 @@ describe('Core actions (core:*) parity, discovery, and security invariants', { t
       const listedIds = new Set(items.map((i) => i.actionId))
       assert.ok(listedIds.has('core:conversations.search'))
       assert.ok(listedIds.has('core:profiles.list'))
+      assert.ok(listedIds.has('core:models.default_get'), 'core:models.default_get should be discoverable and idempotent')
       assert.ok(listedIds.has('core:plugins.config_get'))
+      assert.ok(listedIds.has('core:nodes.endpoints'), 'core:nodes.endpoints should be discoverable and idempotent')
       assert.ok(listedIds.has('core:nodes.remove'), 'top-level human session should see host-governance mutations')
+      const defaultGetMeta = items.find((i) => i.actionId === 'core:models.default_get')!
+      assert.equal(defaultGetMeta.cli, 'helmx models default')
+      assert.equal(defaultGetMeta.idempotent, true)
+      const endpointsMeta = items.find((i) => i.actionId === 'core:nodes.endpoints')!
+      assert.equal(endpointsMeta.cli, 'helmx nodes endpoints')
+      assert.equal(endpointsMeta.idempotent, true)
       assert.equal(listedIds.has('core:asks.answer'), false, 'core:asks.answer must be hidden in any session')
       assert.equal(listedIds.has('core:skills.list'), false, 'core:skills.list must be hidden in any session')
       assert.equal(listedIds.has('core:skills.read'), false, 'core:skills.read must be hidden in any session')
@@ -417,6 +430,12 @@ describe('Core actions (core:*) parity, discovery, and security invariants', { t
       })
       assert.equal(conflictList.status, 400)
       assert.equal(conflictList.code, 'validation_error')
+
+      const includeChildrenList = await postCoreAction(kernel, 'conversations', 'list', {
+        topLevelOnly: false,
+      })
+      assert.equal(includeChildrenList.status, 200)
+      assert.ok((includeChildrenList.body as ConversationSummary[]).some((c) => c.id === childHelmx.id))
 
       // core:conversations.fork
       const forkRes = await postCoreAction(kernel, 'conversations', 'fork', {
@@ -1657,9 +1676,12 @@ describe('Core actions (core:*) parity, discovery, and security invariants', { t
       })
       assert.equal(actionSetDefaults.status, 200)
       const httpGetDefaults = await apiCall(kernel, 'GET', '/api/models/default')
+      const actionGetDefaults = await postCoreAction(kernel, 'models', 'default_get', {})
       const directDefaults = await kernel.models.getDefaults()
       assert.equal(httpGetDefaults.status, 200)
+      assert.equal(actionGetDefaults.status, 200)
       assert.deepEqual(httpGetDefaults.body, directDefaults)
+      assert.deepEqual(actionGetDefaults.body, directDefaults)
       assert.equal(directDefaults.defaultModel, 'faux/faux-1')
       assert.equal(directDefaults.modelThinkingLevels['faux/faux-1'], 'medium')
 
@@ -1842,6 +1864,32 @@ describe('Core actions (core:*) parity, discovery, and security invariants', { t
             `${label} must reject ${JSON.stringify(invalid)}`,
           )
         }
+      }
+    } finally {
+      await kernel.close()
+    }
+  })
+
+  it('core:plugins & core:skills preserve exact registration order, exclude install/update/remove, and expose doctor target', { timeout: 60_000 }, async () => {
+    const kernel = await openRuntime(join(root, 'plugins-skills-manifests'))
+    try {
+      const pluginActions = kernel.plugins.listActions().filter((m) => m.pluginId === 'core:plugins')
+      assert.deepEqual(
+        pluginActions.map((m) => m.id),
+        ['list', 'manifest', 'doc', 'config_get', 'doctor', 'config_set', 'enable', 'disable', 'reload', 'rescan'],
+      )
+      for (const excluded of ['install', 'update', 'remove']) {
+        assert.equal(pluginActions.some((m) => m.id === excluded), false, `core:plugins.${excluded} must not exist`)
+      }
+      const doctorManifest = pluginActions.find((m) => m.id === 'doctor')!
+      assert.ok((doctorManifest.inputSchema.properties as Record<string, unknown>)['target'])
+      const manifestOp = pluginActions.find((m) => m.id === 'manifest')!
+      assert.equal(manifestOp.inputSchema.required, undefined)
+
+      const skillActions = kernel.plugins.listActions().filter((m) => m.pluginId === 'core:skills')
+      assert.deepEqual(skillActions.map((m) => m.id), ['list', 'read'])
+      for (const action of skillActions) {
+        assert.deepEqual(action.scope, { conversationIds: [] })
       }
     } finally {
       await kernel.close()

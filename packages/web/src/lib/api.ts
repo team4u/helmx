@@ -4,6 +4,7 @@ import type {
   ActionManifest,
   ArtifactMetadata,
   AskAnswers,
+  AskListFilter,
   AskSpec,
   AuthStatus,
   AuthToken,
@@ -22,6 +23,7 @@ import type {
   CredentialSummary,
   InputOrigin,
   HostModelEntry,
+  HubAccessInfo,
   ModelCatalogEntry,
   ModelProviderSummary,
   ModelProvidersRefreshResult,
@@ -35,7 +37,10 @@ import type {
   PluginConfigFieldSource,
   PluginDoctorReport,
   PluginInstallResult,
+  PluginManifestProjection,
+  PluginReloadResult,
   PluginRemoveResult,
+  PluginRescanResult,
   PluginSummary,
   PluginUpdateResult,
   Profile,
@@ -48,12 +53,14 @@ import type {
   ConversationWithdrawRequest,
   ConversationWithdrawResponse,
   WhenBusy,
+  WhenPendingAsk,
 } from '@helmx/protocol/browser'
 
 export interface SubmitInputPayload {
   text: string
   origin?: InputOrigin
   whenBusy?: WhenBusy
+  whenPendingAsk?: WhenPendingAsk
   meta?: Record<string, unknown>
   attachments?: string[]
   /** 历史编辑重发：覆盖该 entry 及其后全部条目（服务端执行 rewind 重放）。 */
@@ -182,6 +189,7 @@ export interface ConversationListFilter {
   tag?: string
   status?: ConversationStatus
   ownedBy?: ConversationOwnership
+  topLevelOnly?: boolean
   all?: boolean
   parent?: number
 }
@@ -193,6 +201,7 @@ export const conversationsApi = {
     if (filter?.tag) params.set('tag', filter.tag)
     if (filter?.status) params.set('status', filter.status)
     if (filter?.ownedBy !== undefined) params.set('ownedBy', filter.ownedBy)
+    if (filter?.topLevelOnly !== undefined) params.set('topLevelOnly', filter.topLevelOnly ? '1' : '0')
     if (filter?.all !== undefined) params.set('all', filter.all ? '1' : '0')
     if (filter?.parent !== undefined) params.set('parent', String(filter.parent))
     const qs = params.toString()
@@ -266,22 +275,24 @@ export const conversationsApi = {
       instructions !== undefined && instructions.trim() !== '' ? { instructions } : {},
     )
   },
-  fork(id: number, entryId: string | number, title?: string): Promise<ConversationSummary> {
-    // 契约 ConversationForkRequest 要求 entryId 为安全正整数；ConversationEntry.id 是数字字符串。
+  fork(id: number, entryId?: string | number, title?: string): Promise<ConversationSummary> {
+    // 契约 ConversationForkRequest 要求 entryId 为安全正整数（可选，省略时由服务端取最新安全锚点）；
     // 严格整数字符串正则：拒绝空白/小数/指数/尾杂字符（Number.parseInt('3oops')===3 属错锚点，绝不容忍）。
-    const raw = String(entryId)
-    const numericEntryId = typeof entryId === 'number' ? entryId : /^[0-9]+$/.test(raw) ? Number(raw) : NaN
-    if (!Number.isInteger(numericEntryId) || !Number.isSafeInteger(numericEntryId) || numericEntryId <= 0) {
-      throw new ApiClientError(
-        'validation_error',
-        `entryId must be a safe positive integer (got ${String(entryId)})`,
-        400,
-        { entryId },
-      )
-    }
     const body: ConversationForkRequest = {
-      entryId: numericEntryId,
       ...(title !== undefined && title.trim() !== '' ? { title } : {}),
+    }
+    if (entryId !== undefined) {
+      const raw = String(entryId)
+      const numericEntryId = typeof entryId === 'number' ? entryId : /^[0-9]+$/.test(raw) ? Number(raw) : NaN
+      if (!Number.isInteger(numericEntryId) || !Number.isSafeInteger(numericEntryId) || numericEntryId <= 0) {
+        throw new ApiClientError(
+          'validation_error',
+          `entryId must be a safe positive integer (got ${String(entryId)})`,
+          400,
+          { entryId },
+        )
+      }
+      body.entryId = numericEntryId
     }
     return apiRequest<ConversationSummary>('POST', `/api/conversations/${id}/fork`, body)
   },
@@ -393,8 +404,14 @@ export const artifactsApi = {
 
 export const nodesApi = {
   list: (opts?: { signal?: AbortSignal }) => apiRequest<NodeInfo[]>('GET', '/api/nodes', undefined, opts?.signal),
-  issueToken: (nodeId: string) =>
-    apiRequest<NodeIssuedToken>('POST', '/api/nodes/issue', { nodeId }),
+  endpoints: (opts?: { signal?: AbortSignal }) =>
+    apiRequest<HubAccessInfo>('GET', '/api/nodes/endpoints', undefined, opts?.signal),
+  issueToken: (nodeId: string, hubUrl?: string) =>
+    apiRequest<NodeIssuedToken>(
+      'POST',
+      '/api/nodes/issue',
+      hubUrl !== undefined ? { nodeId, hubUrl } : { nodeId },
+    ),
   remove: (nodeId: string) =>
     apiRequest<{ ok: boolean }>('DELETE', `/api/nodes/${encodeURIComponent(nodeId)}`),
   checkUpgrade: (nodeId: string, registryUrl?: string) => {
@@ -414,7 +431,18 @@ export const nodesApi = {
 // ---------------------------------------------------------------------------
 
 export const asksApi = {
-  list: (opts?: { signal?: AbortSignal }) => apiRequest<AskSpec[]>('GET', '/api/asks', undefined, opts?.signal),
+  list: (filter?: AskListFilter & { signal?: AbortSignal }, opts?: { signal?: AbortSignal }) => {
+    const params = new URLSearchParams()
+    if (filter?.conversationId !== undefined) params.set('conversationId', String(filter.conversationId))
+    if (filter?.status !== undefined) params.set('status', filter.status)
+    const qs = params.toString()
+    return apiRequest<AskSpec[]>(
+      'GET',
+      `/api/asks${qs ? `?${qs}` : ''}`,
+      undefined,
+      opts?.signal ?? filter?.signal,
+    )
+  },
   answer: (askId: string, answers: AskAnswers, expectedStateSeq?: number) =>
     apiRequest<{ ok: boolean }>('POST', `/api/asks/${encodeURIComponent(askId)}/answer`, {
       answers,
@@ -646,8 +674,13 @@ export const assetsApi = {
       ...(providers && providers.length > 0 ? { providers } : {}),
       ...(opts?.force !== undefined ? { force: opts.force } : {}),
     }),
-  setModelFilter: (body: SetModelFilterBody) =>
-    apiRequest<{ ok: boolean; catalog: ModelCatalogInfo }>('PUT', '/api/models/filter', body),
+  setModelFilter: async (body: SetModelFilterBody): Promise<{ ok: boolean; catalog: ModelCatalogInfo }> => {
+    const res = await apiRequest<{ ok: boolean; catalog: unknown }>('PUT', '/api/models/filter', body)
+    if (res === null || typeof res !== 'object' || Array.isArray(res) || typeof res.ok !== 'boolean') {
+      throw new Error('Invalid model filter response')
+    }
+    return { ok: res.ok, catalog: normalizeModelCatalogInfo(res.catalog) }
+  },
 
   listSkills: (opts?: { signal?: AbortSignal }) => apiRequest<SkillSummary[]>('GET', '/api/skills', undefined, opts?.signal),
   readSkill: (id: string, path?: string, opts?: { signal?: AbortSignal }) => {
@@ -669,6 +702,14 @@ export interface PluginConfigResponse {
 
 export const pluginsApi = {
   list: (opts?: { signal?: AbortSignal }) => apiRequest<PluginSummary[]>('GET', '/api/plugins', undefined, opts?.signal),
+  /** 只读插件扩展契约投影（GET /api/plugins/:id/manifest）。 */
+  manifest: (id: string, opts?: { signal?: AbortSignal }) =>
+    apiRequest<PluginManifestProjection>(
+      'GET',
+      `/api/plugins/${encodeURIComponent(id)}/manifest`,
+      undefined,
+      opts?.signal,
+    ),
   enable: (id: string) =>
     apiRequest<PluginSummary[]>('POST', `/api/plugins/${encodeURIComponent(id)}/enable`),
   /** 停用插件；force: true 用于在知情前提下越过 409 plugin_in_use 占用拦截。 */
@@ -678,6 +719,11 @@ export const pluginsApi = {
       `/api/plugins/${encodeURIComponent(id)}/disable`,
       opts?.force === true ? { force: true } : undefined,
     ),
+  /** 受控热重载外部插件（先执行 doctor 预检；POST /api/plugins/:id/reload）。 */
+  reload: (id: string) =>
+    apiRequest<PluginReloadResult>('POST', `/api/plugins/${encodeURIComponent(id)}/reload`),
+  /** 增量重扫外部插件目录（POST /api/plugins/rescan）。 */
+  rescan: () => apiRequest<PluginRescanResult>('POST', '/api/plugins/rescan'),
   getConfig: (id: string, opts?: { signal?: AbortSignal }) =>
     apiRequest<PluginConfigResponse>('GET', `/api/plugins/${encodeURIComponent(id)}/config`, undefined, opts?.signal),
   setConfig: (id: string, values: Record<string, unknown>) =>

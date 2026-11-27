@@ -10,8 +10,9 @@ import { hostname, loadavg, freemem, totalmem, uptime } from 'node:os'
 import { access, chmod, mkdir, readFile, statfs, writeFile } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { HelmxError, isValidNodeId, type EnvExecRequest, type EnvExecResponse, type HubAccessInfo, type NodeAutoUpgradeStatus, type NodeEnvRpcFunctions, type NodeHealthSnapshot, type NodeInfo, type NodeInstallMode, type NodeIssuedToken, type NodeUpgradeCheckInput, type NodeUpgradeCheckResult, type NodeUpgradeResult, type RpcResult } from '@helmx/protocol'
+import { HelmxError, buildNodeConnectGuide, isValidNodeId, resolveDefaultHubUrl, type EnvExecRequest, type EnvExecResponse, type HubAccessInfo, type NodeAutoUpgradeStatus, type NodeConnectGuide, type NodeEnvRpcFunctions, type NodeHealthSnapshot, type NodeInfo, type NodeInstallMode, type NodeIssuedToken, type NodeUpgradeCheckInput, type NodeUpgradeCheckResult, type NodeUpgradeResult, type RpcResult } from '@helmx/protocol'
 import { HelmxUpgradeBusyError, sha256hex, type EnvFabric, type NodeConnection } from '../env/index.js'
+import { requireHttpUrl } from '../http/validate.js'
 import type { ConfigService } from '../services/index.js'
 import type { SecretStash } from '../services/index.js'
 import { isAbsoluteTargetPath, runShell } from './tools.js'
@@ -209,13 +210,25 @@ export class NodeManager {
     })
   }
 
+  /** Reachable Hub access summary and endpoints for remote node enrollment (503 when unavailable). */
+  getHubAccess(): HubAccessInfo {
+    const hubAccess = this.hubAccessInfo()
+    if (hubAccess === undefined) {
+      throw new HelmxError('hub_access_unavailable', 'Hub access endpoints are unavailable', 503)
+    }
+    return hubAccess
+  }
+
   /** Refresh cached canonical host FQDN (best-effort; short `os.hostname()` remains fallback). */
   private async refreshHostFqdn(): Promise<void> {
     this.hostFqdn = await resolveHostFqdn().catch(() => undefined)
   }
 
   /** Issue a node access token: plaintext token is returned only this once; the server retains only sha256. */
-  async issueNodeToken(nodeId: string): Promise<NodeIssuedToken> {
+  async issueNodeToken(
+    nodeId: string,
+    opts?: { hubUrl?: string },
+  ): Promise<NodeIssuedToken & { connectGuide: NodeConnectGuide }> {
     this.assertWritable()
     if (nodeId === 'local') {
       throw new HelmxError('cannot_issue_local', 'local is a built-in node and does not need an access token', 400, { nodeId })
@@ -229,6 +242,10 @@ export class NodeManager {
         { nodeId },
       )
     }
+    const explicitHubUrl =
+      opts?.hubUrl !== undefined
+        ? requireHttpUrl(opts.hubUrl, 'hubUrl').trim().replace(/\/+$/, '')
+        : undefined
     const secret = randomBytes(24).toString('base64url')
     const token = `${nodeId}:${secret}`
     this.nodeTokenIndex.set(nodeId, sha256hex(token))
@@ -253,11 +270,14 @@ export class NodeManager {
       })
     }
     const hubAccess = this.hubAccessInfo()
+    const effectiveHubUrl = explicitHubUrl ?? resolveDefaultHubUrl(hubAccess, this.toolDeps.hubUrl)
+    const connectGuide = buildNodeConnectGuide(effectiveHubUrl, { nodeId, token })
     return {
       nodeId,
       token,
       createdAt: Date.now(),
       ...(hubAccess !== undefined ? { hubAccess } : {}),
+      connectGuide,
     }
   }
 

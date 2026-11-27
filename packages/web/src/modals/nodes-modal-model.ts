@@ -5,16 +5,26 @@
  * Fast Refresh isolation.
  */
 
-import type {
-  HubAccessInfo,
-  HubEndpointKind,
-  NodeInfo,
+import {
+  buildNodeConnectGuide,
+  formatHubListenSummary,
+  isLoopbackHubUrl,
+  type HubAccessInfo,
+  type HubEndpointKind,
+  type NodeConnectGuide,
+  type NodeInfo,
 } from '@helmx/protocol/browser'
 import type { SelectOption } from '@helmx/plugin-client'
 import { formatBytes } from '../lib/format.js'
 import type { WebMessageKey, WebMessageTranslator } from '../i18n/catalog.js'
 
-export { formatBytes }
+export {
+  buildNodeConnectGuide,
+  formatBytes,
+  formatHubListenSummary,
+  isLoopbackHubUrl,
+  type NodeConnectGuide,
+}
 
 /** Node ID constraint (same source as the kernel issueNodeToken validation: starts alphanumeric, may contain . _ -, max 128). */
 export const NODE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/
@@ -30,39 +40,6 @@ export function validateNodeIdInput(raw: string, t: WebMessageTranslator): NodeI
     return { ok: false, error: t('modals.nodeId.invalidChars') }
   }
   return { ok: true, nodeId }
-}
-
-export interface NodeConnectGuide {
-  /** First-time global install on the managed machine (Node.js >= 24.12). */
-  installCommand: string
-  /** Foreground connection (debug): binds the JOIN token and stays in the foreground; Ctrl+C exits; no daemon installed. */
-  connectCommand: string
-  /** Start the daemon in the background: reuses the identity already bound on disk, no token needed. */
-  startDaemonCommand: string
-  /** One-line enrollment: binds the node identity with --token and starts detached in the background (recommended). */
-  oneLineCommand: string
-  serviceInstallCommand: string
-  doctorCommand: string
-}
-
-/** Build the controlled-machine enrollment command set (hubOrigin e.g. http://192.168.1.10:3202). */
-export function buildNodeConnectGuide(
-  hubOrigin: string,
-  issued: { nodeId: string; token: string },
-): NodeConnectGuide {
-  // connect stays in the foreground (only Ctrl/Cmd+C exits), so chaining with
-  // && would never run the rest; one-line enrollment uses start -d: its
-  // detach path supports binding the identity with --token and then spawning
-  // the background daemon, and the child argv carries no token (avoiding
-  // token leaks from long-running process command lines).
-  return {
-    installCommand: 'npm install -g @helmx/node',
-    connectCommand: `helmx-node connect ${hubOrigin} --token ${issued.token}`,
-    startDaemonCommand: 'helmx-node start -d',
-    oneLineCommand: `helmx-node start -d --hub ${hubOrigin} --token ${issued.token}`,
-    serviceInstallCommand: 'helmx-node service install',
-    doctorCommand: 'helmx-node doctor',
-  }
 }
 
 export type HubEndpointOptionKind = HubEndpointKind | 'current'
@@ -106,16 +83,6 @@ function candidateUrlKey(raw: string): string {
   return raw.replace(/\/+$/, '').toLowerCase()
 }
 
-/** Returns true when a URL targets a loopback address (`localhost`, `127.*`, `::1`). */
-export function isLoopbackHubUrl(raw: string): boolean {
-  try {
-    const host = new URL(raw).hostname.replace(/^\[|\]$/g, '').toLowerCase()
-    return host === 'localhost' || host === '::1' || host.startsWith('127.') || host.startsWith('::ffff:127.')
-  } catch {
-    return false
-  }
-}
-
 /** Compact display label for endpoint chips (drops plain `http://`, preserves `https://` for TLS visibility). */
 export function formatHubEndpointDisplayLabel(rawUrl: string): string {
   try {
@@ -124,14 +91,6 @@ export function formatHubEndpointDisplayLabel(rawUrl: string): string {
   } catch {
     return rawUrl
   }
-}
-
-/** Format listen host + port for header display (brackets IPv6 literals). */
-export function formatHubListenSummary(hubAccess: HubAccessInfo): string {
-  const host = hubAccess.listenHost.includes(':') && !hubAccess.listenHost.startsWith('[')
-    ? `[${hubAccess.listenHost}]`
-    : hubAccess.listenHost
-  return `${host}:${hubAccess.listenPort}`
 }
 
 /** Format localized endpoint classification tag (`kind` or `kind · interface`). */
