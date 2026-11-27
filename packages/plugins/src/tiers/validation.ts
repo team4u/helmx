@@ -120,12 +120,12 @@ export function normalizeTierSpec(raw: unknown, tierId?: string): ModelTierSpec 
     if (
       typeof obj.maxExecutionSteps !== 'number' ||
       !Number.isInteger(obj.maxExecutionSteps) ||
-      obj.maxExecutionSteps < 1 ||
+      obj.maxExecutionSteps < 0 ||
       obj.maxExecutionSteps > ORCHESTRATOR_TIER_MAX_STEPS_LIMIT
     ) {
       throw new HelmxError(
         'validation_error',
-        `maxExecutionSteps must be an integer between 1 and ${ORCHESTRATOR_TIER_MAX_STEPS_LIMIT}`,
+        `maxExecutionSteps must be an integer between 0 and ${ORCHESTRATOR_TIER_MAX_STEPS_LIMIT} (0 = unlimited)`,
         400,
         { maxExecutionSteps: obj.maxExecutionSteps },
       )

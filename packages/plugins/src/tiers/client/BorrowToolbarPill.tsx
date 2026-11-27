@@ -36,6 +36,9 @@ import {
   type TierBorrowSessionView,
 } from './borrow-models.ts'
 import {
+  ORCHESTRATOR_DEFAULT_MAX_STEPS,
+} from './models.ts'
+import {
   TIERS_ORCHESTRATOR_SESSION_DOC,
   formatOrchestratorPillModelLabel,
   hasOrchestratorTierBound,
@@ -160,7 +163,7 @@ function BorrowToolbarPillConversation({
     const phase = orchView?.phase ?? 'planning'
     const activeModel = orchView?.activeModel ?? (conversation.model || conversation.modelTier || '')
     const stepCount = orchView?.executionStepCount ?? 0
-    const maxSteps = orchView?.maxExecutionSteps ?? 10
+    const maxSteps = orchView?.maxExecutionSteps ?? ORCHESTRATOR_DEFAULT_MAX_STEPS
     const prefix = phase === 'execution' ? t(C.orchestratorPillExecuting) : t(C.orchestratorPillPlanning)
     const modelLabel =
       orchView !== null

@@ -1594,20 +1594,32 @@ describe("tiers-client-interactions", () => {
         'button[aria-label*="Executor model"][aria-label*="tier/claude-auto"]',
       )
       assert.ok(executorPicker !== null, 'hydrated orchestrator tier shows Executor picker')
-      const stepsInput = mounted.host.querySelector<HTMLInputElement>('input[type="number"][min="1"][max="50"]')
+      const stepsInput = mounted.host.querySelector<HTMLInputElement>('input[type="number"][min="0"][max="100"]')
       assert.ok(stepsInput !== null && stepsInput.value === '12')
 
-      // Switch row back to single mode, then back to orchestrator and set maxExecutionSteps invalid (0) -> validation blocks save
+      // Set maxExecutionSteps > 100 -> validation blocks save
       const segTabs = Array.from(mounted.host.querySelectorAll<HTMLButtonElement>('.tiers-kind-row [role="tab"]'))
       assert.equal(segTabs.length, 2)
+      await act(async () => {
+        setInputValue(stepsInput, '101')
+      })
+      await act(async () => {
+        findButton(mounted.host, 'Save tiers').click()
+      })
+      assert.match(mounted.host.textContent ?? '', /between 0 and 100/i)
+      assert.equal(ctx.actionCalls.length, 0)
+
+      // Set maxExecutionSteps = 0 (unlimited) -> saves cleanly with maxExecutionSteps: 0
       await act(async () => {
         setInputValue(stepsInput, '0')
       })
       await act(async () => {
         findButton(mounted.host, 'Save tiers').click()
       })
-      assert.match(mounted.host.textContent ?? '', /between 1 and 50/i)
-      assert.equal(ctx.actionCalls.length, 0)
+      assert.equal(ctx.actionCalls.length, 1)
+      assert.equal(ctx.actionCalls[0]?.actionId, 'replace')
+      const savedZeroTiers = (ctx.actionCalls[0]?.input as { tiers: Record<string, Record<string, unknown>> }).tiers
+      assert.equal(savedZeroTiers['claude-auto']?.['maxExecutionSteps'], 0)
 
       // Restore valid steps 15 and save -> calls replace with kind:'orchestrator', executorModel, and maxExecutionSteps:15
       await act(async () => {
@@ -1616,9 +1628,9 @@ describe("tiers-client-interactions", () => {
       await act(async () => {
         findButton(mounted.host, 'Save tiers').click()
       })
-      assert.equal(ctx.actionCalls.length, 1)
-      assert.equal(ctx.actionCalls[0]?.actionId, 'replace')
-      const savedTiers = (ctx.actionCalls[0]?.input as { tiers: Record<string, Record<string, unknown>> }).tiers
+      assert.equal(ctx.actionCalls.length, 2)
+      assert.equal(ctx.actionCalls[1]?.actionId, 'replace')
+      const savedTiers = (ctx.actionCalls[1]?.input as { tiers: Record<string, Record<string, unknown>> }).tiers
       assert.deepEqual(savedTiers['claude-auto'], {
         kind: 'orchestrator',
         model: 'faux/flagship',
@@ -1637,9 +1649,24 @@ describe("tiers-client-interactions", () => {
     const {
       parseTierOrchestratorSessionView,
       parseOrchestratorTransitionMeta,
+      formatOrchestratorPillModelLabel,
     } = await import('../../plugins/src/tiers/client/orchestrator-models.ts')
     assert.equal(parseTierOrchestratorSessionView(null), null)
     assert.equal(parseOrchestratorTransitionMeta({ tool: 'bogus' }), undefined)
+    assert.equal(
+      parseTierOrchestratorSessionView({
+        tierId: 'claude-auto',
+        phase: 'execution',
+        activeModel: 'faux/workhorse',
+        plannerModel: 'faux/flagship',
+        executorModel: 'faux/workhorse',
+        executionStepCount: 3,
+        maxExecutionSteps: 0,
+        updatedAt: 1000,
+      })?.maxExecutionSteps,
+      0,
+    )
+    assert.equal(formatOrchestratorPillModelLabel('faux/workhorse', 'execution', 3, 0), 'workhorse (3)')
 
     mountSharedPluginNamespaces({ realHooks: true })
     resetPluginClientCache()

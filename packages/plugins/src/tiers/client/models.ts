@@ -5,8 +5,8 @@ export const TIERS_PLUGIN_ID = 'builtin:tiers' as const
 export const TIERS_STATE_DOC = 'state' as const
 export const TIERS_SCREEN_ID = 'main' as const
 const TIER_ID_PATTERN = /^[a-z0-9][a-z0-9_-]{0,62}$/
-export const ORCHESTRATOR_DEFAULT_MAX_STEPS = 10
-export const ORCHESTRATOR_MAX_STEPS_LIMIT = 50
+export const ORCHESTRATOR_DEFAULT_MAX_STEPS = 30
+export const ORCHESTRATOR_MAX_STEPS_LIMIT = 100
 
 export interface TierTemplateView {
   id: string
@@ -51,7 +51,7 @@ export function parseTiersStateDoc(raw: unknown): ParsedTiersDoc {
         const steps =
           typeof rawSpec.maxExecutionSteps === 'number' &&
           Number.isInteger(rawSpec.maxExecutionSteps) &&
-          rawSpec.maxExecutionSteps >= 1 &&
+          rawSpec.maxExecutionSteps >= 0 &&
           rawSpec.maxExecutionSteps <= ORCHESTRATOR_MAX_STEPS_LIMIT
             ? rawSpec.maxExecutionSteps
             : ORCHESTRATOR_DEFAULT_MAX_STEPS
@@ -183,7 +183,7 @@ export function validateDraftRows(
       if (stepsRaw !== '') {
         if (!/^\d+$/.test(stepsRaw)) return { ok: false, code: 'max_steps_invalid' }
         const parsed = Number.parseInt(stepsRaw, 10)
-        if (parsed < 1 || parsed > ORCHESTRATOR_MAX_STEPS_LIMIT) {
+        if (parsed < 0 || parsed > ORCHESTRATOR_MAX_STEPS_LIMIT) {
           return { ok: false, code: 'max_steps_invalid' }
         }
         maxExecutionSteps = parsed

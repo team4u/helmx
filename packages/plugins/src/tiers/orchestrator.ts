@@ -11,6 +11,7 @@
  */
 import {
   HelmxError,
+  ORCHESTRATOR_TIER_DEFAULT_MAX_STEPS,
   isJsonObject,
   isOrchestratorTier,
   parseModelTierRef,
@@ -211,7 +212,7 @@ function buildPlanningRecord(params: {
     ...(active.spec.thinkingLevel ? { plannerThinkingLevel: active.spec.thinkingLevel } : {}),
     executorModel: active.executorModel,
     ...(active.spec.executorThinkingLevel ? { executorThinkingLevel: active.spec.executorThinkingLevel } : {}),
-    maxExecutionSteps: active.spec.maxExecutionSteps ?? 10,
+    maxExecutionSteps: active.spec.maxExecutionSteps ?? ORCHESTRATOR_TIER_DEFAULT_MAX_STEPS,
     executionStepCount: 0,
     stepLimitTriggered: false,
     handoffCount: existing?.tierId === active.tierId ? existing.handoffCount : 0,
@@ -416,7 +417,7 @@ export function createTierOrchestratorManager(deps: {
           })
           await store.saveRecord(convId, record)
         } else if (record.phase === 'planning') {
-          const nextMaxSteps = active.spec.maxExecutionSteps ?? 10
+          const nextMaxSteps = active.spec.maxExecutionSteps ?? ORCHESTRATOR_TIER_DEFAULT_MAX_STEPS
           const needsRefresh =
             (record.activeRunKey === undefined && runKey !== undefined) ||
             record.plannerModel !== active.spec.model ||
@@ -452,7 +453,7 @@ export function createTierOrchestratorManager(deps: {
         }
 
         const nextStep = record.executionStepCount + 1
-        const stepLimitReached = nextStep > record.maxExecutionSteps
+        const stepLimitReached = record.maxExecutionSteps > 0 && nextStep > record.maxExecutionSteps
         const updatedRecord: TierOrchestratorRecord = {
           ...record,
           executionStepCount: stepLimitReached ? record.maxExecutionSteps : nextStep,
@@ -679,7 +680,7 @@ export function createTierOrchestratorManager(deps: {
           ...(active.spec.thinkingLevel ? { plannerThinkingLevel: active.spec.thinkingLevel } : {}),
           executorModel: active.executorModel,
           ...(active.spec.executorThinkingLevel ? { executorThinkingLevel: active.spec.executorThinkingLevel } : {}),
-          maxExecutionSteps: active.spec.maxExecutionSteps ?? 10,
+          maxExecutionSteps: active.spec.maxExecutionSteps ?? ORCHESTRATOR_TIER_DEFAULT_MAX_STEPS,
           executionStepCount: 0,
           stepLimitTriggered: false,
           handoffCount: (existing?.tierId === active.tierId ? existing.handoffCount : 0) + 1,

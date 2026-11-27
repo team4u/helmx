@@ -123,9 +123,17 @@ test('orchestrator validation, multi-pair coexistence, templates, and disabled-m
     'validation_error',
   )
   await assertRejectsCode(
-    async () => normalizeTierSpec({ kind: 'orchestrator', model: 'faux/flagship', executorModel: 'faux/workhorse', maxExecutionSteps: 51 }),
+    async () => normalizeTierSpec({ kind: 'orchestrator', model: 'faux/flagship', executorModel: 'faux/workhorse', maxExecutionSteps: 101 }),
     'validation_error',
   )
+  await assertRejectsCode(
+    async () => normalizeTierSpec({ kind: 'orchestrator', model: 'faux/flagship', executorModel: 'faux/workhorse', maxExecutionSteps: -1 }),
+    'validation_error',
+  )
+  const defaultStepsSpec = normalizeTierSpec({ kind: 'orchestrator', model: 'faux/flagship', executorModel: 'faux/workhorse' })
+  assert.equal(defaultStepsSpec.maxExecutionSteps, 30)
+  const unlimitedSpec = normalizeTierSpec({ kind: 'orchestrator', model: 'faux/flagship', executorModel: 'faux/workhorse', maxExecutionSteps: 0 })
+  assert.equal(unlimitedSpec.maxExecutionSteps, 0)
 
   const env = await openOrchestratorEnv()
   try {
@@ -143,7 +151,6 @@ test('orchestrator validation, multi-pair coexistence, templates, and disabled-m
       thinkingLevel: 'high',
       executorModel: 'faux/workhorse',
       executorThinkingLevel: 'low',
-      maxExecutionSteps: 4,
       description: 'Flagship planner + workhorse executor',
     })
     await kernel.plugins.invokeAction(TIERS_PLUGIN_ID, 'set', {
@@ -151,8 +158,8 @@ test('orchestrator validation, multi-pair coexistence, templates, and disabled-m
       kind: 'orchestrator',
       model: 'faux/workhorse',
       executorModel: 'faux/fast',
-      maxExecutionSteps: 8,
-      description: 'Lighter planner + fast executor',
+      maxExecutionSteps: 0,
+      description: 'Lighter planner + fast executor (unlimited)',
     })
 
     const catalog = await kernel.models.listModels()
@@ -160,11 +167,11 @@ test('orchestrator validation, multi-pair coexistence, templates, and disabled-m
     const pairB = catalog.modelTiers?.find((t) => t.id === 'pair-b')
     assert.equal(pairA?.kind, 'orchestrator')
     assert.equal(pairA?.executorModel, 'faux/workhorse')
-    assert.equal(pairA?.maxExecutionSteps, 4)
+    assert.equal(pairA?.maxExecutionSteps, 30)
     assert.equal(pairA?.available, true)
     assert.equal(pairB?.kind, 'orchestrator')
     assert.equal(pairB?.executorModel, 'faux/fast')
-    assert.equal(pairB?.maxExecutionSteps, 8)
+    assert.equal(pairB?.maxExecutionSteps, 0)
     assert.equal(pairB?.available, true)
 
     // Save template containing both single and dual-phase orchestrator pairs, wipe, then restore via apply_template
@@ -668,6 +675,73 @@ test('switching off orchestrator tier cleans state and /plan takes strict preced
         kernel.plugins.getPublicSessionDoc(TIERS_PLUGIN_ID, TIERS_ORCHESTRATOR_SESSION_DOC, conv.id).value === null,
       { timeoutMs: 5_000 },
     )
+  } finally {
+    await env.close()
+  }
+})
+
+test('maxExecutionSteps = 0 disables forced step-limit cutoff across multi-step execution', { timeout: 60_000 }, async () => {
+  const env = await openOrchestratorEnv()
+  try {
+    const { kernel } = env.app
+    await kernel.plugins.invokeAction(TIERS_PLUGIN_ID, 'set', {
+      id: 'auto-unlimited',
+      kind: 'orchestrator',
+      model: 'faux/flagship',
+      executorModel: 'faux/workhorse',
+      maxExecutionSteps: 0,
+    })
+
+    const conv = await kernel.conversations.createConversation({ title: 'unlimited-steps', model: 'tier/auto-unlimited' })
+    const observed: ObservedCall[] = []
+    const sdocSnapshots: Array<TierOrchestratorSessionView | null> = []
+
+    const snapDoc = () =>
+      kernel.plugins.getPublicSessionDoc(TIERS_PLUGIN_ID, TIERS_ORCHESTRATOR_SESSION_DOC, conv.id)
+        .value as TierOrchestratorSessionView | null
+
+    env.faux.setResponses([
+      // Planner: enter execution
+      captureStep(observed, conv.id, () => {
+        sdocSnapshots.push(snapDoc())
+        return fauxAssistantMessage(
+          [fauxToolCall(TIERS_EXIT_PLAN_MODE_TOOL, { plan: 'Execute 3 consecutive steps' }, { id: 'exit-unlim' })],
+          { stopReason: 'toolUse' },
+        )
+      }),
+      // Executor step 1
+      captureStep(observed, conv.id, () => {
+        sdocSnapshots.push(snapDoc())
+        return fauxAssistantMessage([fauxToolCall('read', { path: 'a.txt' }, { id: 'read-1' })], { stopReason: 'toolUse' })
+      }),
+      // Executor step 2
+      captureStep(observed, conv.id, () => {
+        sdocSnapshots.push(snapDoc())
+        return fauxAssistantMessage([fauxToolCall('read', { path: 'b.txt' }, { id: 'read-2' })], { stopReason: 'toolUse' })
+      }),
+      // Executor step 3 (still has full workspace tools & no step-limit banner, then finishes)
+      captureStep(observed, conv.id, () => {
+        sdocSnapshots.push(snapDoc())
+        return fauxAssistantMessage('Completed all 3 execution steps without cutoff.')
+      }),
+    ])
+
+    await kernel.conversations.submitInput(conv.id, 'Run multiple execution steps')
+    await kernel.conversations.waitForIdle(conv.id)
+    assert.equal(kernel.conversations.getConversation(conv.id).lastError, undefined)
+    assert.equal(observed.length, 4)
+
+    for (const idx of [1, 2, 3]) {
+      assert.equal(observed[idx]?.modelId, 'faux/workhorse')
+      assert.ok(observed[idx]?.toolNames.includes('write'), `execution step ${idx} must retain write tool`)
+      assert.ok(observed[idx]?.toolNames.includes(TIERS_HAND_BACK_TOOL))
+      assert.ok(!observed[idx]?.systemPrompt.includes(ORCHESTRATOR_STEP_LIMIT_SECTION))
+    }
+
+    assert.equal(sdocSnapshots[1]?.executionStepCount, 1)
+    assert.equal(sdocSnapshots[2]?.executionStepCount, 2)
+    assert.equal(sdocSnapshots[3]?.executionStepCount, 3)
+    assert.equal(sdocSnapshots[3]?.maxExecutionSteps, 0)
   } finally {
     await env.close()
   }
