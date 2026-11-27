@@ -36,6 +36,8 @@ import { Stack } from '../src/ui/Stack.js'
 import { Input, Textarea } from '../src/ui/Input.js'
 import { Field, HelperText, ErrorText } from '../src/ui/Field.js'
 import { Card, SelectCard, CardGrid } from '../src/ui/Card.js'
+import { List, ListRow } from '../src/ui/List.js'
+import { Tabs, TabsList, TabsTrigger, TabCount } from '../src/ui/Tabs.js'
 import { MonoId } from '../src/ui/MonoId.js'
 import { Select, MultiSelect } from '../src/ui/Select.js'
 import { Switch } from '../src/ui/Switch.js'
@@ -47,12 +49,16 @@ const e = React.createElement
 ;(globalThis as Record<string, unknown>).React = React
 
 test('layout primitives are in the shared SDK and the protocol manifest, and every manifest symbol is really exported (bidirectional locking)', { timeout: 60_000 }, () => {
-  for (const name of ['Screen', 'ScreenSection', 'ScreenToolbar', 'DataTable', 'KvGrid']) {
+  for (const name of ['Screen', 'ScreenSection', 'ScreenToolbar', 'DataTable', 'KvGrid', 'List', 'ListRow', 'TabCount']) {
     assert.ok(
       (PLUGIN_CLIENT_SHARED_EXPORTS as readonly string[]).includes(name),
       `PLUGIN_CLIENT_SHARED_EXPORTS must include ${name}`,
     )
-    assert.equal(typeof HelmxPluginClient[name as keyof typeof HelmxPluginClient], 'function', `the shared SDK must really export ${name}`)
+    assert.ok(
+      typeof HelmxPluginClient[name as keyof typeof HelmxPluginClient] === 'function' ||
+        typeof HelmxPluginClient[name as keyof typeof HelmxPluginClient] === 'object',
+      `the shared SDK must really export ${name}`,
+    )
   }
   // Every manifest symbol really exists in the SDK runtime namespace (guards
   // against manifest/implementation drift).
@@ -451,7 +457,7 @@ test('StatusLight: explicit tone mode, connection aliases, pure exports, and pro
 
 test('Button and IconButton: variants, sizes, pending busy state, and required accessible name (SSR)', { timeout: 60_000 }, () => {
   const defaultBtn = renderToString(e(Button, null, 'Save'))
-  assert.match(defaultBtn, /<button[^>]*type="button"[^>]*class="btn"/)
+  assert.match(defaultBtn, /<button[^>]*type="button"[^>]*class="btn btn-secondary"/)
   assert.match(defaultBtn, />Save<\/button>/, 'children render as direct flex items (no wrapper span)')
 
   const primarySm = renderToString(e(Button, { variant: 'primary', size: 'sm', pill: true, icon: 'check' }, 'Apply'))
@@ -542,7 +548,7 @@ test('ToolCallDetails: bootstraps artifact trigger via SDK Button size="xs" (SSR
   )
   assert.match(
     withArtifact,
-    /<button[^>]*type="button"[^>]*class="btn btn-xs"[^>]*>[^<]*<!-- -->\s*#\s*<!-- -->art_42<\/button>/,
+    /<button[^>]*type="button"[^>]*class="btn btn-secondary btn-xs"[^>]*>[^<]*<!-- -->\s*#\s*<!-- -->art_42<\/button>/,
     'ToolCallDetails artifact button must render through SDK Button size="xs" (children are direct flex items)',
   )
 
@@ -745,4 +751,185 @@ test('Card, SelectCard, CardGrid, and MonoId: accessible landmarks, sibling acti
   const plainMono = renderToString(e(MonoId, { value: 'id-999', copyable: false }))
   assert.match(plainMono, /helmx-mono-id-code/)
   assert.doesNotMatch(plainMono, /helmx-mono-id-copy/)
+})
+
+test('Input prefix/suffix: renders .helmx-input-wrap with FieldContext wiring, invalid/disabled states, and mono styling (SSR)', { timeout: 60_000 }, () => {
+  const html = renderToString(
+    e(
+      Field,
+      { label: 'Tier ID', hint: 'Lowercase slug', error: 'Already exists', required: true },
+      e(Input, {
+        size: 'sm',
+        mono: true,
+        prefix: 'tier/',
+        suffix: 'v1',
+        value: 'coder',
+        readOnly: true,
+        className: 'custom-wrap',
+        inputClassName: 'custom-inner',
+      }),
+    ),
+  )
+  const win = new Window()
+  win.document.body.innerHTML = html
+  const label = win.document.querySelector('label.helmx-field-label')
+  const wrap = win.document.querySelector('.helmx-input-wrap.helmx-input-wrap-sm.mono.is-invalid.custom-wrap')
+  const input = win.document.querySelector('input.helmx-input-inner.mono.custom-inner')
+  const prefixEl = win.document.querySelector('.helmx-input-prefix')
+  const suffixEl = win.document.querySelector('.helmx-input-suffix')
+  assert.ok(label !== null && wrap !== null && input !== null && prefixEl !== null && suffixEl !== null)
+  assert.equal(label.getAttribute('for'), input.id, 'Field label htmlFor must point to inner input')
+  assert.equal(input.getAttribute('aria-invalid'), 'true')
+  assert.equal(input.hasAttribute('required'), true)
+  assert.ok((input.getAttribute('aria-describedby') ?? '').includes('-error'))
+  assert.equal(prefixEl.textContent, 'tier/')
+  assert.equal(suffixEl.textContent, 'v1')
+  void win.close()
+})
+
+test('TabCount: renders lightweight inline tabular-nums count inside Tabs pills (SSR)', { timeout: 60_000 }, () => {
+  assert.ok(Tabs.Count === TabCount, 'Tabs.Count compound alias matches TabCount')
+  const html = renderToString(
+    e(
+      Tabs,
+      { value: 'all', variant: 'pills', size: 'sm' },
+      e(
+        TabsList,
+        { 'aria-label': 'Categories' },
+        e(TabsTrigger, { value: 'all' }, e('span', null, 'All'), e(TabCount, null, 12)),
+      ),
+    ),
+  )
+  assert.match(html, /helmx-tabs-pills helmx-tabs-sm/)
+  assert.match(html, /class="helmx-tab-count tabular-nums">12<\/span>/)
+})
+
+test('SelectCard: icon, badges, and description slots promote catalog card anatomy cleanly (SSR)', { timeout: 60_000 }, () => {
+  const html = renderToString(
+    e(SelectCard, {
+      icon: 'server',
+      title: 'gpu-box',
+      badges: e(Badge, { tone: 'ok' }, 'Online'),
+      subtitle: 'node-gpu-01',
+      description: 'Primary remote build node with 8 GPUs.',
+      actions: e(IconButton, { icon: 'more-horizontal', label: 'Node actions', size: 'xs' }),
+      footer: e(Badge, { tone: 'neutral', mono: true }, 'bash'),
+      selected: false,
+      onSelect: () => {},
+    }),
+  )
+  const win = new Window()
+  win.document.body.innerHTML = html
+  const trigger = win.document.querySelector('button.helmx-select-card-trigger')
+  const iconBox = win.document.querySelector('.helmx-select-card-icon')
+  const badges = win.document.querySelector('.helmx-select-card-badges')
+  const desc = win.document.querySelector('.helmx-select-card-desc')
+  const actionBtn = win.document.querySelector('.helmx-card-actions button')
+  assert.ok(trigger !== null && iconBox !== null && badges !== null && desc !== null && actionBtn !== null)
+  assert.ok(iconBox.querySelector('svg') !== null, 'string icon renders HelmxIcon svg inside 32x32 icon box')
+  assert.ok(trigger.contains(iconBox) && trigger.contains(badges), 'icon and non-interactive badges sit inside trigger')
+  assert.ok(!trigger.contains(actionBtn), 'interactive header actions remain siblings outside trigger button')
+  assert.equal(desc.textContent, 'Primary remote build node with 8 GPUs.')
+  void win.close()
+})
+
+test('List and ListRow: hairline roster list slots, interactive sibling a11y, tones, and static rows (SSR)', { timeout: 60_000 }, () => {
+  const html = renderToString(
+    e(
+      List,
+      { density: 'compact', label: 'Model tiers' },
+      e(ListRow, {
+        leading: e(StatusLight, { tone: 'done', label: 'Available' }),
+        title: 'tier/coder',
+        meta: e('code', null, 'claude-sonnet'),
+        description: 'Fast coding tier',
+        trailing: e(Switch, { checked: true, onChange: () => {}, 'aria-label': 'Enable coder' }),
+        actions: e(IconButton, { icon: 'trash-2', label: 'Delete coder', size: 'xs' }),
+        selected: true,
+        tone: 'warn',
+        onSelect: () => {},
+      }),
+      e(
+        ListRow,
+        {
+          title: 'Starter template',
+          meta: 'tpl-1',
+          tone: 'danger',
+          interactive: false,
+          trailing: e(Button, { size: 'xs' }, 'Apply'),
+        },
+        e('div', { className: 'extra-chips' }, 'tier/fast'),
+      ),
+    ),
+  )
+  const win = new Window()
+  win.document.body.innerHTML = html
+  const list = win.document.querySelector('[role="list"].helmx-list.helmx-list-compact')
+  assert.ok(list !== null)
+  assert.equal(list.getAttribute('aria-label'), 'Model tiers')
+
+  const rows = [...list.querySelectorAll('[role="listitem"].helmx-list-row')]
+  assert.equal(rows.length, 2)
+
+  // Row 1: interactive 3-column selected warn row with sibling trailing + actions
+  const row1 = rows[0]!
+  assert.ok(row1.classList.contains('helmx-list-row-interactive'))
+  assert.ok(row1.classList.contains('is-selected'))
+  assert.ok(row1.classList.contains('helmx-list-row-warn'))
+  const trigger1 = row1.querySelector('button.helmx-list-row-trigger.helmx-list-row-cols-3')
+  const switch1 = row1.querySelector('[role="switch"]')
+  const delBtn1 = row1.querySelector('.helmx-list-row-actions button')
+  assert.ok(trigger1 !== null && switch1 !== null && delBtn1 !== null)
+  assert.equal(trigger1.getAttribute('aria-pressed'), 'true')
+  assert.ok(!trigger1.contains(switch1), 'trailing Switch must sit outside the primary row trigger button')
+  assert.ok(!trigger1.contains(delBtn1), 'hover actions button must sit outside the primary row trigger button')
+
+  // Row 2: non-interactive 2-column danger row with extra body block
+  const row2 = rows[1]!
+  assert.ok(!row2.classList.contains('helmx-list-row-interactive'))
+  assert.ok(row2.classList.contains('helmx-list-row-danger'))
+  assert.ok(row2.querySelector('button.helmx-list-row-trigger') === null, 'static row renders no trigger button')
+  assert.ok(row2.querySelector('.helmx-list-row-static.helmx-list-row-cols-2') !== null)
+  assert.equal(row2.querySelector('.helmx-list-row-extra .extra-chips')?.textContent, 'tier/fast')
+  void win.close()
+})
+
+test('Screen: unified topbar + sticky hairline toolbar + banner + overlays shell (SSR)', { timeout: 60_000 }, () => {
+  const html = renderToString(
+    e(
+      Screen,
+      {
+        topbar: true,
+        dataView: 'skill-center',
+        className: 'skill-center',
+        icon: 'sparkles',
+        title: 'Skills',
+        actions: e(Button, { size: 'sm' }, 'Refresh'),
+        topbarEnd: e(IconButton, { icon: 'columns', label: 'Split', size: 'sm' }),
+        toolbar: e(ScreenToolbar, { label: 'Skill filters' }, e('span', null, 'Filter bar')),
+        banner: e('div', { className: 'diag-banner' }, 'Offline warning'),
+        overlays: e('div', { className: 'drawer-overlay' }, 'Drawer'),
+        bodyId: 'skills-panel',
+        bodyRole: 'tabpanel',
+      },
+      e('div', { className: 'stage-body' }, 'Cards'),
+    ),
+  )
+  const win = new Window()
+  win.document.body.innerHTML = html
+  const pane = win.document.querySelector('.helmx-pane.screen-pane.skill-center')
+  assert.ok(pane !== null)
+  assert.equal(pane.getAttribute('data-view'), 'skill-center')
+  assert.ok(pane.querySelector('.pane-topbar .pane-title-group svg') !== null, 'string icon renders HelmxIcon in topbar')
+  assert.equal(pane.querySelector('.pane-topbar .pane-title')?.textContent, 'Skills')
+  assert.equal(pane.querySelectorAll('.pane-topbar .pane-actions button').length, 2, 'actions and topbarEnd render in .pane-actions')
+  const toolbarBar = pane.querySelector(':scope > .screen-toolbar-bar[data-screen-layout="contained"]')
+  assert.ok(toolbarBar !== null, 'toolbar renders directly below .pane-topbar above scroll body')
+  assert.equal(toolbarBar.querySelector('.screen-toolbar')?.getAttribute('aria-label'), 'Skill filters')
+  const hostBody = pane.querySelector(':scope > .screen-host-body#skills-panel[role="tabpanel"]')
+  assert.ok(hostBody !== null, 'bodyId and bodyRole land on .screen-host-body')
+  assert.equal(hostBody.querySelector('.screen-container > .screen-banner .diag-banner')?.textContent, 'Offline warning')
+  assert.equal(hostBody.querySelector('.screen-container > .stage-body')?.textContent, 'Cards')
+  assert.ok(pane.querySelector(':scope > .drawer-overlay') !== null, 'overlays render outside scroll body')
+  void win.close()
 })

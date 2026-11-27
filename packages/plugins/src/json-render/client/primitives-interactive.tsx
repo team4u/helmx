@@ -202,7 +202,7 @@ export function ButtonImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecR
   const pendingKey = useId()
   const pending = ctx.isPending(pendingKey)
   const succeeded = ctx.isSucceeded?.(pendingKey) === true
-  const resolvedVariant: ButtonVariant = ownProp(VALID_BUTTON_VARIANTS, variant) ?? 'default'
+  const resolvedVariant: ButtonVariant = ownProp(VALID_BUTTON_VARIANTS, variant) ?? 'secondary'
   return (
     <Button
       variant={resolvedVariant}
@@ -234,7 +234,7 @@ export function ActionBarImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: Sp
           const pendingKey = `${actionBarId}-${i}`
           const pending = ctx.isPending(pendingKey)
           const succeeded = ctx.isSucceeded?.(pendingKey) === true
-          const resolvedVariant: ButtonVariant = ownProp(VALID_BUTTON_VARIANTS, variant) ?? 'default'
+          const resolvedVariant: ButtonVariant = ownProp(VALID_BUTTON_VARIANTS, variant) ?? 'secondary'
           return (
             <Button
               key={i}

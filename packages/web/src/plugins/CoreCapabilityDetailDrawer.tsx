@@ -314,7 +314,7 @@ export function CoreCapabilityDetailDrawer({
                       </Stack>
                       {onOpenSkill && (
                         <Button
-                          variant="default"
+                          variant="secondary"
                           size="xs"
                           icon="arrow-up-right"
                           data-core-open-skill={skill.id}

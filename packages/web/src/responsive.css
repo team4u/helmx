@@ -44,6 +44,11 @@ button, a, input, select, textarea { touch-action: manipulation; }
   .composer-shell { --conversation-gutter: 14px; }
   .timeline-scroll { padding: 16px var(--conversation-gutter) 22px; }
   .screen-host-body { --screen-gutter: 14px; }
+  .screen-pane { --screen-gutter: 14px; }
+  .screen-toolbar-bar { padding: 8px 14px; }
+  .screen-toolbar .search-box-toolbar,
+  .screen-toolbar-bar .search-box-toolbar { min-width: 0; max-width: none; width: 100%; flex: 1 1 100%; }
+  .screen-toolbar-actions { margin-left: 0; width: 100%; }
   .screen-container[data-screen-layout="contained"] { padding: 16px var(--screen-gutter, 14px) 22px; }
   .timeline-scroll-bottom-btn { right: 14px; bottom: 14px; }
   .msg-human-pill { max-width: 92%; }

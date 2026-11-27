@@ -23,13 +23,14 @@ export interface ScreenHostProps {
 
 export function ScreenHost({ pluginId, screenId, isSplit, onCloseSplit }: ScreenHostProps): React.JSX.Element {
   const groupedUi = useGroupedUi()
-  // 顶栏 `.pane-actions` 内的动作槽：宿主只提供 DOM 落点，插件 `<Screen actions>`
-  // 经 ScreenHostContext 把动作簇 portal 进来（与五大中心的页头动作同一位置），
-  // 没有动作的视图槽为空不占位。
+  // 顶栏 `.pane-actions` 内的动作槽与顶栏下方通栏工具栏槽：宿主只提供 DOM 落点，
+  // 插件 `<Screen actions>` 与 `<Screen toolbar>` 经 ScreenHostContext portal 进来
+  // （与五大中心共享同一套页面壳结构），无贡献的槽为空不占位。
   const [headerActionsSlot, setHeaderActionsSlot] = useState<HTMLDivElement | null>(null)
+  const [toolbarSlot, setToolbarSlot] = useState<HTMLDivElement | null>(null)
   const screenHostState = useMemo<ScreenHostState>(
-    () => ({ hosted: true, headerActionsSlot }),
-    [headerActionsSlot],
+    () => ({ hosted: true, headerActionsSlot, toolbarSlot }),
+    [headerActionsSlot, toolbarSlot],
   )
   const { primaryTarget, splitTarget } = useLocationTargets()
   const { setScreenParams } = useStoreActions()
@@ -125,6 +126,7 @@ export function ScreenHost({ pluginId, screenId, isSplit, onCloseSplit }: Screen
           )}
         </div>
       </div>
+      <div ref={setToolbarSlot} className="screen-host-toolbar-slot" />
       <div className="screen-host-body" data-screen-host="true">
         <ScreenHostContext.Provider value={screenHostState}>
           <ScreenParamsContext.Provider value={screenScope}>

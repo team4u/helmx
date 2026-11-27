@@ -27,7 +27,7 @@
   scrollbar-width: none;
   background: var(--seg-track);
   border: none;
-  border-radius: 7px;
+  border-radius: var(--control-radius-md);
   padding: 2px;
   gap: 2px;
   box-sizing: border-box;
@@ -42,14 +42,14 @@
   align-items: center;
   justify-content: center;
   gap: 5px;
-  height: 24px;
+  height: calc(var(--control-h-md) - 4px);
   padding: 0 12px;
-  font-size: 12.5px;
+  font-size: var(--control-font-md);
   font-weight: 500;
   color: var(--fg-muted);
   background: transparent;
   border: none;
-  border-radius: 5px;
+  border-radius: var(--control-radius-sm);
   cursor: pointer;
   transition: background 120ms ease, color 120ms ease, box-shadow 120ms ease;
   white-space: nowrap;
@@ -91,20 +91,31 @@
   cursor: not-allowed;
 }
 
+.helmx-tabs-sm .segmented-control {
+  border-radius: var(--control-radius-sm);
+}
+
 .helmx-tabs-sm .segmented-control-btn {
-  height: 22px;
+  height: calc(var(--control-h-sm) - 4px);
   padding: 0 9px;
-  font-size: 12px;
+  font-size: var(--control-font-sm);
+  border-radius: 3.5px;
+}
+
+.helmx-tabs-md .segmented-control {
+  border-radius: var(--control-radius-md);
 }
 
 .helmx-tabs-md .segmented-control-btn {
-  height: 26px;
+  height: calc(var(--control-h-md) - 4px);
   padding: 0 12px;
-  font-size: 12.5px;
+  font-size: var(--control-font-md);
+  border-radius: var(--control-radius-sm);
 }
 
 /* ==========================================================================
- * 分类胶囊原语（Tabs variant="pills"）
+ * 分类胶囊原语（Tabs variant="pills"）与轻量计数（TabCount）
+ * 采用无框轻底激活态（对齐 tiers 标杆），淘汰框套框 Badge。
  * ========================================================================== */
 
 .helmx-tabs-pills {
@@ -116,22 +127,26 @@
 .tabs-pills {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 3px;
   overflow-x: auto;
   max-width: 100%;
-  padding-bottom: 2px;
+  scrollbar-width: none;
+}
+
+.tabs-pills::-webkit-scrollbar {
+  display: none;
 }
 
 .tabs-pill {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  height: 28px;
-  padding: 0 10px;
+  gap: 5px;
+  height: var(--control-h-md);
+  padding: 0 11px;
   border-radius: var(--radius-pill);
-  border: 1px solid var(--border);
-  background: var(--bg-elevated);
-  font-size: 12px;
+  border: 1px solid transparent;
+  background: transparent;
+  font-size: var(--control-font-md);
   color: var(--fg-muted);
   cursor: pointer;
   white-space: nowrap;
@@ -149,9 +164,10 @@
 
 .tabs-pill.is-active,
 .tabs-pill[data-state='active'] {
-  background: var(--bg-elevated);
-  color: var(--nav-active-fg);
-  border-color: var(--accent);
+  background: var(--bg-muted);
+  color: var(--fg);
+  border-color: transparent;
+  font-weight: 500;
 }
 
 .tabs-pill:focus-visible {
@@ -168,13 +184,22 @@
 }
 
 .helmx-tabs-sm .tabs-pill {
-  height: 24px;
-  padding: 0 8px;
-  font-size: 11.5px;
+  height: var(--control-h-sm);
+  padding: 0 9px;
+  font-size: var(--control-font-sm);
 }
 
 .helmx-tabs-md .tabs-pill {
-  height: 28px;
-  padding: 0 10px;
-  font-size: 12px;
+  height: var(--control-h-md);
+  padding: 0 11px;
+  font-size: var(--control-font-md);
+}
+
+.helmx-tab-count {
+  font-size: var(--control-font-xs);
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+  color: var(--fg-muted);
+  opacity: 0.85;
+  line-height: 1;
 }

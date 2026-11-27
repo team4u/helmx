@@ -1,4 +1,4 @@
-import { useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent, type ReactNode, type RefObject } from 'react'
+import { useCallback, useContext, useEffect, useId, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent, type ReactNode, type RefObject } from 'react'
 import { MODEL_TIER_PREFIX, isOrchestratorTier, type HostModelEntry, type ModelTierCatalogEntry } from '@helmx/protocol/browser'
 import {
   ComposerModelPickerModeContext,
@@ -6,6 +6,7 @@ import {
 } from '../composer-model-modes.js'
 import { HelmxIcon } from '../icons.js'
 import { Button, IconButton } from './Button.js'
+import { useFieldControlProps } from './field-context.js'
 import { Popover, PopoverAnchor, PopoverContent, PopoverPortal, PopoverTrigger } from './Popover.js'
 import { SearchBox } from './SearchBox.js'
 import { SegmentedControl } from './Tabs.js'
@@ -403,6 +404,9 @@ function ModelPickerFooter({
   )
 }
 
+export type ModelPickerVariant = 'composer' | 'field'
+export type ModelPickerSize = 'sm' | 'md'
+
 export interface ModelPickerControlProps {
   /** Currently effective model id (button label, capability lookup, initial highlight). */
   effectiveModel: string | undefined
@@ -414,6 +418,19 @@ export interface ModelPickerControlProps {
    * explicit conversation override is passed as-is.
    */
   activeThinkingLevel: string
+  /**
+   * Trigger visual variant:
+   * - `'composer'` (default): compact ghost trigger for composer bars;
+   * - `'field'`: full-width bordered form trigger matching `<Select>` (32px `md` / 28px `sm`)
+   *   and automatically wiring to enclosing `<Field>` via `FieldContext`.
+   */
+  variant?: ModelPickerVariant
+  /** Control height tier for `variant="field"` (default `'md'`: 32px; `'sm'`: 28px). */
+  size?: ModelPickerSize
+  /** Marks the trigger invalid (`aria-invalid="true"`) with error border styling. */
+  invalid?: boolean
+  /** Extra class name appended to the root container. */
+  className?: string
   /** Panel fallback when no `[data-helmx-panel]` ancestor exists. */
   fallbackPanel?: HelmxPanel
   /** Copy for the clear-override button (label and title). */
@@ -475,6 +492,10 @@ export interface ModelPickerControlProps {
 export function ModelPickerControl({
   effectiveModel,
   activeThinkingLevel,
+  variant = 'composer',
+  size = 'md',
+  invalid,
+  className,
   fallbackPanel = 'primary',
   resetLabel,
   resetTitle,
@@ -483,7 +504,7 @@ export function ModelPickerControl({
   buttonAriaLabel,
   placeholderLabel,
   copy: copyOverride,
-  popoverSide = 'top',
+  popoverSide,
   open: openProp,
   onOpenChange,
   showResetDefault = true,
@@ -761,8 +782,58 @@ export function ModelPickerControl({
   const listEffectiveModel = activeMode !== null ? activeMode.spec.effectiveModel : effectiveModel
   const listActiveThinkingLevel = activeMode !== null ? (activeMode.spec.activeThinkingLevel ?? '') : activeThinkingLevel
 
+  const isFieldVariant = variant === 'field'
+  const popoverId = useId()
+  const resolvedPopoverSide = popoverSide ?? (isFieldVariant ? 'bottom' : 'top')
+  const fieldProps = useFieldControlProps({
+    id: buttonId,
+    required: undefined,
+    invalid,
+    'aria-invalid': undefined,
+    'aria-describedby': undefined,
+  })
+  const resolvedButtonId = buttonId ?? (isFieldVariant ? fieldProps.id : undefined)
+  const resolvedInvalid = isFieldVariant
+    ? fieldProps['aria-invalid'] === true || fieldProps['aria-invalid'] === 'true'
+    : invalid === true
+  const resolvedAriaDescribedBy = isFieldVariant ? fieldProps['aria-describedby'] : undefined
+  const isPlaceholder = rawShortName === ''
+  const rootClassName = [
+    'composer-picker-root',
+    isFieldVariant ? 'helmx-model-picker-field' : undefined,
+    isFieldVariant && size === 'sm' ? 'helmx-model-picker-sm' : undefined,
+    className,
+  ]
+    .filter(Boolean)
+    .join(' ')
+  const triggerClassName = isFieldVariant
+    ? 'helmx-model-picker-trigger composer-model-button'
+    : 'btn btn-ghost btn-sm composer-model-button'
+  const labelClassName =
+    isFieldVariant && isPlaceholder
+      ? 'composer-model-label helmx-model-picker-placeholder'
+      : 'composer-model-label'
+  const resolvedTriggerAriaLabel =
+    buttonAriaLabel ??
+    formatModelPickerCopy(copy.buttonAria, {
+      model: shortName,
+      level: showLevel ? formatModelPickerCopy(copy.levelSuffix, { level: effectiveLevel }) : '',
+    })
+  const triggerBody = (
+    <>
+      {pending ? <HelmxIcon name="loader" size={12} className="spin-slow" /> : null}
+      <span className={labelClassName}>{shortName}</span>
+      {showLevel ? <span className="composer-model-level">· {effectiveLevel}</span> : null}
+      <HelmxIcon
+        name="chevron-down"
+        size={12}
+        className={isFieldVariant ? 'helmx-model-picker-chevron' : undefined}
+      />
+    </>
+  )
+
   return (
-    <span className="composer-picker-root" ref={rootRef}>
+    <span className={rootClassName} ref={rootRef}>
       <Popover open={open} onOpenChange={handlePopoverOpenChange}>
         {renderTrigger !== undefined ? (
           hasCustomTrigger ? (
@@ -772,35 +843,49 @@ export function ModelPickerControl({
               <span className="helmx-model-picker-anchor" aria-hidden="true" />
             </PopoverAnchor>
           )
+        ) : isFieldVariant ? (
+          <PopoverTrigger asChild>
+            <button
+              id={resolvedButtonId}
+              type="button"
+              role="combobox"
+              aria-haspopup="dialog"
+              aria-controls={popoverId}
+              className={triggerClassName}
+              disabled={disabled || pending}
+              aria-invalid={resolvedInvalid ? true : undefined}
+              data-invalid={resolvedInvalid ? 'true' : undefined}
+              aria-expanded={open}
+              aria-describedby={resolvedAriaDescribedBy}
+              aria-label={resolvedTriggerAriaLabel}
+              title={buttonTitle}
+            >
+              {triggerBody}
+            </button>
+          </PopoverTrigger>
         ) : (
           <PopoverTrigger asChild>
             <button
-              id={buttonId}
+              id={resolvedButtonId}
               type="button"
-              className="btn btn-ghost btn-sm composer-model-button"
+              className={triggerClassName}
               disabled={disabled || pending}
+              data-invalid={resolvedInvalid ? 'true' : undefined}
               aria-expanded={open}
-              aria-label={
-                buttonAriaLabel ??
-                formatModelPickerCopy(copy.buttonAria, {
-                  model: shortName,
-                  level: showLevel ? formatModelPickerCopy(copy.levelSuffix, { level: effectiveLevel }) : '',
-                })
-              }
+              aria-describedby={resolvedAriaDescribedBy}
+              aria-label={resolvedTriggerAriaLabel}
               title={buttonTitle}
             >
-              {pending ? <HelmxIcon name="loader" size={12} className="spin-slow" /> : null}
-              <span className="composer-model-label">{shortName}</span>
-              {showLevel ? <span className="composer-model-level">· {effectiveLevel}</span> : null}
-              <HelmxIcon name="chevron-down" size={12} />
+              {triggerBody}
             </button>
           </PopoverTrigger>
         )}
         <PopoverPortal>
           <PopoverContent
+            id={popoverId}
             ref={contentRef}
             tabIndex={-1}
-            side={popoverSide}
+            side={resolvedPopoverSide}
             align="start"
             sideOffset={8}
             collisionPadding={12}

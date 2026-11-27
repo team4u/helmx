@@ -95,7 +95,7 @@ export function PluginCapabilitiesCard({
               {managedSkills.map((skill) => (
                 <Button
                   key={skill.id}
-                  variant="default"
+                  variant="secondary"
                   size="xs"
                   icon="arrow-up-right"
                   data-plugin-managed-skill={skill.id}

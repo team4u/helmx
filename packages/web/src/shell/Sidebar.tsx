@@ -516,7 +516,7 @@ export function Sidebar({
           <div className="sidebar-header-actions">
             <Tooltip content={quietNotifyTooltip} side="bottom">
               <IconButton
-                variant="default"
+                variant="secondary"
                 size="sm"
                 icon={quietNotifyEnabled && readBrowserNotificationPermission() === 'granted' ? 'bell' : 'bell-off'}
                 aria-label={quietNotifyTooltip}
@@ -528,7 +528,7 @@ export function Sidebar({
             </Tooltip>
             <Tooltip content={commandPaletteLabel} side="bottom">
               <IconButton
-                variant="default"
+                variant="secondary"
                 size="sm"
                 icon="search"
                 aria-label={commandPaletteLabel}
@@ -537,7 +537,7 @@ export function Sidebar({
             </Tooltip>
             <Tooltip content={collapseWithShortcut} side="bottom">
               <IconButton
-                variant="default"
+                variant="secondary"
                 size="sm"
                 className="desktop-sidebar-collapse-btn"
                 icon="chevron-left"

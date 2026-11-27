@@ -17,6 +17,16 @@
   --space-4: 16px;
   --space-5: 20px;
   --space-6: 24px;
+  /* 统一控件几何尺码（md 32px 表单/弹窗、sm 28px 顶栏/工具栏/窄面板、xs 22px 行尾微动作） */
+  --control-h-md: 32px;
+  --control-h-sm: 28px;
+  --control-h-xs: 22px;
+  --control-radius-md: var(--radius-sm);
+  --control-radius-sm: var(--radius-xs);
+  --control-radius-xs: var(--radius-xs);
+  --control-font-md: 13px;
+  --control-font-sm: 12px;
+  --control-font-xs: 11px;
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
   --dur-fast: 120ms;
   --dur-normal: 180ms;
