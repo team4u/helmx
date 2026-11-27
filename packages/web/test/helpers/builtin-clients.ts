@@ -6,7 +6,7 @@
 import { useContext, useSyncExternalStore } from 'react'
 import { fileURLToPath } from 'node:url'
 import * as HelmxPluginClient from '@helmx/plugin-client'
-import type { ConversationSummary, HostModelsSlice } from '@helmx/protocol/browser'
+import type { ConversationSummary, HostModelsSlice, HostNodesSlice } from '@helmx/protocol/browser'
 import { importCompiledPluginClient, mountPluginNamespaceGlobals } from './plugin-namespace.js'
 
 export interface BuiltinClientStubOptions {
@@ -16,6 +16,8 @@ export interface BuiltinClientStubOptions {
   config?: Record<string, unknown>
   /** 宿主模型目录切片（显式提供时覆盖；缺省优先读真实 PluginClientHostContext）。 */
   hostModels?: HostModelsSlice
+  /** 宿主计算节点切片（显式提供时覆盖；未显式覆盖且无真实宿主时返回 undefined）。 */
+  hostNodes?: HostNodesSlice
   /** 会话摘要列表（useConversations 返回值，显式提供时覆盖宿主上下文）。 */
   conversations?: ReadonlyArray<ConversationSummary>
 }
@@ -74,6 +76,16 @@ const sharedPluginClientNamespace = {
     if (realHooks) return live
     return stub.hostModels !== undefined ? stub.hostModels : live
   },
+  useHostNodes: () => {
+    const host = useContext(HelmxPluginClient.PluginClientHostContext)
+    const live = useSyncExternalStore(
+      host?.subscribeNodes ?? NOOP_SUBSCRIBE,
+      host?.getNodes ?? UNDEFINED_SNAPSHOT,
+      UNDEFINED_SNAPSHOT,
+    )
+    if (realHooks) return live
+    return 'hostNodes' in stub ? stub.hostNodes : live
+  },
   useConversations: () => {
     const host = useContext(HelmxPluginClient.PluginClientHostContext)
     const live = useSyncExternalStore(
@@ -97,6 +109,7 @@ const CLIENT_ROOTS: Record<string, string> = {
   'builtin:magpie': fileURLToPath(new URL('../../../plugins/src/magpie/client', import.meta.url)),
   'builtin:tiers': fileURLToPath(new URL('../../../plugins/src/tiers/client', import.meta.url)),
   'builtin:plan': fileURLToPath(new URL('../../../plugins/src/plan/client', import.meta.url)),
+  'builtin:port-forward': fileURLToPath(new URL('../../../plugins/src/port-forward/client', import.meta.url)),
 }
 
 export async function importBuiltinClientModule(

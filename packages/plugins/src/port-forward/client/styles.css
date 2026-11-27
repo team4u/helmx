@@ -1,0 +1,148 @@
+/**
+ * `builtin:port-forward` plugin styles.
+ *
+ * Generic layout/forms/tables/drawers reuse host design-system primitives.
+ * All `:hover` rules stay strictly inside `@media (hover: hover)`.
+ */
+.pf-row {
+  cursor: pointer;
+}
+
+.pf-row:focus-visible td,
+.pf-row.is-selected td {
+  background: var(--bg-subtle);
+}
+
+@media (hover: hover) {
+  .pf-row:hover td {
+    background: var(--bg-subtle);
+  }
+}
+
+.pf-status-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.pf-node-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.pf-slot-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.pf-slot-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-subtle);
+  min-width: 0;
+}
+
+.pf-slot-endpoint {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  font-size: 12px;
+}
+
+.pf-slot-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg);
+  font-weight: 500;
+}
+
+.pf-form-pair {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(110px, 1fr);
+  gap: var(--space-3);
+}
+
+@media (max-width: 680px) {
+  .pf-form-pair {
+    grid-template-columns: 1fr;
+  }
+
+  .pf-table-wrap .helmx-table-wrap {
+    border: none;
+    background: transparent;
+    overflow: visible;
+  }
+
+  .pf-table-wrap .helmx-table,
+  .pf-table-wrap .helmx-table tbody,
+  .pf-table-wrap .helmx-table tr {
+    display: block;
+    width: 100%;
+    min-width: 0;
+  }
+
+  .pf-table-wrap .helmx-table thead {
+    display: none;
+  }
+
+  .pf-table-wrap .helmx-table tbody {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .pf-table-wrap .helmx-table tr {
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--bg-elevated);
+    box-sizing: border-box;
+  }
+
+  .pf-table-wrap .helmx-table td {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 4px 0;
+    border: none;
+    max-width: none;
+    min-width: 0;
+    white-space: normal;
+    word-break: break-word;
+    text-align: right;
+  }
+
+  .pf-table-wrap .helmx-table td[colspan] {
+    display: block;
+    text-align: center;
+    padding: 12px 4px;
+  }
+
+  .pf-table-wrap .helmx-table td[data-label]:not([colspan])::before {
+    content: attr(data-label);
+    flex-shrink: 0;
+    color: var(--fg-subtle);
+    font-size: 11px;
+    text-align: left;
+  }
+
+  .pf-table-wrap .helmx-table td.cell-actions {
+    padding-top: 8px;
+    margin-top: 4px;
+    border-top: 1px solid var(--border);
+    align-items: center;
+  }
+}

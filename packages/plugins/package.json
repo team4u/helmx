@@ -89,6 +89,14 @@
     "./plan/contracts": {
       "types": "./dist/plan/contracts.d.ts",
       "import": "./dist/plan/contracts.js"
+    },
+    "./port-forward": {
+      "types": "./dist/port-forward.d.ts",
+      "import": "./dist/port-forward.js"
+    },
+    "./port-forward/contracts": {
+      "types": "./dist/port-forward/contracts.d.ts",
+      "import": "./dist/port-forward/contracts.js"
     }
   },
   "scripts": {

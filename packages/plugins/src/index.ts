@@ -1,5 +1,5 @@
 /**
- * @helmx/plugins 聚合出口：十三个内置插件的生产者侧工厂与公开契约。
+ * @helmx/plugins 聚合出口：十四个内置插件的生产者侧工厂与公开契约。
  *
  * 消费方向（包拓扑铁律）：本包只依赖 @helmx/protocol 与外部 SDK，绝不依赖
  * @helmx/kernel 实现；产品组合（注册顺序与缺省启停）由 @helmx/hub 负责。
@@ -78,3 +78,19 @@ export {
   type PlanPluginConfig,
   type PlanPluginOptions,
 } from './plan.js';
+export {
+  createPortForwardPlugin,
+  MAX_PORT_FORWARD_RULES,
+  PORT_FORWARD_PLUGIN_ID,
+  PORT_FORWARD_RULES_DOC,
+  PORT_FORWARD_RUNTIME_DOC,
+  PORT_FORWARD_SCREEN_ID,
+  RESERVED_HUB_PORTS,
+  type PortForwardListenerState,
+  type PortForwardPluginConfig,
+  type PortForwardRule,
+  type PortForwardRulesDoc,
+  type PortForwardRuntimeDoc,
+  type PortForwardRuntimeEntry,
+  type PortForwardViewItem,
+} from './port-forward.js';
