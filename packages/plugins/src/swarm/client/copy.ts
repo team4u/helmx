@@ -215,12 +215,29 @@ export const panelRetainedSummary = (
 export const panelPostTargets = (post: { to: string[] }): string =>
   post.to.map((x) => (x === 'all' ? x : `@${x}`)).join(', ')
 
-// Timeline receipt pills
-export const SW_BOARD_REPORT_PILL = L('Swarm report', '协同汇总')
-export const SW_BOARD_WAKEUP_PILL = L('Swarm wakeup', '协同唤醒')
+// Timeline receipt cards
+export const SW_BOARD_MESSAGE_TITLE = L('Board message', '看板消息')
+export const SW_BOARD_IDLE_TITLE = L('All members idle', '全员空闲')
+export const SW_BOARD_WAKEUP_TITLE = L('Swarm wakeup', '协同唤醒')
+export const SW_WAKE_OVERRIDE_SILENT = L('No wake', '未唤醒')
+export const SW_WAKE_OVERRIDE_WOKE = L('Woke', '已唤醒')
+export const SW_RECEIPT_BODY_TRUNCATED = L('Message truncated — open workbench for full text', '正文已截断，可打开工作台查看全文')
+export const SW_RECEIPT_EMPTY = L('No board post details recorded.', '未包含消息正文详情。')
 export const SW_PILL_OPEN_WORKBENCH = L('Open swarm workbench', '打开协同工作台')
-export const swReceiptCountLabel = (n: number, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string =>
-  T(locale, `${n} post${n === 1 ? '' : 's'}`, `${n} 条流转`)
+export const swReceiptCountCompact = (n: number, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string =>
+  T(locale, `${n} posts`, `${n} 条`)
+export const swReceiptToggleLabel = (title: string, open: boolean, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string =>
+  T(locale, `${open ? 'Collapse' : 'Expand'} ${title}`, `${open ? '收起' : '展开'} ${title}`)
+export const swReceiptActiveWorkers = (members: readonly string[], locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string => {
+  const list = members.map((m) => `@${m}`).join(', ')
+  return T(locale, `Still working: ${list}`, `仍在执行：${list}`)
+}
+export const swReceiptTruncatedPosts = (count: number, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string =>
+  T(
+    locale,
+    `${count} earlier post${count === 1 ? '' : 's'} omitted — open workbench for full history`,
+    `已省略更早的 ${count} 条消息，可打开工作台查看完整记录`,
+  )
 
 // Timing labels & tooltip breakdowns
 export const timingWaitingLabel = (d: string, l: HelmxLocale = DEFAULT_HELMX_LOCALE): string => T(l, `Awaiting approval ${d}`, `等待审批 ${d}`)

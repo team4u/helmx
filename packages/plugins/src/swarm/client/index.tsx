@@ -8,6 +8,6 @@ import './styles-workbench.css'
 import './styles-receipts.css'
 
 export { SwarmActiveTray } from './SwarmActiveTray.tsx'
-export { SwarmBoardReportPill, SwarmBoardWakeupPill } from './BoardReceipts.tsx'
+export { SwarmBoardReportCard, SwarmBoardWakeupCard } from './BoardReceipts.tsx'
 export { SwarmToolView } from './SwarmToolView.tsx'
 export { SwarmWorkbenchPanel } from './SwarmWorkbenchPanel.tsx'

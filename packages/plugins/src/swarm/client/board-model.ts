@@ -1,23 +1,44 @@
 /**
  * Pure domain models and strict boundary parsers for builtin:swarm client surfaces (Fast Refresh compliant).
  */
-import type { LocalizedText, TimelineRendererProps } from '@helmx/protocol/browser'
+import type { TimelineRendererProps } from '@helmx/protocol/browser'
 import type {
-  BoardPost, BoardPostKind, BoardViewDoc, BoardViewHeadline, BoardViewMember,
+  BoardPost, BoardPostKind, BoardReceiptPost, BoardViewDoc, BoardViewHeadline, BoardViewMember,
   CollabGroupStatus, CollabGroupSummary, GroupMemberState, MemberLiveState, RetainedWorktreeInfo,
   WorkerAccess, WorkerIsolation, WorktreeHandoffSnapshot,
 } from '../contracts-types.js'
 import type { SwarmIndexDoc } from './models.ts'
 
 export type {
-  BoardPost, BoardPostKind, BoardViewDoc, CollabGroupStatus, CollabGroupSummary, GroupMemberState,
+  BoardPost, BoardPostKind, BoardReceiptPost, BoardViewDoc, CollabGroupStatus, CollabGroupSummary, GroupMemberState,
   MemberLiveState, RetainedWorktreeInfo, WorkerAccess, WorkerIsolation, WorktreeHandoffSnapshot,
 }
 export type BoardMemberView = BoardViewMember
 export type BoardHeadline = BoardViewHeadline
 export type BoardGroupView = BoardViewDoc['group']
-export interface BoardReportReceiptMeta { renderer?: string; groupId?: string; fromSeq?: number; toSeq?: number; postCount?: number; headline?: LocalizedText }
-export interface BoardWakeupReceiptMeta { renderer?: string; groupId?: string; workerName?: string; fromSeq?: number; toSeq?: number; postCount?: number }
+export interface BoardReportReceiptMeta {
+  renderer?: string
+  groupId?: string
+  fromSeq?: number
+  toSeq?: number
+  postCount?: number
+  posts: BoardReceiptPost[]
+  truncatedPostsCount?: number
+  activeWorkingMembers: string[]
+  idleCatchup?: boolean
+  createdAt?: number
+}
+export interface BoardWakeupReceiptMeta {
+  renderer?: string
+  groupId?: string
+  workerName?: string
+  fromSeq?: number
+  toSeq?: number
+  postCount?: number
+  posts: BoardReceiptPost[]
+  truncatedPostsCount?: number
+  createdAt?: number
+}
 
 export const isPlainObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
 const isPosInt = (v: unknown): v is number => typeof v === 'number' && Number.isSafeInteger(v) && v > 0
@@ -66,20 +87,36 @@ function parseWorktreeSnapshot(s: unknown): WorktreeHandoffSnapshot | undefined 
   }
 }
 
-export function parseBoardPost(r: unknown): BoardPost | undefined {
+function parseCommonPostFields(r: Record<string, unknown>): {
+  seq: number; from: string; to: string[]; kind: BoardPostKind; wake: boolean
+  refs: number[]; body: string; worktreeSnapshot?: WorktreeHandoffSnapshot; createdAt: number
+} | undefined {
   if (
-    !isPlainObject(r) || !isPosInt(r.seq) || !isNonEmptyStr(r.groupId) || !isNonEmptyStr(r.from) ||
-    !isNonEmptyStrArr(r.to) || !isNonEmptyStrArr(r.resolvedTargets) || typeof r.wake !== 'boolean' ||
-    typeof r.kind !== 'string' || !POST_KINDS.has(r.kind) || !Array.isArray(r.refs) || !r.refs.every(isPosInt) ||
-    typeof r.body !== 'string' || !isFinNum(r.createdAt)
+    !isPosInt(r.seq) || !isNonEmptyStr(r.from) || !isNonEmptyStrArr(r.to) ||
+    typeof r.kind !== 'string' || !POST_KINDS.has(r.kind) || typeof r.wake !== 'boolean' ||
+    !Array.isArray(r.refs) || !r.refs.every(isPosInt) || typeof r.body !== 'string' ||
+    !isFinNum(r.createdAt) || r.createdAt < 0
   ) return undefined
   const wt = parseWorktreeSnapshot(r.worktreeSnapshot)
   if (wt === 'invalid') return undefined
   return {
-    seq: r.seq, groupId: r.groupId, from: r.from, to: r.to, resolvedTargets: r.resolvedTargets,
-    wake: r.wake, kind: r.kind as BoardPostKind, refs: r.refs, body: r.body,
-    ...(wt ? { worktreeSnapshot: wt } : {}), createdAt: r.createdAt,
+    seq: r.seq, from: r.from, to: r.to, kind: r.kind as BoardPostKind, wake: r.wake,
+    refs: r.refs, body: r.body, ...(wt !== undefined ? { worktreeSnapshot: wt } : {}), createdAt: r.createdAt,
   }
+}
+
+export function parseBoardPost(r: unknown): BoardPost | undefined {
+  if (!isPlainObject(r) || !isNonEmptyStr(r.groupId) || !isNonEmptyStrArr(r.resolvedTargets)) return undefined
+  const base = parseCommonPostFields(r)
+  if (base === undefined) return undefined
+  return { ...base, groupId: r.groupId, resolvedTargets: r.resolvedTargets }
+}
+
+export function parseBoardReceiptPost(raw: unknown): BoardReceiptPost | undefined {
+  if (!isPlainObject(raw) || (raw.bodyTruncated !== undefined && typeof raw.bodyTruncated !== 'boolean')) return undefined
+  const base = parseCommonPostFields(raw)
+  if (base === undefined) return undefined
+  return { ...base, ...(raw.bodyTruncated === true ? { bodyTruncated: true } : {}) }
 }
 
 function parseMemberViewStrict(m: unknown): BoardMemberView | undefined {
@@ -204,10 +241,113 @@ export function mergeBoardViewWithRead(view: BoardViewDoc, readPosts: ReadonlyAr
   return { ...view, posts: [...bySeq.values()].sort((a, b) => a.seq - b.seq) }
 }
 
-export const parseBoardReportMeta = (props: TimelineRendererProps): BoardReportReceiptMeta =>
-  (props.entry.data as { meta?: BoardReportReceiptMeta } | undefined)?.meta ?? {}
-export const parseBoardWakeupMeta = (props: TimelineRendererProps): BoardWakeupReceiptMeta =>
-  (props.entry.data as { meta?: BoardWakeupReceiptMeta } | undefined)?.meta ?? {}
+function parseReceiptBaseMeta(props: TimelineRendererProps): {
+  meta: Record<string, unknown> | undefined
+  renderer?: string
+  groupId?: string
+  fromSeq?: number
+  toSeq?: number
+  postCount?: number
+  posts: BoardReceiptPost[]
+  truncatedPostsCount?: number
+  createdAt?: number
+} {
+  const data = isPlainObject(props.entry.data) ? props.entry.data : undefined
+  const meta = data && isPlainObject(data['meta']) ? data['meta'] : undefined
+  const rawCreatedAt = data?.['createdAt']
+  const createdAt =
+    isFinNum(rawCreatedAt) && rawCreatedAt > 0
+      ? rawCreatedAt
+      : isFinNum(props.entry.createdAt) && props.entry.createdAt > 0
+        ? props.entry.createdAt
+        : undefined
+  const posts: BoardReceiptPost[] = []
+  if (Array.isArray(meta?.['posts'])) {
+    for (const item of meta['posts']) {
+      const parsed = parseBoardReceiptPost(item)
+      if (parsed !== undefined) posts.push(parsed)
+    }
+  }
+  const renderer = isNonEmptyStr(meta?.['renderer']) ? meta['renderer'] : undefined
+  const groupId = isNonEmptyStr(meta?.['groupId']) ? meta['groupId'] : undefined
+  const fromSeq = isPosInt(meta?.['fromSeq']) ? meta['fromSeq'] : undefined
+  const toSeq = isPosInt(meta?.['toSeq']) ? meta['toSeq'] : undefined
+  const postCount = isNonNegInt(meta?.['postCount']) ? meta['postCount'] : undefined
+  const truncatedPostsCount = isPosInt(meta?.['truncatedPostsCount']) ? meta['truncatedPostsCount'] : undefined
+  return {
+    meta,
+    ...(renderer !== undefined ? { renderer } : {}),
+    ...(groupId !== undefined ? { groupId } : {}),
+    ...(fromSeq !== undefined ? { fromSeq } : {}),
+    ...(toSeq !== undefined ? { toSeq } : {}),
+    ...(postCount !== undefined ? { postCount } : {}),
+    posts,
+    ...(truncatedPostsCount !== undefined ? { truncatedPostsCount } : {}),
+    ...(createdAt !== undefined ? { createdAt } : {}),
+  }
+}
+
+export function parseBoardReportMeta(props: TimelineRendererProps): BoardReportReceiptMeta {
+  const { meta, ...base } = parseReceiptBaseMeta(props)
+  const activeWorkingMembers = Array.isArray(meta?.['activeWorkingMembers'])
+    ? meta['activeWorkingMembers'].filter(isNonEmptyStr)
+    : []
+  const idleCatchup = meta?.['idleCatchup'] === true ? true : undefined
+  return {
+    ...base,
+    activeWorkingMembers,
+    ...(idleCatchup ? { idleCatchup } : {}),
+  }
+}
+
+export function parseBoardWakeupMeta(props: TimelineRendererProps): BoardWakeupReceiptMeta {
+  const { meta, ...base } = parseReceiptBaseMeta(props)
+  const workerName = isNonEmptyStr(meta?.['workerName']) ? meta['workerName'] : undefined
+  return {
+    ...base,
+    ...(workerName !== undefined ? { workerName } : {}),
+  }
+}
+
+export function selectReceiptLeadPost(
+  posts: readonly BoardReceiptPost[],
+  role: 'coordinator' | 'worker',
+): BoardReceiptPost | undefined {
+  if (posts.length === 0) return undefined
+  if (role === 'coordinator') {
+    for (let i = posts.length - 1; i >= 0; i -= 1) {
+      const p = posts[i]!
+      if (p.kind === 'blocker' || p.kind === 'stall') return p
+    }
+    for (let i = posts.length - 1; i >= 0; i -= 1) {
+      const p = posts[i]!
+      if (p.wake === true && p.to.includes('coordinator')) return p
+    }
+    return posts[posts.length - 1]
+  }
+  for (let i = posts.length - 1; i >= 0; i -= 1) {
+    const p = posts[i]!
+    if (p.wake === true) return p
+  }
+  return posts[posts.length - 1]
+}
+
+export const isReceiptDefaultOpen = (posts: readonly BoardReceiptPost[]): boolean =>
+  posts.some((p) => p.kind === 'blocker' || p.kind === 'stall')
+
+export function resolveNonDefaultWakeBadge(post: Pick<BoardPost, 'kind' | 'wake'>): 'silent' | 'woke' | undefined {
+  if (post.kind === 'comment' && post.wake === true) return 'woke'
+  if (post.kind !== 'comment' && post.kind !== 'stall' && post.wake === false) return 'silent'
+  return undefined
+}
+
+export function formatReceiptSeqRange(fromSeq?: number, toSeq?: number): string | undefined {
+  const from = isPosInt(fromSeq) ? fromSeq : undefined
+  const to = isPosInt(toSeq) ? toSeq : undefined
+  if (from !== undefined && to !== undefined && from !== to) return `#${from}..#${to}`
+  const focus = to ?? from
+  return focus !== undefined ? `#${focus}` : undefined
+}
 
 export interface ConversationBoardLink {
   groupId: string; coordinatorConversationId: number; workerName?: string

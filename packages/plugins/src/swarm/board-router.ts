@@ -5,12 +5,15 @@ import { HelmxError, escapeXml, type LocalizedText } from '@helmx/protocol'
 import { truncate } from '../entry-text.js'
 import {
   COORDINATOR_ESCALATION_KINDS, swarmError, toGroupSummary,
-  type BoardBadgeEntry, type BoardPost, type BoardPostKind, type BoardViewDoc, type BoardViewHeadline,
+  type BoardBadgeEntry, type BoardPost, type BoardPostKind, type BoardReceiptPost, type BoardViewDoc, type BoardViewHeadline,
   type BoardViewMember, type CollabGroupRecord, type CollabGroupSummary, type GroupMemberState, type MemberLiveSnapshot,
+  type WorktreeHandoffSnapshot,
 } from './contracts.js'
 
 export const MAX_BOARD_VIEW_POST_BODY_CHARS = 4_000
 export const MAX_BOARD_VIEW_DOC_BYTES = 1_536 * 1024
+export const MAX_RECEIPT_POSTS = 20
+export const MAX_RECEIPT_POST_BODY_CHARS = MAX_BOARD_VIEW_POST_BODY_CHARS
 
 export const ANTI_ECHO_RULE_FOOTER =
   'Anti-echo rule: If this batch is purely informational and requires no concrete action, end your turn immediately without posting pure acknowledgments or thank-yous; while activeWorkingMembers is non-empty, you may still act on individual requests or start reviewing completed slices, but never treat partial member completion as full-group completion or close the group.'
@@ -200,20 +203,48 @@ function buildHeadlinePair(
 export const synthesizeHeadline = (group: CollabGroupRecord, members: readonly BoardViewMember[], posts: readonly BoardPost[], activeWorkingMembers: readonly string[]): BoardViewHeadline =>
   buildHeadlinePair(group, members, posts, activeWorkingMembers).headline
 
+function slimWorktreeSnapshot(snapshot: WorktreeHandoffSnapshot | undefined): WorktreeHandoffSnapshot | undefined {
+  if (snapshot === undefined) return undefined
+  return {
+    ...snapshot,
+    changedFilesPreview: snapshot.changedFilesPreview.slice(0, 20).map((f) => truncate(f, 240)),
+  }
+}
+
 function slimPostForBoardView(post: BoardPost): BoardPost {
   const body = post.body.length > MAX_BOARD_VIEW_POST_BODY_CHARS ? truncate(post.body, MAX_BOARD_VIEW_POST_BODY_CHARS) : post.body
-  const snapshot = post.worktreeSnapshot
-    ? {
-        ...post.worktreeSnapshot,
-        changedFilesPreview: post.worktreeSnapshot.changedFilesPreview.slice(0, 20).map((f) => truncate(f, 240)),
-      }
-    : undefined
+  const snapshot = slimWorktreeSnapshot(post.worktreeSnapshot)
   if (body === post.body && snapshot === undefined) return post
   return {
     ...post,
     body,
     ...(snapshot !== undefined ? { worktreeSnapshot: snapshot } : {}),
   }
+}
+
+export function buildReceiptPostSnapshots(
+  posts: readonly BoardPost[],
+): { posts: BoardReceiptPost[]; truncatedPostsCount: number } {
+  const truncatedPostsCount = Math.max(0, posts.length - MAX_RECEIPT_POSTS)
+  const tail = truncatedPostsCount > 0 ? posts.slice(-MAX_RECEIPT_POSTS) : posts
+  const snapshots: BoardReceiptPost[] = tail.map((post) => {
+    const bodyTruncated = post.body.length > MAX_RECEIPT_POST_BODY_CHARS
+    const body = bodyTruncated ? truncate(post.body, MAX_RECEIPT_POST_BODY_CHARS) : post.body
+    const worktreeSnapshot = slimWorktreeSnapshot(post.worktreeSnapshot)
+    return {
+      seq: post.seq,
+      from: post.from,
+      to: [...post.to],
+      kind: post.kind,
+      wake: post.wake,
+      refs: [...post.refs],
+      body,
+      ...(bodyTruncated ? { bodyTruncated: true } : {}),
+      ...(worktreeSnapshot !== undefined ? { worktreeSnapshot } : {}),
+      createdAt: post.createdAt,
+    }
+  })
+  return { posts: snapshots, truncatedPostsCount }
 }
 
 export function buildBoardViewDoc(input: {

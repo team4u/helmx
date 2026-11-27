@@ -17,6 +17,7 @@ import {
   type SwarmCoordinator,
 } from './contracts.js'
 import {
+  buildReceiptPostSnapshots,
   findIdleCatchupAnchorPost,
   formatCoordinatorReportEnvelope,
   formatWorkerWakeupEnvelope,
@@ -100,6 +101,7 @@ export function createWakeDispatcher(ports: WakeDispatcherPorts) {
     }
 
     const envelope = formatWorkerWakeupEnvelope({ group, member, posts: selected, fromSeq, toSeq })
+    const receipt = buildReceiptPostSnapshots(selected)
     const attempt =
       member.wakeupRecovery !== undefined && !member.wakeupRecovery.exhausted && toSeq <= member.wakeupRecovery.toSeq
         ? member.wakeupRecovery.nextAttempt
@@ -119,7 +121,16 @@ export function createWakeDispatcher(ports: WakeDispatcherPorts) {
           origin: 'agent',
           whenBusy: 'followUp',
           requestId,
-          meta: { renderer: BOARD_WAKEUP_RENDERER, groupId, workerName: memberName, fromSeq, toSeq, postCount: selected.length },
+          meta: {
+            renderer: BOARD_WAKEUP_RENDERER,
+            groupId,
+            workerName: memberName,
+            fromSeq,
+            toSeq,
+            postCount: selected.length,
+            posts: receipt.posts,
+            ...(receipt.truncatedPostsCount > 0 ? { truncatedPostsCount: receipt.truncatedPostsCount } : {}),
+          },
         },
         { expectedOwnership: 'helmx' },
       )
@@ -242,12 +253,13 @@ export function createWakeDispatcher(ports: WakeDispatcherPorts) {
         : 0
     const requestId = withRetryAttemptSuffix(baseRequestId, attempt)
 
-    const { view, localizedHeadline } = synthesizeBoardView({
+    const { view } = synthesizeBoardView({
       group,
       posts: allPosts,
       previewLimit: coord.getConfig().boardPreviewLimit,
       resolveMemberLive: ports.resolveMemberLive,
     })
+    const receipt = buildReceiptPostSnapshots(selected)
     const envelope = formatCoordinatorReportEnvelope({ group, posts: selected, fromSeq, toSeq, activeWorkingMembers: view.activeWorkingMembers })
     const baseCompletionSeq = coordSummary.completionSeq
     const hadActiveWorkers = view.activeWorkingMembers.length > 0
@@ -262,7 +274,17 @@ export function createWakeDispatcher(ports: WakeDispatcherPorts) {
         origin: 'agent',
         whenBusy: 'followUp',
         requestId,
-        meta: { renderer: BOARD_REPORT_RENDERER, groupId, fromSeq, toSeq, postCount: selected.length, headline: localizedHeadline },
+        meta: {
+          renderer: BOARD_REPORT_RENDERER,
+          groupId,
+          fromSeq,
+          toSeq,
+          postCount: selected.length,
+          posts: receipt.posts,
+          ...(receipt.truncatedPostsCount > 0 ? { truncatedPostsCount: receipt.truncatedPostsCount } : {}),
+          ...(view.activeWorkingMembers.length > 0 ? { activeWorkingMembers: view.activeWorkingMembers } : {}),
+          ...(isIdleCatchup ? { idleCatchup: true } : {}),
+        },
       })
       await ports.updateGroupMeta(groupId, (d) => {
         if (canFlushPending) d.coordinatorNotifiedSeq = Math.max(d.coordinatorNotifiedSeq, toSeq)

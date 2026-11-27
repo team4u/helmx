@@ -1,12 +1,28 @@
 /**
- * 黑板帖子正文下方的元信息片段（Fast Refresh compliant: components & types only）：
- * `#seq` 引用跳转按钮组与 worktree 快照摘要行，被面板帖子列表与预览浮层共用。
+ * 黑板帖子元数据与下方元信息片段（Fast Refresh compliant: components & types only）：
+ * 偏离默认 wake 轻标签、`#seq` 引用跳转按钮组与 worktree 快照摘要行，
+ * 被面板帖子列表、预览浮层与时间线回执卡共用。
  */
 import type { ReactNode } from 'react'
 import type { HelmxLocale } from '@helmx/protocol/browser'
-import { HelmxIcon } from '@helmx/plugin-client'
-import type { BoardPost } from './board-model.ts'
+import { Badge, HelmxIcon, resolveLocalizedText } from '@helmx/plugin-client'
+import { resolveNonDefaultWakeBadge, type BoardPost } from './board-model.ts'
 import * as C from './copy.ts'
+
+export interface PostWakeBadgeProps {
+  post: Pick<BoardPost, 'kind' | 'wake'>
+  locale: HelmxLocale
+}
+
+export function PostWakeBadge({ post, locale }: PostWakeBadgeProps): ReactNode {
+  const wakeBadge = resolveNonDefaultWakeBadge(post)
+  if (wakeBadge === undefined) return null
+  return (
+    <Badge tone="neutral">
+      {resolveLocalizedText(wakeBadge === 'silent' ? C.SW_WAKE_OVERRIDE_SILENT : C.SW_WAKE_OVERRIDE_WOKE, locale)}
+    </Badge>
+  )
+}
 
 export interface PostRefButtonsProps {
   refs: readonly number[]

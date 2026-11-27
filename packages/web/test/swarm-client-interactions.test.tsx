@@ -4,7 +4,7 @@
  * 覆盖（收敛后形态：无独立 BoardScreen，编排心智模型对齐 builtin:workflow）：
  * 1. UI 扩展注册不变量（registerSwarmUi：toolView 覆盖全部 swarm_* 工具且 replaceRow、
  *    COMPOSER_DOCK_SLOT 活动托盘仅主控作用域、workbench.panel 'groups' 仅参与者作用域、
- *    swarm:board-report / swarm:board-wakeup 单行回执渲染器、@ composerCompleter、
+ *    swarm:board-report / swarm:board-wakeup 折叠回执轨迹卡、@ composerCompleter、
  *    零 screen / 零顶栏 action / 零 sidebarItem、双语 LocalizedText、零 Emoji）；
  * 2. SwarmToolView 26px 工具轨迹行：dispatch 完成态点击打开成员会话抽屉、黑板发布行点击
  *    打开协同工作台面板、有目标行右侧 external-link 提示跳转、无法定目标的行不可点
@@ -15,7 +15,8 @@
  * 4. SwarmWorkbenchPanel：实时 board-view 渲染编排卡（目标、自然状态、成员行点击开抽屉、
  *    最近动态自然 kind 标签、worktree 分支事实），无实时投影时显式 board_status 一次性回退
  *    （失败可重试、不白屏不伪造运行中），完整记录展开按需 board_read；
- * 5. 单行回执胶囊点击打开协同工作台面板；
+ * 5. 时间线回执轨迹卡（SwarmBoardReportCard / SwarmBoardWakeupCard）原地折叠展开、MarkdownView 渲染、
+ *    截断/空闲补报/阻断默认展开、工作台跳转与偏离默认 wake 轻标签；
  * 6. UI 注册模型、组件交互与实际渲染状态。
  */
 import './helpers/register-happy-dom.js'
@@ -67,8 +68,8 @@ interface SwarmClientComponents {
   SwarmToolView: (p: ToolViewProps) => React.ReactElement
   SwarmActiveTray: (p: { conversation?: ConversationSummary }) => React.ReactElement
   SwarmWorkbenchPanel: (p: { conversation?: ConversationSummary; params?: Readonly<Record<string, unknown>> }) => React.ReactElement
-  SwarmBoardReportPill: (p: TimelineRendererProps) => React.ReactElement
-  SwarmBoardWakeupPill: (p: TimelineRendererProps) => React.ReactElement
+  SwarmBoardReportCard: (p: TimelineRendererProps) => React.ReactElement
+  SwarmBoardWakeupCard: (p: TimelineRendererProps) => React.ReactElement
 }
 
 let rawModule: Record<string, unknown>
@@ -84,8 +85,8 @@ describe("swarm-client-interactions", () => {
       SwarmToolView: barrelMod['SwarmToolView'] as SwarmClientComponents['SwarmToolView'],
       SwarmActiveTray: barrelMod['SwarmActiveTray'] as SwarmClientComponents['SwarmActiveTray'],
       SwarmWorkbenchPanel: barrelMod['SwarmWorkbenchPanel'] as SwarmClientComponents['SwarmWorkbenchPanel'],
-      SwarmBoardReportPill: barrelMod['SwarmBoardReportPill'] as SwarmClientComponents['SwarmBoardReportPill'],
-      SwarmBoardWakeupPill: barrelMod['SwarmBoardWakeupPill'] as SwarmClientComponents['SwarmBoardWakeupPill'],
+      SwarmBoardReportCard: barrelMod['SwarmBoardReportCard'] as SwarmClientComponents['SwarmBoardReportCard'],
+      SwarmBoardWakeupCard: barrelMod['SwarmBoardWakeupCard'] as SwarmClientComponents['SwarmBoardWakeupCard'],
     }
   }, { timeout: 60_000 })
 
@@ -1125,112 +1126,505 @@ describe("swarm-client-interactions", () => {
   })
 
   // ---------------------------------------------------------------------------
-  // 5. Timeline receipt pills
+  // 5. Timeline receipt trace cards & non-default wake badges
   // ---------------------------------------------------------------------------
 
-  test('单行回执胶囊：展示计数/动态/成员，点击打开协同工作台面板', { timeout: 60_000 }, async () => {
+  test('SwarmBoardReportCard：26px 单行轨迹与左侧 chevron 原地折叠展开、MarkdownView 渲染、活跃成员页脚与右侧跳转工作台', { timeout: 60_000 }, async () => {
     const spy = makeSpyCtx({ conversationId: 50 })
     const reportMount = await mount(
       spy,
-      e(components.SwarmBoardReportPill, {
+      e(components.SwarmBoardReportCard, {
         conversationId: 50,
         entry: {
           id: 'e-10',
+          kind: 'helmx.input',
+          data: {
+            createdAt: 1_700_000_010_000,
+            meta: {
+              renderer: 'swarm:board-report',
+              groupId: 'grp-live',
+              fromSeq: 5,
+              toSeq: 5,
+              postCount: 1,
+              activeWorkingMembers: ['slow'],
+              posts: [
+                {
+                  seq: 5,
+                  from: 'fast',
+                  to: ['coordinator'],
+                  kind: 'done',
+                  wake: true,
+                  refs: [2],
+                  body: '**Fast slice** ready with `auth.ts` patch.',
+                  worktreeSnapshot: {
+                    worktreeId: 'wt-fast',
+                    branch: 'helmx/fast',
+                    commitsAhead: 1,
+                    dirtyCount: 0,
+                    changedFilesPreview: ['src/auth.ts'],
+                  },
+                  createdAt: 1_700_000_009_000,
+                },
+              ],
+            },
+          },
+        },
+      }),
+    )
+    try {
+      const headerText = reportMount.host.textContent ?? ''
+      assert.match(headerText, /Board message/, '使用标准看板消息标题')
+      assert.doesNotMatch(headerText, /Swarm report|协同汇总/, '淘汰旧协同汇总文案')
+      assert.match(headerText, /Delivered/, '展示触发帖 kind 徽章')
+      assert.match(headerText, /@fast/, '展示发帖人')
+      assert.match(headerText, /Fast slice/, '展示首行摘要')
+      assert.match(headerText, /#5/, '展示序号徽章')
+      assert.doesNotMatch(headerText, /Still working/, '折叠态不展示活跃成员页脚')
+      assert.ok(reportMount.host.querySelector('.sw-receipt-pill') === null, '已淘汰旧 .sw-receipt-pill')
+      assert.ok(reportMount.host.querySelector('.trace-entry-error') === null, 'done 卡片不挂错误态')
+
+      const toggleBtn = reportMount.host.querySelector<HTMLButtonElement>('.sw-receipt-toggle')!
+      assert.ok(toggleBtn !== null, '左侧存在折叠按钮')
+      assert.equal(toggleBtn.getAttribute('aria-expanded'), 'false', '默认折叠')
+      const firstSvg = toggleBtn.firstElementChild
+      assert.ok(firstSvg !== null && firstSvg.classList.contains('trace-row-chevron') && firstSvg.classList.contains('lucide-chevron-right'), '行首左侧首位为 chevron-right')
+
+      const bodyId = toggleBtn.getAttribute('aria-controls')!
+      assert.ok(bodyId.length > 0)
+      const bodyWrap = reportMount.host.querySelector<HTMLElement>(`#${CSS.escape(bodyId)}`)!
+      assert.ok(bodyWrap.hasAttribute('hidden'), '折叠态 body 容器带 hidden')
+      assert.ok(reportMount.host.querySelector('.sw-receipt-expanded') === null, '折叠态不挂载展开内容')
+
+      // Click left toggle to expand in place
+      await act(async () => {
+        toggleBtn.click()
+      })
+      assert.equal(toggleBtn.getAttribute('aria-expanded'), 'true', '点击左侧按钮原地展开')
+      assert.ok(toggleBtn.firstElementChild?.classList.contains('lucide-chevron-down') === true, '展开后切换为 chevron-down')
+      assert.equal(bodyWrap.hasAttribute('hidden'), false, '展开后移除 hidden')
+
+      const expanded = reportMount.host.querySelector<HTMLElement>('.sw-receipt-expanded')!
+      assert.ok(expanded !== null)
+      const mdBody = expanded.querySelector<HTMLElement>('.sw-receipt-post-md')!
+      assert.ok(mdBody !== null, '展开态经宿主 MarkdownView 渲染正文')
+      assert.ok(mdBody.querySelector('strong')?.textContent === 'Fast slice', 'Markdown 加粗真实渲染')
+      assert.ok(mdBody.querySelector('code')?.textContent === 'auth.ts', 'Markdown 行内代码真实渲染')
+      assert.match(expanded.querySelector('.sw-panel-post-worktree')?.textContent ?? '', /helmx\/fast/, '展示 worktree 快照')
+      assert.match(expanded.querySelector('.sw-receipt-post-refs')?.textContent ?? '', /#2/, '展示 refs')
+      assert.match(expanded.querySelector('.sw-receipt-active-footer')?.textContent ?? '', /Still working: @slow/, '展开态底部展示仍在执行成员')
+      assert.doesNotMatch(expanded.textContent ?? '', /No wake|Woke/, '默认 wake=true 的 done 不渲染多余 wake 标签')
+
+      // Click right external-link button to open workbench
+      const openBtn = reportMount.host.querySelector<HTMLButtonElement>('.sw-receipt-open-btn')!
+      assert.ok(openBtn !== null && openBtn.querySelector('.lucide-external-link') !== null, '右侧存在 external-link 工作台按钮')
+      await act(async () => {
+        openBtn.click()
+      })
+      assert.deepEqual(spy.workbenchCalls, ['groups'], '点击右侧按钮打开协同工作台面板')
+      assert.deepEqual(spy.workbenchParamCalls, [{ groupId: 'grp-live', postSeq: 5 }], '携带 groupId 与 postSeq 参数')
+    } finally {
+      reportMount.unmount()
+    }
+
+    // zh-CN locale: 看板消息 + 仍在执行：@slow
+    const zhSpy = makeSpyCtx({ conversationId: 50, locale: 'zh-CN' })
+    const zhMount = await mount(
+      zhSpy,
+      e(components.SwarmBoardReportCard, {
+        conversationId: 50,
+        entry: {
+          id: 'e-10-zh',
+          kind: 'helmx.input',
+          data: {
+            createdAt: 1_700_000_010_000,
+            meta: {
+              renderer: 'swarm:board-report',
+              groupId: 'grp-live',
+              fromSeq: 5,
+              toSeq: 5,
+              postCount: 1,
+              activeWorkingMembers: ['slow'],
+              posts: [
+                {
+                  seq: 5,
+                  from: 'fast',
+                  to: ['coordinator'],
+                  kind: 'review',
+                  wake: true,
+                  refs: [],
+                  body: '请主控确认接口签名。',
+                  createdAt: 1_700_000_009_000,
+                },
+              ],
+            },
+          },
+        },
+      }),
+    )
+    try {
+      const text = zhMount.host.textContent ?? ''
+      assert.match(text, /看板消息/, 'zh-CN 标题为看板消息')
+      assert.doesNotMatch(text, /协同汇总/, 'zh-CN 淘汰旧协同汇总')
+      assert.match(text, /审阅/, 'zh-CN review 徽章')
+      await act(async () => {
+        zhMount.host.querySelector<HTMLButtonElement>('.sw-receipt-toggle')!.click()
+      })
+      assert.match(zhMount.host.querySelector('.sw-receipt-active-footer')?.textContent ?? '', /仍在执行：@slow/)
+    } finally {
+      zhMount.unmount()
+    }
+  })
+
+  test('SwarmBoardReportCard：blocker/stall 默认展开与错误样式、多条合并截断、idleCatchup 与空回执回退', { timeout: 60_000 }, async () => {
+    // 1) blocker defaults open with .trace-entry-error / .trace-row-error, and lead selection picks blocker over trailing comment
+    const blockerMount = await mount(
+      makeSpyCtx({ conversationId: 50, locale: 'zh-CN' }),
+      e(components.SwarmBoardReportCard, {
+        conversationId: 50,
+        entry: {
+          id: 'e-blk',
           kind: 'helmx.input',
           data: {
             meta: {
               renderer: 'swarm:board-report',
               groupId: 'grp-live',
               fromSeq: 4,
-              toSeq: 6,
-              postCount: 3,
-              headline: 'verifier approved #5',
+              toSeq: 5,
+              postCount: 2,
+              activeWorkingMembers: [],
+              posts: [
+                {
+                  seq: 4,
+                  from: 'author',
+                  to: ['coordinator'],
+                  kind: 'blocker',
+                  wake: true,
+                  refs: [],
+                  body: 'Integration DB unreachable.',
+                  createdAt: 1000,
+                },
+                {
+                  seq: 5,
+                  from: 'verifier',
+                  to: ['coordinator'],
+                  kind: 'comment',
+                  wake: false,
+                  refs: [],
+                  body: 'Standing by.',
+                  createdAt: 1100,
+                },
+              ],
             },
           },
         },
       }),
     )
     try {
-      const text = reportMount.host.textContent ?? ''
-      assert.match(text, /Swarm report/)
-      assert.match(text, /#4\.\.#6/)
-      assert.match(text, /3 posts/)
-      assert.match(text, /verifier approved #5/)
-      const pill = reportMount.host.querySelector<HTMLButtonElement>('.sw-receipt-pill')!
-      assert.ok(pill !== null, '回执卡片本体为按钮')
-      assert.ok(reportMount.host.querySelector('.sw-receipt-open') === null, '无尾部 chevron 按钮')
-      assert.match(pill.getAttribute('aria-label') ?? '', /Open swarm workbench/, '整卡可点的可访问名称')
-      await act(async () => {
-        pill.click()
-      })
-      assert.deepEqual(spy.workbenchCalls, ['groups'], '点击卡片本体打开协同工作台面板（短本地 panelId）')
-      assert.deepEqual(spy.workbenchParamCalls, [{ postSeq: 6 }], '回执卡片传递最新聚焦序号 postSeq')
+      assert.ok(blockerMount.host.querySelector('.trace-entry-error') !== null, 'blocker 挂 .trace-entry-error')
+      assert.ok(blockerMount.host.querySelector('.trace-row-error') !== null, 'blocker 挂 .trace-row-error')
+      const toggle = blockerMount.host.querySelector<HTMLButtonElement>('.sw-receipt-toggle')!
+      assert.equal(toggle.getAttribute('aria-expanded'), 'true', 'blocker 默认展开')
+      assert.match(toggle.textContent ?? '', /受阻/, '主帖优先挑选 blocker')
+      assert.match(toggle.textContent ?? '', /@author/, '主帖发帖人不被后续 comment 覆盖')
+      assert.match(blockerMount.host.textContent ?? '', /2 条/, '多条消息显示紧凑计数')
+      assert.match(blockerMount.host.querySelector('.sw-receipt-expanded')?.textContent ?? '', /Integration DB unreachable\./)
     } finally {
-      reportMount.unmount()
+      blockerMount.unmount()
     }
 
-    // LocalizedText headline in SwarmBoardReportPill renders in active zh-CN locale
-    const zhSpy = makeSpyCtx({ conversationId: 50, locale: 'zh-CN' })
-    const zhReportMount = await mount(
-      zhSpy,
-      e(components.SwarmBoardReportPill, {
+    // 2) stall defaults open WITHOUT .trace-row-error
+    const stallMount = await mount(
+      makeSpyCtx({ conversationId: 50 }),
+      e(components.SwarmBoardReportCard, {
         conversationId: 50,
         entry: {
-          id: 'e-11',
+          id: 'e-stall',
           kind: 'helmx.input',
           data: {
             meta: {
               renderer: 'swarm:board-report',
               groupId: 'grp-live',
-              fromSeq: 7,
-              toSeq: 7,
+              fromSeq: 6,
+              toSeq: 6,
               postCount: 1,
-              headline: { en: 'Active: @verifier', 'zh-CN': '执行中：@verifier' },
+              posts: [
+                {
+                  seq: 6,
+                  from: 'system',
+                  to: ['coordinator'],
+                  kind: 'stall',
+                  wake: true,
+                  refs: [5],
+                  body: 'All workers idle without wake.',
+                  createdAt: 1200,
+                },
+              ],
             },
           },
         },
       }),
     )
     try {
-      const zhText = zhReportMount.host.textContent ?? ''
-      assert.match(zhText, /执行中：@verifier/, '回执胶囊在中文界面本地化渲染 LocalizedText headline')
+      assert.equal(stallMount.host.querySelector<HTMLButtonElement>('.sw-receipt-toggle')?.getAttribute('aria-expanded'), 'true', 'stall 默认展开')
+      assert.ok(stallMount.host.querySelector('.trace-row-error') === null, 'stall 不挂错误红态')
     } finally {
-      zhReportMount.unmount()
+      stallMount.unmount()
     }
 
-    const wakeupSpy = makeSpyCtx({ conversationId: 51 })
-    const wakeupMount = await mount(
-      wakeupSpy,
-      e(components.SwarmBoardWakeupPill, {
-        conversationId: 51,
+    // 3) truncatedPostsCount + bodyTruncated + idleCatchup
+    const truncSpy = makeSpyCtx({ conversationId: 50, locale: 'zh-CN' })
+    const truncMount = await mount(
+      truncSpy,
+      e(components.SwarmBoardReportCard, {
+        conversationId: 50,
         entry: {
-          id: 'e-11',
+          id: 'e-trunc',
           kind: 'helmx.input',
           data: {
+            createdAt: 1_700_000_020_000,
+            meta: {
+              renderer: 'swarm:board-report',
+              groupId: 'grp-live',
+              fromSeq: 1,
+              toSeq: 22,
+              postCount: 22,
+              truncatedPostsCount: 2,
+              idleCatchup: true,
+              posts: [
+                {
+                  seq: 22,
+                  from: 'slow',
+                  to: ['coordinator'],
+                  kind: 'done',
+                  wake: false,
+                  refs: [],
+                  body: 'Long truncated content…',
+                  bodyTruncated: true,
+                  createdAt: 1_700_000_019_000,
+                },
+              ],
+            },
+          },
+        },
+      }),
+    )
+    try {
+      const headerText = truncMount.host.textContent ?? ''
+      assert.match(headerText, /全员空闲/, 'idleCatchup 使用全员空闲标题')
+      assert.match(headerText, /#1\.\.#22/, '区间范围展示')
+      assert.match(headerText, /22 条/, '展示总条数')
+      await act(async () => {
+        truncMount.host.querySelector<HTMLButtonElement>('.sw-receipt-toggle')!.click()
+      })
+      const expText = truncMount.host.querySelector('.sw-receipt-expanded')?.textContent ?? ''
+      assert.match(expText, /已省略更早的 2 条消息，可打开工作台查看完整记录/)
+      assert.match(expText, /正文已截断，可打开工作台查看全文/)
+      assert.match(expText, /未唤醒/, 'done(wake=false) 显示未唤醒徽章')
+    } finally {
+      truncMount.unmount()
+    }
+
+    // 4) empty posts fallback
+    const emptyMount = await mount(
+      makeSpyCtx({ conversationId: 50 }),
+      e(components.SwarmBoardReportCard, {
+        conversationId: 50,
+        entry: {
+          id: 'e-empty',
+          kind: 'helmx.input',
+          data: { meta: { renderer: 'swarm:board-report', groupId: 'grp-live', fromSeq: 8, toSeq: 8, postCount: 1 } },
+        },
+      }),
+    )
+    try {
+      await act(async () => {
+        emptyMount.host.querySelector<HTMLButtonElement>('.sw-receipt-toggle')!.click()
+      })
+      assert.match(emptyMount.host.querySelector('.sw-receipt-expanded')?.textContent ?? '', /No board post details recorded\./)
+    } finally {
+      emptyMount.unmount()
+    }
+  })
+
+  test('SwarmBoardWakeupCard：成员唤醒折叠轨迹卡原地展开交接正文并支持跳转工作台', { timeout: 60_000 }, async () => {
+    const wakeupSpy = makeSpyCtx({ conversationId: 52 })
+    const wakeupMount = await mount(
+      wakeupSpy,
+      e(components.SwarmBoardWakeupCard, {
+        conversationId: 52,
+        entry: {
+          id: 'e-w1',
+          kind: 'helmx.input',
+          data: {
+            createdAt: 1_700_000_030_000,
             meta: {
               renderer: 'swarm:board-wakeup',
               groupId: 'grp-live',
-              workerName: 'author',
-              fromSeq: 5,
-              toSeq: 5,
-              postCount: 1,
+              workerName: 'verifier',
+              fromSeq: 2,
+              toSeq: 3,
+              postCount: 2,
+              posts: [
+                {
+                  seq: 2,
+                  from: 'author',
+                  to: ['verifier'],
+                  kind: 'handoff',
+                  wake: true,
+                  refs: [1],
+                  body: 'Ready for verification on **auth refresh**.',
+                  worktreeSnapshot: {
+                    worktreeId: 'wt-author',
+                    branch: 'helmx/author',
+                    commitsAhead: 2,
+                    dirtyCount: 0,
+                    changedFilesPreview: ['src/auth.ts'],
+                  },
+                  createdAt: 1_700_000_028_000,
+                },
+                {
+                  seq: 3,
+                  from: 'author',
+                  to: ['verifier'],
+                  kind: 'comment',
+                  wake: true,
+                  refs: [2],
+                  body: 'Please also check edge timeout.',
+                  createdAt: 1_700_000_029_000,
+                },
+              ],
             },
           },
         },
       }),
     )
     try {
-      assert.match(wakeupMount.host.textContent ?? '', /@author/)
-      const pill = wakeupMount.host.querySelector<HTMLButtonElement>('.sw-receipt-pill')!
-      assert.ok(wakeupMount.host.querySelector('.sw-receipt-open') === null, '唤醒卡片同样无尾部 chevron 按钮')
+      const headerText = wakeupMount.host.textContent ?? ''
+      assert.match(headerText, /Swarm wakeup/)
+      assert.match(headerText, /@author -> @verifier/, '头部展示路由方向')
+      assert.match(headerText, /#2\.\.#3/)
+      assert.match(headerText, /2 posts/)
+      assert.ok(wakeupMount.host.querySelector('.sw-receipt-pill') === null)
+      const toggle = wakeupMount.host.querySelector<HTMLButtonElement>('.sw-receipt-toggle')!
+      assert.equal(toggle.getAttribute('aria-expanded'), 'false')
       await act(async () => {
-        pill.click()
+        toggle.click()
+      })
+      assert.equal(toggle.getAttribute('aria-expanded'), 'true')
+      const expanded = wakeupMount.host.querySelector<HTMLElement>('.sw-receipt-expanded')!
+      assert.ok(expanded !== null)
+      const postEls = expanded.querySelectorAll('.sw-receipt-post')
+      assert.equal(postEls.length, 2, '展开态逐条渲染合并消息')
+      assert.match(postEls[0]!.querySelector('.sw-receipt-post-md')?.textContent ?? '', /Ready for verification on auth refresh\./)
+      assert.doesNotMatch(postEls[0]!.querySelector('.sw-receipt-post-head')?.textContent ?? '', /Woke|No wake/, '默认 handoff(wake=true) 不显多余标签')
+      assert.match(postEls[0]!.querySelector('.sw-panel-post-worktree')?.textContent ?? '', /helmx\/author/)
+      assert.match(postEls[1]!.querySelector('.sw-receipt-post-head')?.textContent ?? '', /Woke/, 'comment(wake=true) 显示 Woke 偏离徽章')
+
+      await act(async () => {
+        wakeupMount.host.querySelector<HTMLButtonElement>('.sw-receipt-open-btn')!.click()
       })
       assert.deepEqual(wakeupSpy.workbenchCalls, ['groups'])
-      assert.deepEqual(wakeupSpy.workbenchParamCalls, [{ postSeq: 5 }])
+      assert.deepEqual(wakeupSpy.workbenchParamCalls, [{ groupId: 'grp-live', postSeq: 3 }])
     } finally {
       wakeupMount.unmount()
     }
+  })
+
+  test('SwarmWorkbenchPanel & SwarmPostPeekPopover：帖子头对偏离默认 wake 展示轻标签，默认 wake 不显示多余标签', { timeout: 60_000 }, async () => {
+    const wakeBoard = boardViewFixture({
+      group: {
+        id: 'grp-live',
+        title: '协同审改组',
+        objective: '验证 wake 偏离标识',
+        coordinatorConversationId: 50,
+        status: 'active',
+        activeWorkerCount: 2,
+        headSeq: 4,
+        createdAt: 1_700_000_000_000,
+        updatedAt: 1_700_000_004_000,
+      },
+      posts: [
+        {
+          seq: 1,
+          groupId: 'grp-live',
+          from: 'author',
+          to: ['coordinator'],
+          resolvedTargets: ['coordinator'],
+          wake: false,
+          kind: 'done',
+          refs: [],
+          body: 'Passive done post.',
+          createdAt: 1_700_000_001_000,
+        },
+        {
+          seq: 2,
+          groupId: 'grp-live',
+          from: 'verifier',
+          to: ['author'],
+          resolvedTargets: ['author'],
+          wake: true,
+          kind: 'comment',
+          refs: [1],
+          body: 'Urgent comment citing #1.',
+          createdAt: 1_700_000_002_000,
+        },
+        {
+          seq: 3,
+          groupId: 'grp-live',
+          from: 'author',
+          to: ['verifier'],
+          resolvedTargets: ['verifier'],
+          wake: true,
+          kind: 'handoff',
+          refs: [],
+          body: 'Default wake handoff.',
+          createdAt: 1_700_000_003_000,
+        },
+        {
+          seq: 4,
+          groupId: 'grp-live',
+          from: 'verifier',
+          to: ['coordinator'],
+          resolvedTargets: ['coordinator'],
+          wake: false,
+          kind: 'comment',
+          refs: [],
+          body: 'Default silent comment.',
+          createdAt: 1_700_000_004_000,
+        },
+      ],
+    })
+    setStubState({
+      docs: { index: coordinatorIndexFixture(), 'board-badges': { byConversation: {} } },
+      sessionDocs: { 'builtin:swarm/board-view/50': wakeBoard },
+    })
+
+    const spy = makeSpyCtx({ conversationId: 50, locale: 'zh-CN' })
+    const panel = await mount(
+      spy,
+      e(components.SwarmWorkbenchPanel, { conversation: convSummary(50, '主控', { tags: ['swarm-coordinator'] }) }),
+    )
+    try {
+      const head1 = panel.host.querySelector<HTMLElement>('.sw-panel-post[data-post-seq="1"] .sw-panel-post-head')!
+      const head2 = panel.host.querySelector<HTMLElement>('.sw-panel-post[data-post-seq="2"] .sw-panel-post-head')!
+      const head3 = panel.host.querySelector<HTMLElement>('.sw-panel-post[data-post-seq="3"] .sw-panel-post-head')!
+      const head4 = panel.host.querySelector<HTMLElement>('.sw-panel-post[data-post-seq="4"] .sw-panel-post-head')!
+      assert.match(head1.textContent ?? '', /未唤醒/, 'done(wake=false) 显示未唤醒')
+      assert.match(head2.textContent ?? '', /已唤醒/, 'comment(wake=true) 显示已唤醒')
+      assert.doesNotMatch(head3.textContent ?? '', /未唤醒|已唤醒/, '默认 handoff(wake=true) 不显多余标签')
+      assert.doesNotMatch(head4.textContent ?? '', /未唤醒|已唤醒/, '默认 comment(wake=false) 不显多余标签')
+
+      // Peek popover on #1 also renders 未唤醒 badge
+      const ref1 = panel.host.querySelector<HTMLButtonElement>('.sw-panel-post[data-post-seq="2"] .sw-panel-post-ref')!
+      await act(async () => {
+        ref1.click()
+      })
+      const peekHead = panel.host.querySelector<HTMLElement>('.sw-peek-popover .sw-peek-head')!
+      assert.match(peekHead.textContent ?? '', /未唤醒/, '速览浮卡帖子头同样展示偏离默认的未唤醒轻标签')
+    } finally {
+      panel.unmount()
+    }
+    resetDefaultStubs()
   })
 
   // ---------------------------------------------------------------------------

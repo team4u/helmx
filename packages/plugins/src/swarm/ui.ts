@@ -47,15 +47,15 @@ export function registerSwarmUi(ctx: HelmxPluginContext): void {
   })
   ctx.ui.timelineRenderer({
     id: 'swarm-board-report',
-    title: { en: 'Swarm Board Report', 'zh-CN': '协同看板汇总' },
+    title: { en: 'Swarm Board Message', 'zh-CN': '协同看板消息' },
     matchMeta: { renderer: BOARD_REPORT_RENDERER },
-    client: { module: 'conversation.tsx', export: 'SwarmBoardReportPill' },
+    client: { module: 'conversation.tsx', export: 'SwarmBoardReportCard' },
   })
   ctx.ui.timelineRenderer({
     id: 'swarm-board-wakeup',
     title: { en: 'Swarm Board Wakeup', 'zh-CN': '协同看板唤醒' },
     matchMeta: { renderer: BOARD_WAKEUP_RENDERER },
-    client: { module: 'conversation.tsx', export: 'SwarmBoardWakeupPill' },
+    client: { module: 'conversation.tsx', export: 'SwarmBoardWakeupCard' },
   })
   ctx.ui.composerCompleter({
     id: 'swarm-board-members',

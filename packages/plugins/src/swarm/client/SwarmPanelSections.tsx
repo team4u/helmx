@@ -15,7 +15,7 @@ import type { PostPeekState } from './model-post-nav.ts'
 import * as C from './copy.ts'
 import { PostBodyText } from './PostBodyText.tsx'
 import { SwarmPostPeekPopover } from './SwarmPostPeekPopover.tsx'
-import { PostRefButtons, PostWorktreeLine } from './SwarmPostFragments.tsx'
+import { PostRefButtons, PostWakeBadge, PostWorktreeLine } from './SwarmPostFragments.tsx'
 import { shouldCollapsePostBody, type BoardViewDoc } from './board-model.ts'
 
 const LIVE_STATE_LIGHT: Record<string, StatusLightTone> = {
@@ -252,6 +252,7 @@ export function SwarmBoardPostsSection(props: SwarmBoardPostsSectionProps): Reac
               >
                 <div className="sw-panel-post-head">
                   <Badge tone={postKindBadgeTone(post.kind)}>{C.postKindLabel(post.kind, locale)}</Badge>
+                  <PostWakeBadge post={post} locale={locale} />
                   <span className="sw-panel-post-from">
                     {`${post.from === 'coordinator' ? 'coordinator' : `@${post.from}`} -> ${C.panelPostTargets(post)}`}
                   </span>

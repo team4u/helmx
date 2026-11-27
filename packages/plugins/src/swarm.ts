@@ -227,11 +227,12 @@ export {
   resolveSwarmConfig, assertIndexDoc, assertCollabGroupRecord, assertBoardPost, assertMemberName, assertGroupId,
   type SwarmConfig, type WorkerAccess, type WorkerIsolation, type CollabGroupStatus, type BoardPostKind,
   type SwarmWorkerPointer, type SwarmIndexDoc, type CollabGroupSummary, type GroupMemberState,
-  type RetainedWorktreeInfo, type CollabGroupRecord, type WorktreeHandoffSnapshot, type BoardPost,
+  type RetainedWorktreeInfo, type CollabGroupRecord, type WorktreeHandoffSnapshot, type BoardPost, type BoardReceiptPost,
   type BoardBadgeEntry, type BoardBadgesDoc, type BoardViewHeadline, type MemberLiveState, type BoardViewMember, type BoardViewDoc,
 } from './swarm/contracts.js'
 
 export {
+  MAX_RECEIPT_POSTS, buildReceiptPostSnapshots,
   resolveDefaultWake, resolveBoardTargets, shouldFlushCoordinatorReport,
   findIdleCatchupAnchorPost, synthesizeHeadline, synthesizeBoardView,
 } from './swarm/board-router.js'

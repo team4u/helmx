@@ -735,6 +735,34 @@ describe('builtin:swarm board routing, settlement & self-healing', () => {
         assert.match(fastCoordText, /Fast slice done\./)
         assert.match(fastCoordText, /activeWorkingMembers: @slow\n/)
 
+        const coordEntriesAfterFast = (await kernel.conversations.getConversationDetail(coord.id, { limit: 30 })).entries
+        const fastReportEntry = coordEntriesAfterFast.find((e) => {
+          if (e.kind !== 'helmx.input' || typeof e.data !== 'object' || e.data === null) return false
+          const meta = (e.data as { meta?: Record<string, unknown> }).meta
+          return (
+            meta?.['renderer'] === 'swarm:board-report' &&
+            Array.isArray(meta['posts']) &&
+            (meta['posts'] as Array<{ body?: string }>).some((p) => p.body === 'Fast slice done.')
+          )
+        })
+        assert.ok(fastReportEntry !== undefined, 'coordinator must receive structured board-report entry for fast done')
+        const fastReportMeta = (fastReportEntry!.data as { meta: Record<string, unknown> }).meta
+        assert.equal('headline' in fastReportMeta, false, 'board-report meta must not carry legacy headline')
+        assert.deepEqual(fastReportMeta['activeWorkingMembers'], ['slow'])
+        assert.equal(fastReportMeta['idleCatchup'], undefined)
+        const fastReportPosts = fastReportMeta['posts'] as Array<{ from: string; kind: string; body: string }>
+        assert.ok(fastReportPosts.some((p) => p.from === 'fast' && p.kind === 'done' && p.body === 'Fast slice done.'))
+
+        const fastEntries = (await kernel.conversations.getConversationDetail(fast.workerConversationId, { limit: 20 })).entries
+        const fastWakeupEntry = fastEntries.find((e) => {
+          if (e.kind !== 'helmx.input' || typeof e.data !== 'object' || e.data === null) return false
+          const meta = (e.data as { meta?: Record<string, unknown> }).meta
+          return meta?.['renderer'] === 'swarm:board-wakeup'
+        })
+        assert.ok(fastWakeupEntry !== undefined, 'worker must receive structured board-wakeup entry')
+        const fastWakeupMeta = (fastWakeupEntry!.data as { meta: Record<string, unknown> }).meta
+        assert.ok(Array.isArray(fastWakeupMeta['posts']) && (fastWakeupMeta['posts'] as unknown[]).length >= 1)
+
         const metaPath = join(env1.dataDir, 'plugins', 'builtin%3Aswarm', 'groups', groupId, 'meta.json')
         const afterFastMeta = JSON.parse(readFileSync(metaPath, 'utf8')) as CollabGroupRecord
         assert.equal(afterFastMeta.lastReportHadActiveWorkers, true, 'lastReportHadActiveWorkers must be persisted to meta.json after fast done report')
@@ -940,6 +968,7 @@ describe('builtin:swarm board routing, settlement & self-healing', () => {
         m.readCursorSeq = commentSeq
         m.pendingWakeupSeq = commentSeq
         m.lastPostSeq = commentSeq
+        if (m.conversationId === slowId) delete m.lastWakeTaskSeq
       }
     }
     writeFileSync(metaPath, `${JSON.stringify(metaAfterPart3, null, 2)}\n`, 'utf8')
@@ -969,6 +998,21 @@ describe('builtin:swarm board routing, settlement & self-healing', () => {
 
       const finalMeta = JSON.parse(readFileSync(metaPath, 'utf8')) as CollabGroupRecord
       assert.equal(finalMeta.lastReportHadActiveWorkers, undefined, 'lastReportHadActiveWorkers must clear after idle catch-up')
+
+      const app3CoordEntries = (await app3.kernel.conversations.getConversationDetail(coordId, { limit: 30 })).entries
+      const idleCatchupEntry = app3CoordEntries.find((e) => {
+        if (e.kind !== 'helmx.input' || typeof e.data !== 'object' || e.data === null) return false
+        const data = e.data as { id?: string; meta?: Record<string, unknown> }
+        return data.id?.startsWith('swarm-report-idle:') === true && data.meta?.['renderer'] === 'swarm:board-report'
+      })
+      assert.ok(idleCatchupEntry !== undefined, 'idle catch-up must persist swarm:board-report entry')
+      const idleCatchupMeta = (idleCatchupEntry!.data as { meta: Record<string, unknown> }).meta
+      assert.equal('headline' in idleCatchupMeta, false, 'idle catch-up meta must not carry legacy headline')
+      assert.equal(idleCatchupMeta['idleCatchup'], true)
+      assert.equal(idleCatchupMeta['activeWorkingMembers'], undefined)
+      const catchupPosts = idleCatchupMeta['posts'] as Array<{ kind: string; body: string }>
+      assert.ok(catchupPosts.some((p) => p.body.includes('Uncommitted report must survive unrelated completionSeq bump.')))
+      assert.ok(catchupPosts.some((p) => p.kind === 'comment' && p.body === 'Trailing passive comment after done.'))
     } finally {
       await app3.close()
     }

@@ -36,6 +36,11 @@ export interface BoardPost {
   seq: number; groupId: string; from: string; to: string[]; resolvedTargets: string[]; wake: boolean
   kind: BoardPostKind; refs: number[]; body: string; idempotencyKey?: string; worktreeSnapshot?: WorktreeHandoffSnapshot; createdAt: number
 }
+export interface BoardReceiptPost {
+  seq: number; from: string; to: string[]; kind: BoardPostKind; wake: boolean
+  refs: number[]; body: string; bodyTruncated?: boolean
+  worktreeSnapshot?: WorktreeHandoffSnapshot; createdAt: number
+}
 export interface BoardBadgeEntry { groupId: string; coordinatorConversationId: number; count: number; tone: 'accent' | 'warn' | 'neutral'; footerText?: LocalizedText }
 export interface BoardBadgesDoc { byConversation: Record<string, BoardBadgeEntry> }
 export interface BoardViewHeadline { text: string; tone: 'info' | 'warn' | 'err' | 'ok'; kind: 'normal' | 'stall' | 'blocker' | 'unmerged' | 'closed'; targetMember?: string; refSeq?: number }

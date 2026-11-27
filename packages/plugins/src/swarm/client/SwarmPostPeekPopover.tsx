@@ -7,7 +7,7 @@ import { extractPostRefs, postKindBadgeTone, type BoardPost } from './board-mode
 import * as C from './copy.ts'
 import { currentPeekSeq, previousPeekSeq, type PostPeekState } from './model-post-nav.ts'
 import { PostBodyText } from './PostBodyText.tsx'
-import { PostRefButtons, PostWorktreeLine } from './SwarmPostFragments.tsx'
+import { PostRefButtons, PostWakeBadge, PostWorktreeLine } from './SwarmPostFragments.tsx'
 
 export interface SwarmPostPeekPopoverProps {
   peekState: PostPeekState
@@ -49,6 +49,7 @@ export function SwarmPostPeekPopover(props: SwarmPostPeekPopoverProps): ReactNod
             {post ? (
               <>
                 <Badge tone={postKindBadgeTone(post.kind)}>{C.postKindLabel(post.kind, locale)}</Badge>
+                <PostWakeBadge post={post} locale={locale} />
                 <span className="sw-peek-from">{`${post.from === 'coordinator' ? 'coordinator' : `@${post.from}`} -> ${C.panelPostTargets(post)}`}</span>
               </>
             ) : null}

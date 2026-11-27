@@ -15,6 +15,7 @@ import {
   ARCHIVED_WORKER_TAG,
   COORDINATOR_SCOPE,
   COORDINATOR_TAG,
+  MAX_RECEIPT_POSTS,
   PARTICIPANT_SCOPE,
   SWARM_PLUGIN_ID,
   SWARM_SKILL_ID,
@@ -26,6 +27,7 @@ import {
   assertGroupId,
   assertIndexDoc,
   assertMemberName,
+  buildReceiptPostSnapshots,
   createSwarmPlugin,
   diagnoseStallRootCause,
   evaluateGroupQuiescence,
@@ -37,6 +39,7 @@ import {
   shouldFlushCoordinatorReport,
   synthesizeBoardView,
   type BoardPost,
+  type BoardReceiptPost,
   type CollabGroupRecord,
   type GroupMemberState,
 } from '../src/swarm.js'
@@ -56,13 +59,23 @@ import {
 } from '../src/swarm/action-schemas.js'
 import { snapshotMemberTiming } from '../src/swarm/contracts.js'
 import { createBoardProjections } from '../src/swarm/projections.js'
-import { parseBoardView } from '../src/swarm/client/board-model.ts'
+import {
+  formatReceiptSeqRange,
+  isReceiptDefaultOpen,
+  parseBoardReceiptPost,
+  parseBoardReportMeta,
+  parseBoardView,
+  parseBoardWakeupMeta,
+  resolveNonDefaultWakeBadge,
+  selectReceiptLeadPost,
+} from '../src/swarm/client/board-model.ts'
 import {
   extractSwarmPresentationMeta,
   resolveSwarmToolClickTarget,
   resolveSwarmToolFacts,
 } from '../src/swarm/client/model-tool-view.ts'
 import {
+  MAX_RECEIPT_POST_BODY_CHARS,
   formatCoordinatorReportEnvelope,
   formatWorkerWakeupEnvelope,
   selectPostsForMemberWakeup,
@@ -2683,4 +2696,173 @@ test('swarm-unit18: concurrent createGroup serializes per coordinatorConversatio
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
+})
+
+test('swarm-unit19: buildReceiptPostSnapshots, selectReceiptLeadPost, isReceiptDefaultOpen, resolveNonDefaultWakeBadge & receipt meta parsers', { timeout: 60_000 }, () => {
+  // 1) buildReceiptPostSnapshots: strips internal fields, truncates long body & worktree changedFilesPreview, keeps latest 20 posts
+  const manyPosts: BoardPost[] = Array.from({ length: 25 }, (_, i) => {
+    const seq = i + 1
+    return makePost(seq, {
+      from: 'author',
+      to: ['coordinator'],
+      resolvedTargets: ['coordinator'],
+      kind: 'handoff',
+      refs: seq > 1 ? [seq - 1] : [],
+      idempotencyKey: `idem-${seq}`,
+      body: seq === 25 ? 'x'.repeat(MAX_RECEIPT_POST_BODY_CHARS + 120) : `Post body #${seq}`,
+      ...(seq === 24
+        ? {
+            worktreeSnapshot: {
+              worktreeId: 'wt-1',
+              branch: 'helmx/author',
+              commitsAhead: 2,
+              dirtyCount: 25,
+              changedFilesPreview: Array.from({ length: 24 }, (_, idx) => `dir/${'a'.repeat(250)}-${idx}.ts`),
+            },
+          }
+        : {}),
+    })
+  })
+  const snapped = buildReceiptPostSnapshots(manyPosts)
+  assert.equal(MAX_RECEIPT_POSTS, 20)
+  assert.equal(snapped.truncatedPostsCount, 5)
+  assert.equal(snapped.posts.length, 20)
+  assert.equal(snapped.posts[0]!.seq, 6)
+  assert.equal(snapped.posts.at(-1)!.seq, 25)
+  assert.equal('groupId' in snapped.posts[0]!, false)
+  assert.equal('resolvedTargets' in snapped.posts[0]!, false)
+  assert.equal('idempotencyKey' in snapped.posts[0]!, false)
+  assert.equal(snapped.posts[0]!.bodyTruncated, undefined)
+  assert.equal(snapped.posts.at(-1)!.bodyTruncated, true)
+  assert.ok(snapped.posts.at(-1)!.body.length <= MAX_RECEIPT_POST_BODY_CHARS)
+  const wtPost = snapped.posts.find((p) => p.seq === 24)!
+  assert.equal(wtPost.worktreeSnapshot?.changedFilesPreview.length, 20)
+  assert.ok(wtPost.worktreeSnapshot!.changedFilesPreview.every((f) => f.length <= 240))
+
+  const shortSnap = buildReceiptPostSnapshots(manyPosts.slice(0, 3))
+  assert.equal(shortSnap.truncatedPostsCount, 0)
+  assert.equal(shortSnap.posts.length, 3)
+
+  // 2) selectReceiptLeadPost priority rules (reverse scan)
+  const rp = (seq: number, over: Partial<BoardReceiptPost> = {}): BoardReceiptPost => ({
+    seq,
+    from: 'author',
+    to: ['coordinator'],
+    kind: 'comment',
+    wake: false,
+    refs: [],
+    body: `post ${seq}`,
+    createdAt: 1000 + seq,
+    ...over,
+  })
+  assert.equal(selectReceiptLeadPost([], 'coordinator'), undefined)
+  // Coordinator prefers latest blocker/stall over trailing wake-to-coordinator or passive comment
+  assert.equal(
+    selectReceiptLeadPost(
+      [rp(1, { kind: 'blocker', wake: true }), rp(2, { kind: 'stall', wake: true }), rp(3, { kind: 'done', wake: true })],
+      'coordinator',
+    )?.seq,
+    2,
+  )
+  // Coordinator second priority: wake === true && to.includes('coordinator')
+  assert.equal(
+    selectReceiptLeadPost(
+      [rp(1, { kind: 'review', wake: true, to: ['coordinator'] }), rp(2, { kind: 'handoff', wake: true, to: ['verifier'] }), rp(3, { kind: 'comment', wake: false, to: ['coordinator'] })],
+      'coordinator',
+    )?.seq,
+    1,
+  )
+  // Coordinator fallback: last post
+  assert.equal(
+    selectReceiptLeadPost(
+      [rp(1, { kind: 'comment', wake: false, to: ['verifier'] }), rp(2, { kind: 'comment', wake: false, to: ['coordinator'] })],
+      'coordinator',
+    )?.seq,
+    2,
+  )
+  // Worker prefers latest wake === true, falls back to last post
+  assert.equal(
+    selectReceiptLeadPost(
+      [rp(1, { kind: 'brief', wake: true, to: ['author'] }), rp(2, { kind: 'comment', wake: false, to: ['author'] })],
+      'worker',
+    )?.seq,
+    1,
+  )
+  assert.equal(
+    selectReceiptLeadPost(
+      [rp(1, { kind: 'comment', wake: false }), rp(2, { kind: 'comment', wake: false })],
+      'worker',
+    )?.seq,
+    2,
+  )
+
+  // 3) isReceiptDefaultOpen & resolveNonDefaultWakeBadge & formatReceiptSeqRange
+  assert.equal(isReceiptDefaultOpen([rp(1, { kind: 'done', wake: true })]), false)
+  assert.equal(isReceiptDefaultOpen([rp(1, { kind: 'blocker', wake: true })]), true)
+  assert.equal(isReceiptDefaultOpen([rp(1, { kind: 'stall', wake: true })]), true)
+
+  assert.equal(resolveNonDefaultWakeBadge({ kind: 'comment', wake: true }), 'woke')
+  assert.equal(resolveNonDefaultWakeBadge({ kind: 'comment', wake: false }), undefined)
+  assert.equal(resolveNonDefaultWakeBadge({ kind: 'done', wake: false }), 'silent')
+  assert.equal(resolveNonDefaultWakeBadge({ kind: 'handoff', wake: false }), 'silent')
+  assert.equal(resolveNonDefaultWakeBadge({ kind: 'stall', wake: false }), undefined)
+  assert.equal(resolveNonDefaultWakeBadge({ kind: 'done', wake: true }), undefined)
+
+  assert.equal(formatReceiptSeqRange(4, 6), '#4..#6')
+  assert.equal(formatReceiptSeqRange(5, 5), '#5')
+  assert.equal(formatReceiptSeqRange(undefined, 7), '#7')
+  assert.equal(formatReceiptSeqRange(undefined, undefined), undefined)
+
+  // 4) Strict boundary parsing of receipt posts & meta
+  assert.equal(parseBoardReceiptPost({ ...rp(1), kind: 'invalid' }), undefined)
+  assert.equal(parseBoardReceiptPost({ ...rp(1), wake: 'yes' }), undefined)
+  assert.equal(parseBoardReceiptPost({ ...rp(1), bodyTruncated: 'true' }), undefined)
+  const parsedReport = parseBoardReportMeta({
+    conversationId: 1,
+    entry: {
+      id: 'e-1',
+      kind: 'helmx.input',
+      data: {
+        createdAt: 1_700_000_000_000,
+        meta: {
+          renderer: 'swarm:board-report',
+          groupId: 'grp_1',
+          fromSeq: 2,
+          toSeq: 3,
+          postCount: 2,
+          truncatedPostsCount: 1,
+          activeWorkingMembers: ['slow', '', 42],
+          idleCatchup: true,
+          posts: [rp(2, { bodyTruncated: true }), { seq: 0, bad: true }],
+        },
+      },
+    },
+  })
+  assert.equal(parsedReport.createdAt, 1_700_000_000_000)
+  assert.deepEqual(parsedReport.activeWorkingMembers, ['slow'])
+  assert.equal(parsedReport.idleCatchup, true)
+  assert.equal(parsedReport.posts.length, 1)
+  assert.equal(parsedReport.posts[0]!.bodyTruncated, true)
+
+  const parsedWakeup = parseBoardWakeupMeta({
+    conversationId: 2,
+    entry: {
+      id: 'e-2',
+      kind: 'helmx.input',
+      data: {
+        createdAt: -5,
+        meta: {
+          renderer: 'swarm:board-wakeup',
+          workerName: 'verifier',
+          fromSeq: 4,
+          toSeq: 4,
+          postCount: 1,
+          posts: [rp(4, { kind: 'handoff', wake: true, to: ['verifier'] })],
+        },
+      },
+    },
+  })
+  assert.equal(parsedWakeup.createdAt, undefined)
+  assert.equal(parsedWakeup.workerName, 'verifier')
+  assert.equal(parsedWakeup.posts.length, 1)
 })

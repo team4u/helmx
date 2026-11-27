@@ -228,8 +228,5 @@
 .sw-panel-post-text.msg-ai-body > :last-child { margin-bottom: 0; }
 
 .sw-panel-post-toggle { align-self: flex-start; }
-.sw-panel-post-worktree { display: flex; align-items: center; gap: 5px; font-size: 11px; color: var(--fg-muted); min-width: 0; max-width: 100%; }
-.sw-panel-post-worktree > svg { flex-shrink: 0; }
-.sw-panel-post-worktree > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sw-panel-history-toggle { flex-shrink: 0; }
 .sw-panel-load-earlier { align-self: center; }
