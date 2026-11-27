@@ -19,6 +19,7 @@ import {
   Stack,
   formatModelShortName,
   formatTime,
+  resolveDefaultChainThinkingLevel,
   useHostModels,
   usePluginContext,
   usePluginDoc,
@@ -185,10 +186,21 @@ export function TiersManagerScreen(_props: ScreenProps): ReactNode {
             {draft.map((row) => {
               const badge = STATUS_BADGE[resolveTierRowStatus(row, models)]
               const isOrch = row.kind === 'orchestrator'
+              const displayThinkingLevel = resolveDefaultChainThinkingLevel(hostModels, row.model, row.thinkingLevel, 'tier')
+              const displayExecThinkingLevel = resolveDefaultChainThinkingLevel(
+                hostModels,
+                row.executorModel,
+                row.executorThinkingLevel,
+                'tier',
+              )
               const placeholder = !row.model && row.thinkingLevel ? tiersPickModelWithHint(row.thinkingLevel, locale) : t(C.pickModel)
-              const buttonTitle = row.model ? (row.thinkingLevel ? `${row.model} · ${row.thinkingLevel}` : row.model) : placeholder
+              const buttonTitle = row.model
+                ? (displayThinkingLevel && displayThinkingLevel !== 'off' ? `${row.model} · ${displayThinkingLevel}` : row.model)
+                : placeholder
               const execButtonTitle = row.executorModel
-                ? (row.executorThinkingLevel ? `${row.executorModel} · ${row.executorThinkingLevel}` : row.executorModel)
+                ? (displayExecThinkingLevel && displayExecThinkingLevel !== 'off'
+                    ? `${row.executorModel} · ${displayExecThinkingLevel}`
+                    : row.executorModel)
                 : t(C.pickModel)
               const patch = (p: Partial<TierDraftRow>) => mutateDraft((prev) => prev.map((r) => (r.key === row.key ? { ...r, ...p } : r)))
               return (
@@ -226,7 +238,7 @@ export function TiersManagerScreen(_props: ScreenProps): ReactNode {
                       <ModelPickerControl
                         buttonAriaLabel={`${t(isOrch ? C.fieldPlannerModel : C.fieldModel)}${row.id.trim() ? ` · tier/${row.id.trim()}` : ''}`}
                         effectiveModel={row.model || undefined}
-                        activeThinkingLevel={row.thinkingLevel}
+                        activeThinkingLevel={displayThinkingLevel}
                         placeholderLabel={placeholder}
                         buttonTitle={buttonTitle}
                         resetLabel={t(C.clearModel)}
@@ -260,7 +272,7 @@ export function TiersManagerScreen(_props: ScreenProps): ReactNode {
                         <ModelPickerControl
                           buttonAriaLabel={`${t(C.fieldExecutorModel)}${row.id.trim() ? ` · tier/${row.id.trim()}` : ''}`}
                           effectiveModel={row.executorModel || undefined}
-                          activeThinkingLevel={row.executorThinkingLevel}
+                          activeThinkingLevel={displayExecThinkingLevel}
                           placeholderLabel={t(C.pickModel)}
                           buttonTitle={execButtonTitle}
                           resetLabel={t(C.clearModel)}

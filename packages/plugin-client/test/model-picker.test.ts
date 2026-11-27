@@ -195,6 +195,30 @@ test('resolveDefaultChainThinkingLevel: compaction chain = configured compaction
   assert.equal(resolveDefaultChainThinkingLevel({ ...TIER_CATALOG, modelThinkingLevels: {} }, 'faux/sol', '', 'compaction'), '')
 })
 
+test('resolveDefaultChainThinkingLevel: tier chain = explicit tier preset > per-model default, kernel-clamped', { timeout: 60_000 }, () => {
+  // Explicit tier level (including explicit 'off') wins over per-model default.
+  assert.equal(resolveDefaultChainThinkingLevel(TIER_CATALOG, 'faux/sol', 'high', 'tier'), 'high')
+  assert.equal(resolveDefaultChainThinkingLevel(TIER_CATALOG, 'faux/omni', 'off', 'tier'), 'off')
+  // Empty tier level falls back to per-model default, clamped to target capabilities.
+  assert.equal(resolveDefaultChainThinkingLevel(TIER_CATALOG, 'faux/sol', '', 'tier'), 'xhigh')
+  assert.equal(
+    resolveDefaultChainThinkingLevel(
+      { ...TIER_CATALOG, modelThinkingLevels: { 'faux/sol': 'max' } },
+      'faux/sol',
+      '',
+      'tier',
+    ),
+    'xhigh',
+  )
+  // Both explicit level and per-model default empty -> returns '' (follows SDK default).
+  assert.equal(resolveDefaultChainThinkingLevel({ ...TIER_CATALOG, modelThinkingLevels: {} }, 'faux/sol', '', 'tier'), '')
+  // Empty model reference (e.g. starter draft with suggested hint) -> returns '' even if configuredLevel is set.
+  assert.equal(resolveDefaultChainThinkingLevel(TIER_CATALOG, '', 'high', 'tier'), '')
+  // Catalog unknown -> explicit level passes through unconverged, empty stays ''.
+  assert.equal(resolveDefaultChainThinkingLevel(undefined, 'faux/sol', 'high', 'tier'), 'high')
+  assert.equal(resolveDefaultChainThinkingLevel(undefined, 'faux/sol', '', 'tier'), '')
+})
+
 /** Mount the control over a catalog and return the trigger button text. */
 async function renderTriggerText(
   props: Pick<ModelPickerControlProps, 'effectiveModel' | 'activeThinkingLevel'> & Partial<ModelPickerControlProps>,
@@ -270,7 +294,23 @@ test('tier-aware trigger: shows the caller-resolved level and falls back to the 
 })
 
 test('tier rows badge the kernel-clamped preset level', { timeout: 60_000 }, async () => {
-  const handle: CatalogHandle = { slice: TIER_CATALOG, listeners: new Set() }
+  const slice: HostModelsSlice = {
+    ...TIER_CATALOG,
+    models: [
+      ...TIER_CATALOG.models,
+      { id: 'faux/nothink', provider: 'faux', modelId: 'nothink', available: true, thinkingLevels: ['off'] },
+    ],
+    modelTiers: [
+      ...(TIER_CATALOG.modelTiers ?? []),
+      { id: 'bare', model: 'faux/fast', available: true, thinkingLevels: ['off', 'low', 'high'] },
+      { id: 'staleoff', model: 'faux/nothink', available: true, thinkingLevels: ['off'] },
+    ],
+    modelThinkingLevels: {
+      ...TIER_CATALOG.modelThinkingLevels,
+      'faux/nothink': 'high',
+    },
+  }
+  const handle: CatalogHandle = { slice, listeners: new Set() }
   const container = document.createElement('div')
   document.body.appendChild(container)
   const root = ReactDOMClient.createRoot(container)
@@ -295,9 +335,15 @@ test('tier rows badge the kernel-clamped preset level', { timeout: 60_000 }, asy
     const rows = Array.from(document.body.querySelectorAll<HTMLElement>('.composer-model-row'))
     const reviewerRow = rows.find((row) => row.textContent?.includes('tier/reviewer'))
     const scoutRow = rows.find((row) => row.textContent?.includes('tier/scout'))
+    const plainRow = rows.find((row) => row.textContent?.includes('tier/plain'))
+    const bareRow = rows.find((row) => row.textContent?.includes('tier/bare'))
+    const staleoffRow = rows.find((row) => row.textContent?.includes('tier/staleoff'))
     assert.ok(reviewerRow !== null && reviewerRow !== undefined, 'reviewer tier row renders')
     assert.equal(reviewerRow.querySelector('.badge-neutral')?.textContent, 'xhigh', 'unsupported preset badges the clamped level')
     assert.equal(scoutRow?.querySelector('.badge-neutral')?.textContent, 'max')
+    assert.equal(plainRow?.querySelector('.badge-neutral')?.textContent, 'xhigh', 'tier without preset badges per-model default')
+    assert.ok(bareRow !== undefined && bareRow.querySelector('.badge-neutral') === null, 'tier without preset or per-model default omits badge')
+    assert.ok(staleoffRow !== undefined && staleoffRow.querySelector('.badge-neutral') === null, 'tier targeting non-thinking model omits badge even with stale per-model entry')
   } finally {
     await act(async () => {
       root.unmount()

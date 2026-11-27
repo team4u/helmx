@@ -1778,4 +1778,199 @@ describe("tiers-client-interactions", () => {
       mountSharedPluginNamespaces({ realHooks: false })
     }
   })
+
+  test('TiersManagerScreen: model row click displays per-model thinking default while saving dynamic inheritance (single & orchestrator)', { timeout: 60_000 }, async () => {
+    const ctx = makeSpyCtx()
+    setBuiltinClientStub({
+      docs: { state: { tiers: {}, templates: {} } },
+    })
+    const mounted = await mountWithHost(
+      e(PluginClientContext.Provider, { value: ctx }, e(TiersManagerScreen, { screenId: 'main' })),
+      {
+        modelDefaults: {
+          modelTiers: TEST_TIERS,
+          modelThinkingLevels: { 'faux/workhorse': 'medium', 'faux/flagship': 'high' },
+        },
+      },
+    )
+    try {
+      await act(async () => {
+        findButton(mounted.host, 'Add tier').click()
+      })
+      const idInput = mounted.host.querySelector<HTMLInputElement>('.tiers-id-wrap input')
+      assert.ok(idInput !== null)
+      await act(async () => {
+        setInputValue(idInput, 'coder')
+      })
+
+      const getPrimaryPickerBtn = (): HTMLButtonElement => {
+        const btn = mounted.host.querySelector<HTMLButtonElement>('button.composer-model-button')
+        assert.ok(btn !== null, 'expected primary ModelPickerControl button')
+        return btn
+      }
+
+      // 1) Click model row body (`faux/workhorse`): shows per-model default `medium` in trigger, title, and popover chip while saving without thinkingLevel
+      await act(async () => {
+        getPrimaryPickerBtn().click()
+      })
+      const workhorseMain = Array.from(document.body.querySelectorAll<HTMLButtonElement>('.composer-model-row-main')).find(
+        (btn) => btn.title.includes('faux/workhorse'),
+      )
+      assert.ok(workhorseMain !== undefined, 'expected faux/workhorse row body button')
+      await act(async () => {
+        workhorseMain.click()
+      })
+      assert.match(getPrimaryPickerBtn().textContent ?? '', /workhorse/)
+      assert.match(getPrimaryPickerBtn().textContent ?? '', /medium/)
+      assert.equal(getPrimaryPickerBtn().title, 'faux/workhorse · medium')
+
+      // Reopen popover -> `medium` chip is pressed on the current row
+      await act(async () => {
+        getPrimaryPickerBtn().click()
+      })
+      const workhorseRow = Array.from(document.body.querySelectorAll<HTMLElement>('.composer-model-row')).find((row) =>
+        (row.querySelector('.composer-model-row-main') as HTMLButtonElement | null)?.title.includes('faux/workhorse'),
+      )
+      assert.ok(workhorseRow !== undefined)
+      const mediumChip = Array.from(workhorseRow.querySelectorAll<HTMLButtonElement>('.composer-model-level-chip')).find(
+        (btn) => btn.textContent?.trim() === 'medium',
+      )
+      assert.ok(mediumChip !== undefined)
+      assert.equal(mediumChip.getAttribute('aria-pressed'), 'true')
+      await act(async () => {
+        getPrimaryPickerBtn().click()
+      })
+      await act(async () => {
+        findButton(mounted.host, 'Save tiers').click()
+      })
+      assert.deepEqual(ctx.actionCalls[0], {
+        actionId: 'replace',
+        input: { tiers: { coder: { model: 'faux/workhorse' } } },
+      })
+
+      // 2) Click explicit `high` chip -> overrides per-model default and saves thinkingLevel: 'high'
+      await act(async () => {
+        getPrimaryPickerBtn().click()
+      })
+      const highChip = Array.from(document.body.querySelectorAll<HTMLElement>('.composer-model-row'))
+        .find((row) =>
+          (row.querySelector('.composer-model-row-main') as HTMLButtonElement | null)?.title.includes('faux/workhorse'),
+        )
+        ?.querySelectorAll<HTMLButtonElement>('.composer-model-level-chip')
+      const highBtn = Array.from(highChip ?? []).find((btn) => btn.textContent?.trim() === 'high')
+      assert.ok(highBtn !== undefined)
+      await act(async () => {
+        highBtn.click()
+      })
+      assert.match(getPrimaryPickerBtn().textContent ?? '', /high/)
+      assert.equal(getPrimaryPickerBtn().title, 'faux/workhorse · high')
+      await act(async () => {
+        findButton(mounted.host, 'Save tiers').click()
+      })
+      assert.deepEqual(ctx.actionCalls[1], {
+        actionId: 'replace',
+        input: { tiers: { coder: { model: 'faux/workhorse', thinkingLevel: 'high' } } },
+      })
+
+      // 3) Click explicit `off` chip -> outranks per-model default `medium`, hides level suffix/title, presses `off` chip, and saves 'off'
+      await act(async () => {
+        getPrimaryPickerBtn().click()
+      })
+      const offBtn = Array.from(
+        Array.from(document.body.querySelectorAll<HTMLElement>('.composer-model-row'))
+          .find((row) =>
+            (row.querySelector('.composer-model-row-main') as HTMLButtonElement | null)?.title.includes('faux/workhorse'),
+          )
+          ?.querySelectorAll<HTMLButtonElement>('.composer-model-level-chip') ?? [],
+      ).find((btn) => btn.textContent?.trim() === 'off')
+      assert.ok(offBtn !== undefined)
+      await act(async () => {
+        offBtn.click()
+      })
+      assert.doesNotMatch(getPrimaryPickerBtn().textContent ?? '', /medium/)
+      assert.doesNotMatch(getPrimaryPickerBtn().textContent ?? '', /high/)
+      assert.equal(getPrimaryPickerBtn().title, 'faux/workhorse')
+      await act(async () => {
+        getPrimaryPickerBtn().click()
+      })
+      const reopenedChips = Array.from(
+        Array.from(document.body.querySelectorAll<HTMLElement>('.composer-model-row'))
+          .find((row) =>
+            (row.querySelector('.composer-model-row-main') as HTMLButtonElement | null)?.title.includes('faux/workhorse'),
+          )
+          ?.querySelectorAll<HTMLButtonElement>('.composer-model-level-chip') ?? [],
+      )
+      const reopenedOff = reopenedChips.find((btn) => btn.textContent?.trim() === 'off')
+      const reopenedMedium = reopenedChips.find((btn) => btn.textContent?.trim() === 'medium')
+      assert.equal(reopenedOff?.getAttribute('aria-pressed'), 'true')
+      assert.equal(reopenedMedium?.getAttribute('aria-pressed'), null)
+      await act(async () => {
+        getPrimaryPickerBtn().click()
+      })
+      await act(async () => {
+        findButton(mounted.host, 'Save tiers').click()
+      })
+      assert.deepEqual(ctx.actionCalls[2], {
+        actionId: 'replace',
+        input: { tiers: { coder: { model: 'faux/workhorse', thinkingLevel: 'off' } } },
+      })
+
+      // 4) Switch to `faux/fast` (no per-model default) by row body -> shows only `fast` without `·`
+      await act(async () => {
+        getPrimaryPickerBtn().click()
+      })
+      const fastMain = Array.from(document.body.querySelectorAll<HTMLButtonElement>('.composer-model-row-main')).find(
+        (btn) => btn.title.includes('faux/fast'),
+      )
+      assert.ok(fastMain !== undefined)
+      await act(async () => {
+        fastMain.click()
+      })
+      assert.match(getPrimaryPickerBtn().textContent ?? '', /fast/)
+      assert.doesNotMatch(getPrimaryPickerBtn().textContent ?? '', /·/)
+      assert.equal(getPrimaryPickerBtn().title, 'faux/fast')
+
+      // 5) Switch to dual-phase orchestrator -> click `faux/flagship` row body in Executor picker -> displays `high` and omits executorThinkingLevel
+      const orchTab = Array.from(mounted.host.querySelectorAll<HTMLButtonElement>('.tiers-kind-row [role="tab"]')).find(
+        (btn) => (btn.textContent ?? '').includes('Dual-phase'),
+      )
+      assert.ok(orchTab !== undefined, 'expected Dual-phase segmented tab')
+      await act(async () => {
+        orchTab.click()
+      })
+      const execPickerBtn = mounted.host.querySelector<HTMLButtonElement>('button[aria-label*="Executor model"]')
+      assert.ok(execPickerBtn !== null, 'expected Executor ModelPickerControl button')
+      await act(async () => {
+        execPickerBtn.click()
+      })
+      const flagshipMain = Array.from(document.body.querySelectorAll<HTMLButtonElement>('.composer-model-row-main')).find(
+        (btn) => btn.title.includes('faux/flagship'),
+      )
+      assert.ok(flagshipMain !== undefined)
+      await act(async () => {
+        flagshipMain.click()
+      })
+      assert.match(execPickerBtn.textContent ?? '', /flagship/)
+      assert.match(execPickerBtn.textContent ?? '', /high/)
+      assert.equal(execPickerBtn.title, 'faux/flagship · high')
+      await act(async () => {
+        findButton(mounted.host, 'Save tiers').click()
+      })
+      assert.deepEqual(ctx.actionCalls[3], {
+        actionId: 'replace',
+        input: {
+          tiers: {
+            coder: {
+              kind: 'orchestrator',
+              model: 'faux/fast',
+              executorModel: 'faux/flagship',
+              maxExecutionSteps: 30,
+            },
+          },
+        },
+      })
+    } finally {
+      await mounted.unmount()
+    }
+  })
 })

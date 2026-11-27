@@ -756,7 +756,7 @@ export interface PluginClientContext {
  *   useComposerModelPickerMode;
  * - ModelPickerControl: shared model + thinking-level picker (reads the catalog via the useHostModels
  *   host port slice; apply/reset callbacks keep the PI follow-default semantics);
- * - model formatting pure functions: formatModelShortName / resolveEffectiveThinkingLevel / resolveDefaultChainThinkingLevel (kernel-ordered `conversation` / `compaction` level resolution);
+ * - model formatting pure functions: formatModelShortName / resolveEffectiveThinkingLevel / resolveDefaultChainThinkingLevel (kernel-ordered `conversation` / `compaction` / `tier` level resolution);
  * - form, card & layout primitives: Button / IconButton / Badge / Stack / Input / Textarea /
  *   Field / HelperText / ErrorText / Card / SelectCard / CardGrid / MonoId;
  * - accessibility & overlay components: Switch / Select / MultiSelect / Checkbox / Tabs family

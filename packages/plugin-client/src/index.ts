@@ -121,7 +121,7 @@ export {
   stepActiveIndex,
   usePanelShortcut,
 } from './ui/model-picker-model.js'
-export type { HelmxPanel, HelmxShortcutEventDetail, ModelPickerControlCopy } from './ui/model-picker-model.js'
+export type { DefaultThinkingLevelChain, HelmxPanel, HelmxShortcutEventDetail, ModelPickerControlCopy } from './ui/model-picker-model.js'
 
 // ---- Accessibility base components (Radix wrappers) ----
 export { Switch } from './ui/Switch.js'

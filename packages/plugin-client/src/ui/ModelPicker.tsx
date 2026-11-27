@@ -149,6 +149,8 @@ interface ModelPickerTierRowProps {
   isActive: boolean
   isCurrent: boolean
   disabled: boolean
+  perModelThinkingLevel?: string
+  targetModelLevels?: ReadonlyArray<string>
   copy: ModelPickerControlCopy
   setItemRef: (index: number, node: HTMLElement | null) => void
   onHover: (index: number) => void
@@ -161,6 +163,8 @@ function ModelPickerTierRow({
   isActive,
   isCurrent,
   disabled,
+  perModelThinkingLevel,
+  targetModelLevels,
   copy,
   setItemRef,
   onHover,
@@ -170,11 +174,18 @@ function ModelPickerTierRow({
   const orchestrator = isOrchestratorTier(tier)
   const targetShort = formatModelShortName(tier.model)
   const executorShort = orchestrator ? formatModelShortName(tier.executorModel) : ''
-  // The badge shows the level the kernel will actually run: a preset the
-  // target model does not support clamps the same way as the trigger.
-  const tierPresetBadge =
+  // The badge shows the level the kernel will actually run for this tier:
+  // tier preset > per-model default, converged the way the kernel clamps.
+  const rawTierLevel =
     tier.thinkingLevel !== undefined && tier.thinkingLevel !== ''
-      ? resolveEffectiveThinkingLevel(tier.thinkingLevels ?? [tier.thinkingLevel], tier.thinkingLevel)
+      ? tier.thinkingLevel
+      : (perModelThinkingLevel ?? '').trim()
+  const effectiveTierLevels = tier.thinkingLevels ?? targetModelLevels
+  const tierSupportsThinking =
+    effectiveTierLevels === undefined || effectiveTierLevels.some((level) => level !== 'off')
+  const tierPresetBadge =
+    rawTierLevel !== '' && tierSupportsThinking
+      ? resolveEffectiveThinkingLevel(effectiveTierLevels ?? [rawTierLevel], rawTierLevel)
       : ''
   const titleModel = orchestrator && tier.executorModel !== undefined && tier.executorModel !== ''
     ? `${tier.model} -> ${tier.executorModel}`
@@ -854,6 +865,8 @@ export function ModelPickerControl({
                       isActive={idx === activeIndex}
                       isCurrent={`${MODEL_TIER_PREFIX}/${tier.id}` === listEffectiveModel}
                       disabled={disabled}
+                      perModelThinkingLevel={catalog?.modelThinkingLevels?.[tier.model]}
+                      targetModelLevels={models.find((m) => m.id === tier.model)?.thinkingLevels}
                       copy={copy}
                       setItemRef={setItemRef}
                       onHover={setActiveIndex}

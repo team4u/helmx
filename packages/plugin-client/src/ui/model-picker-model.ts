@@ -114,7 +114,9 @@ export function resolveEffectiveThinkingLevel(levels: ReadonlyArray<string>, act
  *   tier preset > per-model default > the level configured beside the reference
  *   (Profile / global level);
  * - `'compaction'` (compaction routing in `Models.completeSimple`): the configured
- *   compaction level > tier preset > per-model default.
+ *   compaction level > tier preset > per-model default;
+ * - `'tier'` (tier target model binding in `TiersManagerScreen`): the tier's
+ *   explicit preset > per-model default.
  *
  * The first non-empty candidate of the chain converges against the target model's
  * supported levels. Returns `''` when nothing can be shown honestly: no reference,
@@ -122,7 +124,7 @@ export function resolveEffectiveThinkingLevel(levels: ReadonlyArray<string>, act
  * is still unknown; a concrete reference outside the catalog keeps its chain result
  * merely unconverged.
  */
-export type DefaultThinkingLevelChain = 'conversation' | 'compaction'
+export type DefaultThinkingLevelChain = 'conversation' | 'compaction' | 'tier'
 
 export function resolveDefaultChainThinkingLevel(
   catalog: Pick<HostModelsSlice, 'models' | 'modelTiers' | 'modelThinkingLevels'> | undefined,
@@ -140,7 +142,9 @@ export function resolveDefaultChainThinkingLevel(
   const candidates =
     chain === 'compaction'
       ? [configured, tier?.thinkingLevel, perModel]
-      : [tier?.thinkingLevel, perModel, configured]
+      : chain === 'tier'
+        ? [configured, perModel]
+        : [tier?.thinkingLevel, perModel, configured]
   const raw = candidates.find((candidate) => candidate !== undefined && candidate !== '') ?? ''
   if (tierId === undefined) {
     const levels = catalog?.models.find((entry) => entry.id === ref)?.thinkingLevels

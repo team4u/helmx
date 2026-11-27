@@ -9,6 +9,7 @@
  * with zero Radix and zero component imports.
  */
 export { resolveDefaultChainThinkingLevel, resolveEffectiveThinkingLevel } from './ui/model-picker-model.js'
+export type { DefaultThinkingLevelChain } from './ui/model-picker-model.js'
 export {
   STATUS_LIGHT_TONES,
   normalizeStatusLightTone,
