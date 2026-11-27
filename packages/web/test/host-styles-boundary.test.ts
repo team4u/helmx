@@ -362,7 +362,8 @@ test('样式边界：.btn-inline 归属 primitives.css，旧 .callout--* 与 .tr
 
 test('样式边界：主舞台 .screen-host-body / SearchBox / EmptyState 与 Tabs pills 归属公共分片，无 :has() 补丁与旧类残留', { timeout: 60_000 }, () => {
   const segmented = readFileSync(join(STYLES_DIR, 'segmented.css'), 'utf8')
-  const centers = readFileSync(join(STYLES_DIR, 'centers.css'), 'utf8')
+  const centers = stripCssComments(readFileSync(join(STYLES_DIR, 'centers.css'), 'utf8'))
+  const modelCenter = stripCssComments(readFileSync(join(STYLES_DIR, 'model-center.css'), 'utf8'))
   const strippedPrimitives = stripCssComments(primitives)
 
   for (const selector of [
@@ -384,6 +385,31 @@ test('样式边界：主舞台 .screen-host-body / SearchBox / EmptyState 与 Ta
   for (const stale of ['.primary-category-pill', '.primary-center-empty', '.primary-search-box']) {
     assert.ok(!centers.includes(stale), `centers.css 不得再残留旧类 ${stale}`)
   }
+
+  // Wave 2 五大中心迁至 SDK Screen / CardGrid / SelectCard / Tabs 后，锁定已退场旧类不得回流任何宿主样式分片
+  // （保留 .primary-drawer-* 供 SDK DetailDrawer 复用）。
+  const allHostCss = [
+    ...readdirSync(STYLES_DIR)
+      .filter((name) => name.endsWith('.css'))
+      .map((name) => ({ name, css: stripCssComments(readFileSync(join(STYLES_DIR, name), 'utf8')) })),
+    { name: 'responsive.css', css: stripCssComments(readFileSync(join(__dirname, '../src/responsive.css'), 'utf8')) },
+  ]
+  for (const { name, css } of allHostCss) {
+    for (const stale of [
+      '.primary-center',
+      '.primary-card-',
+      '.model-center-tabs',
+      '.model-center-tab-btn',
+      '.model-center-main-tabs',
+      '.model-toolbar-inline',
+    ]) {
+      assert.ok(!css.includes(stale), `宿主分片 ${name} 不得回流已收口旧类 ${stale}`)
+    }
+  }
+  assert.ok(
+    !modelCenter.includes('.model-defaults-panel .composer-model-button'),
+    'model-center.css 不得再残留已收口旧选择器 .model-defaults-panel .composer-model-button',
+  )
 })
 
 test('样式边界：统一批量操作栏 .batch-bar 族与 .btn-danger-sm 完整归属 primitives.css（sidebar/overview 分片仅留布局微调）', { timeout: 60_000 }, () => {
