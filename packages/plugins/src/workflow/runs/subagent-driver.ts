@@ -302,6 +302,9 @@ export class SubagentRunDriver {
     run.abort.signal.addEventListener(
       'abort',
       () => {
+        // Why: 已进入结算的 run 没有可中止的子会话也无需再 settle；`finishSettlement` 仍会把该信号当清理触发，
+        // 而结算落盘尾部可能晚于 PluginHost dispose 执行，此时再读配置会抛 `plugin_host_disposed`。
+        if (settledOnce) return
         if (!this.core.isRunSuspending(run)) {
           for (const childId of [...run.childConversations]) {
             abortChildConversation(host, run, childId)

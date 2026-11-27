@@ -15,6 +15,9 @@
  * - 进程重启恢复：遗留 kind: 'subagent' + running 记录 init() 后标
  *   failed (interrupted) 并补发一次 onBackgroundAgentSettled；已终态但
  *   未 notifiedAt 的记录同样补发（outbox），notifiedAt 落库。
+ * - 结算尾部竞态：run 已进入结算后 run.abort 才触发（结算落盘可能晚于
+ *   PluginHost dispose）时监听器不再读配置、不中止子会话；宿主未关停时
+ *   suspend/abort 裁决零配置读取。
  */
 
 import { strict as assert } from 'node:assert'
@@ -1057,5 +1060,67 @@ describe('startBackgroundAgent', () => {
     } finally {
       rmSync(localDir, { recursive: true, force: true })
     }
+  })
+
+  it('run 已进入结算后 run.abort 才触发：监听器不再读配置、不中止子会话（结算尾部晚于宿主 dispose 仍安全）', timeout, async () => {
+    // 真实时序（CI 45978494696）：子代理完成 → 结算开始（header=completed、落盘中）→ kernel.close() 置 isClosing →
+    // PluginHost.dispose 置 disposed（尚未进入 workflow stop 窗口）→ 落盘完成 → finishSettlement 触发 run.abort →
+    // 监听器读配置 → plugin_host_disposed 未捕获。用结算首次 isHostClosing() 调用作为门控翻转"宿主已销毁"。
+    const host = makeHost()
+    host.behavior = { kind: 'hanging', execution: { conversationId: 42 }, result: 'done-result' }
+    let disposed = false
+    host.isHostClosing = () => false
+    const configReadsWhileDisposed: boolean[] = []
+    const service = new WorkflowService({
+      dataDir,
+      host,
+      kv: makeStateStore(),
+      autoRecoverOnRestart: () => {
+        configReadsWhileDisposed.push(disposed)
+        return true
+      },
+    })
+    await service.init()
+    configReadsWhileDisposed.length = 0
+    const { run } = await service.startBackgroundAgent({ parentConversationId: 1, prompt: '结算尾部竞态' })
+    // 门控：结算的首次 isHostClosing() 即模拟 kernel.close() + PluginHost.dispose()（dispose 先于 workflow stop 窗口）。
+    host.isHostClosing = () => {
+      disposed = true
+      return true
+    }
+    host.release()
+    assert.equal(await service.wait(run.id), 'done-result')
+    assert.equal(service.getRun(run.id).status, 'completed')
+    assert.deepEqual(
+      configReadsWhileDisposed,
+      [],
+      'run 已结算后 run.abort 监听器不得再读取 autoRecover 配置（宿主 dispose 后该读取抛 plugin_host_disposed）',
+    )
+    assert.deepEqual(host.abortedConversations, [], '已结算的 run 不得再中止子会话')
+    await service.close()
+  })
+
+  it('宿主未关停时 suspend/abort 裁决不读取配置，显式 abort 仍中止子会话', timeout, async () => {
+    const host = makeHost()
+    host.behavior = { kind: 'hanging', execution: { conversationId: 42 }, result: 'never' }
+    host.isHostClosing = () => false
+    let configReads = 0
+    const service = new WorkflowService({
+      dataDir,
+      host,
+      kv: makeStateStore(),
+      autoRecoverOnRestart: () => {
+        configReads++
+        return true
+      },
+    })
+    await service.init()
+    configReads = 0
+    const { run } = await service.startBackgroundAgent({ parentConversationId: 1, prompt: '显式中止' })
+    await service.abort(run.id)
+    assert.equal(service.getRun(run.id).status, 'aborted')
+    assert.deepEqual(host.abortedConversations, [42], '非挂起语义的中止必须到达子会话')
+    assert.equal(configReads, 0, '宿主未关停时 isRunSuspending 不得读取配置（仅关停场景由配置裁决）')
+    await service.close()
   })
 })
