@@ -303,10 +303,6 @@ export const shellMessages = {
   },
 
   // Sidebar conversation working set & quick switcher
-  'shell.sidebar.sectionRecent': {
-    en: 'Recent',
-    'zh-CN': '近期',
-  },
   'shell.sidebar.viewAllConversations': {
     en: 'View all {count} conversations',
     'zh-CN': '查看全部 {count} 个会话',

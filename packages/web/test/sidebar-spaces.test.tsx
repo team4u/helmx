@@ -375,9 +375,9 @@ test('Sidebar 工作集态势分节、分屏焦点、后代展开、搜索防藏
   )
   await act(async () => {})
 
-  // 四态分节顺序：需处理 -> 进行中 -> 未读完成 -> 近期（非搜索态安静区标题为「近期」）
+  // 四态分节顺序：需处理 -> 进行中 -> 未读完成 -> 空闲（与总览页分节命名统一）
   const sectionTitles = [...document.body.querySelectorAll('.sidebar-overview-section-title')].map((el) => el.textContent)
-  assert.deepEqual(sectionTitles, ['需处理', '进行中', '未读完成', '近期'])
+  assert.deepEqual(sectionTitles, ['需处理', '进行中', '未读完成', '空闲'])
   assert.ok(!document.body.textContent!.includes('累计'), '窄栏工作集不展示静态累计耗时')
 
   // 主屏当前会话高亮 + 焦点的「主」微标
@@ -439,9 +439,9 @@ test('Sidebar 工作集态势分节、分屏焦点、后代展开、搜索防藏
   assert.deepEqual(store.getPrimaryTarget(), { kind: 'conversation', conversationId: 41 })
   assert.equal(closeCount, 2)
 
-  // 折叠「近期」分节，再搜索「历史安静」：搜索防藏匿自动临时展开；清空后恢复折叠态
+  // 折叠「空闲」分节，再搜索「历史安静」：搜索防藏匿自动临时展开；清空后恢复折叠态
   const quietSectionToggle = [...document.body.querySelectorAll<HTMLButtonElement>('.sidebar-overview-section-toggle')].find((el) =>
-    el.textContent?.includes('近期'),
+    el.textContent?.includes('空闲'),
   )!
   await act(async () => {
     quietSectionToggle.click()
@@ -909,9 +909,9 @@ test('Sidebar 批量管理：开关切换、单选/全选/清空、折叠收敛�
       .find((btn) => btn.textContent === '清空')!
     assert.ok(clearBtn !== undefined, '全选后按钮切换为清空')
 
-    // 折叠「近期」分节：不可见的 8 项自动从已选集收敛出局，只保留「进行中」的 1 项
+    // 折叠「空闲」分节：不可见的 8 项自动从已选集收敛出局，只保留「进行中」的 1 项
     const recentToggle = [...document.body.querySelectorAll<HTMLButtonElement>('.sidebar-overview-section-toggle')].find((el) =>
-      el.textContent?.includes('近期'),
+      el.textContent?.includes('空闲'),
     )!
     await act(async () => {
       recentToggle.click()

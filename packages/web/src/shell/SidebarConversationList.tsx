@@ -941,10 +941,6 @@ export function SidebarConversationList({
 
               const collapsed = activeCollapsedKeys.has(group.key)
               const headingId = `${sectionIdPrefix}-${group.key}`
-              const sectionTitle =
-                group.kind === 'bucket' && group.bucket === 'quiet' && !workingSet.searchActive
-                  ? t('shell.sidebar.sectionRecent')
-                  : group.label
               const showCount = group.kind !== 'profile' || collapsed
               return (
                 <section
@@ -964,7 +960,7 @@ export function SidebarConversationList({
                       <span
                         className={`sidebar-overview-section-title${group.kind === 'node' && group.nodeId !== 'local' ? ' mono' : ''}`}
                       >
-                        {sectionTitle}
+                        {group.label}
                       </span>
                       <HelmxIcon
                         name={collapsed ? 'chevron-right' : 'chevron-down'}
