@@ -1,6 +1,6 @@
 import { useMemo, useId, useRef, useState } from 'react'
 import { resolveLocalizedText, type AskSpec } from '@helmx/protocol/browser'
-import { Callout, HelperText } from '@helmx/plugin-client'
+import { Callout, HelperText } from '@helmx/ui'
 import { useWebLocale } from '../../i18n/use-web-locale.js'
 import { useStoreActions } from '../../lib/store-context.js'
 import {

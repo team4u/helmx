@@ -13,7 +13,7 @@ import {
   KvGrid,
   MonoId,
   Stack,
-} from '@helmx/plugin-client'
+} from '@helmx/ui'
 import { CodeBlockView } from '../conversation/MarkdownView.js'
 import { createWebTranslator } from '../i18n/catalog.js'
 import { useOptionalLocale } from '../lib/store-context.js'

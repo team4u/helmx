@@ -14,7 +14,7 @@ import {
   IconButton,
   Stack,
   Tooltip,
-} from '@helmx/plugin-client'
+} from '@helmx/ui'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { formatModShiftShortcut } from './shortcuts-model.js'
 import type { AgentStanding } from './sidebar-model.js'

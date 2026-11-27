@@ -1,4 +1,4 @@
-import { Button, HelmxIcon } from '@helmx/plugin-client'
+import { Button, HelmxIcon } from '@helmx/ui'
 import { useWebLocale } from '../../i18n/use-web-locale.js'
 
 /** Collapsible tail of a terminal snapshot attached to the ask (context or fenced description block). */

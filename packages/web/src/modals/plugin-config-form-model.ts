@@ -19,7 +19,7 @@ import type {
   PluginConfigFieldValue,
   Profile,
 } from '@helmx/protocol/browser'
-import type { SelectOption } from '@helmx/plugin-client'
+import type { SelectOption } from '@helmx/ui'
 import type { WebMessageTranslator } from '../i18n/catalog.js'
 
 export type ConfigValue = PluginConfigFieldValue

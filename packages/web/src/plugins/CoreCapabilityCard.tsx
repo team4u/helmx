@@ -1,6 +1,6 @@
 import React, { useMemo } from 'react'
 import { DEFAULT_HELMX_LOCALE } from '@helmx/protocol/browser'
-import { Badge, SelectCard, Stack } from '@helmx/plugin-client'
+import { Badge, SelectCard, Stack } from '@helmx/ui'
 import { createWebTranslator } from '../i18n/catalog.js'
 import { useOptionalLocale } from '../lib/store-context.js'
 import type { CoreCapabilityOwner } from './core-capability-model.js'

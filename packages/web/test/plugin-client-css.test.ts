@@ -27,7 +27,7 @@ import { makeTestStore } from './helpers/store.js'
 ensureHappyDom()
 ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
 const { createRoot } = await import('react-dom/client')
-const { Dialog, DialogContent, DialogPortal, DialogTitle } = await import('@helmx/plugin-client')
+const { Dialog, DialogContent, DialogPortal, DialogTitle } = await import('@helmx/ui')
 const { PluginUiView } = await import('../src/ui/PluginUiView.js')
 const { CodeBlockRenderer } = await import('../src/conversation/CodeBlockRenderer.js')
 const { HostStoreProviders } = await import('./helpers/host-store.js')

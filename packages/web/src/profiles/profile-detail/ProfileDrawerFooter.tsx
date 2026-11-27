@@ -1,5 +1,5 @@
 import React from 'react'
-import { Button, Stack } from '@helmx/plugin-client'
+import { Button, Stack } from '@helmx/ui'
 import { useWebLocale } from '../../i18n/use-web-locale.js'
 
 export interface ProfileDrawerFooterProps {

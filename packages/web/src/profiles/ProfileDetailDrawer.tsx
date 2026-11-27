@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { PROFILE_DETAIL_SECTION_SLOT } from '@helmx/protocol/browser'
-import { Badge, Callout, DetailDrawer, MonoId, PluginSlot } from '@helmx/plugin-client'
+import { Badge, Callout, DetailDrawer, MonoId } from '@helmx/ui'
+import { PluginSlot } from '@helmx/plugin-client'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { isSystemProfile, profileIdValid, type Profile } from './profile-center-model.js'
 import { ProfileBasicFieldsCard } from './profile-detail/ProfileBasicFieldsCard.js'

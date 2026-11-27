@@ -15,7 +15,8 @@ import {
   type ConversationSummary,
   type Profile,
 } from '@helmx/protocol/browser'
-import { HelmxIcon, IconButton, PluginSlot } from '@helmx/plugin-client'
+import { HelmxIcon, IconButton } from '@helmx/ui'
+import { PluginSlot } from '@helmx/plugin-client'
 import type { ModelCatalogDefaults } from '../../lib/api.js'
 import { useWebLocale } from '../../i18n/use-web-locale.js'
 import type { QualifiedCommand } from '../../lib/commands-model.js'

@@ -10,7 +10,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
-import { Button, Card, HelmxIcon, Stack } from '@helmx/plugin-client'
+import { Button, Card, HelmxIcon, Stack } from '@helmx/ui'
 import { apiRequest, ApiClientError } from '../lib/api.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import {

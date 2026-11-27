@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ConversationSummary } from '@helmx/protocol/browser'
-import { Button, ErrorText } from '@helmx/plugin-client'
+import { Button, ErrorText } from '@helmx/ui'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { conversationsApi } from '../lib/api.js'
 import { useNodes, useStoreActions } from '../lib/store-context.js'

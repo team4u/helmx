@@ -4,7 +4,7 @@
  * shows the transcript).
  */
 import type { ConversationSummary } from '@helmx/protocol/browser'
-import { Badge, HelmxIcon } from '@helmx/plugin-client'
+import { Badge, HelmxIcon } from '@helmx/ui'
 import { useWebLocale } from '../../i18n/use-web-locale.js'
 
 export interface ConversationDrawerEnvBarProps {

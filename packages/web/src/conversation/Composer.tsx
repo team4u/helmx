@@ -1,12 +1,10 @@
 import { memo, useCallback, useId, useMemo, useRef, useState } from 'react'
 import type { ComposerMenuSlotProps, ComposerScopeProps, ConversationSummary, WhenBusy } from '@helmx/protocol/browser'
 import { COMPOSER_DOCK_SLOT, COMPOSER_MENU_SLOT, COMPOSER_STATUS_SLOT, COMPOSER_TOOLBAR_SLOT } from '@helmx/protocol/browser'
+import { Button, HelmxIcon, Kbd } from '@helmx/ui'
 import {
-  Button,
   ComposerCommandContext,
   ComposerModelPickerModeContext,
-  HelmxIcon,
-  Kbd,
   PluginSlot,
   createComposerCommandRegistry,
   createComposerModelPickerModeRegistry,

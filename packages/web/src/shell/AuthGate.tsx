@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from 'react'
 import { authApi } from '../lib/api.js'
-import { Button, Card, Field, HelmxIcon, IconButton, Input, Stack } from '@helmx/plugin-client'
+import { Button, Card, Field, HelmxIcon, IconButton, Input, Stack } from '@helmx/ui'
 import { useAuthConnection, useStoreActions, useThemePreferencesState } from '../lib/store-context.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { LocaleMenuButton } from '../ui/LocaleMenuButton.js'

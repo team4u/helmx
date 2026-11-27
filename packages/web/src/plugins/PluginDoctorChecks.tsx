@@ -1,6 +1,6 @@
 import React from 'react'
 import type { PluginDoctorReport } from '@helmx/protocol/browser'
-import { HelmxIcon, Stack } from '@helmx/plugin-client'
+import { HelmxIcon, Stack } from '@helmx/ui'
 import { buildDoctorCheckItems } from './plugin-package-model.js'
 
 export interface PluginDoctorChecksProps {

@@ -1,6 +1,6 @@
 import React from 'react'
 import type { PluginDoctorReport, PluginManagedMeta } from '@helmx/protocol/browser'
-import { Badge, Button, Card, HelmxIcon, Input, KvGrid, Stack } from '@helmx/plugin-client'
+import { Badge, Button, Card, HelmxIcon, Input, KvGrid, Stack } from '@helmx/ui'
 import { useWebLocale } from '../../i18n/use-web-locale.js'
 import {
   detectPluginSourceKind,

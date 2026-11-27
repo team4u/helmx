@@ -17,7 +17,7 @@ const {
   AlertDialogPortal,
   AlertDialogTitle,
   ConfirmDialog,
-} = await import('@helmx/plugin-client')
+} = await import('@helmx/ui')
 
 const e = React.createElement
 

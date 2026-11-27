@@ -20,7 +20,8 @@ import type { HelmxStoreValue } from '../src/lib/types.js'
 
 const { HelmxStoreProvider } = await import('../src/lib/HelmxStoreProvider.js')
 const { useHelmxStore } = await import('../src/lib/store-context.js')
-const { DetailDrawer, ScreenParamsContext, useScreenDrawer } = await import('@helmx/plugin-client')
+const { DetailDrawer } = await import('@helmx/ui')
+const { ScreenParamsContext, useScreenDrawer } = await import('@helmx/plugin-client')
 const { ProfileCenter } = await import('../src/profiles/ProfileCenter.js')
 const { NodeCenter } = await import('../src/nodes/NodeCenter.js')
 const { ModelCenter } = await import('../src/models/ModelCenter.js')

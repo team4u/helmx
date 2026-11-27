@@ -7,7 +7,7 @@ import {
   HelmxIcon,
   SearchBox,
   Stack,
-} from '@helmx/plugin-client'
+} from '@helmx/ui'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import type { ProviderItem, ProviderModelItem } from './model-center-model.js'
 

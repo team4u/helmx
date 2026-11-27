@@ -1,6 +1,7 @@
 import { memo, useContext, useMemo, useState } from 'react'
 import type { ConversationEntry, ConversationSummary } from '@helmx/protocol/browser'
-import { CopyButton, HelmxIcon, IconButton, ToolActivityContext, useSharedNowMs } from '@helmx/plugin-client'
+import { CopyButton, HelmxIcon, IconButton } from '@helmx/ui'
+import { ToolActivityContext, useSharedNowMs } from '@helmx/plugin-client'
 import { MarkdownView } from './MarkdownView.js'
 import { StepGroup, TraceRow } from './TimelineRows.js'
 import { ToolActivityProvider } from './ToolActivityProvider.js'

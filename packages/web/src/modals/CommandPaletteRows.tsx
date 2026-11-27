@@ -2,7 +2,7 @@
  * Highlighted search row and command row subcomponents extracted from CommandPaletteModal.
  */
 import { Fragment, type MouseEvent } from 'react'
-import { HelmxIcon, Kbd } from '@helmx/plugin-client'
+import { HelmxIcon, Kbd } from '@helmx/ui'
 import type { WebMessageTranslator } from '../i18n/catalog.js'
 import { ConversationStatusDot } from '../shell/SidebarPrimitives.js'
 import type { ConversationBackgroundIndex } from '../shell/conversation-status-model.js'

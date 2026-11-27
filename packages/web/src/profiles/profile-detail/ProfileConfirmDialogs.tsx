@@ -1,5 +1,5 @@
 import React from 'react'
-import { ConfirmDialog } from '@helmx/plugin-client'
+import { ConfirmDialog } from '@helmx/ui'
 import { useWebLocale } from '../../i18n/use-web-locale.js'
 
 export interface ProfileConfirmDialogsProps {

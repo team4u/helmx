@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
-import { Dialog, DialogContent, DialogOverlay, DialogPortal, DialogTitle, EmptyState, HelmxIcon, LoadingState } from '@helmx/plugin-client'
+import { Dialog, DialogContent, DialogOverlay, DialogPortal, DialogTitle, EmptyState, HelmxIcon, LoadingState } from '@helmx/ui'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { isImeComposing } from '../lib/ime.js'
 import { formatModShortcut } from '../shell/shortcuts-model.js'

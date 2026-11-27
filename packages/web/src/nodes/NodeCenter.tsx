@@ -11,7 +11,7 @@ import {
   Tabs,
   TabsList,
   TabsTrigger,
-} from '@helmx/plugin-client'
+} from '@helmx/ui'
 import type { WebMessageKey } from '../i18n/catalog.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { useLocationTargets, useNodes, useStoreActions } from '../lib/store-context.js'

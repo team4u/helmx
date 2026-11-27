@@ -1,5 +1,5 @@
 import React, { useMemo, type RefObject } from 'react'
-import { Card, Checkbox, HelperText, SearchBox, Stack, Switch } from '@helmx/plugin-client'
+import { Card, Checkbox, HelperText, SearchBox, Stack, Switch } from '@helmx/ui'
 import { useWebLocale } from '../../i18n/use-web-locale.js'
 import { summarizeSingleLine } from '../../lib/format.js'
 import { useSkills } from '../../lib/store-context.js'

@@ -7,16 +7,8 @@ import {
   resolveEffectiveProfileModel,
   summarizeProfileActivity,
 } from './profile-center-model.js'
-import {
-  Badge,
-  Button,
-  HelmxIcon,
-  SelectCard,
-  Stack,
-  StatusLight,
-  useHostModels,
-  type StatusLightTone,
-} from '@helmx/plugin-client'
+import { Badge, Button, HelmxIcon, SelectCard, Stack, StatusLight, type StatusLightTone } from '@helmx/ui'
+import { useHostModels } from '@helmx/plugin-client'
 import {
   useOptionalConversations,
   useOptionalPlugins,

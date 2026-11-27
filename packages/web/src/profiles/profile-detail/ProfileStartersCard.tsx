@@ -1,6 +1,6 @@
 import React from 'react'
 import { PROFILE_STARTERS_MAX_ITEMS } from '@helmx/protocol/browser'
-import { Button, Card, ErrorText, HelperText, IconButton, Input, Textarea } from '@helmx/plugin-client'
+import { Button, Card, ErrorText, HelperText, IconButton, Input, Textarea } from '@helmx/ui'
 import { useWebLocale } from '../../i18n/use-web-locale.js'
 import { startersAtLimit, validateStarterDraft } from '../profile-center-model.js'
 import type { StarterFormItem } from './profile-form-model.js'

@@ -4,7 +4,7 @@
  * error with its retry.
  */
 import type { Profile } from '@helmx/protocol/browser'
-import { Button, HelmxIcon, Tooltip } from '@helmx/plugin-client'
+import { Button, HelmxIcon, Tooltip } from '@helmx/ui'
 import { useWebLocale } from '../../i18n/use-web-locale.js'
 import { useStoreActions } from '../../lib/store-context.js'
 import { StandbyEnvBar } from '../StandbyControls.js'

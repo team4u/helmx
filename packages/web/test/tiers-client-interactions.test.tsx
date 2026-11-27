@@ -40,13 +40,13 @@ import { makeTestStore } from './helpers/store.js'
 
 ensureHappyDom()
 const { createRoot } = await import('react-dom/client')
+const { resolveLocalizedText } = await import('@helmx/ui')
 const {
   ComposerModelPickerModeContext,
   ModelPickerControl,
   PluginClientContext,
   PluginClientHostContext,
   createComposerModelPickerModeRegistry,
-  resolveLocalizedText,
   useComposerModelPickerMode,
 } = await import('@helmx/plugin-client')
 const { Composer } = await import('../src/conversation/Composer.js')

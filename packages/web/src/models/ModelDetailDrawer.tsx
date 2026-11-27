@@ -9,7 +9,7 @@ import {
   EmptyState,
   MonoId,
   Stack,
-} from '@helmx/plugin-client'
+} from '@helmx/ui'
 import { useOptionalModels, useOptionalStoreActions } from '../lib/store-context.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import {

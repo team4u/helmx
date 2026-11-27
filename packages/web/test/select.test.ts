@@ -1,15 +1,15 @@
 import './helpers/register-happy-dom.js'
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
 import React, { act } from 'react'
 import { renderToString } from 'react-dom/server'
-import type { SelectOption, SelectChangeEvent } from '@helmx/plugin-client'
+import type { SelectOption, SelectChangeEvent } from '@helmx/ui'
 import { ensureHappyDom } from './helpers/dom-harness.js'
+import { readHostStyles } from './helpers/host-styles.js'
 
 ensureHappyDom()
 const ReactDOMClient = await import('react-dom/client')
-const { Select } = await import('@helmx/plugin-client')
+const { Select } = await import('@helmx/ui')
 
 const e = React.createElement
 
@@ -279,11 +279,8 @@ test('CSS stacking regression: Popover 内容节点必须声明 z-index: 80，Se
   // [data-radix-popper-content-wrapper]; if .helmx-popover-content computes to 'auto',
   // inline z-index: auto overrides the wrapper rule and lets .timeline-container::after (z-index: 2)
   // paint a horizontal seam straight across the popover.
-  const tokensCss = readFileSync(new URL('../src/styles/tokens.css', import.meta.url), 'utf8')
-  const formsCss = readFileSync(new URL('../src/styles/forms.css', import.meta.url), 'utf8')
-  const overlaysCss = readFileSync(new URL('../src/styles/overlays.css', import.meta.url), 'utf8')
   const style = document.createElement('style')
-  style.textContent = `${tokensCss}\n${formsCss}\n${overlaysCss}`
+  style.textContent = readHostStyles()
   document.head.appendChild(style)
 
   const makeWrapped = (className: string, inlineZ?: string): HTMLElement => {
@@ -299,16 +296,19 @@ test('CSS stacking regression: Popover 内容节点必须声明 z-index: 80，Se
 
   const plainPopover = makeWrapped('helmx-popover-content magpie-quota-popover')
   const modelPopover = makeWrapped('helmx-popover-content composer-popover composer-model-popover')
+  const paneMorePopover = makeWrapped('helmx-popover-content pane-more-popover')
   const selectPopover = makeWrapped('helmx-popover-content helmx-select-popover')
   const nestedDialogPopover = makeWrapped('helmx-popover-content magpie-quota-popover', '1002')
   try {
     assert.equal(getComputedStyle(plainPopover).zIndex, '80', '普通 Popover 必须向 Radix Popper 暴露 z-index: 80 而非 auto')
     assert.equal(getComputedStyle(modelPopover).zIndex, '80', '模型选择器 Popover 统一处于 80 层，不被侧栏或底渐隐层遮挡')
+    assert.equal(getComputedStyle(paneMorePopover).zIndex, '80', '会话顶栏更多菜单 Popover 统一处于 80 层，不被 @layer host-components 压回 50')
     assert.equal(getComputedStyle(selectPopover).zIndex, '120', 'MultiSelect 复用 PopoverContent 时仍须维持 120 层高于旧弹窗')
     assert.equal(getComputedStyle(nestedDialogPopover).zIndex, '1002', 'Dialog 内浮层通过 useOverlayChildStyle 内联抬高层级不被压低')
   } finally {
     plainPopover.parentElement?.remove()
     modelPopover.parentElement?.remove()
+    paneMorePopover.parentElement?.remove()
     selectPopover.parentElement?.remove()
     nestedDialogPopover.parentElement?.remove()
     style.remove()

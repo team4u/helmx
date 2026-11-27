@@ -23,7 +23,7 @@
 import { Fragment, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { ToolEditDiff } from '@helmx/protocol/browser'
-import { Badge, Button, CopyButton, HelmxIcon, KvGrid, type BadgeTone } from '@helmx/plugin-client'
+import { Badge, Button, CopyButton, HelmxIcon, KvGrid, type BadgeTone } from '@helmx/ui'
 import { useStoreActions } from '../lib/store-context.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { formatBytes } from '../lib/format.js'

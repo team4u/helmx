@@ -1073,7 +1073,7 @@ test('ToastOverlay：悬停或聚焦暂停自动关闭计时器，移开后恢�
 test('ToastOverlay：在 Radix DetailDrawer 打开时点击关闭 Toast 不触发抽屉关闭', { timeout: 60_000 }, async () => {
   const { act } = await import('react')
   const ReactDOMClient = await import('react-dom/client')
-  const { DetailDrawer } = await import('@helmx/plugin-client')
+  const { DetailDrawer } = await import('@helmx/ui')
   const { HelmxExternalStore } = await import('../src/lib/helmx-store.js')
   const { parseLocationHash } = await import('../src/lib/url-hash-model.js')
   const { ToastOverlay } = await import('../src/shell/ToastOverlay.js')

@@ -15,7 +15,7 @@ import {
   Stack,
   type BadgeTone,
   type SelectOption,
-} from '@helmx/plugin-client'
+} from '@helmx/ui'
 import { CodeBlockView, MarkdownView } from '../conversation/MarkdownView.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { useOptionalStoreActions } from '../lib/store-context.js'

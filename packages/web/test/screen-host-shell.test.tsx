@@ -10,7 +10,7 @@ import { ensureHappyDom, flushMacrotask } from './helpers/dom-harness.js'
 import { makeTestStore } from './helpers/store.js'
 
 ensureHappyDom()
-const { Screen, ScreenToolbar } = await import('@helmx/plugin-client')
+const { Screen, ScreenToolbar } = await import('@helmx/ui')
 const { resetPluginClientCache, seedPluginClientModule } = await import('../src/lib/plugin-client.js')
 const { HostStoreProviders } = await import('./helpers/host-store.js')
 const { mountSharedPluginNamespaces } = await import('./helpers/builtin-clients.js')

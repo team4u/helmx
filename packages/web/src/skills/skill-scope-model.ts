@@ -5,7 +5,7 @@
  *
  * 遵循 Fast Refresh 约定：纯函数与常量只放本模块，不进组件文件。
  */
-import type { SelectOption } from '@helmx/plugin-client'
+import type { SelectOption } from '@helmx/ui'
 import type { NodeInfo, SkillSummary } from '@helmx/protocol/browser'
 import type { WebMessageTranslator } from '../i18n/catalog.js'
 

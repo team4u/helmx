@@ -5,7 +5,7 @@
  * - 未随附 changelog（老 payload / 特殊部署）如实显示空态，不装假数据。
  */
 import { useEffect, useState, type ReactNode } from 'react'
-import { Badge, Callout, LoadingState, ModalDialog } from '@helmx/plugin-client'
+import { Badge, Callout, LoadingState, ModalDialog } from '@helmx/ui'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { apiRequest, ApiClientError } from '../lib/api.js'
 import { useIsMobile } from '../conversation/composer-model.js'

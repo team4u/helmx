@@ -231,7 +231,7 @@
   user-select: none;
 }
 
-/* 工作台抽屉页签与产物分栏（复用 segmented.css .tabs-bar / .helmx-tabs-scrollable 与 primitives.css List） */
+/* 工作台抽屉页签与产物分栏（复用 @helmx/ui Tabs .tabs-bar / .helmx-tabs-scrollable 与 List） */
 .workbench-tabs-root {
   display: flex;
   flex-direction: column;

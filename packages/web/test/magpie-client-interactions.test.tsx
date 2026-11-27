@@ -18,7 +18,8 @@ import { ensureHappyDom } from './helpers/dom-harness.js'
 
 ensureHappyDom()
 const { createRoot } = await import('react-dom/client')
-const { PluginClientContext, resolveLocalizedText } = await import('@helmx/plugin-client')
+const { resolveLocalizedText } = await import('@helmx/ui')
+const { PluginClientContext } = await import('@helmx/plugin-client')
 const { importBuiltinClientModule, mountSharedPluginNamespaces, setBuiltinClientStub } = await import('./helpers/builtin-clients.js')
 const {
   isAccountExhausted,

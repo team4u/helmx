@@ -5,7 +5,8 @@
  */
 import * as React from 'react'
 import { useMemo, useState } from 'react'
-import { HelmxIcon, ScreenHostContext, ScreenParamsContext, type ScreenHostState } from '@helmx/plugin-client'
+import { HelmxIcon, ScreenHostContext, type ScreenHostState } from '@helmx/ui'
+import { ScreenParamsContext } from '@helmx/plugin-client'
 import { resolveLocalizedText, type ScreenParamsScope, type ScreenSpec } from '@helmx/protocol/browser'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { useGroupedUi, useLocationTargets, useStoreActions } from '../lib/store-context.js'

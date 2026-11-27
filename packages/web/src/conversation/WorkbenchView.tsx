@@ -12,7 +12,7 @@ import {
   Tabs,
   TabsList,
   TabsTrigger,
-} from '@helmx/plugin-client'
+} from '@helmx/ui'
 import {
   useConversationArtifacts,
   useConversationDetail,

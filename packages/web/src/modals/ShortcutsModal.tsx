@@ -4,7 +4,7 @@
  * and plugin-declared shortcuts stay synchronized without plugin-ID hardcoding.
  */
 import { useMemo, type ReactNode } from 'react'
-import { Kbd, ModalDialog } from '@helmx/plugin-client'
+import { Kbd, ModalDialog } from '@helmx/ui'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { useGroupedUi } from '../lib/store-context.js'
 import { buildShortcutCatalog } from '../shell/shortcuts-model.js'

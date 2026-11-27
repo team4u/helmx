@@ -2,7 +2,7 @@
  * Non-content states of the conversation pane: detail load failure (retry + close affordances)
  * and the first detail read still pending.
  */
-import { Button, HelmxIcon, IconButton, LoadingState } from '@helmx/plugin-client'
+import { Button, HelmxIcon, IconButton, LoadingState } from '@helmx/ui'
 import { useWebLocale } from '../../i18n/use-web-locale.js'
 import { CloseSplitButton } from '../../ui/SplitControls.js'
 

@@ -1,16 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react'
-import {
-  Button,
-  Callout,
-  Card,
-  Field,
-  HelperText,
-  HelmxIcon,
-  IconButton,
-  ModelPickerControl,
-  Stack,
-  useHostModels,
-} from '@helmx/plugin-client'
+import { Button, Callout, Card, Field, HelperText, HelmxIcon, IconButton, Stack } from '@helmx/ui'
+import { ModelPickerControl, useHostModels } from '@helmx/plugin-client'
 import { resolveDefaultChainThinkingLevel } from '@helmx/plugin-client/pure'
 import { assetsApi } from '../lib/api.js'
 import { useOptionalStoreActions } from '../lib/store-context.js'

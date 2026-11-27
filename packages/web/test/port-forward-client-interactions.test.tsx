@@ -22,7 +22,8 @@ import type {
   PluginClientContext as PluginClientContextType,
   ScreenProps,
 } from '@helmx/protocol/browser'
-import { PluginClientContext, resolveLocalizedText, type HelmxLocale } from '@helmx/plugin-client'
+import { resolveLocalizedText, type HelmxLocale } from '@helmx/ui'
+import { PluginClientContext } from '@helmx/plugin-client'
 import {
   importBuiltinClientModule,
   mountSharedPluginNamespaces,

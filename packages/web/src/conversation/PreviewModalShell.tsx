@@ -8,7 +8,7 @@ import {
   IconButton,
   LoadingState,
   ModalDialog,
-} from '@helmx/plugin-client'
+} from '@helmx/ui'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { formatBytes } from '../lib/format.js'
 import { useIsMobile } from './composer-model.js'

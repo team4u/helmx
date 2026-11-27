@@ -20,7 +20,7 @@ import {
   TooltipRoot,
   TooltipTrigger,
   TooltipContent,
-} from '@helmx/plugin-client'
+} from '@helmx/ui'
 
 test('Popover 原语挂载、数据属性与无障碍属性（SSR）', { timeout: 60_000 }, () => {
   const openHtml = renderToString(

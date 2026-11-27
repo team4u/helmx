@@ -1,5 +1,5 @@
 import type { ReactNode, RefObject } from 'react'
-import { Callout } from '@helmx/plugin-client'
+import { Callout } from '@helmx/ui'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { formatBytes } from '../lib/format.js'
 import { MAX_PREVIEW_TEXT_BYTES } from './artifact-preview-text.js'

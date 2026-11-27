@@ -4,7 +4,8 @@
  */
 import { useState } from 'react'
 import type { ConversationSummary } from '@helmx/protocol/browser'
-import { Button, HelmxIcon, useSharedNowMs } from '@helmx/plugin-client'
+import { Button, HelmxIcon } from '@helmx/ui'
+import { useSharedNowMs } from '@helmx/plugin-client'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { formatStopwatchMs, resolveConversationTiming } from '../lib/format.js'
 import { PluginUiView } from '../ui/PluginUiView.js'

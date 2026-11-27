@@ -2,7 +2,7 @@
  * 节点详情抽屉内复用的展示小原语（DOM 结构与类名保持与拆分前一致）。
  */
 import type { ReactNode } from 'react'
-import { CopyButton, HelmxIcon, Stack } from '@helmx/plugin-client'
+import { CopyButton, HelmxIcon, Stack } from '@helmx/ui'
 
 /** KvGrid 等键值位的等宽可选中文本单元格。 */
 export function MonoValue({ children }: { children: ReactNode }): ReactNode {

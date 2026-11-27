@@ -7,7 +7,7 @@
  *   对话空间主体承载活跃+近期工作集及底部「查看全部 / 已归档会话 / 搜索查看匹配」总览按需下钻入口。
  */
 import { useMemo, type ReactNode, type RefObject } from 'react'
-import { Badge, HelmxIcon, IconButton, Tooltip } from '@helmx/plugin-client'
+import { Badge, HelmxIcon, IconButton, Tooltip } from '@helmx/ui'
 import {
   useAuthConnection,
   useConversations,

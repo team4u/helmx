@@ -1,5 +1,5 @@
 /**
- * Web host formatting entry; shared implementations come from @helmx/plugin-client.
+ * Web host formatting entry; shared implementations come from @helmx/ui.
  */
 export {
   formatBytes,
@@ -7,8 +7,8 @@ export {
   formatOffsetMs,
   formatStopwatchMs,
   resolveConversationTiming,
-} from '@helmx/plugin-client'
-export type { ConversationTimingInput, ConversationTimingSnapshot } from '@helmx/plugin-client'
+} from '@helmx/ui'
+export type { ConversationTimingInput, ConversationTimingSnapshot } from '@helmx/ui'
 
 /**
  * Compact human-readable token counts (strictly mirrors the pi agent footer formatTokens tiers,

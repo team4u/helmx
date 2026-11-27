@@ -1,6 +1,6 @@
 import { useMemo } from 'react'
 import type { AskSpec } from '@helmx/protocol/browser'
-import { Stack } from '@helmx/plugin-client'
+import { Stack } from '@helmx/ui'
 import { useConversations, usePendingAsks } from '../lib/store-context.js'
 import { collectSubtreeIds } from './ancestry-model.js'
 import { AskCard } from './ask-dock/AskCard.js'

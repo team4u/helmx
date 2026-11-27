@@ -1,4 +1,4 @@
-import { Button, HelmxIcon, IconButton } from '@helmx/plugin-client'
+import { Button, HelmxIcon, IconButton } from '@helmx/ui'
 import type { ConversationSummary } from '@helmx/protocol/browser'
 import { useConversations, useNotices, useStoreActions } from '../lib/store-context.js'
 import { resolveTargetString, type ResolvedTarget, type ToastNotice } from '../lib/types.js'

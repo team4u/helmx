@@ -4,12 +4,8 @@ import { describe, afterEach, test } from 'node:test'
 import * as React from 'react'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
-import {
-  PluginClientContext,
-  useConversation,
-  usePluginContext,
-  type LocalizedText,
-} from '@helmx/plugin-client'
+import { type LocalizedText } from '@helmx/ui'
+import { PluginClientContext, useConversation, usePluginContext } from '@helmx/plugin-client'
 import type { ConversationLive, ConversationSummary, HelmxSnapshot } from '@helmx/protocol/browser'
 import { HelmxStoreProvider } from '../src/lib/HelmxStoreProvider.js'
 import { HelmxExternalStore } from '../src/lib/helmx-store.js'

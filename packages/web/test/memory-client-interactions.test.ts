@@ -9,6 +9,7 @@ import * as React from 'react'
 import * as ReactJsxRuntime from 'react/jsx-runtime'
 import * as LucideReact from 'lucide-react'
 import type { PluginClientContext as ClientContext, ProfileDetailSlotProps } from '@helmx/protocol'
+import * as HelmxUi from '@helmx/ui'
 import * as HelmxPluginClient from '@helmx/plugin-client'
 import { compilePluginClientModule } from '@helmx/plugin-build'
 
@@ -27,6 +28,7 @@ describe("memory-client-interactions", () => {
       __helmx_shared_react: React,
       __helmx_shared_react_jsx_runtime: ReactJsxRuntime,
       __helmx_shared_lucide_react: LucideReact,
+      __helmx_shared_ui: HelmxUi,
       __helmx_shared_plugin_client: HelmxPluginClient,
     })
     const clientRoot = fileURLToPath(new URL('../../plugins/src/memory/client', import.meta.url))

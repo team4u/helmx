@@ -1,6 +1,6 @@
 import React from 'react'
 import type { PluginDiagnosticError } from '@helmx/protocol/browser'
-import { Button, Callout, Stack } from '@helmx/plugin-client'
+import { Button, Callout, Stack } from '@helmx/ui'
 import { useWebLocale } from '../../i18n/use-web-locale.js'
 import { pluginErrorStageLabel } from '../plugin-card-model.js'
 import type { PluginInUseConfirm } from './use-plugin-drawer-actions.js'

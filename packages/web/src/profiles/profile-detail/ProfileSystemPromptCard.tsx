@@ -1,5 +1,5 @@
 import React from 'react'
-import { Card, Field, Textarea } from '@helmx/plugin-client'
+import { Card, Field, Textarea } from '@helmx/ui'
 import { useWebLocale } from '../../i18n/use-web-locale.js'
 
 export interface ProfileSystemPromptCardProps {

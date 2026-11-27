@@ -5,13 +5,8 @@ import type {
   ConversationSummary,
   ProfileStarterPrompt,
 } from '@helmx/protocol/browser'
-import {
-  Button,
-  createTimelineToolCallsStore,
-  HelmxIcon,
-  LoadingState,
-  TimelineToolCallsContext,
-} from '@helmx/plugin-client'
+import { Button, HelmxIcon, LoadingState } from '@helmx/ui'
+import { createTimelineToolCallsStore, TimelineToolCallsContext } from '@helmx/plugin-client'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import {
   useConversationDetail,

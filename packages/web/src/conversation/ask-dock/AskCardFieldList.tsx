@@ -1,4 +1,4 @@
-import { Field, Stack } from '@helmx/plugin-client'
+import { Field, Stack } from '@helmx/ui'
 import { resolveLocalizedText, type AskAnswers, type AskKind, type AskSpec } from '@helmx/protocol/browser'
 import { useWebLocale } from '../../i18n/use-web-locale.js'
 import { AskFieldInput, type FocusChoiceOptionRequest } from '../AskDockFields.js'

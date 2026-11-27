@@ -24,8 +24,8 @@ import { renderToString } from 'react-dom/server'
 // 测试通过 tsx 执行当前 worktree 的真实编译器；生产 Web 不反向依赖 kernel。
 import { compilePluginClientModule } from '@helmx/plugin-build'
 import { requireClientExport } from '../src/lib/plugin-client.js'
-// '@helmx/plugin-client' 共享模块实例：宿主挂载的是 web/src/lib/plugin-client-context.ts
-// 的模块命名空间（HelmxStoreProvider 挂载同一对象）；测试直接 import 该模块挂到全局。
+// '@helmx/ui' 与 '@helmx/plugin-client' 共享模块实例（HelmxStoreProvider 挂载同一对象）；测试直接 import 挂到全局。
+import * as HelmxUi from '@helmx/ui'
 import * as HelmxPluginClient from '@helmx/plugin-client'
 
 const e = React.createElement
@@ -46,11 +46,12 @@ describe("plugin-client-render", () => {
       `
   import { useState } from 'react'
   import { Save } from 'lucide-react'
+  import { Button } from '@helmx/ui'
   import { usePluginContext, usePluginDoc } from '@helmx/plugin-client'
 
   export function ScreenPanel(props: { pluginId: string; screenId: string }) {
     const [n, setN] = useState(3)
-    return <div className="panel">screen:{props.screenId}:{n}<Save size={12} aria-label="save" /><button onClick={() => setN(n + 1)}>bump</button></div>
+    return <div className="panel">screen:{props.screenId}:{n}<Save size={12} aria-label="save" /><Button onClick={() => setN(n + 1)}>bump</Button></div>
   }
 
   export function ToolCard(props: { toolName: string; status: 'running' | 'done' | 'error'; callId: string }) {
@@ -62,6 +63,7 @@ describe("plugin-client-render", () => {
   }
 
   export const sharedReact = { useState }
+  export const sharedUi = { Button }
   export const sharedHooks = { usePluginContext, usePluginDoc }
   `,
     )
@@ -82,6 +84,7 @@ describe("plugin-client-render", () => {
     g.__helmx_shared_react = React
     g.__helmx_shared_react_jsx_runtime = ReactJsxRuntime
     g.__helmx_shared_lucide_react = LucideReact
+    g.__helmx_shared_ui = HelmxUi
     g.__helmx_shared_plugin_client = HelmxPluginClient
     const mod = await importCompiled()
     assert.equal(typeof mod.ScreenPanel, 'function')
@@ -115,9 +118,11 @@ describe("plugin-client-render", () => {
     assert.equal(g.__helmx_shared_react_jsx_runtime, ReactJsxRuntime)
   })
 
-  test("'@helmx/plugin-client' 共享模块：产物内 hooks 与宿主为同一函数实例（usePluginContext/usePluginDoc）", { timeout: 60_000 }, async () => {
+  test("'@helmx/ui' 与 '@helmx/plugin-client' 共享模块：产物内原语与 hooks 与宿主为同一实例", { timeout: 60_000 }, async () => {
     const mod = await importCompiled()
+    const ui = mod.sharedUi as { Button: unknown }
     const hooks = mod.sharedHooks as { usePluginContext: unknown; usePluginDoc: unknown }
+    assert.equal(ui.Button, HelmxUi.Button)
     assert.equal(hooks.usePluginContext, HelmxPluginClient.usePluginContext)
     assert.equal(hooks.usePluginDoc, HelmxPluginClient.usePluginDoc)
   })

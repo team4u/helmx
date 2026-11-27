@@ -1,4 +1,4 @@
-import { Button, HelmxIcon } from '@helmx/plugin-client'
+import { Button, HelmxIcon } from '@helmx/ui'
 import { useWebLocale } from '../../i18n/use-web-locale.js'
 
 /** Source-conversation badge: shown when the ask belongs to another

@@ -6,8 +6,9 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve, dirname } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
+import * as HelmxUi from '@helmx/ui'
+import type { HelmxLocale } from '@helmx/ui'
 import * as HelmxPluginClient from '@helmx/plugin-client'
-import type { HelmxLocale } from '@helmx/plugin-client'
 import { normalizeSpec, type NormalizedSpecNode } from '../../plugins/src/json-render/client/spec-normalize.js'
 import type { EvalScope } from '../../plugins/src/json-render/client/evaluator.js'
 import { compilePluginClientModule } from '@helmx/plugin-build'
@@ -28,6 +29,7 @@ interface SpecRenderContext {
 ;(globalThis as Record<string, unknown>).React = React
 ;(globalThis as Record<string, unknown>).__helmx_shared_react = React
 ;(globalThis as Record<string, unknown>).__helmx_shared_react_jsx_runtime = await import('react/jsx-runtime')
+;(globalThis as Record<string, unknown>).__helmx_shared_ui = HelmxUi
 ;(globalThis as Record<string, unknown>).__helmx_shared_plugin_client = HelmxPluginClient
 ;(globalThis as Record<string, unknown>).__helmx_shared_lucide_react = await import('lucide-react')
 

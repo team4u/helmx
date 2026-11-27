@@ -6,7 +6,7 @@
  *   直到下次版本变化才重新出现——主动一键切换不经过这里（切换完成卡自带引导）。
  */
 import { useState, type ReactNode } from 'react'
-import { Button, Card, HelmxIcon, Stack } from '@helmx/plugin-client'
+import { Button, Card, HelmxIcon, Stack } from '@helmx/ui'
 import { useStoreActions } from '../lib/store-context.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { markSeenVersion, readSeenVersion } from './hub-changelog-seen.js'

@@ -191,6 +191,7 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-lg);
+  z-index: var(--z-popover);
 }
 
 [data-radix-popper-content-wrapper] .pane-more-popover {
@@ -198,6 +199,7 @@
   top: auto;
   right: auto;
   border-radius: var(--radius-md);
+  z-index: var(--z-popover);
 }
 
 [data-radix-popper-content-wrapper] .composer-model-popover {

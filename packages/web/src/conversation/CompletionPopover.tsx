@@ -12,7 +12,7 @@
  * Component files export only components and TS types (Fast Refresh rule).
  */
 import { useEffect, useRef, useState } from 'react'
-import { Kbd } from '@helmx/plugin-client'
+import { Kbd } from '@helmx/ui'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { isImeComposing } from '../lib/ime.js'
 import type { MergedCompletionItem } from './composer-completion-model.js'

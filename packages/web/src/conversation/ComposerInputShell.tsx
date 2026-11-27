@@ -17,7 +17,7 @@ import {
   Tooltip,
   resolveLocalizedText,
   type BadgeTone,
-} from '@helmx/plugin-client'
+} from '@helmx/ui'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import type { QualifiedCommand, SlashMenuItem } from '../lib/commands-model.js'
 import { isElementVisibleInDocument } from '../lib/dom-visibility.js'

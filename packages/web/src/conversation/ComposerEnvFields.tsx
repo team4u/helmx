@@ -4,7 +4,7 @@
  */
 import { useMemo } from 'react'
 import type * as React from 'react'
-import { HelmxIcon, Input, Select } from '@helmx/plugin-client'
+import { HelmxIcon, Input, Select } from '@helmx/ui'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { useNodes } from '../lib/store-context.js'
 import { buildNodeSelectOptions } from '../modals/nodes-modal-model.js'

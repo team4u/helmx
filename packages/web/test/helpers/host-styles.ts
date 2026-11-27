@@ -3,19 +3,41 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const WEB_ROOT = join(dirname(fileURLToPath(import.meta.url)), '../..')
+const UI_SRC_DIR = join(WEB_ROOT, '../ui/src')
 const STYLES_ENTRY = join(WEB_ROOT, 'src/styles.css')
 
+function readUiCssEntry(subpath: string): string {
+  const filePath = join(UI_SRC_DIR, subpath)
+  const css = readFileSync(filePath, 'utf8')
+  const baseDir = dirname(filePath)
+  const expanded: string[] = []
+  let hasImports = false
+  for (const line of css.split('\n')) {
+    const nested = line.match(/^@import '(\.[^']+\.css)'(?:\s+layer\([^)]+\))?;$/)
+    if (nested) {
+      hasImports = true
+      expanded.push(readFileSync(join(baseDir, nested[1]!), 'utf8'))
+    }
+  }
+  return hasImports ? expanded.join('\n') : css
+}
+
 /**
- * 读取宿主样式契约源：按 src/styles.css 入口的 @import 顺序拼接 src/styles/ 全部分片。
+ * 读取宿主样式契约源：按 src/styles.css 入口的 @import 顺序拼接 @helmx/ui 与 src/styles/ 全部分片。
  * 拼接结果与 Vite 构建产物的级联顺序一致，供 CSS 契约测试断言使用。
  */
 export function readHostStyles(): string {
   const entry = readFileSync(STYLES_ENTRY, 'utf8')
   const fragments: string[] = []
   for (const line of entry.split('\n')) {
-    const match = line.match(/^@import '\.\/styles\/([^']+\.css)'(?:\s+layer\([^)]+\))?;$/)
-    if (match) {
-      fragments.push(readFileSync(join(WEB_ROOT, 'src/styles', match[1]!), 'utf8'))
+    const uiMatch = line.match(/^@import '@helmx\/ui\/([^']+\.css)'(?:\s+layer\([^)]+\))?;$/)
+    if (uiMatch) {
+      fragments.push(readUiCssEntry(uiMatch[1]!))
+      continue
+    }
+    const localMatch = line.match(/^@import '\.\/styles\/([^']+\.css)'(?:\s+layer\([^)]+\))?;$/)
+    if (localMatch) {
+      fragments.push(readFileSync(join(WEB_ROOT, 'src/styles', localMatch[1]!), 'utf8'))
     }
   }
   if (fragments.length === 0) {

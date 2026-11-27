@@ -1,6 +1,6 @@
 import React from 'react'
 import { isPluginSummaryActive, type PluginSummary } from '@helmx/protocol/browser'
-import { Badge, Button, Card, Stack } from '@helmx/plugin-client'
+import { Badge, Button, Card, Stack } from '@helmx/ui'
 import { useWebLocale } from '../../i18n/use-web-locale.js'
 import type { HelmxStoreActions } from '../../lib/helmx-store.js'
 import { isPluginFailed } from '../plugin-center-model.js'

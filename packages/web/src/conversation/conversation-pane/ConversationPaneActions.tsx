@@ -19,7 +19,7 @@ import {
   IconButton,
   Tooltip,
   type BadgeTone,
-} from '@helmx/plugin-client'
+} from '@helmx/ui'
 import { conversationsApi } from '../../lib/api.js'
 import { useWebLocale } from '../../i18n/use-web-locale.js'
 import { patchConversationArchived } from '../../shell/archive-ops.js'
