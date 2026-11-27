@@ -638,6 +638,10 @@
   gap: var(--space-3);
 }
 
+.tiers-template-dialog {
+  max-width: 480px;
+}
+
 @container (max-width: 680px) {
   .tiers-toolbar-filters {
     width: 100%;

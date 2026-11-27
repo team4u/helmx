@@ -1,5 +1,5 @@
-/** Centered dialog to snapshot active model tiers into a reusable preset template (`builtin:tiers`). */
-import { useEffect, useState, type ReactNode } from 'react'
+/** Centered dialog to snapshot active model tiers into a reusable template (`builtin:tiers`). */
+import { useEffect, useState, type KeyboardEvent, type ReactNode } from 'react'
 import type { HelmxLocale, LocalizedText } from '@helmx/protocol/browser'
 import {
   Button,
@@ -12,7 +12,7 @@ import {
   DialogPortal,
   DialogTitle,
   Field,
-  HelmxIcon,
+  IconButton,
   Input,
   Stack,
   Textarea,
@@ -65,6 +65,20 @@ export function SaveTemplateDialog({
     onSubmit(checked.payload)
   }
 
+  const handleInputKeyDown = (e: KeyboardEvent<HTMLInputElement>): void => {
+    if (e.key === 'Enter' && !e.nativeEvent.isComposing && !pending) {
+      e.preventDefault()
+      handleSubmit()
+    }
+  }
+
+  const handleBodyKeyDown = (e: KeyboardEvent<HTMLDivElement>): void => {
+    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter' && !e.nativeEvent.isComposing && !pending) {
+      e.preventDefault()
+      handleSubmit()
+    }
+  }
+
   return (
     <Dialog
       open={open}
@@ -74,82 +88,83 @@ export function SaveTemplateDialog({
       }}
     >
       <DialogPortal inline={inline}>
-        <DialogOverlay className="modal-backdrop" />
-        <DialogContent className="modal" aria-describedby={undefined}>
-          <div className="modal-header">
-            <DialogTitle>{t(C.templateSaveTitle)}</DialogTitle>
-            <DialogClose asChild>
-              <button
-                type="button"
-                className="btn btn-ghost btn-icon-sm"
-                disabled={pending}
-                aria-label={t(C.close)}
-                title={t(C.close)}
-              >
-                <HelmxIcon name="x" size={14} />
-              </button>
-            </DialogClose>
-          </div>
-          <div className="modal-body">
-            <Stack gap="md">
-              <DialogDescription className="text-muted">
-                {tiersTemplateCountSummary(activeTierCount, locale)}
-              </DialogDescription>
-              {displayError !== null && (
-                <Callout tone="err">
-                  <span>{displayError}</span>
-                </Callout>
-              )}
-              <div className="tiers-form-pair">
-                <Field label={t(C.templateIdLabel)} required>
-                  <Input
-                    type="text"
-                    mono
-                    value={form.id}
-                    disabled={pending}
-                    placeholder={t(C.templateIdPlaceholder)}
-                    onChange={(e) => {
-                      setLocalError(null)
-                      setForm((prev) => ({ ...prev, id: e.target.value }))
-                    }}
-                  />
-                </Field>
-                <Field label={t(C.templateNameLabel)} required>
-                  <Input
-                    type="text"
-                    value={form.name}
-                    disabled={pending}
-                    placeholder={t(C.templateNamePlaceholder)}
-                    onChange={(e) => {
-                      setLocalError(null)
-                      setForm((prev) => ({ ...prev, name: e.target.value }))
-                    }}
-                  />
-                </Field>
-              </div>
-              <Field label={t(C.templateDescLabel)}>
-                <Textarea
-                  rows={2}
-                  value={form.description}
+        <DialogOverlay className="modal-backdrop">
+          <DialogContent className="modal tiers-template-dialog">
+            <div className="modal-header">
+              <DialogTitle className="modal-title">{t(C.templateSaveTitle)}</DialogTitle>
+              <DialogClose asChild>
+                <IconButton
+                  variant="ghost"
+                  size="sm"
+                  icon="x"
+                  label={t(C.close)}
                   disabled={pending}
-                  placeholder={t(C.templateDescPlaceholder)}
-                  onChange={(e) => {
-                    setLocalError(null)
-                    setForm((prev) => ({ ...prev, description: e.target.value }))
-                  }}
                 />
-              </Field>
-            </Stack>
-          </div>
-          <div className="modal-footer">
-            <Button variant="ghost" size="sm" disabled={pending} onClick={onClose}>
-              {t(C.cancel)}
-            </Button>
-            <Button variant="primary" size="sm" icon="layers" pending={pending} disabled={pending} onClick={handleSubmit}>
-              {pending ? t(C.saving) : t(C.templateSaveBtn)}
-            </Button>
-          </div>
-        </DialogContent>
+              </DialogClose>
+            </div>
+            <div className="modal-body" onKeyDown={handleBodyKeyDown}>
+              <Stack gap="md">
+                <DialogDescription className="text-muted">
+                  {tiersTemplateCountSummary(activeTierCount, locale)}
+                </DialogDescription>
+                {displayError !== null && (
+                  <Callout tone="err">
+                    <span>{displayError}</span>
+                  </Callout>
+                )}
+                <div className="tiers-form-pair">
+                  <Field label={t(C.templateIdLabel)} required>
+                    <Input
+                      type="text"
+                      mono
+                      value={form.id}
+                      disabled={pending}
+                      placeholder={t(C.templateIdPlaceholder)}
+                      onKeyDown={handleInputKeyDown}
+                      onChange={(e) => {
+                        setLocalError(null)
+                        setForm((prev) => ({ ...prev, id: e.target.value }))
+                      }}
+                    />
+                  </Field>
+                  <Field label={t(C.templateNameLabel)} required>
+                    <Input
+                      type="text"
+                      value={form.name}
+                      disabled={pending}
+                      placeholder={t(C.templateNamePlaceholder)}
+                      onKeyDown={handleInputKeyDown}
+                      onChange={(e) => {
+                        setLocalError(null)
+                        setForm((prev) => ({ ...prev, name: e.target.value }))
+                      }}
+                    />
+                  </Field>
+                </div>
+                <Field label={t(C.templateDescLabel)}>
+                  <Textarea
+                    rows={2}
+                    value={form.description}
+                    disabled={pending}
+                    placeholder={t(C.templateDescPlaceholder)}
+                    onChange={(e) => {
+                      setLocalError(null)
+                      setForm((prev) => ({ ...prev, description: e.target.value }))
+                    }}
+                  />
+                </Field>
+              </Stack>
+            </div>
+            <div className="modal-footer">
+              <Button variant="ghost" size="sm" disabled={pending} onClick={onClose}>
+                {t(C.cancel)}
+              </Button>
+              <Button variant="primary" size="sm" icon="layers" pending={pending} disabled={pending} onClick={handleSubmit}>
+                {pending ? t(C.saving) : t(C.templateSaveBtn)}
+              </Button>
+            </div>
+          </DialogContent>
+        </DialogOverlay>
       </DialogPortal>
     </Dialog>
   )

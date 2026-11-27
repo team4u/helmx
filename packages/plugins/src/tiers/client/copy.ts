@@ -4,39 +4,39 @@ import type { HelmxLocale, LocalizedText } from '@helmx/protocol/browser'
 
 export const TIERS_COPY = {
   screenTitle: { en: 'Model Tiers', 'zh-CN': '模型档位' },
-  screenSubtitle: { en: 'Map semantic tiers (tier/<id>) to concrete models and switchable preset templates.', 'zh-CN': '将语义档位（tier/<id>）映射到具体模型，并保存可一键切换的编制模板。' },
+  screenSubtitle: { en: 'Map semantic tiers (tier/<id>) to concrete models and switchable templates.', 'zh-CN': '将语义档位（tier/<id>）映射到具体模型，并保存可一键切换的模板。' },
   activeSection: { en: 'Active model tiers', 'zh-CN': '当前生效档位' },
-  templatesSection: { en: 'Saved preset templates', 'zh-CN': '已保存编制模板' },
+  templatesSection: { en: 'Saved templates', 'zh-CN': '已保存模板' },
   loading: { en: 'Loading model tiers…', 'zh-CN': '正在加载模型档位…' },
   addRow: { en: 'Add tier', 'zh-CN': '新增档位' },
   saveAll: { en: 'Save tiers', 'zh-CN': '保存档位' },
   saving: { en: 'Saving…', 'zh-CN': '正在保存…' },
   discard: { en: 'Discard changes', 'zh-CN': '放弃更改' },
   savedNotice: { en: 'Model tiers saved and synced to kernel.', 'zh-CN': '模型档位已保存并同步至内核。' },
-  emptyTitle: { en: 'No model tiers configured yet', 'zh-CN': '尚未配置模型档位' },
+  emptyTitle: { en: 'No model tiers yet', 'zh-CN': '暂无模型档位' },
   emptyHint: {
-    en: 'Add a tier or pick a recommended starter below to bind a model.',
-    'zh-CN': '点击右上角新增档位，或直接点选下方推荐档位绑定模型。',
+    en: 'Add a tier or pick a starter below to bind a model.',
+    'zh-CN': '点击右上角新增档位，或选用下方推荐档位绑定模型。',
   },
-  tabTiers: { en: 'Tiers', 'zh-CN': '生效档位' },
-  tabTemplates: { en: 'Templates', 'zh-CN': '编制模板' },
+  tabTiers: { en: 'Tiers', 'zh-CN': '档位' },
+  tabTemplates: { en: 'Templates', 'zh-CN': '模板' },
   filterAll: { en: 'All', 'zh-CN': '全部' },
   filterSingle: { en: 'Single', 'zh-CN': '单模型' },
-  filterOrchestrator: { en: 'Dual-phase', 'zh-CN': '双相编排' },
+  filterOrchestrator: { en: 'Dual-phase', 'zh-CN': '双相' },
   searchPlaceholder: { en: 'Search tiers or models…', 'zh-CN': '搜索档位或模型…' },
   filterEmptyTitle: { en: 'No matching tiers', 'zh-CN': '未找到匹配的档位' },
   resetFilters: { en: 'Reset filters', 'zh-CN': '重置筛选' },
-  starterSectionTitle: { en: 'Recommended starter tiers', 'zh-CN': '推荐起步档位' },
+  starterSectionTitle: { en: 'Starter tiers', 'zh-CN': '推荐档位' },
   starterCardCta: { en: 'Bind', 'zh-CN': '绑定' },
   starterPresetsLabel: { en: 'Presets', 'zh-CN': '推荐' },
   drawerCreateTitle: { en: 'New tier', 'zh-CN': '新建档位' },
   drawerEditTitle: { en: 'Edit tier', 'zh-CN': '编辑档位' },
-  drawerNotFoundTitle: { en: 'Model tier not found', 'zh-CN': '未找到该模型档位' },
-  drawerNotFoundBody: { en: 'This tier no longer exists or was removed.', 'zh-CN': '该模型档位不存在或已被移除。' },
+  drawerNotFoundTitle: { en: 'Tier not found', 'zh-CN': '档位不存在' },
+  drawerNotFoundBody: { en: 'This tier no longer exists or was removed.', 'zh-CN': '该档位不存在或已被删除。' },
   createTier: { en: 'Create', 'zh-CN': '创建' },
   saveTier: { en: 'Save', 'zh-CN': '保存' },
   deleteTier: { en: 'Delete', 'zh-CN': '删除' },
-  tierDeleteConfirmTitle: { en: 'Delete model tier', 'zh-CN': '确认删除模型档位' },
+  tierDeleteConfirmTitle: { en: 'Delete tier', 'zh-CN': '删除档位' },
   fieldId: { en: 'Tier ID', 'zh-CN': '档位 ID' },
   fieldIdPlaceholder: { en: 'e.g. coder', 'zh-CN': '例如 coder' },
   fieldIdHint: {
@@ -57,28 +57,28 @@ export const TIERS_COPY = {
   statusDisabled: { en: 'Model disabled', 'zh-CN': '模型已禁用' },
   statusUnavailable: { en: 'Unavailable', 'zh-CN': '不可用' },
   saveAsTemplate: { en: 'Save template', 'zh-CN': '存为模板' },
-  templateSaveTitle: { en: 'Save as preset template', 'zh-CN': '另存为编制模板' },
+  templateSaveTitle: { en: 'Save template', 'zh-CN': '存为模板' },
   templateIdLabel: { en: 'Template ID', 'zh-CN': '模板 ID' },
   templateIdPlaceholder: { en: 'e.g. flagship-5', 'zh-CN': '例如 flagship-5' },
   templateNameLabel: { en: 'Template name', 'zh-CN': '模板名称' },
-  templateNamePlaceholder: { en: 'e.g. Flagship Engineering Roster', 'zh-CN': '例如 主力研发 5 档' },
-  templateDescLabel: { en: 'Notes (optional)', 'zh-CN': '备注（可选）' },
-  templateDescPlaceholder: { en: 'When to activate this preset', 'zh-CN': '说明何时切换这套模板' },
+  templateNamePlaceholder: { en: 'e.g. Daily Engineering', 'zh-CN': '例如 主力研发' },
+  templateDescLabel: { en: 'Notes', 'zh-CN': '备注' },
+  templateDescPlaceholder: { en: 'When to use this template (optional)', 'zh-CN': '说明适用场景（可选）' },
   templateSaveBtn: { en: 'Save template', 'zh-CN': '保存模板' },
-  templateEmptyTitle: { en: 'No preset templates saved', 'zh-CN': '尚未保存编制模板' },
-  templateEmpty: { en: 'Save your active tiers as a preset template to switch rosters in one click.', 'zh-CN': '可将当前生效档位另存为编制模板，日后一键整体切换。' },
+  templateEmptyTitle: { en: 'No templates yet', 'zh-CN': '暂无模板' },
+  templateEmpty: { en: 'Save your active tiers as a template to switch configurations in one click.', 'zh-CN': '可将当前档位存为模板，日后一键切换。' },
   templateActiveBadge: { en: 'Active', 'zh-CN': '当前生效' },
   templateApply: { en: 'Apply', 'zh-CN': '应用' },
   templateDelete: { en: 'Delete', 'zh-CN': '删除' },
   cancel: { en: 'Cancel', 'zh-CN': '取消' },
   close: { en: 'Close', 'zh-CN': '关闭' },
-  templateDeleteConfirmTitle: { en: 'Delete preset template', 'zh-CN': '确认删除编制模板' },
-  settingsKvActive: { en: 'Active tiers', 'zh-CN': '生效档位数' },
-  settingsKvTemplates: { en: 'Saved templates', 'zh-CN': '已存模板数' },
+  templateDeleteConfirmTitle: { en: 'Delete template', 'zh-CN': '删除模板' },
+  settingsKvActive: { en: 'Active tiers', 'zh-CN': '档位数' },
+  settingsKvTemplates: { en: 'Templates', 'zh-CN': '模板数' },
   settingsKvTemplate: { en: 'Active template', 'zh-CN': '当前模板' },
   settingsNone: { en: 'None (custom)', 'zh-CN': '无（自定义）' },
   settingsOpen: { en: 'Open Model Tiers', 'zh-CN': '打开模型档位管理' },
-  settingsHint: { en: 'Manage semantic model tiers (tier/<id>), descriptions, and switchable preset templates.', 'zh-CN': '管理语义模型档位（tier/<id>）、路由职责边界与可一键切换的编制模板。' },
+  settingsHint: { en: 'Manage semantic model tiers (tier/<id>), guidance, and switchable templates.', 'zh-CN': '管理语义模型档位（tier/<id>）、定位说明与可一键切换的模板。' },
   errIdRequired: { en: 'Every tier must have a non-empty lowercase slug ID (e.g. scout, coder).', 'zh-CN': '每个档位都必须填写非空的小写标识 ID（如 scout、coder）。' },
   errDuplicateId: { en: 'A tier with this ID already exists; choose a different ID.', 'zh-CN': '该档位 ID 已存在，请更换其他标识 ID。' },
   errModelRequired: { en: 'Every tier must bind a concrete target model before saving.', 'zh-CN': '保存前请为每个档位绑定一个具体目标模型。' },
@@ -110,7 +110,7 @@ export const TIERS_COPY = {
   tierKindAria: { en: 'Mode', 'zh-CN': '模式' },
   fieldPlannerModel: { en: 'Planner model', 'zh-CN': '规划模型' },
   fieldExecutorModel: { en: 'Executor model', 'zh-CN': '执行模型' },
-  fieldMaxSteps: { en: 'Max execution steps', 'zh-CN': '最大执行步数' },
+  fieldMaxSteps: { en: 'Max execution steps', 'zh-CN': '执行步数上限' },
   fieldMaxStepsHint: { en: '0 = unlimited', 'zh-CN': '0 为不限' },
   fieldMaxStepsUnit: { en: 'steps', 'zh-CN': '步' },
   fieldMaxStepsPlaceholder: { en: '30', 'zh-CN': '30' },
@@ -137,7 +137,7 @@ export const TIERS_COPY = {
 } as const satisfies Record<string, LocalizedText>
 
 export const tiersTemplateDeleteConfirmBody = (name: string, id: string, locale: HelmxLocale): string =>
-  locale === 'zh-CN' ? `确定删除编制模板「${name}」（${id}）吗？此操作无法撤销。` : `Delete preset template "${name}" (${id})? This action cannot be undone.`
+  locale === 'zh-CN' ? `确定删除模板「${name}」（${id}）吗？此操作无法撤销。` : `Delete template "${name}" (${id})? This action cannot be undone.`
 
 export const tiersTierDeleteConfirmBody = (id: string, model: string, locale: HelmxLocale): string =>
   locale === 'zh-CN' ? `确定删除模型档位「tier/${id}」（${model}）吗？此操作无法撤销。` : `Delete model tier "tier/${id}" (${model})? This action cannot be undone.`
@@ -160,7 +160,7 @@ export const tiersTierDeletedNotice = (id: string, locale: HelmxLocale): string 
   locale === 'zh-CN' ? `已删除档位「tier/${id}」。` : `Deleted tier "tier/${id}".`
 
 export const tiersTemplateCountSummary = (count: number, locale: HelmxLocale): string =>
-  locale === 'zh-CN' ? `基于当前 ${count} 个生效档位创建可一键切换的编制模板。` : `Snapshot your ${count} active tier(s) as a reusable preset template.`
+  locale === 'zh-CN' ? `将当前 ${count} 个档位保存为可一键切换的模板。` : `Save your ${count} active tier(s) as a reusable template.`
 
 export const tiersTemplateAppliedNotice = (name: string, locale: HelmxLocale): string =>
   locale === 'zh-CN' ? `已切换到模板「${name}」。` : `Applied template "${name}".`

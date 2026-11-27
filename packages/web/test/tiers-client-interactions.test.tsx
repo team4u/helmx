@@ -212,8 +212,8 @@ describe("tiers-client-interactions", () => {
       e(PluginClientContext.Provider, { value: ctx }, e(TiersManagerScreen, { screenId: 'main' })),
     )
     try {
-      assert.match(emptyMount.host.textContent ?? '', /No model tiers configured yet/i)
-      assert.match(emptyMount.host.textContent ?? '', /Recommended starter tiers/i)
+      assert.match(emptyMount.host.textContent ?? '', /No model tiers yet/i)
+      assert.match(emptyMount.host.textContent ?? '', /Starter tiers/i)
       const starterRows = Array.from(emptyMount.host.querySelectorAll<HTMLElement>('.tiers-starter-row'))
       assert.deepEqual(
         starterRows.map((row) => row.getAttribute('data-starter-tier')),
@@ -471,6 +471,10 @@ describe("tiers-client-interactions", () => {
       })
       const tplDialog = document.body.querySelector<HTMLElement>('[role="dialog"]')
       assert.ok(tplDialog !== null, 'Save as template opens Dialog')
+      assert.ok(
+        tplDialog.closest('.modal-backdrop') !== null,
+        'SaveTemplateDialog content must be nested inside .modal-backdrop so it centers visibly on desktop and mobile',
+      )
       await act(async () => {
         findButton(tplDialog, 'Save template').click()
       })
