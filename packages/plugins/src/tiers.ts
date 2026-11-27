@@ -1,5 +1,6 @@
 /** builtin:tiers: semantic model tiers (`tier/<id>`), preset templates, one-turn model borrow, and `switch_model` relay. */
 import {
+  COMPOSER_STATUS_SLOT,
   COMPOSER_TOOLBAR_SLOT,
   HelmxError,
   MODEL_TIER_DESCRIPTION_MAX_LENGTH,
@@ -708,6 +709,12 @@ export function createTiersPlugin(): PluginDefinition {
       ctx.ui.sidebarItem({ id: 'tiers-manager', label, icon: 'layers', target: `screen:${TIERS_PLUGIN_ID}/${TIERS_SCREEN_ID}`, order: 16 })
       ctx.ui.screen({ id: TIERS_SCREEN_ID, label, icon: 'layers', client: { module: 'manager.tsx', export: 'TiersManagerScreen' } })
       ctx.ui.settingsPanel({ id: 'tiers-settings', label, order: 26, client: { module: 'settings.tsx', export: 'TiersSettingsPanel' } })
+      ctx.ui.slot({
+        id: 'tiers-orchestrator-status',
+        target: COMPOSER_STATUS_SLOT,
+        order: 5,
+        client: { module: 'OrchestratorStatusBadge.tsx', export: 'OrchestratorStatusBadge' },
+      })
       ctx.ui.slot({
         id: 'tiers-borrow-toolbar-pill',
         target: COMPOSER_TOOLBAR_SLOT,

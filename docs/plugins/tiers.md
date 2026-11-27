@@ -84,10 +84,10 @@
 
 - **模型档位主视图**（`#/s/builtin:tiers/main`）：采用「顶栏常驻动作 + 一级主舞台卡片网格 + 右侧详情抽屉（`DetailDrawer`）」布局——顶栏常驻「新增档位 / 另存为模板」主按钮，工具栏提供「生效档位 / 编制模板」Tab 切换以及搜索与模式筛选（全部 / 单模型 / 双相编排）；空态提供推荐 5 档起步卡片，点击任一档位卡或新增按钮滑出右侧抽屉（底部固定保存/删除/取消操作栏，单条调用 `set` / `remove` 即时落盘），支持单模型与双相编排 `Planner -> Executor` 切换（最大执行步数 0–100，默认 30，0 表示不限步数）及「另存为模板」轻量弹窗与独立模板管理视图。
 - **插件详情设置面板**（`settingsPanel`）：展示当前激活档位数、模板数与生效模板名，提供快捷入口跳转主视图。
-- **Composer 集成**（`BorrowToolbarPill` + `useComposerModelPickerMode`）：
-  - 在配置了双相编排档位的顶层人类会话中，空闲且未激活单轮借用时同样可在模型选择器顶部切换「仅下一轮」标签并渲染只读阶段胶囊（展示当前处于规划中/执行中、实时底层模型名及执行步数 `step/max`）；当预装或正在执行单轮借用时优先展示对应借用胶囊，当轮结束后自动恢复回编排阶段胶囊；
-  - 在可借用且非忙/非活跃态的顶层人类会话与待命页中，`BorrowToolbarPill` 通过 `useComposerModelPickerMode('tiers:one-turn', ...)` 向宿主 `ModelPickerControl` 顶部注册「仅下一轮」模式标签（选定即设下一轮借用且不改会话持久模型；每次点击底部按钮或 `Ctrl+L` 打开一律回到默认「切换模型」页防误触）；
-  - 未预装且非借用中时工具栏返回 `null`（零占位 DOM、零 Tab 焦点位）；预装态展示紧凑 24px 胶囊 `[ 下一轮: <label> | × ]`（点击主体调 `openMode()` 直达「仅下一轮」标签，点击独立兄弟按钮 `×` 取消预装）；借用中展示 `[ 本轮借用: <label> | × ]`（主体禁用且不注册模式标签，点击 `×` 即使忙态也可取消自动恢复）；停用 `builtin:tiers` 后模式标签即时消失。
+- **Composer 集成**（`OrchestratorStatusBadge` + `BorrowToolbarPill` + `useComposerModelPickerMode`）：
+  - 在配置了双相编排档位的顶层人类会话中，空闲且未激活单轮借用时仍可在模型选择器顶部切换「仅下一轮」标签，阶段与实时运行模型指示渲染在输入框下方状态行 `COMPOSER_STATUS_SLOT`（`OrchestratorStatusBadge`，精简呈现 `规划 · <模型>` / `执行 <步数> · <模型>`，不挤占工具栏宽度）；点击/轻触该指示可弹出 Radix Popover 查看完整 `tier/<id>`、当前阶段、Planner / Executor 完整模型与执行步数；当预装或正在执行单轮借用时自动让位（返回 `null`），由工具栏展示对应借用胶囊，当轮结束后自动恢复回编排状态行指示；
+  - 在可借用且非忙/非活跃态的顶层人类会话与待命页中，`BorrowToolbarPill`（`COMPOSER_TOOLBAR_SLOT`）通过 `useComposerModelPickerMode('tiers:one-turn', ...)` 向宿主 `ModelPickerControl` 顶部注册「仅下一轮」模式标签（选定即设下一轮借用且不改会话持久模型；每次点击底部按钮或 `Ctrl+L` 打开一律回到默认「切换模型」页防误触）；
+  - 未预装且非借用中时 `BorrowToolbarPill` 工具栏返回 `null`（零占位 DOM、零 Tab 焦点位）；预装态展示紧凑 24px 胶囊 `[ 下一轮: <label> | × ]`（点击主体调 `openMode()` 直达「仅下一轮」标签，点击独立兄弟按钮 `×` 取消预装）；借用中展示 `[ 本轮借用: <label> | × ]`（主体禁用且不注册模式标签，点击 `×` 即使忙态也可取消自动恢复）；停用 `builtin:tiers` 后模式标签与状态行指示即时消失。
 - **时间线工具行**（`SwitchModelToolRow` & `OrchestratorToolRow`）：`toolView`（`replaceRow: true`）消费 `presentationMeta` 渲染 26px `.trace-row`，简洁区分「单轮自动恢复 / 持久切换」及「切换执行阶段 / 交回规划阶段」。
 - **共享模型选择器增强（`ModelPickerControl`）**：存在可用档位时在下拉列表顶部展示「模型档位」分组；默认 `allowOrchestratorTiers={false}` 隐藏双相编排档位（仅顶层人类对话/待命页、`Profile.model` 与全局 `defaultModel` 显式放行，且切换至「仅下一轮」等模式标签时自动过滤编排档位，全球 `defaultCompactionModel` 亦不可选）；配置具体模型目标的入口传 `allowTiers={false}` 防止递归绑定；支持可选受控 `open`/`onOpenChange`、`showResetDefault` 与 `renderTrigger`。
 - **档位与按模型默认等级展示**：选中 `tier/<id>` 或具体模型后，触发按钮显示内核实际生效的等级，并按内核 clamp 规则收敛（如预设 `max` 而底层模型仅支持 `high|xhigh` 时显示 `xhigh`）。模型档位主视图中的主模型 / Planner 与 Executor 选择器以及下拉列表档位行徽章遵循 `档位预设 > 按模型默认`（`resolveDefaultChainThinkingLevel(..., 'tier')`），点击模型行主体留空 `thinkingLevel` 保持动态继承的同时如实展示当前生效的按模型默认思考等级；全局规则默认模型与 Profile 绑定遵循 `档位预设 > 按模型默认 > Profile/全局等级`；上下文压缩模型遵循 `压缩等级 > 档位预设 > 按模型默认`。共享选择器只展示调用方传入的链结果，待命页的草稿链仍为 `草稿覆盖 > 档位预设 > 按模型默认 > Profile > 全局`。模型中心「当前生效」状态行与 Profile 卡片经 `resolveDefaultChainThinkingLevel` 走同一规则。
@@ -98,6 +98,6 @@
 | :--- | :--- |
 | 内核纯解引用原语与只读覆写投影 | `packages/kernel/src/runtime/model-registry.ts`、`conversation-profile.ts`、`conversation-service.ts`、`spawn-fork.ts`、`store/conversation-repo.ts` |
 | 插件后端、借用与编排状态机及校验 | `packages/plugins/src/tiers.ts`、`packages/plugins/src/tiers/contracts.ts`、`packages/plugins/src/tiers/orchestrator.ts`、`packages/plugins/src/tiers/borrow.ts`、`packages/plugins/src/tiers/validation.ts`、`packages/plugins/src/shared/read-only-shell/` |
-| 插件前端 UI | `packages/plugins/src/tiers/client/`（`manager.tsx`、`TierDetailDrawer.tsx`、`SaveTemplateDialog.tsx`、`settings.tsx`、`BorrowToolbarPill.tsx`、`SwitchModelToolRow.tsx`、`OrchestratorToolRow.tsx`、`borrow-models.ts`、`orchestrator-models.ts`） |
+| 插件前端 UI | `packages/plugins/src/tiers/client/`（`manager.tsx`、`TierDetailDrawer.tsx`、`SaveTemplateDialog.tsx`、`settings.tsx`、`BorrowToolbarPill.tsx`、`OrchestratorStatusBadge.tsx`、`SwitchModelToolRow.tsx`、`OrchestratorToolRow.tsx`、`borrow-models.ts`、`orchestrator-models.ts`） |
 | 共享选择器扩展 | `packages/plugin-client/src/ui/ModelPicker.tsx`、`model-picker-model.ts` |
 | 集成与契约测试 | `packages/plugins/test/tiers-plugin.test.ts`、`packages/plugins/test/tiers-orchestrator.integration.test.ts`、`packages/web/test/tiers-client-interactions.test.tsx`、`packages/plugin-client/test/model-picker.test.ts`、`packages/kernel/test/runtime-thinking-config.test.ts` |

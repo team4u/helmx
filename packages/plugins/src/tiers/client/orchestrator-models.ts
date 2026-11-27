@@ -1,5 +1,5 @@
 /**
- * Pure data models & boundary parsers for builtin:tiers orchestrator toolbar pill and tool row.
+ * Pure data models & boundary parsers for builtin:tiers orchestrator status badge and tool row.
  * Browser-safe, zero React component exports (Fast Refresh compliant).
  */
 import type { ConversationSummary } from '@helmx/protocol/browser'
@@ -126,17 +126,15 @@ export function parseOrchestratorTransitionMeta(raw: unknown): OrchestratorTrans
   }
 }
 
-export function formatOrchestratorPillModelLabel(
-  activeModel: string,
+export function formatOrchestratorStepLabel(
   phase: TierOrchestratorPhase,
   executionStepCount: number,
   maxExecutionSteps: number,
 ): string {
-  const short = formatModelShortName(activeModel) || activeModel.trim()
-  if (phase === 'execution') {
-    return maxExecutionSteps > 0
-      ? `${short} (${executionStepCount}/${maxExecutionSteps})`
-      : `${short} (${executionStepCount})`
-  }
-  return short
+  if (phase !== 'execution') return ''
+  return maxExecutionSteps > 0 ? `${executionStepCount}/${maxExecutionSteps}` : String(executionStepCount)
+}
+
+export function formatOrchestratorActiveModelShort(activeModel: string): string {
+  return formatModelShortName(activeModel) || activeModel.trim()
 }
