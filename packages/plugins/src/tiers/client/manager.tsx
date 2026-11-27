@@ -6,45 +6,78 @@ import {
   Button,
   Callout,
   Card,
+  CardGrid,
   ConfirmDialog,
   EmptyState,
-  Field,
-  Input,
+  HelmxIcon,
+  IconButton,
   LoadingState,
-  ModelPickerControl,
   Screen,
   ScreenSection,
   ScreenToolbar,
-  SegmentedControl,
+  SearchBox,
+  SelectCard,
   Stack,
+  StatusLight,
+  Tabs,
+  TabsList,
+  TabsTrigger,
   formatModelShortName,
   formatTime,
   resolveDefaultChainThinkingLevel,
   useHostModels,
+  usePluginAction,
   usePluginContext,
   usePluginDoc,
   usePluginLocale,
   usePluginTranslator,
-  type BadgeTone,
   type LocalizedText,
+  type StatusLightTone,
 } from '@helmx/plugin-client'
 import {
-  ORCHESTRATOR_DEFAULT_MAX_STEPS, ORCHESTRATOR_MAX_STEPS_LIMIT,
-  TIERS_STATE_DOC, buildStarterDraftRows, isDraftDirty, parseTiersStateDoc,
-  resolveTierRowStatus, tiersRecordToDraftRows, validateDraftRows, type TierDraftRow, type TierTemplateView,
+  ORCHESTRATOR_DEFAULT_MAX_STEPS,
+  TIERS_STATE_DOC,
+  countTierItemsByKind,
+  createEmptyTierDraft,
+  filterTierItems,
+  getStarterTierPresets,
+  isTierDraftDirty,
+  parseTiersStateDoc,
+  synthesizeTierItems,
+  tierSpecToDraft,
+  validateTierDraft,
+  type StarterTierPreset,
+  type TierAvailabilityStatus,
+  type TierFormDraft,
+  type TierItemView,
+  type TierKindFilter,
+  type TierTemplateView,
+  type TiersManagerTab,
 } from './models.ts'
 import {
-  TIERS_COPY as C, buildTiersPickerCopy, tiersActionFailed, tiersPickModelWithHint,
-  tiersTemplateAppliedNotice, tiersTemplateDeleteConfirmBody, tiersTemplateDeletedNotice, tiersTemplateSavedNotice,
+  TIERS_COPY as C,
+  buildTiersPickerCopy,
+  tiersActionFailed,
+  tiersOrchestratorStepsBadge,
+  tiersSuggestedLevelBadge,
+  tiersTemplateAppliedNotice,
+  tiersTemplateDeleteConfirmBody,
+  tiersTemplateDeletedNotice,
+  tiersTemplateSavedNotice,
+  tiersTierDeleteConfirmBody,
+  tiersTierDeletedNotice,
+  tiersTierSavedNotice,
 } from './copy.ts'
+import { TierDetailDrawer } from './TierDetailDrawer.tsx'
+import { SaveTemplateDialog } from './SaveTemplateDialog.tsx'
 import './styles.css'
 
-const STATUS_BADGE: Readonly<Record<'available' | 'disabled' | 'unavailable' | 'draft', { tone: BadgeTone; copy: LocalizedText }>> = {
-  available: { tone: 'ok', copy: C.statusAvailable },
-  disabled: { tone: 'warn', copy: C.statusDisabled },
-  unavailable: { tone: 'warn', copy: C.statusUnavailable },
-  draft: { tone: 'neutral', copy: C.statusDraft },
+const STATUS_META: Readonly<Record<TierAvailabilityStatus, { tone: StatusLightTone; copy: LocalizedText }>> = {
+  available: { tone: 'done', copy: C.statusAvailable },
+  disabled: { tone: 'blocked', copy: C.statusDisabled },
+  unavailable: { tone: 'aborted', copy: C.statusUnavailable },
 }
+
 const VALIDATION_ERROR_COPY = {
   id_required: C.errIdRequired,
   duplicate_id: C.errDuplicateId,
@@ -53,7 +86,9 @@ const VALIDATION_ERROR_COPY = {
   max_steps_invalid: C.errMaxStepsInvalid,
 } as const
 
-export function TiersManagerScreen(_props: ScreenProps): ReactNode {
+export function TiersManagerScreen(
+  props: Partial<ScreenProps> & { inlineDrawer?: boolean },
+): ReactNode {
   const ctx = usePluginContext()
   const locale = usePluginLocale()
   const t = usePluginTranslator()
@@ -61,361 +96,663 @@ export function TiersManagerScreen(_props: ScreenProps): ReactNode {
   const hostModels = useHostModels()
   const parsed = useMemo(() => parseTiersStateDoc(rawDoc), [rawDoc])
   const pickerCopy = useMemo(() => buildTiersPickerCopy(locale), [locale])
+  const starterPresets = useMemo(() => getStarterTierPresets(locale), [locale])
   const models = hostModels?.models ?? []
 
-  const [draft, setDraft] = useState<TierDraftRow[]>([])
-  const [initialized, setInitialized] = useState(false)
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [tplForm, setTplForm] = useState({ id: '', name: '', desc: '' })
-  const [pendingDelete, setPendingDelete] = useState<TierTemplateView | null>(null)
-  const nextRowCounter = useRef(1)
-  const dirtyRef = useRef(false)
+  const actions = usePluginAction({
+    formatError: (err) => tiersActionFailed(err, locale),
+  })
 
-  const dirty = initialized && isDraftDirty(draft, parsed.tiers)
-  dirtyRef.current = dirty
+  const hasHostParams = typeof props.setParams === 'function'
+  const [localTab, setLocalTab] = useState<TiersManagerTab>('tiers')
+  const [localEditingId, setLocalEditingId] = useState<string | undefined>(undefined)
+  const [localCreating, setLocalCreating] = useState(false)
+
+  const activeTab: TiersManagerTab = hasHostParams
+    ? (props.params?.['tab'] === 'templates' ? 'templates' : 'tiers')
+    : localTab
+  const editingId: string | undefined = hasHostParams
+    ? (props.params?.['edit'] !== undefined && props.params['edit'] !== '' ? props.params['edit'] : undefined)
+    : localEditingId
+  const creating: boolean = hasHostParams
+    ? props.params?.['create'] === '1'
+    : localCreating
+  const drawerOpen = creating || editingId !== undefined
+
+  const [query, setQuery] = useState('')
+  const [kindFilter, setKindFilter] = useState<TierKindFilter>('all')
+  const [saveTemplateOpen, setSaveTemplateOpen] = useState(false)
+  const [templateSaveError, setTemplateSaveError] = useState<string | null>(null)
+  const [pendingDeleteTier, setPendingDeleteTier] = useState<TierItemView | null>(null)
+  const [pendingDeleteTemplate, setPendingDeleteTemplate] = useState<TierTemplateView | null>(null)
+
+  const [pendingPreset, setPendingPreset] = useState<StarterTierPreset | undefined>(undefined)
+  const [draft, setDraft] = useState<TierFormDraft>(() => createEmptyTierDraft())
+  const [formError, setFormError] = useState<string | null>(null)
+  const hydratedKeyRef = useRef<string | null>(null)
+
+  const updateNavigation = (patch: {
+    tab?: TiersManagerTab
+    edit?: string | undefined
+    create?: boolean
+  }): void => {
+    if (hasHostParams) {
+      props.setParams?.({
+        ...(patch.tab !== undefined ? { tab: patch.tab === 'tiers' ? undefined : patch.tab } : {}),
+        ...('edit' in patch ? { edit: patch.edit } : {}),
+        ...('create' in patch ? { create: patch.create === true ? '1' : undefined } : {}),
+      })
+      return
+    }
+    if (patch.tab !== undefined) setLocalTab(patch.tab)
+    if ('edit' in patch) setLocalEditingId(patch.edit)
+    if ('create' in patch) setLocalCreating(patch.create === true)
+  }
+
+  const tierItems = useMemo(() => synthesizeTierItems(parsed.tiers, models), [parsed.tiers, models])
+  const kindCounts = useMemo(() => countTierItemsByKind(tierItems), [tierItems])
+  const filteredItems = useMemo(
+    () => filterTierItems(tierItems, { query, kindFilter }),
+    [tierItems, query, kindFilter],
+  )
+  const existingIds = useMemo(() => new Set(Object.keys(parsed.tiers)), [parsed.tiers])
+  const editingItem = useMemo(
+    () => (editingId !== undefined ? tierItems.find((item) => item.id === editingId) : undefined),
+    [tierItems, editingId],
+  )
+
+  const hasEditingItem = editingItem !== undefined
+  const drawerTargetKey = creating
+    ? `create:${pendingPreset?.id ?? ''}`
+    : editingId !== undefined
+      ? `edit:${editingId}:${hasEditingItem ? 'ready' : 'missing'}`
+      : 'closed'
 
   useEffect(() => {
-    if (rawDoc !== undefined && (!initialized || !dirtyRef.current)) {
-      setDraft(tiersRecordToDraftRows(parsed.tiers))
-      setInitialized(true)
+    if (!drawerOpen) {
+      if (hydratedKeyRef.current !== null) {
+        hydratedKeyRef.current = null
+        setPendingPreset(undefined)
+        setFormError(null)
+      }
+      return
     }
-  }, [rawDoc, parsed.tiers, initialized])
+    if (hydratedKeyRef.current === drawerTargetKey) return
+    hydratedKeyRef.current = drawerTargetKey
+    setFormError(null)
+    if (creating) {
+      setDraft(createEmptyTierDraft(pendingPreset))
+    } else if (editingItem !== undefined) {
+      setDraft(tierSpecToDraft(editingItem.id, editingItem.spec))
+    }
+  }, [drawerOpen, drawerTargetKey, creating, pendingPreset, editingItem])
 
-  const mutateDraft = (updater: (prev: TierDraftRow[]) => TierDraftRow[]): void => { setError(null); setDraft(updater) }
-
-  const runAction = async (fn: () => Promise<string | void>): Promise<void> => {
-    setError(null); setBusy(true)
-    try { const msg = await fn(); if (msg) ctx.notify(msg) } catch (err) { setError(tiersActionFailed(err, locale)) } finally { setBusy(false) }
+  const openCreateDrawer = (preset?: StarterTierPreset): void => {
+    actions.clearError()
+    setFormError(null)
+    setPendingPreset(preset)
+    setDraft(createEmptyTierDraft(preset))
+    updateNavigation({ create: true, edit: undefined })
   }
 
-  const saveAll = (): Promise<void> => {
-    const checked = validateDraftRows(draft)
-    if (!checked.ok) { setError(t(VALIDATION_ERROR_COPY[checked.code])); return Promise.resolve() }
-    return runAction(async () => {
-      await ctx.callAction('replace', { tiers: checked.tiers })
-      setDraft(tiersRecordToDraftRows(checked.tiers))
-      return t(C.savedNotice)
+  const openEditDrawer = (tierId: string): void => {
+    actions.clearError()
+    setFormError(null)
+    setPendingPreset(undefined)
+    updateNavigation({ edit: tierId, create: false })
+  }
+
+  const closeDrawer = (): void => {
+    setFormError(null)
+    setPendingPreset(undefined)
+    updateNavigation({ create: false, edit: undefined })
+  }
+
+  const mutateDraft = (patch: Partial<TierFormDraft>): void => {
+    setFormError(null)
+    setDraft((prev) => ({ ...prev, ...patch }))
+  }
+
+  const applyPresetInDrawer = (preset: StarterTierPreset): void => {
+    setFormError(null)
+    setDraft((prev) => ({
+      ...prev,
+      id: preset.id,
+      suggestedThinkingLevel: preset.suggestedThinkingLevel,
+      description: preset.description,
+    }))
+  }
+
+  const dirty = creating
+    ? true
+    : editingItem !== undefined && isTierDraftDirty(draft, editingItem.id, editingItem.spec)
+
+  const handleSaveTier = async (): Promise<void> => {
+    setFormError(null)
+    actions.clearError()
+    const mode: 'create' | 'edit' = creating ? 'create' : 'edit'
+    const checked = validateTierDraft(draft, { mode, existingIds })
+    if (!checked.ok) {
+      setFormError(t(VALIDATION_ERROR_COPY[checked.code]))
+      return
+    }
+    await actions.run('set', checked.payload, {
+      key: 'save-tier',
+      onSuccess: () => {
+        ctx.notify(tiersTierSavedNotice(checked.payload.id, locale))
+        setPendingPreset(undefined)
+        updateNavigation({
+          ...(creating ? { tab: 'tiers' } : {}),
+          create: false,
+          edit: undefined,
+        })
+      },
+      onError: (msg) => {
+        setFormError(msg)
+      },
     })
   }
 
-  const handleSaveTemplate = (): Promise<void> => {
-    const id = tplForm.id.trim()
-    const name = tplForm.name.trim()
-    const desc = tplForm.desc.trim()
-    if (!id || !name) { setError(t(C.errTemplateFields)); return Promise.resolve() }
-    return runAction(async () => {
-      await ctx.callAction('save_template', { id, name, ...(desc ? { description: desc } : {}) })
-      setTplForm({ id: '', name: '', desc: '' })
-      return tiersTemplateSavedNotice(name, locale)
+  const confirmDeleteTier = (): void => {
+    const target = pendingDeleteTier
+    if (target === null) return
+    setPendingDeleteTier(null)
+    actions.clearError()
+    void actions.run(
+      'remove',
+      { id: target.id },
+      {
+        key: `remove:${target.id}`,
+        onSuccess: () => {
+          ctx.notify(tiersTierDeletedNotice(target.id, locale))
+          if (editingId === target.id) closeDrawer()
+        },
+        onError: (msg) => {
+          if (drawerOpen) setFormError(msg)
+        },
+      },
+    )
+  }
+
+  const handleSaveTemplate = (payload: { id: string; name: string; description?: string }): void => {
+    setTemplateSaveError(null)
+    actions.clearError()
+    void actions.run('save_template', payload, {
+      key: 'save-template',
+      onSuccess: () => {
+        setSaveTemplateOpen(false)
+        ctx.notify(tiersTemplateSavedNotice(payload.name, locale))
+      },
+      onError: (msg) => {
+        setTemplateSaveError(msg)
+      },
     })
+  }
+
+  const handleApplyTemplate = (tpl: TierTemplateView): void => {
+    actions.clearError()
+    void actions.run(
+      'apply_template',
+      { id: tpl.id },
+      {
+        key: `apply-tpl:${tpl.id}`,
+        onSuccess: () => {
+          ctx.notify(tiersTemplateAppliedNotice(tpl.name, locale))
+        },
+      },
+    )
+  }
+
+  const confirmDeleteTemplate = (): void => {
+    const target = pendingDeleteTemplate
+    if (target === null) return
+    setPendingDeleteTemplate(null)
+    actions.clearError()
+    void actions.run(
+      'delete_template',
+      { id: target.id },
+      {
+        key: `delete-tpl:${target.id}`,
+        onSuccess: () => {
+          ctx.notify(tiersTemplateDeletedNotice(target.name, locale))
+        },
+      },
+    )
   }
 
   if (rawDoc === undefined) {
     return (
-      <Screen title={t(C.screenTitle)} subtitle={t(C.screenSubtitle)}>
-        <LoadingState label={t(C.loading)} />
+      <Screen layout="full-bleed" className="tiers-screen" title={t(C.screenTitle)}>
+        <div className="tiers-stage">
+          <LoadingState label={t(C.loading)} />
+        </div>
       </Screen>
     )
   }
 
-  const savedCount = Object.keys(parsed.tiers).length
+  const savedCount = tierItems.length
 
   return (
-    <Screen title={t(C.screenTitle)} subtitle={t(C.screenSubtitle)}>
-      <ScreenToolbar
-        actions={
-          <>
-            {dirty && <Badge tone="warn">{t(C.unsavedBadge)}</Badge>}
-            {draft.length === 0 && (
-              <Button
-                variant="secondary"
-                size="sm"
-                icon="sparkles"
-                disabled={busy}
-                onClick={() => { mutateDraft(() => buildStarterDraftRows(locale)); setInitialized(true) }}
-              >
-                {t(C.fillStarter)}
-              </Button>
-            )}
+    <Screen
+      layout="full-bleed"
+      className="tiers-screen"
+      title={t(C.screenTitle)}
+      actions={
+        <>
+          {savedCount > 0 && (
             <Button
-              variant="secondary"
+              variant="default"
               size="sm"
-              icon="plus"
-              disabled={busy}
-              onClick={() =>
-                mutateDraft((prev) => [
-                  ...prev,
-                  {
-                    key: `new:${nextRowCounter.current++}`,
-                    id: '',
-                    kind: 'single',
-                    model: '',
-                    thinkingLevel: '',
-                    executorModel: '',
-                    executorThinkingLevel: '',
-                    maxExecutionSteps: String(ORCHESTRATOR_DEFAULT_MAX_STEPS),
-                    description: '',
-                  },
-                ])
-              }
+              icon="layers"
+              aria-label={t(C.saveAsTemplate)}
+              title={t(C.saveAsTemplate)}
+              disabled={actions.pending}
+              onClick={() => {
+                setTemplateSaveError(null)
+                setSaveTemplateOpen(true)
+              }}
             >
-              {t(C.addRow)}
+              <span className="pane-action-label">{t(C.saveAsTemplate)}</span>
             </Button>
-            {dirty && (
-              <Button variant="ghost" size="sm" disabled={busy} onClick={() => mutateDraft(() => tiersRecordToDraftRows(parsed.tiers))}>
-                {t(C.discard)}
-              </Button>
-            )}
-            <Button variant="primary" size="sm" icon="check" pending={busy} disabled={!dirty} onClick={() => void saveAll()}>
-              {busy ? t(C.saving) : t(C.saveAll)}
-            </Button>
+          )}
+          <Button
+            variant="primary"
+            size="sm"
+            icon="plus"
+            aria-label={t(C.addRow)}
+            title={t(C.addRow)}
+            disabled={actions.pending}
+            onClick={() => openCreateDrawer()}
+          >
+            <span className="pane-action-label">{t(C.addRow)}</span>
+          </Button>
+        </>
+      }
+    >
+      <ScreenToolbar className="tiers-toolbar" label={t(C.screenTitle)}>
+        <Tabs
+          value={activeTab}
+          onValueChange={(nextValue) =>
+            updateNavigation({ tab: nextValue === 'templates' ? 'templates' : 'tiers' })
+          }
+          variant="pills"
+        >
+          <TabsList aria-label={t(C.screenTitle)}>
+            <TabsTrigger value="tiers">
+              <span>{t(C.tabTiers)}</span>
+              <Badge className="tabular-nums">{savedCount}</Badge>
+            </TabsTrigger>
+            <TabsTrigger value="templates">
+              <span>{t(C.tabTemplates)}</span>
+              <Badge className="tabular-nums">{parsed.templates.length}</Badge>
+            </TabsTrigger>
+          </TabsList>
+        </Tabs>
+
+        {activeTab === 'tiers' && savedCount > 0 && (
+          <>
+            <SearchBox
+              variant="toolbar"
+              value={query}
+              onChange={setQuery}
+              placeholder={t(C.searchPlaceholder)}
+              ariaLabel={t(C.searchPlaceholder)}
+            />
+            <Tabs
+              value={kindFilter}
+              onValueChange={(nextValue) => setKindFilter(nextValue as TierKindFilter)}
+              variant="pills"
+            >
+              <TabsList aria-label={t(C.tierKindAria)}>
+                <TabsTrigger value="all">
+                  <span>{t(C.filterAll)}</span>
+                  <Badge className="tabular-nums">{kindCounts.all}</Badge>
+                </TabsTrigger>
+                <TabsTrigger value="single">
+                  <span>{t(C.filterSingle)}</span>
+                  <Badge className="tabular-nums">{kindCounts.single}</Badge>
+                </TabsTrigger>
+                <TabsTrigger value="orchestrator">
+                  <span>{t(C.filterOrchestrator)}</span>
+                  <Badge className="tabular-nums">{kindCounts.orchestrator}</Badge>
+                </TabsTrigger>
+              </TabsList>
+            </Tabs>
           </>
-        }
-      >
-        <span className="text-muted">{t(C.activeSection)} ({draft.length})</span>
+        )}
       </ScreenToolbar>
 
-      {error && <Callout tone="err">{error}</Callout>}
+      <div className="tiers-stage">
+        {actions.error !== undefined && !drawerOpen && !saveTemplateOpen && (
+          <Callout tone="err">
+            <span>{actions.error}</span>
+          </Callout>
+        )}
 
-      <ScreenSection title={t(C.activeSection)}>
-        {draft.length === 0 ? (
-          <EmptyState icon="layers" title={t(C.emptyTitle)} hint={t(C.emptyHint)} />
-        ) : (
-          <Stack gap="md">
-            {draft.map((row) => {
-              const badge = STATUS_BADGE[resolveTierRowStatus(row, models)]
-              const isOrch = row.kind === 'orchestrator'
-              const displayThinkingLevel = resolveDefaultChainThinkingLevel(hostModels, row.model, row.thinkingLevel, 'tier')
-              const displayExecThinkingLevel = resolveDefaultChainThinkingLevel(
-                hostModels,
-                row.executorModel,
-                row.executorThinkingLevel,
-                'tier',
-              )
-              const placeholder = !row.model && row.thinkingLevel ? tiersPickModelWithHint(row.thinkingLevel, locale) : t(C.pickModel)
-              const buttonTitle = row.model
-                ? (displayThinkingLevel && displayThinkingLevel !== 'off' ? `${row.model} · ${displayThinkingLevel}` : row.model)
-                : placeholder
-              const execButtonTitle = row.executorModel
-                ? (displayExecThinkingLevel && displayExecThinkingLevel !== 'off'
-                    ? `${row.executorModel} · ${displayExecThinkingLevel}`
-                    : row.executorModel)
-                : t(C.pickModel)
-              const patch = (p: Partial<TierDraftRow>) => mutateDraft((prev) => prev.map((r) => (r.key === row.key ? { ...r, ...p } : r)))
-              return (
-                <Card key={row.key} className="tiers-row-card">
-                  <div className="tiers-kind-row">
-                    <SegmentedControl
-                      size="sm"
-                      aria-label={`${t(C.tierKindAria)}${row.id.trim() ? ` · tier/${row.id.trim()}` : ''}`}
-                      value={row.kind}
-                      disabled={busy}
-                      onValueChange={(nextValue) =>
-                        patch({ kind: nextValue === 'orchestrator' ? 'orchestrator' : 'single' })
+        {activeTab === 'tiers' ? (
+          savedCount === 0 ? (
+            <>
+              <EmptyState
+                prominent
+                icon="layers"
+                title={t(C.emptyTitle)}
+                hint={t(C.emptyHint)}
+                hintSubtle
+                action={
+                  <Button
+                    variant="primary"
+                    size="sm"
+                    icon="plus"
+                    disabled={actions.pending}
+                    onClick={() => openCreateDrawer()}
+                  >
+                    {t(C.addRow)}
+                  </Button>
+                }
+              />
+              <ScreenSection title={t(C.starterSectionTitle)}>
+                <CardGrid minWidth="md" gap="md">
+                  {starterPresets.map((preset) => (
+                    <SelectCard
+                      key={preset.id}
+                      className="tiers-starter-card"
+                      data-starter-tier={preset.id}
+                      selected={creating && pendingPreset?.id === preset.id}
+                      onSelect={() => openCreateDrawer(preset)}
+                      title={
+                        <span className="tiers-card-title-row">
+                          <HelmxIcon name="sparkles" size={13} className="tiers-starter-icon" />
+                          <span className="mono tiers-card-id">tier/{preset.id}</span>
+                        </span>
                       }
-                      items={[
-                        { value: 'single', label: t(C.tierKindSingle) },
-                        { value: 'orchestrator', label: t(C.tierKindOrchestrator) },
-                      ]}
-                    />
-                  </div>
-                  <div className="tiers-card-top">
-                    <Field label={t(C.fieldId)}>
-                      <div className="tiers-id-wrap">
-                        <span className="mono tiers-id-prefix">tier/</span>
-                        <Input
-                          type="text"
-                          mono
-                          value={row.id}
-                          disabled={busy}
-                          placeholder={t(C.fieldIdPlaceholder)}
-                          onChange={(e) => patch({ id: e.target.value })}
+                      actions={
+                        preset.suggestedThinkingLevel !== '' ? (
+                          <Badge tone="neutral">{tiersSuggestedLevelBadge(preset.suggestedThinkingLevel, locale)}</Badge>
+                        ) : undefined
+                      }
+                      footer={
+                        <span className="tiers-starter-cta">
+                          <span>{t(C.starterCardCta)}</span>
+                          <HelmxIcon name="arrow-right" size={12} />
+                        </span>
+                      }
+                    >
+                      <p className="tiers-card-desc" title={preset.description}>
+                        {preset.description}
+                      </p>
+                    </SelectCard>
+                  ))}
+                </CardGrid>
+              </ScreenSection>
+            </>
+          ) : filteredItems.length === 0 ? (
+            <EmptyState
+              prominent
+              icon="search"
+              title={t(C.filterEmptyTitle)}
+              action={
+                <Button
+                  size="sm"
+                  icon="rotate-ccw"
+                  onClick={() => {
+                    setQuery('')
+                    setKindFilter('all')
+                  }}
+                >
+                  {t(C.resetFilters)}
+                </Button>
+              }
+            />
+          ) : (
+            <CardGrid minWidth="md" gap="md">
+              {filteredItems.map((item) => {
+                const statusMeta = STATUS_META[item.status]
+                const statusLabel = t(statusMeta.copy)
+                const primaryDisplayLevel = resolveDefaultChainThinkingLevel(
+                  hostModels,
+                  item.spec.model,
+                  item.spec.thinkingLevel,
+                  'tier',
+                )
+                const execDisplayLevel =
+                  item.kind === 'orchestrator' && item.spec.executorModel !== undefined
+                    ? resolveDefaultChainThinkingLevel(
+                        hostModels,
+                        item.spec.executorModel,
+                        item.spec.executorThinkingLevel,
+                        'tier',
+                      )
+                    : ''
+                const showPrimaryLevel = primaryDisplayLevel !== '' && primaryDisplayLevel !== 'off'
+                const showExecLevel = execDisplayLevel !== '' && execDisplayLevel !== 'off'
+
+                return (
+                  <SelectCard
+                    key={item.id}
+                    className="tiers-card"
+                    data-tier-id={item.id}
+                    selected={editingId === item.id}
+                    tone={item.status === 'available' ? 'default' : 'warn'}
+                    onSelect={() => openEditDrawer(item.id)}
+                    title={
+                      <span className="tiers-card-title-row">
+                        <StatusLight tone={statusMeta.tone} label={statusLabel} />
+                        <span className="mono tiers-card-id">tier/{item.id}</span>
+                      </span>
+                    }
+                    actions={
+                      item.kind === 'orchestrator' ? (
+                        <Badge tone="accent" icon="workflow">
+                          {tiersOrchestratorStepsBadge(
+                            item.spec.maxExecutionSteps ?? ORCHESTRATOR_DEFAULT_MAX_STEPS,
+                            locale,
+                          )}
+                        </Badge>
+                      ) : showPrimaryLevel ? (
+                        <Badge tone="neutral">{primaryDisplayLevel}</Badge>
+                      ) : undefined
+                    }
+                    footer={
+                      <>
+                        <span className={`tiers-card-status tiers-status-${item.status}`}>{statusLabel}</span>
+                        <IconButton
+                          icon="trash-2"
+                          size="xs"
+                          variant="ghost"
+                          className="tiers-card-delete-btn"
+                          label={t(C.deleteTier)}
+                          disabled={actions.pending}
+                          pending={actions.pendingKey === `remove:${item.id}`}
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            setPendingDeleteTier(item)
+                          }}
+                          onKeyDown={(e) => e.stopPropagation()}
                         />
-                      </div>
-                    </Field>
-                    <Field label={t(isOrch ? C.fieldPlannerModel : C.fieldModel)} htmlFor={false}>
-                      <ModelPickerControl
-                        buttonAriaLabel={`${t(isOrch ? C.fieldPlannerModel : C.fieldModel)}${row.id.trim() ? ` · tier/${row.id.trim()}` : ''}`}
-                        effectiveModel={row.model || undefined}
-                        activeThinkingLevel={displayThinkingLevel}
-                        placeholderLabel={placeholder}
-                        buttonTitle={buttonTitle}
-                        resetLabel={t(C.clearModel)}
-                        resetTitle={t(C.clearModel)}
-                        popoverSide="bottom"
-                        enableShortcut={false}
-                        allowTiers={false}
-                        disabled={busy}
-                        copy={pickerCopy}
-                        onNotice={(msg, tone) => ctx.notify(msg, tone)}
-                        onApply={(model, level) => patch({ model, thinkingLevel: level ?? '' })}
-                        onResetDefault={() => patch({ model: '', thinkingLevel: '' })}
-                      />
-                    </Field>
-                    <div className="tiers-card-actions">
-                      <Badge tone={badge.tone}>{t(badge.copy)}</Badge>
+                      </>
+                    }
+                  >
+                    <div className="tiers-model-box">
+                      <span className="tiers-model-endpoint" title={item.spec.model}>
+                        <code className="tiers-model-name">{formatModelShortName(item.spec.model)}</code>
+                        {showPrimaryLevel && <span className="tiers-model-level">· {primaryDisplayLevel}</span>}
+                      </span>
+                      {item.kind === 'orchestrator' && item.spec.executorModel !== undefined && (
+                        <>
+                          <HelmxIcon name="arrow-right" size={12} className="tiers-model-arrow" />
+                          <span className="tiers-model-endpoint" title={item.spec.executorModel}>
+                            <code className="tiers-model-name">{formatModelShortName(item.spec.executorModel)}</code>
+                            {showExecLevel && <span className="tiers-model-level">· {execDisplayLevel}</span>}
+                          </span>
+                        </>
+                      )}
+                    </div>
+                    {item.spec.description !== undefined && item.spec.description !== '' && (
+                      <p className="tiers-card-desc" title={item.spec.description}>
+                        {item.spec.description}
+                      </p>
+                    )}
+                  </SelectCard>
+                )
+              })}
+            </CardGrid>
+          )
+        ) : parsed.templates.length === 0 ? (
+          <EmptyState
+            prominent
+            icon="layers"
+            title={t(C.templateEmptyTitle)}
+            hint={t(C.templateEmpty)}
+            hintSubtle
+            action={
+              savedCount > 0 ? (
+                <Button
+                  variant="primary"
+                  size="sm"
+                  icon="layers"
+                  disabled={actions.pending}
+                  onClick={() => {
+                    setTemplateSaveError(null)
+                    setSaveTemplateOpen(true)
+                  }}
+                >
+                  {t(C.saveAsTemplate)}
+                </Button>
+              ) : undefined
+            }
+          />
+        ) : (
+          <CardGrid minWidth="lg" gap="md">
+            {parsed.templates.map((tpl) => (
+              <Card
+                key={tpl.id}
+                className="tiers-template-card"
+                data-template-id={tpl.id}
+                title={tpl.name}
+                subtitle={<span className="mono">{tpl.id}</span>}
+                actions={
+                  parsed.activeTemplate === tpl.id ? (
+                    <Badge tone="ok">{t(C.templateActiveBadge)}</Badge>
+                  ) : undefined
+                }
+                footer={
+                  <>
+                    <span className="mono text-muted tiers-template-updated">
+                      {tpl.updatedAt > 0 ? formatTime(tpl.updatedAt) : '—'}
+                    </span>
+                    <Stack direction="horizontal" gap="xs" align="center">
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        disabled={actions.pending}
+                        pending={actions.pendingKey === `apply-tpl:${tpl.id}`}
+                        onClick={() => handleApplyTemplate(tpl)}
+                      >
+                        {t(C.templateApply)}
+                      </Button>
                       <Button
                         variant="ghost"
                         size="sm"
-                        icon="trash-2"
-                        disabled={busy}
-                        onClick={() => mutateDraft((prev) => prev.filter((r) => r.key !== row.key))}
+                        disabled={actions.pending}
+                        pending={actions.pendingKey === `delete-tpl:${tpl.id}`}
+                        onClick={() => setPendingDeleteTemplate(tpl)}
                       >
-                        {t(C.removeRow)}
+                        {t(C.templateDelete)}
                       </Button>
-                    </div>
-                  </div>
-                  {isOrch ? (
-                    <div className="tiers-orchestrator-row">
-                      <Field label={t(C.fieldExecutorModel)} htmlFor={false}>
-                        <ModelPickerControl
-                          buttonAriaLabel={`${t(C.fieldExecutorModel)}${row.id.trim() ? ` · tier/${row.id.trim()}` : ''}`}
-                          effectiveModel={row.executorModel || undefined}
-                          activeThinkingLevel={displayExecThinkingLevel}
-                          placeholderLabel={t(C.pickModel)}
-                          buttonTitle={execButtonTitle}
-                          resetLabel={t(C.clearModel)}
-                          resetTitle={t(C.clearModel)}
-                          popoverSide="bottom"
-                          enableShortcut={false}
-                          allowTiers={false}
-                          disabled={busy}
-                          copy={pickerCopy}
-                          onNotice={(msg, tone) => ctx.notify(msg, tone)}
-                          onApply={(model, level) => patch({ executorModel: model, executorThinkingLevel: level ?? '' })}
-                          onResetDefault={() => patch({ executorModel: '', executorThinkingLevel: '' })}
-                        />
-                      </Field>
-                      <Field label={t(C.fieldMaxSteps)}>
-                        <Input
-                          type="number"
-                          mono
-                          min={0}
-                          max={ORCHESTRATOR_MAX_STEPS_LIMIT}
-                          value={row.maxExecutionSteps}
-                          disabled={busy}
-                          placeholder={t(C.fieldMaxStepsPlaceholder)}
-                          onChange={(e) => patch({ maxExecutionSteps: e.target.value })}
-                        />
-                      </Field>
-                    </div>
-                  ) : null}
-                  <Field label={t(C.fieldDescription)}>
-                    <Input
-                      type="text"
-                      maxLength={240}
-                      value={row.description}
-                      disabled={busy}
-                      placeholder={t(C.fieldDescriptionPlaceholder)}
-                      onChange={(e) => patch({ description: e.target.value })}
-                    />
-                  </Field>
-                </Card>
-              )
-            })}
-          </Stack>
+                    </Stack>
+                  </>
+                }
+              >
+                <Stack gap="sm">
+                  {tpl.description !== undefined && tpl.description !== '' && (
+                    <p className="text-subtle tiers-template-desc">{tpl.description}</p>
+                  )}
+                  <Stack direction="horizontal" gap="xs" wrap>
+                    {Object.entries(tpl.tiers).map(([tid, spec]) => (
+                      <Badge key={tid} tone="neutral" mono title={spec.model}>
+                        tier/{tid} → {formatModelShortName(spec.model)}{spec.thinkingLevel ? ` · ${spec.thinkingLevel}` : ''}
+                      </Badge>
+                    ))}
+                  </Stack>
+                </Stack>
+              </Card>
+            ))}
+          </CardGrid>
         )}
-      </ScreenSection>
+      </div>
 
-      <ScreenSection title={t(C.templatesSection)}>
-        <p className="text-muted">{t(C.templateSaveTitle)}</p>
-        <div className="tiers-template-form">
-          {([
-            ['id', C.templateIdLabel, C.templateIdPlaceholder, true],
-            ['name', C.templateNameLabel, C.templateNamePlaceholder, false],
-            ['desc', C.templateDescLabel, C.templateDescPlaceholder, false],
-          ] as const).map(([field, label, ph, mono]) => (
-            <Field key={field} label={t(label)}>
-              <Input
-                type="text"
-                mono={mono}
-                value={tplForm[field]}
-                disabled={busy || savedCount === 0}
-                placeholder={t(ph)}
-                onChange={(e) => setTplForm((prev) => ({ ...prev, [field]: e.target.value }))}
-              />
-            </Field>
-          ))}
-          <Button variant="secondary" size="sm" icon="layers" disabled={busy || savedCount === 0} onClick={() => void handleSaveTemplate()}>
-            {t(C.templateSaveBtn)}
-          </Button>
-        </div>
+      <TierDetailDrawer
+        open={drawerOpen}
+        mode={creating ? 'create' : 'edit'}
+        inline={props.inlineDrawer}
+        draft={draft}
+        editingItem={editingItem}
+        existingIds={existingIds}
+        starterPresets={starterPresets}
+        hostModels={hostModels}
+        pickerCopy={pickerCopy}
+        dirty={dirty}
+        saving={actions.pendingKey === 'save-tier'}
+        busy={actions.pending}
+        error={formError}
+        locale={locale}
+        translate={t}
+        onNotice={(msg, tone) => ctx.notify(msg, tone)}
+        onChange={mutateDraft}
+        onApplyPreset={applyPresetInDrawer}
+        onSave={() => void handleSaveTier()}
+        onRequestDelete={(item) => setPendingDeleteTier(item)}
+        onClose={closeDrawer}
+      />
 
-        {parsed.templates.length === 0 ? (
-          <p className="text-subtle">{t(C.templateEmpty)}</p>
-        ) : (
-          <div className="helmx-table-wrap">
-            <table className="helmx-table">
-              <thead>
-                <tr><th>{t(C.colTemplate)}</th><th>{t(C.colRoster)}</th><th>{t(C.colUpdated)}</th><th>{t(C.colActions)}</th></tr>
-              </thead>
-              <tbody>
-                {parsed.templates.map((tpl) => (
-                  <tr key={tpl.id}>
-                    <td>
-                      <div className="flex-col-xs">
-                        <span className="flex-row"><strong>{tpl.name}</strong>{parsed.activeTemplate === tpl.id && <Badge tone="ok">{t(C.templateActiveBadge)}</Badge>}</span>
-                        <span className="mono text-subtle">{tpl.id}</span>
-                        {tpl.description && <span className="text-subtle">{tpl.description}</span>}
-                      </div>
-                    </td>
-                    <td>
-                      <Stack direction="horizontal" gap="xs" wrap>
-                        {Object.entries(tpl.tiers).map(([tid, spec]) => (
-                          <Badge key={tid} tone="neutral" mono title={spec.model}>
-                            tier/{tid} → {formatModelShortName(spec.model)}{spec.thinkingLevel ? ` · ${spec.thinkingLevel}` : ''}
-                          </Badge>
-                        ))}
-                      </Stack>
-                    </td>
-                    <td className="mono text-muted">{tpl.updatedAt > 0 ? formatTime(tpl.updatedAt) : '—'}</td>
-                    <td>
-                      <Stack direction="horizontal" gap="xs" align="center">
-                        <Button
-                          variant="secondary"
-                          size="sm"
-                          disabled={busy}
-                          onClick={() => void runAction(async () => {
-                            await ctx.callAction('apply_template', { id: tpl.id })
-                            setDraft(tiersRecordToDraftRows(tpl.tiers))
-                            return tiersTemplateAppliedNotice(tpl.name, locale)
-                          })}
-                        >
-                          {t(C.templateApply)}
-                        </Button>
-                        <Button variant="ghost" size="sm" disabled={busy} onClick={() => setPendingDelete(tpl)}>
-                          {t(C.templateDelete)}
-                        </Button>
-                      </Stack>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </ScreenSection>
+      <SaveTemplateDialog
+        open={saveTemplateOpen}
+        inline={props.inlineDrawer}
+        activeTierCount={savedCount}
+        pending={actions.pendingKey === 'save-template'}
+        error={templateSaveError}
+        locale={locale}
+        translate={t}
+        onSubmit={handleSaveTemplate}
+        onClose={() => setSaveTemplateOpen(false)}
+      />
 
       <ConfirmDialog
-        open={pendingDelete !== null}
-        onOpenChange={(open) => { if (!open) setPendingDelete(null) }}
+        open={pendingDeleteTier !== null}
+        onOpenChange={(open) => {
+          if (!open) setPendingDeleteTier(null)
+        }}
+        title={t(C.tierDeleteConfirmTitle)}
+        description={
+          pendingDeleteTier !== null
+            ? tiersTierDeleteConfirmBody(pendingDeleteTier.id, pendingDeleteTier.spec.model, locale)
+            : ''
+        }
+        confirmText={t(C.deleteTier)}
+        cancelText={t(C.cancel)}
+        danger
+        inline={props.inlineDrawer}
+        onConfirm={confirmDeleteTier}
+        onCancel={() => setPendingDeleteTier(null)}
+      />
+
+      <ConfirmDialog
+        open={pendingDeleteTemplate !== null}
+        onOpenChange={(open) => {
+          if (!open) setPendingDeleteTemplate(null)
+        }}
         title={t(C.templateDeleteConfirmTitle)}
-        description={pendingDelete ? tiersTemplateDeleteConfirmBody(pendingDelete.name, pendingDelete.id, locale) : ''}
+        description={
+          pendingDeleteTemplate !== null
+            ? tiersTemplateDeleteConfirmBody(pendingDeleteTemplate.name, pendingDeleteTemplate.id, locale)
+            : ''
+        }
         confirmText={t(C.templateDelete)}
         cancelText={t(C.cancel)}
         danger
-        onConfirm={() => {
-          const target = pendingDelete
-          setPendingDelete(null)
-          if (target) {
-            void runAction(async () => {
-              await ctx.callAction('delete_template', { id: target.id })
-              return tiersTemplateDeletedNotice(target.name, locale)
-            })
-          }
-        }}
-        onCancel={() => setPendingDelete(null)}
+        inline={props.inlineDrawer}
+        onConfirm={confirmDeleteTemplate}
+        onCancel={() => setPendingDeleteTemplate(null)}
       />
     </Screen>
   )

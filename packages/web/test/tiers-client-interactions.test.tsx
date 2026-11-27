@@ -1,8 +1,9 @@
 /**
  * builtin:tiers client module (compiled TSX via @helmx/plugin-build) and ModelPickerControl
  * tier-group interactive DOM tests:
- * - TiersManagerScreen: loading state, starter 5-tier draft fill, client-side validation blocking
- *   incomplete rows, live status badges (available / unavailable), and save/apply/delete template actions;
+ * - TiersManagerScreen: loading state, empty starter quick-start cards, DetailDrawer create/edit
+ *   validation & atomic set/remove actions, search/kind filtering, template tabs/apply/delete &
+ *   SaveTemplateDialog, dual-phase orchestrator editing, and per-model thinking defaults;
  * - TiersSettingsPanel: summary KV projection and openScreen deep-link;
  * - ModelPickerControl: tiers section at top of popover (available tiers only), clicking a tier
  *   commits `tier/<id>`, and `allowTiers={false}` suppresses tiers to prevent recursive tier bindings.
@@ -192,7 +193,7 @@ describe("tiers-client-interactions", () => {
     input.dispatchEvent(new Event('input', { bubbles: true }))
   }
 
-  test('TiersManagerScreen: starter draft fill, validation guard, template save/apply/delete, and status badges', { timeout: 60_000 }, async () => {
+  test('TiersManagerScreen: loading, starter cards, drawer validation/create/edit/delete, filtering, and template tabs/dialog', { timeout: 60_000 }, async () => {
     const ctx = makeSpyCtx()
     // 1. Loading state
     setBuiltinClientStub({ docs: {} })
@@ -202,49 +203,65 @@ describe("tiers-client-interactions", () => {
     assert.match(loadingMount.host.textContent ?? '', /Loading model tiers/i)
     await loadingMount.unmount()
 
-    // 2. Empty state -> fill starter 5-tier draft -> save blocked when models are unset
+    // 2. Empty state -> 5 starter quick-start cards -> click `coder` opens create drawer -> save blocked when model unset
     setBuiltinClientStub({ docs: { state: { tiers: {}, templates: {} } } })
     const emptyMount = await mountWithHost(
       e(PluginClientContext.Provider, { value: ctx }, e(TiersManagerScreen, { screenId: 'main' })),
     )
     try {
       assert.match(emptyMount.host.textContent ?? '', /No model tiers configured yet/i)
-      await act(async () => {
-        findButton(emptyMount.host, 'Fill 5-tier starter').click()
-      })
-      const idInputs = Array.from(emptyMount.host.querySelectorAll('.tiers-id-wrap input')) as HTMLInputElement[]
+      assert.match(emptyMount.host.textContent ?? '', /Quick-start with recommended 5 tiers/i)
+      const starterCards = Array.from(emptyMount.host.querySelectorAll<HTMLElement>('.tiers-starter-card'))
       assert.deepEqual(
-        idInputs.map((i) => i.value),
+        starterCards.map((card) => card.getAttribute('data-starter-tier')),
         ['scout', 'coder', 'senior', 'architect', 'reviewer'],
       )
-      assert.equal(
-        emptyMount.host.querySelectorAll('.helmx-select-trigger, select').length,
-        0,
-        'TiersManagerScreen must reuse integrated ModelPickerControl instead of a separate thinking-level Select',
+      const coderStarterTrigger = emptyMount.host.querySelector<HTMLButtonElement>(
+        '[data-starter-tier="coder"] .helmx-select-card-trigger',
       )
-      const starterPickers = Array.from(
-        emptyMount.host.querySelectorAll('button.composer-model-button'),
-      ) as HTMLButtonElement[]
-      assert.equal(starterPickers.length, 5)
-      assert.match(starterPickers[1]?.textContent ?? '', /suggested: high/, 'starter draft should hint suggested thinking level')
-      assert.match(starterPickers[2]?.textContent ?? '', /suggested: xhigh/)
-      // Attempt save with blank concrete models -> explicit error, zero action calls
+      assert.ok(coderStarterTrigger !== null, 'expected coder starter card trigger')
       await act(async () => {
-        findButton(emptyMount.host, 'Save tiers').click()
+        coderStarterTrigger.click()
       })
-      assert.match(emptyMount.host.textContent ?? '', /concrete target model/i)
+      const drawer = document.body.querySelector<HTMLElement>('.tiers-drawer')
+      assert.ok(drawer !== null, 'clicking starter card opens DetailDrawer')
+      const idInput = drawer.querySelector<HTMLInputElement>('.tiers-id-wrap input')
+      assert.ok(idInput !== null)
+      assert.equal(idInput.value, 'coder')
+      assert.equal(idInput.disabled, false)
+      assert.equal(
+        drawer.querySelectorAll('.helmx-select-trigger, select').length,
+        0,
+        'TiersManagerScreen drawer must reuse integrated ModelPickerControl instead of a separate thinking-level Select',
+      )
+      const drawerPicker = drawer.querySelector<HTMLButtonElement>('button.composer-model-button')
+      assert.ok(drawerPicker !== null)
+      assert.match(drawerPicker.textContent ?? '', /suggested: high/, 'starter preset hints suggested thinking level')
+
+      await act(async () => {
+        findButton(document.body, 'Create tier').click()
+      })
+      assert.match(drawer.textContent ?? '', /concrete target model/i)
       assert.equal(ctx.actionCalls.length, 0)
     } finally {
       await emptyMount.unmount()
     }
 
-    // 3. Hydrated state with saved tiers + templates -> badges & template actions
+    // 3. Hydrated state with saved tiers + templates -> card grid, filter, drawer edit/set, delete, and templates tab/dialog
     setBuiltinClientStub({
       docs: {
         state: {
           tiers: {
             coder: { model: 'faux/workhorse', thinkingLevel: 'high', description: 'Mainline' },
             stale: { model: 'faux/removed', description: 'Missing model' },
+            'orch-1': {
+              kind: 'orchestrator',
+              model: 'faux/flagship',
+              thinkingLevel: 'xhigh',
+              executorModel: 'faux/workhorse',
+              maxExecutionSteps: 30,
+              description: 'Dual pair',
+            },
           },
           activeTemplate: 'daily',
           templates: {
@@ -271,79 +288,66 @@ describe("tiers-client-interactions", () => {
       const text = fullMount.host.textContent ?? ''
       assert.match(text, /Available/)
       assert.match(text, /Unavailable/)
-      assert.match(text, /Daily Dev/)
-      assert.match(text, /Budget Mode/)
+      assert.match(text, /tier\/coder/)
+      assert.match(text, /tier\/stale/)
+      assert.match(text, /tier\/orch-1/)
+      assert.match(text, /Dual · 30 steps/)
+      assert.equal(EMOJI_RE.test(text), false)
 
-      // Mutate local draft so editor is dirty, then apply first row's template (`budget`, sorted newest first):
-      // draft must immediately replace unsaved rows with the applied template's tiers (`coder` only).
-      await act(async () => {
-        findButton(fullMount.host, 'Add tier').click()
-      })
-      assert.equal(fullMount.host.querySelectorAll('.tiers-id-wrap input').length, 3)
-      await act(async () => {
-        findButton(fullMount.host, 'Apply').click()
-      })
-      assert.deepEqual(ctx.actionCalls[0], { actionId: 'apply_template', input: { id: 'budget' } })
-      assert.ok(fullMount.host.querySelector('.callout-ok') === null, 'must not render inline callout-ok on apply_template')
-      assert.deepEqual(ctx.notifications[0], { message: 'Applied template "Budget Mode".', tone: 'info' })
-      const afterApplyIds = Array.from(fullMount.host.querySelectorAll('.tiers-id-wrap input')).map(
-        (el) => (el as HTMLInputElement).value,
+      // Kind filter pills + search box filter cards accurately
+      const dualFilterTab = Array.from(fullMount.host.querySelectorAll<HTMLButtonElement>('[role="tab"]')).find(
+        (tab) => (tab.textContent ?? '').includes('Dual-phase'),
       )
-      assert.deepEqual(afterApplyIds, ['coder'], 'applying a template must sync draft rows even when local edits were dirty')
+      assert.ok(dualFilterTab !== undefined)
+      await act(async () => {
+        dualFilterTab.click()
+      })
+      assert.equal(fullMount.host.querySelectorAll('.tiers-card').length, 1)
+      assert.ok(fullMount.host.querySelector('[data-tier-id="orch-1"]') !== null)
 
-      // Delete first row's template (`budget`) requires ConfirmDialog confirmation
-      await act(async () => {
-        findButton(fullMount.host, 'Delete').click()
-      })
-      assert.equal(ctx.actionCalls.length, 1, 'clicking Delete must wait for ConfirmDialog confirmation')
-      let confirmDialog = document.body.querySelector('[role="alertdialog"]')
-      assert.ok(confirmDialog !== null, 'template Delete opens AlertDialog confirmation')
-      await act(async () => {
-        findButton(confirmDialog!, 'Cancel').click()
-      })
-      assert.equal(ctx.actionCalls.length, 1, 'cancelling confirmation dialog must not call delete_template')
-
-      await act(async () => {
-        findButton(fullMount.host, 'Delete').click()
-      })
-      confirmDialog = document.body.querySelector('[role="alertdialog"]')
-      assert.ok(confirmDialog !== null)
-      const confirmDeleteBtn = Array.from(confirmDialog.querySelectorAll<HTMLButtonElement>('button')).find((b) =>
-        b.className.includes('btn-danger'),
+      const allFilterTab = Array.from(fullMount.host.querySelectorAll<HTMLButtonElement>('[role="tab"]')).find(
+        (tab) => (tab.textContent ?? '').includes('All'),
       )
-      assert.ok(confirmDeleteBtn !== undefined)
+      assert.ok(allFilterTab !== undefined)
       await act(async () => {
-        confirmDeleteBtn.click()
+        allFilterTab.click()
       })
-      assert.deepEqual(ctx.actionCalls[1], { actionId: 'delete_template', input: { id: 'budget' } })
-      assert.ok(fullMount.host.querySelector('.callout-ok') === null, 'must not render inline callout-ok on delete_template')
-      assert.deepEqual(ctx.notifications[1], { message: 'Deleted template "Budget Mode".', tone: 'info' })
+      assert.equal(fullMount.host.querySelectorAll('.tiers-card').length, 3)
 
-      // Save current active tiers as a new template
-      const tplInputs = Array.from(fullMount.host.querySelectorAll('.tiers-template-form input')) as HTMLInputElement[]
-      assert.ok(tplInputs.length >= 2)
-      const [tplIdInput, tplNameInput] = tplInputs as [HTMLInputElement, HTMLInputElement]
+      const searchInput = fullMount.host.querySelector<HTMLInputElement>('input[aria-label*="Search tier ID"]')
+      assert.ok(searchInput !== null)
       await act(async () => {
-        setInputValue(tplIdInput, 'custom-1')
-        setInputValue(tplNameInput, 'Custom Roster')
+        setInputValue(searchInput, 'stale')
       })
+      assert.equal(fullMount.host.querySelectorAll('.tiers-card').length, 1)
+      assert.ok(fullMount.host.querySelector('[data-tier-id="stale"]') !== null)
       await act(async () => {
-        findButton(fullMount.host, 'Save template').click()
+        setInputValue(searchInput, '')
       })
-      assert.deepEqual(ctx.actionCalls[2], {
-        actionId: 'save_template',
-        input: { id: 'custom-1', name: 'Custom Roster' },
+      assert.equal(fullMount.host.querySelectorAll('.tiers-card').length, 3)
+
+      // Click `tier/coder` card -> opens edit DetailDrawer with locked ID & ModelPickerControl -> edit & save calls `set`
+      const coderCardTrigger = fullMount.host.querySelector<HTMLButtonElement>(
+        '[data-tier-id="coder"] .helmx-select-card-trigger',
+      )
+      assert.ok(coderCardTrigger !== null)
+      await act(async () => {
+        coderCardTrigger.click()
       })
-      assert.ok(fullMount.host.querySelector('.callout-ok') === null, 'must not render inline callout-ok on save_template')
-      assert.deepEqual(ctx.notifications[2], { message: 'Saved template "Custom Roster".', tone: 'info' })
+      const drawer = document.body.querySelector<HTMLElement>('.tiers-drawer')
+      assert.ok(drawer !== null, 'clicking tier card opens DetailDrawer')
+      const editIdInput = drawer.querySelector<HTMLInputElement>('.tiers-id-wrap input')
+      assert.ok(editIdInput !== null)
+      assert.equal(editIdInput.value, 'coder')
+      assert.equal(editIdInput.disabled, true)
+      assert.equal(editIdInput.readOnly, true)
+      const saveChangesBtn = findButton(document.body, 'Save changes')
+      assert.equal(saveChangesBtn.disabled, true, 'Save changes stays disabled until draft is dirty')
 
-      // Earlier we applied `budget` -> draft has `coder: faux/fast · low`. Verify integrated trigger + inline chips!
-      const pickerBtn = fullMount.host.querySelector('button.composer-model-button') as HTMLButtonElement | null
-      assert.ok(pickerBtn, 'expected integrated ModelPickerControl button')
-      assert.match(pickerBtn.textContent ?? '', /fast/)
-      assert.match(pickerBtn.textContent ?? '', /low/)
-
-      // 1) Click inline thinking chip (`xhigh` on `faux/flagship`) -> updates model + thinkingLevel together and saves
+      const pickerBtn = drawer.querySelector<HTMLButtonElement>('button.composer-model-button')
+      assert.ok(pickerBtn !== null, 'expected integrated ModelPickerControl button in drawer')
+      assert.match(pickerBtn.textContent ?? '', /workhorse/)
+      assert.match(pickerBtn.textContent ?? '', /high/)
       await act(async () => {
         pickerBtn.click()
       })
@@ -361,54 +365,129 @@ describe("tiers-client-interactions", () => {
       })
       assert.match(pickerBtn.textContent ?? '', /flagship/)
       assert.match(pickerBtn.textContent ?? '', /xhigh/)
+      assert.equal(saveChangesBtn.disabled, false)
       await act(async () => {
-        findButton(fullMount.host, 'Save tiers').click()
+        saveChangesBtn.click()
       })
-      assert.deepEqual(ctx.actionCalls[3], {
-        actionId: 'replace',
+      assert.deepEqual(ctx.actionCalls[0], {
+        actionId: 'set',
         input: {
-          tiers: {
-            coder: { model: 'faux/flagship', thinkingLevel: 'xhigh' },
-          },
+          id: 'coder',
+          kind: 'single',
+          model: 'faux/flagship',
+          thinkingLevel: 'xhigh',
+          description: 'Mainline',
         },
       })
-      assert.ok(fullMount.host.querySelector('.callout-ok') === null, 'must not render inline callout-ok on Save tiers')
-      assert.deepEqual(ctx.notifications[3], { message: 'Model tiers saved and synced to kernel.', tone: 'info' })
+      assert.ok(document.body.querySelector('.tiers-drawer') === null, 'drawer closes after saving tier')
+      assert.ok(fullMount.host.querySelector('.callout-ok') === null, 'must not render inline callout-ok on set')
+      assert.deepEqual(ctx.notifications[0], { message: 'Saved tier "tier/coder" and synced to kernel.', tone: 'info' })
 
-      // 2) Click model row body (`faux/workhorse`) -> updates model and resets thinkingLevel to follow default chain
-      await act(async () => {
-        pickerBtn.click()
-      })
-      const workhorseRowMain = Array.from(document.body.querySelectorAll<HTMLButtonElement>('.composer-model-row-main')).find(
-        (btn) => btn.title.includes('faux/workhorse'),
+      // Delete `tier/stale` from card footer -> ConfirmDialog -> calls `remove`
+      const staleDeleteBtn = fullMount.host.querySelector<HTMLButtonElement>(
+        '[data-tier-id="stale"] .tiers-card-delete-btn',
       )
-      assert.ok(workhorseRowMain, 'expected faux/workhorse row body button')
+      assert.ok(staleDeleteBtn !== null)
       await act(async () => {
-        workhorseRowMain.click()
+        staleDeleteBtn.click()
       })
-      assert.match(pickerBtn.textContent ?? '', /workhorse/)
-      assert.doesNotMatch(pickerBtn.textContent ?? '', /xhigh/)
+      assert.equal(ctx.actionCalls.length, 1, 'clicking card delete must wait for ConfirmDialog')
+      let confirmDialog = document.body.querySelector('[role="alertdialog"]')
+      assert.ok(confirmDialog !== null)
       await act(async () => {
-        findButton(fullMount.host, 'Save tiers').click()
+        findButton(confirmDialog!, 'Cancel').click()
+      })
+      assert.equal(ctx.actionCalls.length, 1)
+
+      await act(async () => {
+        staleDeleteBtn.click()
+      })
+      confirmDialog = document.body.querySelector('[role="alertdialog"]')
+      assert.ok(confirmDialog !== null)
+      const confirmRemoveBtn = Array.from(confirmDialog.querySelectorAll<HTMLButtonElement>('button')).find((b) =>
+        b.className.includes('btn-danger'),
+      )
+      assert.ok(confirmRemoveBtn !== undefined)
+      await act(async () => {
+        confirmRemoveBtn.click()
+      })
+      assert.deepEqual(ctx.actionCalls[1], { actionId: 'remove', input: { id: 'stale' } })
+      assert.deepEqual(ctx.notifications[1], { message: 'Deleted tier "tier/stale".', tone: 'info' })
+
+      // Switch to `Preset templates` tab -> verify Apply & Delete
+      const templatesTab = Array.from(fullMount.host.querySelectorAll<HTMLButtonElement>('[role="tab"]')).find(
+        (tab) => (tab.textContent ?? '').includes('Preset templates'),
+      )
+      assert.ok(templatesTab !== undefined)
+      await act(async () => {
+        templatesTab.click()
+      })
+      const tplText = fullMount.host.textContent ?? ''
+      assert.match(tplText, /Daily Dev/)
+      assert.match(tplText, /Budget Mode/)
+
+      await act(async () => {
+        findButton(fullMount.host, 'Apply').click()
+      })
+      assert.deepEqual(ctx.actionCalls[2], { actionId: 'apply_template', input: { id: 'budget' } })
+      assert.ok(fullMount.host.querySelector('.callout-ok') === null, 'must not render inline callout-ok on apply_template')
+      assert.deepEqual(ctx.notifications[2], { message: 'Applied template "Budget Mode".', tone: 'info' })
+
+      await act(async () => {
+        findButton(fullMount.host, 'Delete').click()
+      })
+      assert.equal(ctx.actionCalls.length, 3, 'clicking template Delete must wait for ConfirmDialog confirmation')
+      confirmDialog = document.body.querySelector('[role="alertdialog"]')
+      assert.ok(confirmDialog !== null, 'template Delete opens AlertDialog confirmation')
+      await act(async () => {
+        findButton(confirmDialog!, 'Cancel').click()
+      })
+      assert.equal(ctx.actionCalls.length, 3)
+
+      await act(async () => {
+        findButton(fullMount.host, 'Delete').click()
+      })
+      confirmDialog = document.body.querySelector('[role="alertdialog"]')
+      assert.ok(confirmDialog !== null)
+      const confirmDeleteTplBtn = Array.from(confirmDialog.querySelectorAll<HTMLButtonElement>('button')).find((b) =>
+        b.className.includes('btn-danger'),
+      )
+      assert.ok(confirmDeleteTplBtn !== undefined)
+      await act(async () => {
+        confirmDeleteTplBtn.click()
+      })
+      assert.deepEqual(ctx.actionCalls[3], { actionId: 'delete_template', input: { id: 'budget' } })
+      assert.ok(fullMount.host.querySelector('.callout-ok') === null, 'must not render inline callout-ok on delete_template')
+      assert.deepEqual(ctx.notifications[3], { message: 'Deleted template "Budget Mode".', tone: 'info' })
+
+      // Click `Save as template` -> SaveTemplateDialog -> validate empty/invalid -> submit `save_template`
+      await act(async () => {
+        findButton(fullMount.host, 'Save as template').click()
+      })
+      const tplDialog = document.body.querySelector<HTMLElement>('[role="dialog"]')
+      assert.ok(tplDialog !== null, 'Save as template opens Dialog')
+      await act(async () => {
+        findButton(tplDialog, 'Save template').click()
+      })
+      assert.match(tplDialog.textContent ?? '', /both required/i)
+      assert.equal(ctx.actionCalls.length, 4)
+
+      const tplInputs = Array.from(tplDialog.querySelectorAll('input')) as HTMLInputElement[]
+      assert.equal(tplInputs.length, 2)
+      const [tplIdInput, tplNameInput] = tplInputs as [HTMLInputElement, HTMLInputElement]
+      await act(async () => {
+        setInputValue(tplIdInput, 'custom-1')
+        setInputValue(tplNameInput, 'Custom Roster')
+      })
+      await act(async () => {
+        findButton(tplDialog, 'Save template').click()
       })
       assert.deepEqual(ctx.actionCalls[4], {
-        actionId: 'replace',
-        input: {
-          tiers: {
-            coder: { model: 'faux/workhorse' },
-          },
-        },
+        actionId: 'save_template',
+        input: { id: 'custom-1', name: 'Custom Roster' },
       })
-
-      // 3) Click reset item (`Clear model & level`) -> clears both model and thinkingLevel back to Draft
-      await act(async () => {
-        pickerBtn.click()
-      })
-      await act(async () => {
-        findButton(document.body, 'Clear model & level').click()
-      })
-      assert.match(pickerBtn.textContent ?? '', /Select model & thinking level/)
-      assert.match(fullMount.host.textContent ?? '', /Draft/)
+      assert.ok(document.body.querySelector('[role="dialog"]') === null, 'SaveTemplateDialog closes after submit')
+      assert.deepEqual(ctx.notifications[4], { message: 'Saved template "Custom Roster".', tone: 'info' })
     } finally {
       await fullMount.unmount()
     }
@@ -774,7 +853,14 @@ describe("tiers-client-interactions", () => {
       ),
     )
     try {
-      const pickerBtn = mounted.host.querySelector<HTMLButtonElement>('button.composer-model-button')
+      const coderCardTrigger = mounted.host.querySelector<HTMLButtonElement>(
+        '[data-tier-id="coder"] .helmx-select-card-trigger',
+      )
+      assert.ok(coderCardTrigger !== null)
+      await act(async () => {
+        coderCardTrigger.click()
+      })
+      const pickerBtn = document.body.querySelector<HTMLButtonElement>('.tiers-drawer button.composer-model-button')
       assert.ok(pickerBtn !== null)
       await act(async () => {
         pickerBtn.click()
@@ -1566,7 +1652,7 @@ describe("tiers-client-interactions", () => {
     }
   })
 
-  test('TiersManagerScreen: dual-phase orchestrator toggle, validation, and save payload', { timeout: 60_000 }, async () => {
+  test('TiersManagerScreen: dual-phase orchestrator drawer editing, validation, and set payload', { timeout: 60_000 }, async () => {
     const ctx = makeSpyCtx()
     setBuiltinClientStub({
       docs: {
@@ -1590,55 +1676,96 @@ describe("tiers-client-interactions", () => {
       e(PluginClientContext.Provider, { value: ctx }, e(TiersManagerScreen, { screenId: 'main' })),
     )
     try {
-      const executorPicker = mounted.host.querySelector<HTMLButtonElement>(
+      const cardTrigger = mounted.host.querySelector<HTMLButtonElement>(
+        '[data-tier-id="claude-auto"] .helmx-select-card-trigger',
+      )
+      assert.ok(cardTrigger !== null, 'expected orchestrator tier card trigger')
+      await act(async () => {
+        cardTrigger.click()
+      })
+      const drawer = document.body.querySelector<HTMLElement>('.tiers-drawer')
+      assert.ok(drawer !== null)
+      const executorPicker = drawer.querySelector<HTMLButtonElement>(
         'button[aria-label*="Executor model"][aria-label*="tier/claude-auto"]',
       )
-      assert.ok(executorPicker !== null, 'hydrated orchestrator tier shows Executor picker')
-      const stepsInput = mounted.host.querySelector<HTMLInputElement>('input[type="number"][min="0"][max="100"]')
+      assert.ok(executorPicker !== null, 'hydrated orchestrator tier shows Executor picker in drawer')
+      const stepsInput = drawer.querySelector<HTMLInputElement>('input[type="number"][min="0"][max="100"]')
       assert.ok(stepsInput !== null && stepsInput.value === '12')
 
       // Set maxExecutionSteps > 100 -> validation blocks save
-      const segTabs = Array.from(mounted.host.querySelectorAll<HTMLButtonElement>('.tiers-kind-row [role="tab"]'))
+      const segTabs = Array.from(drawer.querySelectorAll<HTMLButtonElement>('[role="tab"]'))
       assert.equal(segTabs.length, 2)
       await act(async () => {
         setInputValue(stepsInput, '101')
       })
       await act(async () => {
-        findButton(mounted.host, 'Save tiers').click()
+        findButton(document.body, 'Save changes').click()
       })
-      assert.match(mounted.host.textContent ?? '', /between 0 and 100/i)
+      assert.match(drawer.textContent ?? '', /between 0 and 100/i)
       assert.equal(ctx.actionCalls.length, 0)
 
-      // Set maxExecutionSteps = 0 (unlimited) -> saves cleanly with maxExecutionSteps: 0
+      // Set maxExecutionSteps = 0 (unlimited) -> saves cleanly with maxExecutionSteps: 0 and closes drawer
       await act(async () => {
         setInputValue(stepsInput, '0')
       })
       await act(async () => {
-        findButton(mounted.host, 'Save tiers').click()
+        findButton(document.body, 'Save changes').click()
       })
       assert.equal(ctx.actionCalls.length, 1)
-      assert.equal(ctx.actionCalls[0]?.actionId, 'replace')
-      const savedZeroTiers = (ctx.actionCalls[0]?.input as { tiers: Record<string, Record<string, unknown>> }).tiers
-      assert.equal(savedZeroTiers['claude-auto']?.['maxExecutionSteps'], 0)
+      assert.equal(ctx.actionCalls[0]?.actionId, 'set')
+      assert.equal((ctx.actionCalls[0]?.input as { maxExecutionSteps?: number }).maxExecutionSteps, 0)
+      assert.ok(document.body.querySelector('.tiers-drawer') === null)
 
-      // Restore valid steps 15 and save -> calls replace with kind:'orchestrator', executorModel, and maxExecutionSteps:15
+      // Reopen drawer -> set steps = 15 -> calls set with full orchestrator payload
       await act(async () => {
-        setInputValue(stepsInput, '15')
+        cardTrigger.click()
+      })
+      const reopenedSteps = document.body.querySelector<HTMLInputElement>('.tiers-drawer input[type="number"][min="0"][max="100"]')
+      assert.ok(reopenedSteps !== null)
+      await act(async () => {
+        setInputValue(reopenedSteps, '15')
       })
       await act(async () => {
-        findButton(mounted.host, 'Save tiers').click()
+        findButton(document.body, 'Save changes').click()
       })
       assert.equal(ctx.actionCalls.length, 2)
-      assert.equal(ctx.actionCalls[1]?.actionId, 'replace')
-      const savedTiers = (ctx.actionCalls[1]?.input as { tiers: Record<string, Record<string, unknown>> }).tiers
-      assert.deepEqual(savedTiers['claude-auto'], {
-        kind: 'orchestrator',
-        model: 'faux/flagship',
-        thinkingLevel: 'xhigh',
-        executorModel: 'faux/workhorse',
-        executorThinkingLevel: 'medium',
-        maxExecutionSteps: 15,
-        description: 'Planner -> Executor pair',
+      assert.deepEqual(ctx.actionCalls[1], {
+        actionId: 'set',
+        input: {
+          id: 'claude-auto',
+          kind: 'orchestrator',
+          model: 'faux/flagship',
+          thinkingLevel: 'xhigh',
+          executorModel: 'faux/workhorse',
+          executorThinkingLevel: 'medium',
+          maxExecutionSteps: 15,
+          description: 'Planner -> Executor pair',
+        },
+      })
+
+      // Reopen drawer -> switch from orchestrator to single -> omits executor fields strictly
+      await act(async () => {
+        cardTrigger.click()
+      })
+      const singleTab = Array.from(document.body.querySelectorAll<HTMLButtonElement>('.tiers-drawer [role="tab"]')).find(
+        (btn) => (btn.textContent ?? '').includes('Single model'),
+      )
+      assert.ok(singleTab !== undefined)
+      await act(async () => {
+        singleTab.click()
+      })
+      await act(async () => {
+        findButton(document.body, 'Save changes').click()
+      })
+      assert.deepEqual(ctx.actionCalls[2], {
+        actionId: 'set',
+        input: {
+          id: 'claude-auto',
+          kind: 'single',
+          model: 'faux/flagship',
+          thinkingLevel: 'xhigh',
+          description: 'Planner -> Executor pair',
+        },
       })
     } finally {
       await mounted.unmount()
@@ -1794,24 +1921,26 @@ describe("tiers-client-interactions", () => {
       },
     )
     try {
-      await act(async () => {
-        findButton(mounted.host, 'Add tier').click()
-      })
-      const idInput = mounted.host.querySelector<HTMLInputElement>('.tiers-id-wrap input')
-      assert.ok(idInput !== null)
-      await act(async () => {
-        setInputValue(idInput, 'coder')
-      })
-
-      const getPrimaryPickerBtn = (): HTMLButtonElement => {
-        const btn = mounted.host.querySelector<HTMLButtonElement>('button.composer-model-button')
-        assert.ok(btn !== null, 'expected primary ModelPickerControl button')
-        return btn
+      const openCreateAndFillId = async (id: string): Promise<HTMLButtonElement> => {
+        await act(async () => {
+          findButton(mounted.host, 'Add tier').click()
+        })
+        const drawer = document.body.querySelector<HTMLElement>('.tiers-drawer')
+        assert.ok(drawer !== null, 'expected Create DetailDrawer')
+        const idInput = drawer.querySelector<HTMLInputElement>('.tiers-id-wrap input')
+        assert.ok(idInput !== null)
+        await act(async () => {
+          setInputValue(idInput, id)
+        })
+        const primaryBtn = drawer.querySelector<HTMLButtonElement>('button.composer-model-button')
+        assert.ok(primaryBtn !== null, 'expected primary ModelPickerControl button inside drawer')
+        return primaryBtn
       }
 
       // 1) Click model row body (`faux/workhorse`): shows per-model default `medium` in trigger, title, and popover chip while saving without thinkingLevel
+      let primaryBtn = await openCreateAndFillId('coder')
       await act(async () => {
-        getPrimaryPickerBtn().click()
+        primaryBtn.click()
       })
       const workhorseMain = Array.from(document.body.querySelectorAll<HTMLButtonElement>('.composer-model-row-main')).find(
         (btn) => btn.title.includes('faux/workhorse'),
@@ -1820,13 +1949,13 @@ describe("tiers-client-interactions", () => {
       await act(async () => {
         workhorseMain.click()
       })
-      assert.match(getPrimaryPickerBtn().textContent ?? '', /workhorse/)
-      assert.match(getPrimaryPickerBtn().textContent ?? '', /medium/)
-      assert.equal(getPrimaryPickerBtn().title, 'faux/workhorse · medium')
+      assert.match(primaryBtn.textContent ?? '', /workhorse/)
+      assert.match(primaryBtn.textContent ?? '', /medium/)
+      assert.equal(primaryBtn.title, 'faux/workhorse · medium')
 
       // Reopen popover -> `medium` chip is pressed on the current row
       await act(async () => {
-        getPrimaryPickerBtn().click()
+        primaryBtn.click()
       })
       const workhorseRow = Array.from(document.body.querySelectorAll<HTMLElement>('.composer-model-row')).find((row) =>
         (row.querySelector('.composer-model-row-main') as HTMLButtonElement | null)?.title.includes('faux/workhorse'),
@@ -1838,19 +1967,20 @@ describe("tiers-client-interactions", () => {
       assert.ok(mediumChip !== undefined)
       assert.equal(mediumChip.getAttribute('aria-pressed'), 'true')
       await act(async () => {
-        getPrimaryPickerBtn().click()
+        primaryBtn.click()
       })
       await act(async () => {
-        findButton(mounted.host, 'Save tiers').click()
+        findButton(document.body, 'Create tier').click()
       })
       assert.deepEqual(ctx.actionCalls[0], {
-        actionId: 'replace',
-        input: { tiers: { coder: { model: 'faux/workhorse' } } },
+        actionId: 'set',
+        input: { id: 'coder', kind: 'single', model: 'faux/workhorse' },
       })
 
       // 2) Click explicit `high` chip -> overrides per-model default and saves thinkingLevel: 'high'
+      primaryBtn = await openCreateAndFillId('coder')
       await act(async () => {
-        getPrimaryPickerBtn().click()
+        primaryBtn.click()
       })
       const highChip = Array.from(document.body.querySelectorAll<HTMLElement>('.composer-model-row'))
         .find((row) =>
@@ -1862,19 +1992,20 @@ describe("tiers-client-interactions", () => {
       await act(async () => {
         highBtn.click()
       })
-      assert.match(getPrimaryPickerBtn().textContent ?? '', /high/)
-      assert.equal(getPrimaryPickerBtn().title, 'faux/workhorse · high')
+      assert.match(primaryBtn.textContent ?? '', /high/)
+      assert.equal(primaryBtn.title, 'faux/workhorse · high')
       await act(async () => {
-        findButton(mounted.host, 'Save tiers').click()
+        findButton(document.body, 'Create tier').click()
       })
       assert.deepEqual(ctx.actionCalls[1], {
-        actionId: 'replace',
-        input: { tiers: { coder: { model: 'faux/workhorse', thinkingLevel: 'high' } } },
+        actionId: 'set',
+        input: { id: 'coder', kind: 'single', model: 'faux/workhorse', thinkingLevel: 'high' },
       })
 
       // 3) Click explicit `off` chip -> outranks per-model default `medium`, hides level suffix/title, presses `off` chip, and saves 'off'
+      primaryBtn = await openCreateAndFillId('coder')
       await act(async () => {
-        getPrimaryPickerBtn().click()
+        primaryBtn.click()
       })
       const offBtn = Array.from(
         Array.from(document.body.querySelectorAll<HTMLElement>('.composer-model-row'))
@@ -1887,11 +2018,11 @@ describe("tiers-client-interactions", () => {
       await act(async () => {
         offBtn.click()
       })
-      assert.doesNotMatch(getPrimaryPickerBtn().textContent ?? '', /medium/)
-      assert.doesNotMatch(getPrimaryPickerBtn().textContent ?? '', /high/)
-      assert.equal(getPrimaryPickerBtn().title, 'faux/workhorse')
+      assert.doesNotMatch(primaryBtn.textContent ?? '', /medium/)
+      assert.doesNotMatch(primaryBtn.textContent ?? '', /high/)
+      assert.equal(primaryBtn.title, 'faux/workhorse')
       await act(async () => {
-        getPrimaryPickerBtn().click()
+        primaryBtn.click()
       })
       const reopenedChips = Array.from(
         Array.from(document.body.querySelectorAll<HTMLElement>('.composer-model-row'))
@@ -1905,19 +2036,20 @@ describe("tiers-client-interactions", () => {
       assert.equal(reopenedOff?.getAttribute('aria-pressed'), 'true')
       assert.equal(reopenedMedium?.getAttribute('aria-pressed'), null)
       await act(async () => {
-        getPrimaryPickerBtn().click()
+        primaryBtn.click()
       })
       await act(async () => {
-        findButton(mounted.host, 'Save tiers').click()
+        findButton(document.body, 'Create tier').click()
       })
       assert.deepEqual(ctx.actionCalls[2], {
-        actionId: 'replace',
-        input: { tiers: { coder: { model: 'faux/workhorse', thinkingLevel: 'off' } } },
+        actionId: 'set',
+        input: { id: 'coder', kind: 'single', model: 'faux/workhorse', thinkingLevel: 'off' },
       })
 
-      // 4) Switch to `faux/fast` (no per-model default) by row body -> shows only `fast` without `·`
+      // 4) Switch to `faux/fast` (no per-model default) by row body -> shows only `fast` without `·`, then switch to orchestrator and pick Executor `faux/flagship` row body -> displays `high` and omits executorThinkingLevel
+      primaryBtn = await openCreateAndFillId('coder')
       await act(async () => {
-        getPrimaryPickerBtn().click()
+        primaryBtn.click()
       })
       const fastMain = Array.from(document.body.querySelectorAll<HTMLButtonElement>('.composer-model-row-main')).find(
         (btn) => btn.title.includes('faux/fast'),
@@ -1926,20 +2058,21 @@ describe("tiers-client-interactions", () => {
       await act(async () => {
         fastMain.click()
       })
-      assert.match(getPrimaryPickerBtn().textContent ?? '', /fast/)
-      assert.doesNotMatch(getPrimaryPickerBtn().textContent ?? '', /·/)
-      assert.equal(getPrimaryPickerBtn().title, 'faux/fast')
+      assert.match(primaryBtn.textContent ?? '', /fast/)
+      assert.doesNotMatch(primaryBtn.textContent ?? '', /·/)
+      assert.equal(primaryBtn.title, 'faux/fast')
 
-      // 5) Switch to dual-phase orchestrator -> click `faux/flagship` row body in Executor picker -> displays `high` and omits executorThinkingLevel
-      const orchTab = Array.from(mounted.host.querySelectorAll<HTMLButtonElement>('.tiers-kind-row [role="tab"]')).find(
+      const orchTab = Array.from(document.body.querySelectorAll<HTMLButtonElement>('.tiers-drawer [role="tab"]')).find(
         (btn) => (btn.textContent ?? '').includes('Dual-phase'),
       )
-      assert.ok(orchTab !== undefined, 'expected Dual-phase segmented tab')
+      assert.ok(orchTab !== undefined, 'expected Dual-phase segmented tab inside drawer')
       await act(async () => {
         orchTab.click()
       })
-      const execPickerBtn = mounted.host.querySelector<HTMLButtonElement>('button[aria-label*="Executor model"]')
-      assert.ok(execPickerBtn !== null, 'expected Executor ModelPickerControl button')
+      const execPickerBtn = document.body.querySelector<HTMLButtonElement>(
+        '.tiers-drawer button[aria-label*="Executor model"]',
+      )
+      assert.ok(execPickerBtn !== null, 'expected Executor ModelPickerControl button inside drawer')
       await act(async () => {
         execPickerBtn.click()
       })
@@ -1954,19 +2087,16 @@ describe("tiers-client-interactions", () => {
       assert.match(execPickerBtn.textContent ?? '', /high/)
       assert.equal(execPickerBtn.title, 'faux/flagship · high')
       await act(async () => {
-        findButton(mounted.host, 'Save tiers').click()
+        findButton(document.body, 'Create tier').click()
       })
       assert.deepEqual(ctx.actionCalls[3], {
-        actionId: 'replace',
+        actionId: 'set',
         input: {
-          tiers: {
-            coder: {
-              kind: 'orchestrator',
-              model: 'faux/fast',
-              executorModel: 'faux/flagship',
-              maxExecutionSteps: 30,
-            },
-          },
+          id: 'coder',
+          kind: 'orchestrator',
+          model: 'faux/fast',
+          executorModel: 'faux/flagship',
+          maxExecutionSteps: 30,
         },
       })
     } finally {
