@@ -20,7 +20,7 @@ helmx plugins init my-app --template app              # 全栈微应用骨架（
 helmx plugins types ~/code/my-plugin                  # 离线写入/刷新 .helmx/types/ 声明快照（不修改既有 tsconfig.json）
 ```
 
-full 模板产出 `plugin.json`（含 `clientRoot: "./client"`）、`index.ts`（doc 与 `increment` 动作）、`tsconfig.json`（含指向 `.helmx/types/` 的 `paths`）、`.helmx/types/`（离线 `@helmx/protocol` / `@helmx/protocol/browser` / `@helmx/plugin-client` 类型声明快照，仓外无需 `node_modules` 即可 `tsc --noEmit`）、`client/index.tsx`（`@helmx/plugin-client` 示例面板）与 `README.md`；minimal 仅后端 ping 探针；app 模板产出 public doc + 双 Schema 动作 + `ctx.ui.screen` 主视图 + 可选侧栏直达入口，生成目录可直接通过 `helmx plugins doctor`（回报 `screens: ["main"]`），再经 `helmx plugins install <dir> --enable` 安装并在插件中心「应用视图」筛选与一键打开。已有插件目录可随时执行 `helmx plugins types [dir]` 刷新 `.helmx/types/`（只读检测 `tsconfig.json` 并在未配置 `paths` 时打印建议配置片段，绝不改写用户文件）。目标目录非空默认拒绝，`--force` 继续（同名文件被覆盖，不删除现有文件）。
+full 模板产出 `plugin.json`（含 `clientRoot: "./client"`）、`index.ts`（doc 与 `increment` 动作）、`tsconfig.json`（含指向 `.helmx/types/` 的 `paths`）、`.helmx/types/`（离线 `@helmx/protocol` / `@helmx/protocol/browser` / `@helmx/ui` / `@helmx/plugin-client` 类型声明快照，仓外无需 `node_modules` 即可 `tsc --noEmit`）、`client/index.tsx`（`@helmx/ui` 原语 + `@helmx/plugin-client` Hooks 示例面板）与 `README.md`；minimal 仅后端 ping 探针；app 模板产出 public doc + 双 Schema 动作 + `ctx.ui.screen` 主视图 + 可选侧栏直达入口，生成目录可直接通过 `helmx plugins doctor`（回报 `screens: ["main"]`），再经 `helmx plugins install <dir> --enable` 安装并在插件中心「应用视图」筛选与一键打开。已有插件目录可随时执行 `helmx plugins types [dir]` 刷新 `.helmx/types/`（只读检测 `tsconfig.json` 并在未配置 `paths` 时打印建议配置片段，绝不改写用户文件）。目标目录非空默认拒绝，`--force` 继续（同名文件被覆盖，不删除现有文件）。
 
 ### ② 插件目录与清单
 
@@ -134,21 +134,24 @@ export default {
 
 目录随插件启停自动增删，无需修改 SYSTEM.md。完整契约获取：`run_action({ actionId, describe: true })` 只读自省，或 `helmx actions list --json`。`scope`（conversationIds / tags / profileIds / modelProviders）同时约束目录可见性、describe 与调用；人工 HTTP/CLI 不受 scope 限制。`idempotent: true` 声明是安全重试承诺，工作流账本据此做前缀缓存复用与恢复重跑。
 
-### ④ 前端：client.tsx 单轨与共享 SDK
+### ④ 前端：client.tsx 单轨与双共享包（`@helmx/ui` + `@helmx/plugin-client`）
 
-视图类扩展点统一 React 组件单轨（`UiSpecBase` 只接受 `client: ClientComponentRef`）。`@helmx/plugin-client` 是独立浏览器 SDK，可直接依赖做类型检查；运行时被构建器虚拟化为宿主全局命名空间（`globalThis.__helmx_shared_plugin_client`），与宿主共享同一份 SDK、React 与上下文实例。主要符号（唯一真源 `PLUGIN_CLIENT_SHARED_EXPORTS`）：
+视图类扩展点统一 React 组件单轨（`UiSpecBase` 只接受 `client: ClientComponentRef`）。宿主通过 `@helmx/plugin-build` 将两个正交的共享浏览器包虚拟化为全局命名空间，与宿主共享同一份 React 与实例（外部插件严禁导入 `/pure` 子路径）：
 
-| 分类 | 符号 |
-| :--- | :--- |
-| Hooks | `usePluginContext`（`callAction / fetchRoute / submitInput / openScreen / openSplitScreen / openConversationDrawer / openArtifact / notify / theme / composer` 等；其中 `fetchRoute(path, init?)` 鉴权请求本插件 `/api/plugins/<id>/routes<path>` 并原样返回 `Response`，宿主代注 Bearer Token 且防路径逃逸）、`usePluginDoc`、`usePluginSessionDoc`、`useConversations`、`useConversation`、`useConversationBackground`（宿主标准按会话后台在途快照 `{ unknown, byConversation }`；`unknown` 为 true 时如实渲染未知，不得当作「无后台任务」）、`useHostModels`（宿主模型目录只读切片 `HostModelsSlice \| undefined`，稳定句柄订阅，仅目录真实变化才重渲染；`undefined`=能力未注入或首载未完成，如实渲染未知并禁选，不得伪造空目录；`models: []` 才是已加载且为空）、`useHostNodes`（只读计算节点切片 `HostNodesSlice \| undefined`，不含节点接入令牌）与 `useHostProfiles`（只读 Profile 目录切片 `HostProfilesSlice \| undefined`，不含 `SYSTEM.md` 正文），均与 `useHostModels` 同构（独立订阅隔离流式抖动，严格区分 `undefined` 与 `[]`）、`usePlugins`、`usePluginConfig`、`usePluginAction`（含并发互斥与错误态）、`usePluginLocale` / `usePluginTranslator`、`useScreenParams` / `useScreenLocation`、`useToolActivity`、`useTimelineToolCalls`、`useSharedNowMs`、`usePluginScopeId` |
-| 基础控件与表单 | `Button` / `IconButton`（强类型 variant/size、`pending` 忙态、`forwardRef` 兼容 Radix `asChild`）、`Input` / `Textarea`（`size`/`mono`/`invalid` + `FieldContext` 自动接线）、`Field` / `HelperText` / `ErrorText`（非包裹式 `<label htmlFor>` / `htmlFor={false}` `role="group"`，贯通 `Input` / `Textarea` / `Select` / `MultiSelect` / `Switch` / `Checkbox`）、`Switch`、`Select` / `MultiSelect`、`Checkbox`、`Tabs` / `SegmentedControl`、`Dialog` 系列、`Popover` 系列、`Tooltip` / `TooltipProvider` 系列、`DropdownMenu` 系列、`AlertDialog` 系列 / `ConfirmDialog`、`SearchBox`、`EmptyState`、`LoadingState`、`StatusLight`（支持强类型 `tone: StatusLightTone` 与 `status: string` 互斥入参；导出 `STATUS_LIGHT_TONES`、`normalizeStatusLightTone`、`isKnownStatusLightStatus`）、`Badge`、`MonoId`、`ViewBoundary`、`Callout`、`PluginScope` |
-| 领域选择器与快捷键 | `ModelPickerControl`（宿主与插件共享的模型+思考档位选择器：目录经 `useHostModels` 稳定句柄切片读取；行体点击仅应用模型、档位跟随服务端权威默认链；档位 chips 单次提交模型+档位；`showThinkingLevels={false}` 用于纯 model-id 配置字段；控件零 churning context 读取，文案经 `copy` prop 注入、SDK 默认英文，刷新通知经 `onNotice` 回调）、`useComposerModelPickerMode`（在宿主输入框 `ModelPickerControl` 顶部注册可选模式标签并返回 `{ openMode }` 直达跳转）、`formatModelShortName` / `formatModelRowDisplay`（模型短名与来源行拆分）、`resolveEffectiveThinkingLevel`（档位按模型支持列表收敛，与内核 clamp 同序：不支持时向上找最近支持档、再向下，显式 `off` 原样透传）、`resolveDefaultChainThinkingLevel`（默认链引用的展示等级：按 `conversation` 或 `compaction` 链解析 `tier` 预设、按模型默认及调用方配置等级，并按内核规则收敛）、`usePanelShortcut`（按最近 `[data-helmx-panel]` 面板作用域监听宿主 `helmx:shortcut` 事件，如 `toggle-model-picker`、`toggle-plan-mode`） |
-| 布局与卡片原语 | `Screen`、`ScreenSection`、`ScreenToolbar`、`Stack`（间距映射 `--space-1..5`）、`Card`（静态容器 `elevated \| subtle` / `default \| warn \| danger`）、`SelectCard` + `CardGrid`（主舞台可点选对象卡与窄分屏防溢出网格）、`DataTable`（统一 loading/empty）、`KvGrid`、`DetailDrawer`、`DockTray` / `DockTrayRow` |
-| 内容展示 | `HelmxIcon`、`MarkdownView`、`MarkdownText`、`CodeBlockView`、`ToolCallDetails`、`CopyButton`、`formatTime` 等格式化纯函数 |
-| 插件间组合 | `PluginSlot` |
+1. **`@helmx/ui`**（唯一真源 `UI_SHARED_EXPORTS`，虚拟化至 `globalThis.__helmx_shared_ui`）：独立 Quiet Surface 设计系统，零插件运行时依赖——提供全部通用 UI 原语、布局外壳、图标、作用域/语言上下文、剪贴板与纯格式化函数；
+2. **`@helmx/plugin-client`**（唯一真源 `PLUGIN_CLIENT_SHARED_EXPORTS`，与 `UI_SHARED_EXPORTS` 严格不相交，虚拟化至 `globalThis.__helmx_shared_plugin_client`）：纯插件运行时 Hooks、插件间插槽与宿主耦合组件（`ModelPickerControl`、`Markdown*`、`ToolCallDetails`）。
+
+| 包 | 分类 | 符号 |
+| :--- | :--- | :--- |
+| `@helmx/ui` | 作用域与多语言 | `UiScope` / `useUiScopeId`、`UiLocaleProvider` / `useUiLocale` / `useUiTranslator` 与协议语言纯函数（`HELMX_LOCALES`、`DEFAULT_HELMX_LOCALE`、`isHelmxLocale`、`normalizeLocaleTag`、`parseLocalizedText`、`resolveLocalizedText`、`createLocaleTranslator`） |
+| `@helmx/ui` | 基础控件与表单 | `Button` / `IconButton`（5 变体 `secondary \| primary \| ghost \| danger \| inline`，禁 `default`；`md/sm/xs` 三档、`pending` 忙态、`forwardRef` 兼容 Radix `asChild`）、`Input` / `Textarea`（`size`/`prefix`/`suffix`/`mono`/`invalid` + `FieldContext` 自动接线）、`Field` / `HelperText` / `ErrorText`、`Switch`、`Select` / `MultiSelect`、`Checkbox`、`Tabs` / `TabsList` / `TabsTrigger` / `TabsContent` / `TabCount` / `SegmentedControl`、`Dialog` 系列 / `ModalDialog`、`Popover` 系列、`Tooltip` / `TooltipProvider` 系列、`DropdownMenu` 系列、`AlertDialog` 系列 / `ConfirmDialog`、`SearchBox`、`EmptyState`、`LoadingState`、`StatusLight`（`STATUS_LIGHT_TONES`、`normalizeStatusLightTone`、`isKnownStatusLightStatus`）、`Badge`、`Kbd`、`MonoId`、`ViewBoundary`、`Callout` |
+| `@helmx/ui` | 布局、卡片与工具 | `Screen`、`ScreenSection`、`ScreenToolbar`、`Stack`、`Card`、`SelectCard` + `CardGrid`、`List` + `ListRow`、`DataTable`、`KvGrid`、`DetailDrawer`、`DockTray` / `DockTrayRow`、`HelmxIcon`、`CopyButton` / `copyToClipboard`、`formatTime` / `formatCompactTimestamp` / `formatDurationMs` / `formatStopwatchMs` / `formatOffsetMs` / `resolveConversationTiming` / `formatBytes` |
+| `@helmx/plugin-client` | 插件运行时 Hooks | `usePluginContext`（`callAction / fetchRoute / submitInput / openScreen / openSplitScreen / openConversationDrawer / openArtifact / openWorkbench / notify / theme / locale / translate / composer`）、`usePluginDoc` / `usePluginDocState`、`usePluginSessionDoc` / `usePluginSessionDocState`、`useConversations`、`useConversation`、`useHostModels` / `useHostNodes` / `useHostProfiles`（稳定句柄只读切片，严格区分 `undefined` 与空集合）、`usePlugins`、`usePluginConfig`、`usePluginAction`、`usePluginLocale` / `usePluginTranslator`、`useScreenParams`、`useScreenDrawer`、`useToolActivity`、`useTimelineToolCalls`、`useSharedNowMs`、`usePanelShortcut`、`useComposerCommand`、`useComposerModelPickerMode` |
+| `@helmx/plugin-client` | 宿主耦合组件与插槽 | `ModelPickerControl`（`variant="composer \| field"`，配套 `formatModelShortName`、`resolveEffectiveThinkingLevel`、`resolveDefaultChainThinkingLevel`）、`MarkdownView`、`MarkdownText`、`CodeBlockView`、`ToolCallDetails`、`PluginSlot`、`PluginScope` |
 
 ```tsx
-import { usePluginDoc, HelmxIcon, Screen, ScreenSection, DataTable, KvGrid } from '@helmx/plugin-client';
+import { HelmxIcon, KvGrid, Screen, ScreenSection } from '@helmx/ui';
+import { usePluginDoc } from '@helmx/plugin-client';
 
 export function SampleWidget() {
   const stats = usePluginDoc<{ totalCalls: number; failedCalls: number }>('stats');
@@ -255,9 +258,10 @@ ctx.service({
 | doctor 四阶段 | `packages/kernel/src/plugins/plugin-doctor.ts` |
 | 受管包安装 | `packages/kernel/src/plugins/package-manager.ts`、`package-store.ts` |
 | client 编译实现 | `packages/plugin-build/` |
-| 共享浏览器 SDK | `packages/plugin-client/` |
+| 共享 UI 设计系统 | `packages/ui/` |
+| 共享插件运行时 SDK | `packages/plugin-client/` |
 | CLI 脚手架模板 | `packages/cli/src/commands/scaffold-templates.ts` |
-| 测试 | `packages/kernel/test/plugins.test.ts` 与 `plugin-*.test.ts`（生命周期、依赖、doctor、受管包）、`packages/cli/test/`（init/doctor/reload 命令）、`packages/plugin-build/test/`、`packages/plugin-client/test/` |
+| 测试 | `packages/kernel/test/plugins.test.ts` 与 `plugin-*.test.ts`（生命周期、依赖、doctor、受管包）、`packages/cli/test/`（init/doctor/reload 命令）、`packages/plugin-build/test/`、`packages/ui/test/`、`packages/plugin-client/test/` |
 
 ## 相关文档
 

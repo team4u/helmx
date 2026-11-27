@@ -8,12 +8,8 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { ComposerScopeProps, ConversationStatus } from '@helmx/protocol/browser'
+import { Badge, DockTray, DockTrayRow, IconButton, resolveLocalizedText } from '@helmx/ui'
 import {
-  Badge,
-  DockTray,
-  DockTrayRow,
-  IconButton,
-  resolveLocalizedText,
   usePluginAction,
   usePluginContext,
   usePluginLocale,

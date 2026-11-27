@@ -3,6 +3,7 @@
  * Parallel workspace TypeScript checker (`pnpm typecheck:only`).
  *
  * Runs all independent typecheck roots concurrently (`tsconfig.check.json`,
+ * `packages/ui/tsconfig.json`, `packages/ui/tsconfig.test.json`,
  * `packages/plugin-client/tsconfig.json`, `packages/plugins/tsconfig.client.json`,
  * `packages/web/tsconfig.json`, `packages/web/tsconfig.test.json`) with per-target
  * buffered output so diagnostics never interleave, and terminates all owned child process trees
@@ -19,6 +20,8 @@ const defaultTscBin = require.resolve('typescript/bin/tsc');
 
 export const TYPECHECK_TARGETS = [
   { label: 'tsconfig.check.json', project: 'tsconfig.check.json' },
+  { label: 'packages/ui/tsconfig.json', project: 'packages/ui/tsconfig.json' },
+  { label: 'packages/ui/tsconfig.test.json', project: 'packages/ui/tsconfig.test.json' },
   { label: 'packages/plugin-client/tsconfig.json', project: 'packages/plugin-client/tsconfig.json' },
   { label: 'packages/plugins/tsconfig.client.json', project: 'packages/plugins/tsconfig.client.json' },
   { label: 'packages/web/tsconfig.json', project: 'packages/web/tsconfig.json' },

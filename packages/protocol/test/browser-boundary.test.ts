@@ -31,6 +31,7 @@ test('@helmx/protocol/browser: export declarations aligned with the root entry\'
     'PLUGIN_HOOK_NAMES',
     'PLUGIN_CONFIG_FIELD_TYPES',
     'PLUGIN_CONFIG_FIELD_FORMATS',
+    'UI_SHARED_EXPORTS',
     'PLUGIN_CLIENT_SHARED_EXPORTS',
     'PLUGIN_UI_METHOD_NAMES',
     'KNOWN_PLUGIN_UI_SURFACES',

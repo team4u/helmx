@@ -12,7 +12,8 @@ import * as React from 'react'
 import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import type { PluginClientContext as PluginClientContextType, ScreenProps } from '@helmx/protocol'
-import { PluginClientContext, resolveLocalizedText, type HelmxLocale } from '@helmx/plugin-client'
+import { resolveLocalizedText, type HelmxLocale } from '@helmx/ui'
+import { PluginClientContext } from '@helmx/plugin-client'
 import { importBuiltinClientModule, mountSharedPluginNamespaces, setBuiltinClientStub } from './helpers/builtin-clients.js'
 
 const e = React.createElement

@@ -1,5 +1,5 @@
 import type { ConversationSummary } from '@helmx/protocol/browser'
-import { HelmxIcon, IconButton, StatusLight, Tooltip } from '@helmx/plugin-client'
+import { HelmxIcon, IconButton, StatusLight, Tooltip } from '@helmx/ui'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import type { WebMessageTranslator } from '../i18n/catalog.js'
 import { sidebarPaneTagLabel, type SidebarTargetPresence } from './sidebar-model.js'

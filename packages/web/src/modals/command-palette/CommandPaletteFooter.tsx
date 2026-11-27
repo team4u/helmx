@@ -1,5 +1,5 @@
 import React from 'react'
-import { Button, Kbd } from '@helmx/plugin-client'
+import { Button, Kbd } from '@helmx/ui'
 import { useWebLocale } from '../../i18n/use-web-locale.js'
 import { formatModShortcut } from '../../shell/shortcuts-model.js'
 

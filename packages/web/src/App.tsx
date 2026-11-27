@@ -15,7 +15,7 @@ import {
   type ReactNode,
   type RefObject,
 } from 'react'
-import { Button, HelmxIcon, LoadingState, Stack, TooltipProvider } from '@helmx/plugin-client'
+import { Button, HelmxIcon, LoadingState, Stack, TooltipProvider } from '@helmx/ui'
 import { AgentStandbyPane } from './conversation/AgentStandbyPane.js'
 import { ConversationPane } from './conversation/ConversationPane.js'
 import { ConversationWindowStage } from './conversation/ConversationWindowStage.js'

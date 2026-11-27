@@ -3,7 +3,7 @@
  * used by ConversationOverview and SidebarConversationList.
  */
 import type { ReactNode } from 'react'
-import { Button, ConfirmDialog } from '@helmx/plugin-client'
+import { Button, ConfirmDialog } from '@helmx/ui'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 
 export interface BatchActionBarProps {

@@ -746,57 +746,43 @@ export interface PluginClientContext {
 }
 
 /**
- * Host shared module importable by plugin client.tsx (the compiler virtualizes
- * it into the __helmx_shared_plugin_client global namespace, sharing the same
- * mechanism as React — never bundles a second React copy).
+ * Host shared modules importable by plugin client.tsx (the compiler virtualizes
+ * them into `globalThis.__helmx_shared_ui` and `globalThis.__helmx_shared_plugin_client`,
+ * sharing the same mechanism as React — never bundling a second React copy):
  *
- * The single source of truth of exported symbols is PLUGIN_CLIENT_SHARED_EXPORTS:
- * - hooks: usePluginContext / usePluginLocale / usePluginTranslator / usePluginDoc /
- *   usePluginDocState / usePluginSessionDoc / usePluginSessionDocState /
- *   useToolActivity / useTimelineToolCalls / useConversations / useConversation /
- *   usePlugins / usePluginConfig / useScreenParams (screen-local params scope provided
- *   by the host ScreenHost) / useScreenDrawer (URL-hash-backed DetailDrawer navigation
- *   with closed->open push and switch/close replace semantics) / useHostModels / useHostNodes / useHostProfiles (stable-handle
- *   reads of host read-only catalog slices; unrelated host port revisions must not re-render
- *   consumers) / useSharedNowMs / usePluginAction / usePanelShortcut / useComposerCommand /
- *   useComposerModelPickerMode;
- * - ModelPickerControl: shared model + thinking-level picker (reads the catalog via the useHostModels
- *   host port slice; apply/reset callbacks keep the PI follow-default semantics);
- * - model formatting pure functions: formatModelShortName / resolveEffectiveThinkingLevel / resolveDefaultChainThinkingLevel (kernel-ordered `conversation` / `compaction` / `tier` level resolution);
- * - form, card & layout primitives: Button / IconButton / Badge / Kbd / Stack / Input / Textarea /
- *   Field / HelperText / ErrorText / Card / SelectCard / CardGrid / MonoId;
- * - accessibility & overlay components: Switch / Select / MultiSelect / Checkbox / Tabs family
- *   (Tabs / TabsList / TabsTrigger / TabsContent) / SegmentedControl / HelmxIcon / ViewBoundary /
- *   Callout / Dialog family (Dialog / DialogPortal / DialogOverlay / DialogContent / DialogTitle /
- *   DialogDescription / DialogClose / DialogTrigger) / ModalDialog (centered modal shell) /
- *   Popover family (Popover / PopoverTrigger / PopoverContent / PopoverClose) / Tooltip family (Tooltip / TooltipProvider / TooltipRoot /
- *   TooltipTrigger / TooltipContent) / DropdownMenu family (DropdownMenu / DropdownMenuRoot /
- *   DropdownMenuTrigger / DropdownMenuPortal / DropdownMenuContent / DropdownMenuItem /
- *   DropdownMenuSeparator / DropdownMenuLabel / DropdownMenuGroup) / AlertDialog family (AlertDialog /
- *   AlertDialogPortal / AlertDialogOverlay / AlertDialogContent / AlertDialogTitle /
- *   AlertDialogDescription / AlertDialogAction / AlertDialogCancel / AlertDialogTrigger) /
- *   ConfirmDialog (minimal double-confirm composition);
- * - unified light patterns: SearchBox (container-class search input with the single clear button,
- *   always type="text" per the shared search-box spec) / EmptyState (host .empty-state vocabulary
- *   with optional icon/title/hint/compact) / LoadingState;
- * - StatusLight & tone helpers: StatusLight / STATUS_LIGHT_TONES / normalizeStatusLightTone /
- *   isKnownStatusLightStatus (visually dot-only; localized label becomes the accessible name,
- *   reusing the host .status-dot vocabulary);
- * - lightweight layout primitives: Screen (page container + header) / ScreenSection (sectioning) /
- *   ScreenToolbar (header-to-content toolbar row) / DataTable (composable table with unified
- *   loading/empty) / KvGrid (key-value overview) / DetailDrawer (right-side detail drawer shell
- *   over the host .primary-drawer-* vocabulary; the header/meta/body/footer stay composable JSX,
- *   state and data belong to the caller) / DockTray & DockTrayRow (shared composer-dock in-flight
- *   HUD tray over the host .dock-tray* vocabulary);
- * - content display: MarkdownView / MarkdownText / CodeBlockView (syntax-highlighted code block) /
- *   ToolCallDetails / CopyButton;
- * - formatting & timing pure functions: formatTime (compact MM-DD HH:mm) / formatCompactTimestamp
- *   (MM-DD HH:mm:ss log timestamp) / formatDurationMs (millisecond duration summary) /
- *   formatStopwatchMs (1Hz whole-second stopwatch Xs / XmYYs / XhYYm) /
- *   formatOffsetMs (relative offset +MM:SS / +H:MM:SS) /
- *   resolveConversationTiming (honest conversation timing snapshot) /
- *   formatBytes (human-readable bytes, 1024-based);
- * - inter-plugin slot primitives: PluginSlot / PluginScope.
+ * 1. `@helmx/ui` (`UI_SHARED_EXPORTS`): standalone Quiet Surface Design System
+ *    with zero dependency on plugin runtime contexts:
+ *    - scope & locale: UiScope / useUiScopeId / UiLocaleProvider / useUiLocale /
+ *      useUiTranslator + protocol locale helpers (HELMX_LOCALES / DEFAULT_HELMX_LOCALE /
+ *      isHelmxLocale / normalizeLocaleTag / parseLocalizedText / resolveLocalizedText /
+ *      createLocaleTranslator);
+ *    - accessibility & overlay primitives: Switch / Checkbox / Select / MultiSelect /
+ *      Tabs family (Tabs / TabsList / TabsTrigger / TabsContent / TabCount / SegmentedControl) /
+ *      Dialog family / ModalDialog / Popover family / Tooltip family / DropdownMenu family /
+ *      AlertDialog family / ConfirmDialog;
+ *    - form, card, list & feedback primitives: ViewBoundary / Callout / StatusLight +
+ *      STATUS_LIGHT_TONES / normalizeStatusLightTone / isKnownStatusLightStatus /
+ *      Button / IconButton / Badge / Kbd / Stack / Input / Textarea / Field /
+ *      HelperText / ErrorText / Card / SelectCard / CardGrid / List / ListRow / MonoId /
+ *      SearchBox / EmptyState / LoadingState;
+ *    - layout shells: Screen / ScreenSection / ScreenToolbar / DataTable / KvGrid /
+ *      DetailDrawer / DockTray / DockTrayRow;
+ *    - clipboard, icons & formatting: CopyButton / copyToClipboard / HelmxIcon /
+ *      formatTime / formatCompactTimestamp / formatDurationMs / formatStopwatchMs /
+ *      formatOffsetMs / resolveConversationTiming / formatBytes.
+ *
+ * 2. `@helmx/plugin-client` (`PLUGIN_CLIENT_SHARED_EXPORTS`, strictly disjoint from
+ *    `UI_SHARED_EXPORTS`): pure plugin runtime hooks, inter-plugin slots & host-coupled widgets:
+ *    - hooks: usePluginContext / usePluginLocale / usePluginTranslator / usePluginDoc /
+ *      usePluginDocState / usePluginSessionDoc / usePluginSessionDocState /
+ *      useToolActivity / useTimelineToolCalls / useConversations / useConversation /
+ *      usePlugins / usePluginConfig / useScreenParams / useScreenDrawer /
+ *      useHostModels / useHostNodes / useHostProfiles / useSharedNowMs / usePluginAction /
+ *      usePanelShortcut / useComposerCommand / useComposerModelPickerMode;
+ *    - host-coupled widgets & helpers: ModelPickerControl / formatModelShortName /
+ *      resolveEffectiveThinkingLevel / resolveDefaultChainThinkingLevel /
+ *      MarkdownView / MarkdownText / CodeBlockView / ToolCallDetails;
+ *    - inter-plugin slot & scope wrappers: PluginSlot / PluginScope.
  */
 
 /** Honest three-state lifecycle for reactive plugin doc / sessionDoc state hooks. */
@@ -939,7 +925,116 @@ void _assertAllPluginUiMethodsListed
 /** Host reserved in-conversation slash command triggers (plugin command.slash must not occupy them). */
 export const RESERVED_SLASH_COMMANDS = ['new', 'clear', 'compact'] as const
 
-/** Single source of truth of runtime symbols exported by @helmx/plugin-client for plugin client.tsx. */
+/** Single source of truth of runtime symbols exported by @helmx/ui for plugin client.tsx and web consumers. */
+export const UI_SHARED_EXPORTS = [
+  'UiScope',
+  'useUiScopeId',
+  'UiLocaleProvider',
+  'useUiLocale',
+  'useUiTranslator',
+  'HELMX_LOCALES',
+  'DEFAULT_HELMX_LOCALE',
+  'isHelmxLocale',
+  'normalizeLocaleTag',
+  'parseLocalizedText',
+  'resolveLocalizedText',
+  'createLocaleTranslator',
+  'Switch',
+  'Checkbox',
+  'Select',
+  'MultiSelect',
+  'Tabs',
+  'TabsList',
+  'TabsTrigger',
+  'TabsContent',
+  'TabCount',
+  'SegmentedControl',
+  'Dialog',
+  'DialogPortal',
+  'DialogOverlay',
+  'DialogContent',
+  'DialogTitle',
+  'DialogDescription',
+  'DialogClose',
+  'DialogTrigger',
+  'ModalDialog',
+  'Popover',
+  'PopoverRoot',
+  'PopoverTrigger',
+  'PopoverAnchor',
+  'PopoverPortal',
+  'PopoverClose',
+  'PopoverContent',
+  'Tooltip',
+  'TooltipProvider',
+  'TooltipRoot',
+  'TooltipTrigger',
+  'TooltipContent',
+  'DropdownMenu',
+  'DropdownMenuRoot',
+  'DropdownMenuTrigger',
+  'DropdownMenuPortal',
+  'DropdownMenuContent',
+  'DropdownMenuItem',
+  'DropdownMenuSeparator',
+  'DropdownMenuLabel',
+  'DropdownMenuGroup',
+  'AlertDialog',
+  'AlertDialogPortal',
+  'AlertDialogOverlay',
+  'AlertDialogContent',
+  'AlertDialogTitle',
+  'AlertDialogDescription',
+  'AlertDialogAction',
+  'AlertDialogCancel',
+  'AlertDialogTrigger',
+  'ConfirmDialog',
+  'ViewBoundary',
+  'Callout',
+  'StatusLight',
+  'STATUS_LIGHT_TONES',
+  'normalizeStatusLightTone',
+  'isKnownStatusLightStatus',
+  'Button',
+  'IconButton',
+  'Badge',
+  'Kbd',
+  'Stack',
+  'Input',
+  'Textarea',
+  'Field',
+  'HelperText',
+  'ErrorText',
+  'Card',
+  'SelectCard',
+  'CardGrid',
+  'List',
+  'ListRow',
+  'MonoId',
+  'SearchBox',
+  'EmptyState',
+  'LoadingState',
+  'Screen',
+  'ScreenSection',
+  'ScreenToolbar',
+  'DataTable',
+  'KvGrid',
+  'DetailDrawer',
+  'DockTray',
+  'DockTrayRow',
+  'CopyButton',
+  'copyToClipboard',
+  'HelmxIcon',
+  'formatTime',
+  'formatCompactTimestamp',
+  'formatDurationMs',
+  'formatStopwatchMs',
+  'formatOffsetMs',
+  'resolveConversationTiming',
+  'formatBytes',
+] as const
+
+/** Single source of truth of runtime symbols exported by @helmx/plugin-client for plugin client.tsx (disjoint from UI_SHARED_EXPORTS). */
 export const PLUGIN_CLIENT_SHARED_EXPORTS = [
   'usePluginContext',
   'usePluginLocale',
@@ -970,97 +1065,8 @@ export const PLUGIN_CLIENT_SHARED_EXPORTS = [
   'useComposerModelPickerMode',
   'PluginSlot',
   'PluginScope',
-  'Switch',
-  'Select',
-  'MultiSelect',
-  'Checkbox',
-  'Tabs',
-  'TabsList',
-  'TabsTrigger',
-  'TabsContent',
-  'TabCount',
-  'SegmentedControl',
-  'HelmxIcon',
   'MarkdownView',
   'MarkdownText',
   'CodeBlockView',
   'ToolCallDetails',
-  'CopyButton',
-  'ViewBoundary',
-  'Callout',
-  'StatusLight',
-  'STATUS_LIGHT_TONES',
-  'normalizeStatusLightTone',
-  'isKnownStatusLightStatus',
-  'Button',
-  'IconButton',
-  'Badge',
-  'Kbd',
-  'Stack',
-  'Input',
-  'Textarea',
-  'Field',
-  'HelperText',
-  'ErrorText',
-  'Card',
-  'SelectCard',
-  'CardGrid',
-  'List',
-  'ListRow',
-  'MonoId',
-  'Dialog',
-  'DialogPortal',
-  'DialogOverlay',
-  'DialogContent',
-  'DialogTitle',
-  'DialogDescription',
-  'DialogClose',
-  'DialogTrigger',
-  'ModalDialog',
-  'Popover',
-  'PopoverTrigger',
-  'PopoverContent',
-  'PopoverClose',
-  'Tooltip',
-  'TooltipProvider',
-  'TooltipRoot',
-  'TooltipTrigger',
-  'TooltipContent',
-  'DropdownMenu',
-  'DropdownMenuRoot',
-  'DropdownMenuTrigger',
-  'DropdownMenuPortal',
-  'DropdownMenuContent',
-  'DropdownMenuItem',
-  'DropdownMenuSeparator',
-  'DropdownMenuLabel',
-  'DropdownMenuGroup',
-  'AlertDialog',
-  'AlertDialogPortal',
-  'AlertDialogOverlay',
-  'AlertDialogContent',
-  'AlertDialogTitle',
-  'AlertDialogDescription',
-  'AlertDialogAction',
-  'AlertDialogCancel',
-  'AlertDialogTrigger',
-  'ConfirmDialog',
-  'SearchBox',
-  'EmptyState',
-  'LoadingState',
-  'Screen',
-  'ScreenSection',
-  'ScreenToolbar',
-  'DataTable',
-  'KvGrid',
-  'DetailDrawer',
-  'DockTray',
-  'DockTrayRow',
-  'formatTime',
-  'formatCompactTimestamp',
-  'formatDurationMs',
-  'formatStopwatchMs',
-  'formatOffsetMs',
-  'resolveConversationTiming',
-  'formatBytes',
 ] as const

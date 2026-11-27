@@ -1,6 +1,6 @@
 import React from 'react'
 import type { HelmxLocale, PluginConfigFieldSchema, PluginConfigFieldSource } from '@helmx/protocol/browser'
-import { Badge, Button, Field, HelmxIcon } from '@helmx/plugin-client'
+import { Badge, Button, Field, HelmxIcon } from '@helmx/ui'
 import type { WebMessageTranslator } from '../../i18n/catalog.js'
 import type { ConfigValue } from '../../modals/plugin-config-form-model.js'
 import { PluginConfigFieldControl } from './PluginConfigFieldControl.js'

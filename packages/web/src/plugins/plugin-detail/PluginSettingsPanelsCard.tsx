@@ -1,7 +1,7 @@
 import React from 'react'
 import type { SettingsPanelSpec } from '@helmx/protocol/browser'
 import { resolveLocalizedText, type HelmxLocale } from '@helmx/protocol/browser'
-import { Card, HelmxIcon, Stack } from '@helmx/plugin-client'
+import { Card, HelmxIcon, Stack } from '@helmx/ui'
 import type { WebMessageTranslator } from '../../i18n/catalog.js'
 import type { QualifiedUiSpec } from '../../lib/types.js'
 import { PluginUiView } from '../../ui/PluginUiView.js'

@@ -7,6 +7,7 @@ import * as ReactJsxRuntime from 'react/jsx-runtime'
 import * as ReactDom from 'react-dom'
 import * as ReactDomClient from 'react-dom/client'
 import * as LucideReact from 'lucide-react'
+import * as HelmxUi from '@helmx/ui'
 import { mkdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { compilePluginClientModule } from '@helmx/plugin-build'
@@ -18,8 +19,11 @@ mkdirSync(PLUGIN_CLIENT_CACHE_DIR, { recursive: true })
 
 let mountGen = 0
 
-/** 将宿主共享 React / Lucide / @helmx/plugin-client 命名空间挂载到 globalThis。 */
-export function mountPluginNamespaceGlobals(pluginClientNamespace: Record<string, unknown>): void {
+/** 将宿主共享 React / Lucide / @helmx/ui / @helmx/plugin-client 命名空间挂载到 globalThis。 */
+export function mountPluginNamespaceGlobals(
+  pluginClientNamespace: Record<string, unknown>,
+  uiNamespace: Record<string, unknown> = HelmxUi,
+): void {
   mountGen += 1
   Object.assign(globalThis, {
     __helmx_shared_react: React,
@@ -27,6 +31,7 @@ export function mountPluginNamespaceGlobals(pluginClientNamespace: Record<string
     __helmx_shared_react_dom_client: ReactDomClient,
     __helmx_shared_react_jsx_runtime: ReactJsxRuntime,
     __helmx_shared_lucide_react: LucideReact,
+    __helmx_shared_ui: uiNamespace,
     __helmx_shared_plugin_client: pluginClientNamespace,
   })
 }

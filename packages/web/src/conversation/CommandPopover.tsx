@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Kbd } from '@helmx/plugin-client'
+import { Kbd } from '@helmx/ui'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { isImeComposing } from '../lib/ime.js'
 import { ComposerPopoverShell } from './ComposerPopoverShell.js'

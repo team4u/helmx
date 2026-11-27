@@ -454,7 +454,8 @@ test('plugins init: generates local skeleton (default full template: plugin.json
   assert.ok(tsconfig.compilerOptions)
   const client = await fsp.readFile(path.join(body.dir, 'client', 'index.tsx'), 'utf8')
   assert.ok(client.includes('export function SamplePanel'))
-  assert.ok(client.includes('@helmx/plugin-client'), 'standard template imports host shared frontend package')
+  assert.ok(client.includes('@helmx/ui'), 'standard template imports host shared UI package')
+  assert.ok(client.includes('@helmx/plugin-client'), 'standard template imports host shared plugin runtime package')
   assert.ok(client.includes('usePluginDoc'), 'standard template uses shared hook')
   assert.ok(client.includes('usePluginAction'), 'standard template uses shared action hook')
   // Standard template uses narrow-panel HIG primitives without raw loading-state div, 1-col DataTable, or pseudo-Tailwind classes
@@ -703,9 +704,11 @@ test('plugins types: syncs offline .helmx/types, cleans stale files, preserves u
   assert.equal(body1.tsconfigStatus, 'missing')
   assert.ok(body1.recommendedCompilerOptions.paths['@helmx/protocol']?.includes('./.helmx/types/protocol/index.d.ts'))
   assert.ok(body1.recommendedCompilerOptions.paths['@helmx/protocol/browser']?.includes('./.helmx/types/protocol/browser.d.ts'))
+  assert.ok(body1.recommendedCompilerOptions.paths['@helmx/ui']?.includes('./.helmx/types/ui/index.d.ts'))
   assert.ok(body1.recommendedCompilerOptions.paths['@helmx/plugin-client']?.includes('./.helmx/types/plugin-client/index.d.ts'))
   assert.ok(existsSync(path.join(pluginDir, '.helmx', 'types', 'protocol', 'index.d.ts')))
   assert.ok(existsSync(path.join(pluginDir, '.helmx', 'types', 'protocol', 'browser.d.ts')))
+  assert.ok(existsSync(path.join(pluginDir, '.helmx', 'types', 'ui', 'index.d.ts')))
   assert.ok(existsSync(path.join(pluginDir, '.helmx', 'types', 'plugin-client', 'index.d.ts')))
   assert.ok(existsSync(path.join(pluginDir, '.helmx', 'types', 'shims', 'peers.d.ts')))
   assert.ok(existsSync(path.join(pluginDir, '.helmx', 'types', 'shims', 'react.d.ts')))
@@ -800,6 +803,7 @@ test('plugins init: all three templates pass real standalone tsc --noEmit outsid
       assert.equal(tsconfig.compilerOptions.baseUrl, '.')
       assert.deepEqual(tsconfig.compilerOptions.paths?.['@helmx/protocol'], ['./.helmx/types/protocol/index.d.ts'])
       assert.deepEqual(tsconfig.compilerOptions.paths?.['@helmx/protocol/browser'], ['./.helmx/types/protocol/browser.d.ts'])
+      assert.deepEqual(tsconfig.compilerOptions.paths?.['@helmx/ui'], ['./.helmx/types/ui/index.d.ts'])
       assert.deepEqual(tsconfig.compilerOptions.paths?.['@helmx/plugin-client'], ['./.helmx/types/plugin-client/index.d.ts'])
       return { template, dir: body.dir }
     }),
@@ -830,7 +834,7 @@ test('plugins init: all three templates pass real standalone tsc --noEmit outsid
     path.join(appDir, 'client', 'shim-aria-probe.tsx'),
     [
       "import type { PointerEvent, ReactNode } from 'react'",
-      "import { Badge, Button, Card, CardGrid, Field, IconButton, Input, MonoId, SelectCard, Stack, StatusLight, Textarea } from '@helmx/plugin-client'",
+      "import { Badge, Button, Card, CardGrid, Field, IconButton, Input, MonoId, SelectCard, Stack, StatusLight, Textarea } from '@helmx/ui'",
       'export function ShimAriaProbe(): ReactNode {',
       '  const handlePointer = (e: PointerEvent<HTMLDivElement>) => { void e.pointerId; void e.pointerType }',
       '  return (',
@@ -869,7 +873,8 @@ test('plugins init: all three templates pass real standalone tsc --noEmit outsid
     path.join(coexistDir, 'client', 'extra.tsx'),
     [
       "import { useEffect, useRef, type ChangeEvent, type ReactNode } from 'react'",
-      "import { usePluginContext, Dialog, Tabs, Select, Tooltip } from '@helmx/plugin-client'",
+      "import { Dialog, Select, Tabs, Tooltip } from '@helmx/ui'",
+      "import { usePluginContext } from '@helmx/plugin-client'",
       'export function ExtraView(): ReactNode {',
       '  const ctx = usePluginContext()',
       '  const inputRef = useRef<HTMLInputElement>(null)',

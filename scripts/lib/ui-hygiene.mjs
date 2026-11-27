@@ -3,7 +3,7 @@
  *
  * Enforces the Helmx UI HIG static invariants across business UI sources
  * (`packages/web/src/**\/*.tsx` and `packages/plugins/src/*\/client/**\/*.tsx`):
- *   no-native-select       native `<select>` is forbidden (use `@helmx/plugin-client` `<Select>` / `<MultiSelect>`);
+ *   no-native-select       native `<select>` is forbidden (use `@helmx/ui` `<Select>` / `<MultiSelect>`);
  *   no-search-input        `<input type="search">` is forbidden (use `<SearchBox>` or `<Input type="text">`);
  *   no-ui-emoji            UI Emoji in JSX text or string/template literals (excluding comments & imports) is forbidden;
  *   no-raw-control-class   raw `.btn` / `.btn-*` / `.input` / `.input-sm` and retired legacy container/modal/tab/kbd
@@ -29,7 +29,7 @@ export const UI_EMOJI_PATTERN =
 
 /**
  * Standalone host control and retired legacy container/modal/tab/kbd class tokens that must
- * come from `@helmx/plugin-client` primitives rather than raw HTML tags.
+ * come from `@helmx/ui` primitives rather than raw HTML tags.
  */
 const RAW_CONTROL_CLASS_TOKEN_RE =
   /^(?:btn(?:-[a-z0-9_-]+)?|input(?:-sm)?|section-flat|form-grid|kv-list|tabs-bar|tab-btn|modal-header|modal-footer|dropdown-panel|kbd-hint|card)$/;
@@ -235,7 +235,7 @@ export function analyzeUiSource(ts, filePath, source, existingSourceFile = undef
           file: filePath,
           line: lineOf(node),
           rule: 'no-native-select',
-          message: 'native <select> is forbidden (use @helmx/plugin-client <Select> or <MultiSelect>)',
+          message: 'native <select> is forbidden (use @helmx/ui <Select> or <MultiSelect>)',
         });
       }
 
@@ -249,7 +249,7 @@ export function analyzeUiSource(ts, filePath, source, existingSourceFile = undef
               file: filePath,
               line: lineOf(attr),
               rule: 'no-search-input',
-              message: '<input type="search"> is forbidden (use @helmx/plugin-client <SearchBox> or <Input type="text">)',
+              message: '<input type="search"> is forbidden (use @helmx/ui <SearchBox> or <Input type="text">)',
             });
             break;
           }
@@ -276,7 +276,7 @@ export function analyzeUiSource(ts, filePath, source, existingSourceFile = undef
               file: filePath,
               line: firstLine,
               rule: 'no-raw-control-class',
-              message: `raw/legacy UI class token(s) [${[...badTokens].join(', ')}] on intrinsic <${tag}> bypass @helmx/plugin-client primitives (use <Button>, <IconButton>, <Input>, <Card>, <Field>, <KvGrid>, <Tabs>, <ModalDialog>, <DropdownMenu>, or <Kbd>)`,
+              message: `raw/legacy UI class token(s) [${[...badTokens].join(', ')}] on intrinsic <${tag}> bypass @helmx/ui primitives (use <Button>, <IconButton>, <Input>, <Card>, <Field>, <KvGrid>, <Tabs>, <ModalDialog>, <DropdownMenu>, or <Kbd>)`,
             });
           }
         }

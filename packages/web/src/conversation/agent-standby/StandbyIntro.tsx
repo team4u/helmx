@@ -5,13 +5,8 @@
  */
 import { useCallback, type RefObject } from 'react'
 import type { Profile } from '@helmx/protocol/browser'
-import {
-  Button,
-  HelmxIcon,
-  Kbd,
-  Stack,
-  type HelmxShortcutEventDetail,
-} from '@helmx/plugin-client'
+import { Button, HelmxIcon, Kbd, Stack } from '@helmx/ui'
+import { type HelmxShortcutEventDetail } from '@helmx/plugin-client'
 import { useWebLocale } from '../../i18n/use-web-locale.js'
 import { useStoreActions } from '../../lib/store-context.js'
 import { formatModShiftShortcut, formatModShortcut } from '../../shell/shortcuts-model.js'

@@ -1,6 +1,5 @@
 /** Display copy for the builtin:mermaid client (Fast Refresh friendly). */
-import type { HelmxLocale, LocalizedText } from '@helmx/plugin-client'
-import { resolveLocalizedText } from '@helmx/plugin-client'
+import { resolveLocalizedText, type HelmxLocale, type LocalizedText } from '@helmx/ui'
 
 export const MERMAID_COPY = {
   zoomIn: { en: 'Zoom in', 'zh-CN': '放大预览' },

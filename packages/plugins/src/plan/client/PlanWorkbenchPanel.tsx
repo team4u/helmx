@@ -21,12 +21,14 @@ import {
   Input,
   KvGrid,
   LoadingState,
-  MarkdownView,
   MonoId,
   Stack,
   Textarea,
   formatCompactTimestamp,
   resolveLocalizedText,
+} from '@helmx/ui'
+import {
+  MarkdownView,
   usePluginAction,
   usePluginContext,
   usePluginLocale,

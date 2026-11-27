@@ -2,8 +2,8 @@
  * Shared Web UI component copy (split controls, dialogs, generic UI slots)
  * plus lib-level display fallbacks. Owner: the lib-ui partition.
  *
- * Note: SDK component defaults (CopyButton / Select / DataTable / ViewBoundary)
- * are localized inside `@helmx/plugin-client` via the host locale port — never
+ * Note: `@helmx/ui` primitive defaults (CopyButton / Select / DataTable / ViewBoundary)
+ * are localized inside `@helmx/ui` via `UiLocaleProvider` — never
  * duplicate those default strings here; only web-owned overrides belong.
  */
 import type { MessageTable } from '../messages.js'

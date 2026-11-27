@@ -3,7 +3,7 @@
  */
 import { memo, useId, useState } from 'react'
 import type { ConversationSummary } from '@helmx/protocol/browser'
-import { CopyButton, HelmxIcon, IconButton } from '@helmx/plugin-client'
+import { CopyButton, HelmxIcon, IconButton } from '@helmx/ui'
 import type { WebMessageTranslator } from '../i18n/catalog.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { formatFullTimestamp, formatMessageTime } from '../lib/format.js'

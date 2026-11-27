@@ -7,16 +7,8 @@
  *   and restores focus cleanly to the composer textarea on keyboard/pick close.
  */
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
-import {
-  EmptyState,
-  HelmxIcon,
-  Kbd,
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-  SearchBox,
-  usePanelShortcut,
-} from '@helmx/plugin-client'
+import { EmptyState, HelmxIcon, Kbd, Popover, PopoverContent, PopoverTrigger, SearchBox } from '@helmx/ui'
+import { usePanelShortcut } from '@helmx/plugin-client'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { formatModShiftShortcut } from '../shell/shortcuts-model.js'
 import { RemoteNodeTag } from '../shell/SidebarPrimitives.js'

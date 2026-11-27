@@ -4,7 +4,7 @@
  */
 import type { ReactNode } from 'react'
 import type { Profile } from '@helmx/protocol/browser'
-import { Button, HelmxIcon } from '@helmx/plugin-client'
+import { Button, HelmxIcon } from '@helmx/ui'
 import { useWebLocale } from '../../i18n/use-web-locale.js'
 import { useStoreActions } from '../../lib/store-context.js'
 

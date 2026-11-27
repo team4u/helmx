@@ -1,6 +1,6 @@
 import React, { useMemo } from 'react'
 import { DEFAULT_HELMX_LOCALE, resolveLocalizedText, type PluginSummary, type SkillSummary } from '@helmx/protocol/browser'
-import { Callout, Card, DetailDrawer, EmptyState, HelmxIcon, HelperText, LoadingState, MonoId, Stack } from '@helmx/plugin-client'
+import { Callout, Card, DetailDrawer, EmptyState, HelmxIcon, HelperText, LoadingState, MonoId, Stack } from '@helmx/ui'
 import { createWebTranslator } from '../i18n/catalog.js'
 import { useOptionalGroupedUi, useOptionalLocale, useOptionalStoreActions } from '../lib/store-context.js'
 import { PluginConfigForm } from './plugin-detail/PluginConfigForm.js'

@@ -822,7 +822,7 @@ export function scanPluginTsxUiHygiene(filePath: string, source: string): Plugin
         file: filePath,
         line: tagStartLine,
         rule: 'no-native-select',
-        message: 'native <select> is forbidden (use @helmx/plugin-client <Select> or <MultiSelect>)',
+        message: 'native <select> is forbidden (use @helmx/ui <Select> or <MultiSelect>)',
       });
     }
 
@@ -871,7 +871,7 @@ export function scanPluginTsxUiHygiene(filePath: string, source: string): Plugin
               file: filePath,
               line: attrLine,
               rule: 'no-search-input',
-              message: '<input type="search"> is forbidden (use @helmx/plugin-client <SearchBox> or <Input type="text">)',
+              message: '<input type="search"> is forbidden (use @helmx/ui <SearchBox> or <Input type="text">)',
             });
           }
           if (isIntrinsic && attrName === 'className') {
@@ -881,7 +881,7 @@ export function scanPluginTsxUiHygiene(filePath: string, source: string): Plugin
                 file: filePath,
                 line: startLine,
                 rule: 'no-raw-control-class',
-                message: `raw/legacy UI class token(s) [${[...new Set(badTokens)].join(', ')}] on intrinsic <${tagName}> bypass @helmx/plugin-client primitives (use <Button>, <IconButton>, <Input>, <Card>, <Field>, <KvGrid>, <Tabs>, <ModalDialog>, <DropdownMenu>, or <Kbd>)`,
+                message: `raw/legacy UI class token(s) [${[...new Set(badTokens)].join(', ')}] on intrinsic <${tagName}> bypass @helmx/ui primitives (use <Button>, <IconButton>, <Input>, <Card>, <Field>, <KvGrid>, <Tabs>, <ModalDialog>, <DropdownMenu>, or <Kbd>)`,
               });
             }
           }
@@ -901,7 +901,7 @@ export function scanPluginTsxUiHygiene(filePath: string, source: string): Plugin
                   file: filePath,
                   line: attrLine,
                   rule: 'no-search-input',
-                  message: '<input type="search"> is forbidden (use @helmx/plugin-client <SearchBox> or <Input type="text">)',
+                  message: '<input type="search"> is forbidden (use @helmx/ui <SearchBox> or <Input type="text">)',
                 });
               }
             }
@@ -920,7 +920,7 @@ export function scanPluginTsxUiHygiene(filePath: string, source: string): Plugin
                   file: filePath,
                   line: firstLine,
                   rule: 'no-raw-control-class',
-                  message: `raw/legacy UI class token(s) [${[...badTokens].join(', ')}] on intrinsic <${tagName}> bypass @helmx/plugin-client primitives (use <Button>, <IconButton>, <Input>, <Card>, <Field>, <KvGrid>, <Tabs>, <ModalDialog>, <DropdownMenu>, or <Kbd>)`,
+                  message: `raw/legacy UI class token(s) [${[...badTokens].join(', ')}] on intrinsic <${tagName}> bypass @helmx/ui primitives (use <Button>, <IconButton>, <Input>, <Card>, <Field>, <KvGrid>, <Tabs>, <ModalDialog>, <DropdownMenu>, or <Kbd>)`,
                 });
               }
             }

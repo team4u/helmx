@@ -29,7 +29,7 @@ import {
   DropdownMenuTrigger,
   HelmxIcon,
   IconButton,
-} from '@helmx/plugin-client'
+} from '@helmx/ui'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { useStoreActions } from '../lib/store-context.js'
 import { conversationsApi } from '../lib/api.js'

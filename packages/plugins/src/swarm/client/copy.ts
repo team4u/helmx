@@ -1,7 +1,12 @@
 /**
  * Display copy for the builtin:swarm client (pure copy table + builders, zero Emoji, Fast Refresh compliant).
  */
-import { DEFAULT_HELMX_LOCALE, resolveLocalizedText, type HelmxLocale, type LocalizedText } from '@helmx/plugin-client'
+import {
+  DEFAULT_HELMX_LOCALE,
+  resolveLocalizedText,
+  type HelmxLocale,
+  type LocalizedText,
+} from '@helmx/ui'
 import type { BoardPostKind, BoardViewDoc, MemberLiveState } from './board-model.ts'
 
 const L = (en: string, zh: string): LocalizedText => ({ en, 'zh-CN': zh })

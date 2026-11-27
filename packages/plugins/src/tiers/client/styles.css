@@ -1,4 +1,4 @@
-/* builtin:tiers domain-specific styles (.tiers-* prefix; shared layout & primitives come from @helmx/plugin-client). */
+/* builtin:tiers domain-specific styles (.tiers-* prefix; shared layout & primitives come from @helmx/ui). */
 .tiers-empty {
   padding: 28px 16px;
   min-height: 120px;

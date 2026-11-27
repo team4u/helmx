@@ -9,7 +9,7 @@ import {
   Select,
   Stack,
   Textarea,
-} from '@helmx/plugin-client'
+} from '@helmx/ui'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import type { ProviderItem } from './model-center-model.js'
 

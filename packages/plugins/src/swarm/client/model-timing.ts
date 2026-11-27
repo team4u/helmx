@@ -1,11 +1,17 @@
 /**
- * Pure timing derivations for builtin:swarm client surfaces (delegates elapsed math to @helmx/plugin-client).
+ * Pure timing derivations for builtin:swarm client surfaces (delegates elapsed math to @helmx/ui).
  */
 import type { ConversationStatus, ConversationSummary } from '@helmx/protocol/browser'
 import {
-  DEFAULT_HELMX_LOCALE, formatCompactTimestamp, formatDurationMs, formatOffsetMs, formatStopwatchMs,
-  resolveConversationTiming, type ConversationTimingSnapshot, type HelmxLocale,
-} from '@helmx/plugin-client'
+  DEFAULT_HELMX_LOCALE,
+  formatCompactTimestamp,
+  formatDurationMs,
+  formatOffsetMs,
+  formatStopwatchMs,
+  resolveConversationTiming,
+  type ConversationTimingSnapshot,
+  type HelmxLocale,
+} from '@helmx/ui'
 import type { BoardMemberView, BoardViewDoc, CollabGroupStatus } from './board-model.ts'
 import * as C from './copy.ts'
 

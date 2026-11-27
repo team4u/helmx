@@ -1,0 +1,76 @@
+/* ==========================================================================
+ * Field / HelperText / ErrorText 表单字段容器原语
+ * ========================================================================== */
+
+.helmx-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.helmx-field-horizontal {
+  display: grid;
+  grid-template-columns: minmax(110px, 160px) minmax(0, 1fr);
+  align-items: start;
+  gap: var(--space-1) var(--space-3);
+}
+
+.helmx-field-label-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.helmx-field-horizontal .helmx-field-label-row {
+  padding-top: 6px;
+}
+
+.helmx-field-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--fg-secondary);
+  line-height: 1.4;
+  min-width: 0;
+}
+
+.helmx-field-required {
+  color: var(--err);
+  font-weight: 600;
+  line-height: 1;
+}
+
+.helmx-field-control {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.helmx-helper-text {
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--fg-muted);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.helmx-error-text {
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--err);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 680px) {
+  .helmx-field-horizontal {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .helmx-field-horizontal .helmx-field-label-row {
+    padding-top: 0;
+  }
+}

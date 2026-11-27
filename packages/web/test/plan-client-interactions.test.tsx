@@ -54,16 +54,15 @@ import { ensureHappyDom } from './helpers/dom-harness.js'
 ensureHappyDom()
 
 const { createRoot } = await import('react-dom/client')
+const HelmxUi = await import('@helmx/ui')
 const HelmxPluginClient = await import('@helmx/plugin-client')
+const { DropdownMenuContent, DropdownMenuRoot, resolveLocalizedText } = HelmxUi
 const {
   ComposerCommandContext,
-  DropdownMenuContent,
-  DropdownMenuRoot,
   MarkdownText,
   PluginClientContext,
   PluginClientHostContext,
   createComposerCommandRegistry,
-  resolveLocalizedText,
 } = HelmxPluginClient
 const { importCompiledPluginClient, mountPluginNamespaceGlobals } = await import('./helpers/plugin-namespace.js')
 

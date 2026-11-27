@@ -455,6 +455,7 @@ test('spec-primitives: 原型链查表拦截、组件切换 Hook 数量稳定，
   const { fileURLToPath, pathToFileURL } = await import('node:url')
   const { createRequire } = await import('node:module')
   const { CLIENT_SHARED_GLOBALS, compilePluginClientModule } = await import('@helmx/plugin-build')
+  const HelmxUi = await import('@helmx/ui')
   const HelmxPluginClient = await import('@helmx/plugin-client')
 
   const req = createRequire(new URL('../../plugin-client/package.json', import.meta.url))
@@ -467,6 +468,7 @@ test('spec-primitives: 原型链查表拦截、组件切换 Hook 数量稳定，
   const g = globalThis as Record<string, unknown>
   g[CLIENT_SHARED_GLOBALS['react']!] = React
   g[CLIENT_SHARED_GLOBALS['react/jsx-runtime']!] = ReactJsxRuntime
+  g[CLIENT_SHARED_GLOBALS['@helmx/ui']!] = HelmxUi
   g[CLIENT_SHARED_GLOBALS['@helmx/plugin-client']!] = HelmxPluginClient
   g[CLIENT_SHARED_GLOBALS['lucide-react']!] = LucideReact
   g['IS_REACT_ACT_ENVIRONMENT'] = true

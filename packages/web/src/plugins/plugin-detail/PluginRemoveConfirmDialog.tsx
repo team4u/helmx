@@ -1,6 +1,6 @@
 import React from 'react'
 import { resolveLocalizedText, type HelmxLocale, type PluginSummary } from '@helmx/protocol/browser'
-import { ConfirmDialog } from '@helmx/plugin-client'
+import { ConfirmDialog } from '@helmx/ui'
 import type { WebMessageTranslator } from '../../i18n/catalog.js'
 import type { PluginPackageOp } from './use-plugin-drawer-actions.js'
 

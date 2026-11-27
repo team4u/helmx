@@ -1,6 +1,6 @@
 /**
  * Workflow Library fullscreen view (`screen` extension point) + right DetailDrawer.
- * Built 100% on `@helmx/plugin-client` primitives: Screen, ScreenSection,
+ * Built 100% on `@helmx/ui` primitives: Screen, ScreenSection,
  * ScreenToolbar, SearchBox, DetailDrawer, KvGrid, Select, ConfirmDialog,
  * CopyButton, EmptyState, LoadingState, Callout, and usePluginAction.
  * Exports only React components and TS types (Fast Refresh compliant).
@@ -29,6 +29,8 @@ import {
   formatBytes,
   formatTime,
   resolveLocalizedText,
+} from '@helmx/ui'
+import {
   useConversations,
   usePluginAction,
   usePluginContext,

@@ -1,10 +1,12 @@
 /**
- * 宿主样式分片归属契约（静态结构断言，非属性值正则）：
- * `.status-dot` 通用状态灯词汇（base / working / blocked / done / error /
- * background + keyframes + prefers-reduced-motion）是宿主公共设计系统资产，
- * 被 @helmx/plugin-client 的 StatusLight 共享，必须完整归属 primitives.css；
- * navigation.css 只允许保留导航专有覆盖（如 .sidebar-overview-group 的 6px 小点与右侧指示槽），
- * 避免「共享原语依赖导航私有样式」的架构漂移与级联回归。
+ * 宿主与 @helmx/ui 样式分片归属契约（静态结构断言，非属性值正则）：
+ * - 通用设计系统令牌与原语样式（tokens / base / Button / SearchBox / Screen / Tabs /
+ *   StatusLight 等）统一归属独立包 `@helmx/ui`（`packages/ui/src/`）；
+ * - 宿主样式分片（`packages/web/src/styles/`）只保留宿主业务与宿主耦合控件（如
+ *   `ModelPickerControl` / `ToolCallDetails` / `.batch-bar`），绝不点名内置插件私有类；
+ * - `@helmx/plugin-client` 渲染的全部字面 className 词元必须被 `@helmx/ui` ∪ 宿主 CSS
+ *   覆盖；`{ui, web, plugin-client, plugins}` 全量 `var(--token)` 必须闭合；
+ * - Round 2 已退场的 7 组旧样式族严禁回流 `web/src/styles/` 或 `ui/src/`。
  */
 import assert from 'node:assert/strict'
 import { readFileSync, readdirSync } from 'node:fs'
@@ -15,6 +17,9 @@ import ts from 'typescript'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const STYLES_DIR = join(__dirname, '../src/styles')
+const UI_SRC_DIR = join(__dirname, '../../ui/src')
+const UI_PRIMITIVES_DIR = join(UI_SRC_DIR, 'primitives')
+const SDK_SRC_DIR = join(__dirname, '../../plugin-client/src')
 const primitives = readFileSync(join(STYLES_DIR, 'primitives.css'), 'utf8')
 
 /** Selector-ownership probe: a shard owns a rule when the selector is declared at line start. */
@@ -25,10 +30,20 @@ function stripCssComments(css: string): string {
   return css.replace(/\/\*[\s\S]*?\*\//g, (match) => match.replace(/[^\n]/g, ' '))
 }
 
+function listCssFiles(dir: string): string[] {
+  const out: string[] = []
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const full = join(dir, entry.name)
+    if (entry.isDirectory()) out.push(...listCssFiles(full))
+    else if (entry.name.endsWith('.css')) out.push(full)
+  }
+  return out.sort()
+}
+
 /**
- * 宿主样式分片不得选择内置插件私有类名（CSS ownership 单向边界）：
+ * 宿主与 @helmx/ui 样式分片不得选择内置插件私有类名（CSS ownership 单向边界）：
  * 插件视图的壳结构必须复用公共设计系统类（.screen-header / .screen-title /
- * .search-box / .helmx-table 等），宿主绝不点名插件私有类做定向补丁。
+ * .search-box / .helmx-table 等），宿主与设计系统绝不点名插件私有类做定向补丁。
  * 新增内置插件私有类前缀时同步登记此清单；公共词汇（helmx-/screen-/callout/
  * badge/btn/kv/table/stack/cell/loading/primary-/plugin- 等）不属插件私有。
  */
@@ -40,24 +55,27 @@ const PLUGIN_PRIVATE_CLASS_PREFIXES = [
   'plan-', // builtin:plan
 ] as const
 
-test('样式边界：宿主分片零插件私有类名选择器（消除宿主点名插件类名的 CSS 补丁）', { timeout: 60_000 }, () => {
-  const shards = readdirSync(STYLES_DIR)
-    .filter((name) => name.endsWith('.css'))
-    .map((name) => ({ name, css: readFileSync(join(STYLES_DIR, name), 'utf8') }))
-  assert.ok(shards.length > 0, '应能读取宿主样式分片')
+test('样式边界：宿主与 @helmx/ui 分片零插件私有类名选择器（消除点名插件类名的 CSS 补丁）', { timeout: 60_000 }, () => {
+  const repoPackagesDir = join(__dirname, '../..')
+  const shards = [...listCssFiles(UI_SRC_DIR), ...listCssFiles(STYLES_DIR)].map((file) => ({
+    name: file.slice(repoPackagesDir.length + 1),
+    css: readFileSync(file, 'utf8'),
+  }))
+  assert.ok(shards.length > 0, '应能读取宿主与 @helmx/ui 样式分片')
   for (const { name, css } of shards) {
     for (const prefix of PLUGIN_PRIVATE_CLASS_PREFIXES) {
       assert.ok(
         !css.includes(`.${prefix}`),
-        `宿主分片 ${name} 不得选择插件私有类名 .${prefix}*（插件壳结构请复用公共设计系统类）`,
+        `样式分片 ${name} 不得选择插件私有类名 .${prefix}*（插件壳结构请复用公共设计系统类）`,
       )
     }
   }
 })
 
 /**
- * R3②（SDK → 宿主 CSS 单向词汇边界）：@helmx/plugin-client 组件渲染的全部
- * 字面 className 词元必须 ⊆ 宿主样式分片类名集 ∪ SDK_SEMANTIC_CLASS_ALLOWLIST。
+ * R3②（SDK → 设计系统 + 宿主 CSS 单向词汇边界）：@helmx/plugin-client 组件（ModelPicker /
+ * ToolCallDetails / Markdown 等）渲染的全部字面 className 词元必须
+ * ⊆ (@helmx/ui CSS ∪ 宿主样式分片类名集) ∪ SDK_SEMANTIC_CLASS_ALLOWLIST。
  *
  * 提取用 TypeScript AST 只收「类名句法位置」的字面量（className/class JSX
  * 属性、joinClass/clsx/cn 实参、同作用域局部类名变量初始化器、模块级常量映射表
@@ -66,22 +84,12 @@ test('样式边界：宿主分片零插件私有类名选择器（消除宿主�
  * 字符串不会误入；动态拼接的运行时外部 className 不属 SDK 词汇，不在静态面内。
  *
  * 「DOM 在用但 CSS 故意不定义」的语义类是合法形态，但必须在此显式登记并
- * 写明缘由，防止孤儿词汇静默扩散；一旦宿主 CSS 补齐真实定义，双向门禁强制移出。
+ * 写明缘由，防止孤儿词汇静默扩散；一旦 CSS 补齐真实定义，双向门禁强制移出。
  */
-const SDK_SRC_DIR = join(__dirname, '../../plugin-client/src')
-
-/** 显式登记的 SDK 语义类（在 DOM 中使用、宿主 CSS 故意不定义；视觉由并列类承担）。 */
 const SDK_SEMANTIC_CLASS_ALLOWLIST: Readonly<Record<string, string>> = {
-  // 架构复审裁决（board #67）：detail drawer 元信息行语义标记，在用两处
-  // （web SkillDetailDrawer / workflow WorkflowLibraryDrawer），
-  // 视觉由并列的 mono / text-subtle 承担；如需专属视觉，定义单独提交并移出本登记。
-  'primary-drawer-id': 'detail drawer meta-line semantic marker; visuals carried by sibling mono/text-subtle',
-  // 门禁首跑发现的同类存量（model-picker 线引入）：ModelPicker 刷新按钮 /
-  // 档位 chip 的语义锚点，视觉由 btn / segmented-control-btn 家族承担。
+  // ModelPicker 刷新按钮 / 档位 chip 的语义锚点，视觉由 btn / segmented-control-btn 家族承担。
   'composer-model-refresh-btn': 'ModelPicker refresh button semantic anchor; visuals carried by btn family',
   'composer-model-level-chip': 'ModelPicker level chip semantic anchor; visuals carried by segmented-control-btn',
-  // AST 升级覆盖局部变量与映射表后浮现的既有语义根标记：
-  'helmx-select-multi': 'MultiSelect root semantic marker; visuals carried by sibling .helmx-select and .helmx-select-multi-option',
 }
 
 /** 递归收集目录下的 .ts/.tsx 源文件。 */
@@ -292,67 +300,71 @@ function collectSdkClassTokens(): TokenCollector {
   return collector
 }
 
-test('样式边界：SDK 组件字面 className 词元 ⊆ 宿主 CSS 类名集 ∪ 显式语义类登记（R3②）', { timeout: 60_000 }, () => {
-  const hostClasses = new Set<string>()
-  for (const { css } of readdirSync(STYLES_DIR)
-    .filter((name) => name.endsWith('.css'))
-    .map((name) => ({ name, css: readFileSync(join(STYLES_DIR, name), 'utf8') }))) {
+test('样式边界：@helmx/plugin-client 字面 className 词元 ⊆ (@helmx/ui ∪ 宿主 CSS 类名集) ∪ 显式语义类登记（R3②）', { timeout: 60_000 }, () => {
+  const definedClasses = new Set<string>()
+  for (const file of [...listCssFiles(UI_SRC_DIR), ...listCssFiles(STYLES_DIR)]) {
+    const css = readFileSync(file, 'utf8')
     for (const match of stripCssComments(css).matchAll(/\.([a-zA-Z_-][a-zA-Z0-9_-]*)/g)) {
-      hostClasses.add(match[1]!)
+      definedClasses.add(match[1]!)
     }
   }
-  assert.ok(hostClasses.size > 500, '应能从宿主样式分片解析出类名集')
+  assert.ok(definedClasses.size > 500, '应能从 @helmx/ui 与宿主样式分片解析出类名集')
 
   const { tokens, origins } = collectSdkClassTokens()
-  assert.ok(tokens.size >= 180, `SDK 词元提取异常（仅 ${tokens.size} 个，应覆盖局部变量与映射表）`)
-  // 守卫 AST 升级能力：模块级类名映射表与局部拼接变量必须纳入覆盖
+  assert.ok(tokens.size >= 40, `SDK 词元提取异常（仅 ${tokens.size} 个，应覆盖 ModelPicker / ToolCallDetails / 局部变量）`)
+  // 守卫 AST 收集能力：局部变量、条件拼接与宿主耦合组件词元必须纳入覆盖
   for (const expected of [
-    'btn-primary',
-    'btn-inline',
-    'btn-icon',
-    'badge-ok',
-    'helmx-stack-horizontal',
-    'is-active',
-    'helmx-tabs-pills',
-    'tabs-pills',
-    'tabs-pill',
+    'composer-model-popover',
+    'helmx-model-picker-field',
+    'helmx-model-picker-trigger',
+    'helmx-model-picker-sm',
+    'popover-item-active',
+    'segmented-control-btn',
+    'tool-call-details',
+    'trace-expanded-body',
   ]) {
-    assert.ok(tokens.has(expected), `AST 收集器应覆盖映射表/局部变量词元 .${expected}`)
+    assert.ok(tokens.has(expected), `AST 收集器应覆盖 @helmx/plugin-client 词元 .${expected}`)
   }
 
   const violations: string[] = []
   for (const token of [...tokens].sort()) {
-    if (hostClasses.has(token)) continue
+    if (definedClasses.has(token)) continue
     if (token in SDK_SEMANTIC_CLASS_ALLOWLIST) continue
     violations.push(`.${token} <- ${[...(origins.get(token) ?? [])].join(', ')}`)
   }
   assert.ok(
     violations.length === 0,
-    `SDK 引用了宿主未定义且未登记的类名（需在宿主 CSS 补定义，或在 SDK_SEMANTIC_CLASS_ALLOWLIST 显式登记并写明缘由）：\n${violations.join('\n')}`,
+    `@helmx/plugin-client 引用了未定义且未登记的类名（需在 @helmx/ui 或宿主 CSS 补定义，或在 SDK_SEMANTIC_CLASS_ALLOWLIST 显式登记并写明缘由）：\n${violations.join('\n')}`,
   )
 
-  // 登记表双向纪律：每个登记项必须仍被 SDK 引用，且宿主 CSS 中尚未定义（防僵尸豁免项滞留）。
+  // 登记表双向纪律：每个登记项必须仍被 SDK 引用，且 CSS 中尚未定义（防僵尸豁免项滞留）。
   for (const [name, reason] of Object.entries(SDK_SEMANTIC_CLASS_ALLOWLIST)) {
     assert.ok(reason.trim().length > 0, `语义类 .${name} 登记必须写明缘由`)
-    assert.ok(tokens.has(name), `语义类 .${name} 已不被 SDK 引用，应移出登记表`)
-    assert.ok(!hostClasses.has(name), `语义类 .${name} 已在宿主 CSS 中拥有真实定义，应移出语义类豁免登记表`)
+    assert.ok(tokens.has(name), `语义类 .${name} 已不被 @helmx/plugin-client 引用，应移出登记表`)
+    assert.ok(!definedClasses.has(name), `语义类 .${name} 已在 CSS 中拥有真实定义，应移出语义类豁免登记表`)
   }
 })
 
-test('样式边界：.btn-inline 归属 primitives.css，旧 .callout--* 与 .trace-inline-btn 彻底清零', { timeout: 60_000 }, () => {
-  const shards = readdirSync(STYLES_DIR)
-    .filter((name) => name.endsWith('.css'))
-    .map((name) => ({ name, css: readFileSync(join(STYLES_DIR, name), 'utf8') }))
-  assert.ok(shards.length > 0, '应能读取宿主样式分片')
+test('样式边界：.btn-inline 归属 @helmx/ui Button.css，宿主不重定义，旧 .callout--* 与 .trace-inline-btn 彻底清零', { timeout: 60_000 }, () => {
+  const buttonCss = readFileSync(join(UI_PRIMITIVES_DIR, 'Button.css'), 'utf8')
+  const webShards = listCssFiles(STYLES_DIR).map((file) => ({
+    name: file.slice(STYLES_DIR.length + 1),
+    css: readFileSync(file, 'utf8'),
+  }))
+  const uiShards = listCssFiles(UI_SRC_DIR).map((file) => ({
+    name: `ui/${file.slice(UI_SRC_DIR.length + 1)}`,
+    css: readFileSync(file, 'utf8'),
+  }))
+  assert.ok(webShards.length > 0, '应能读取宿主样式分片')
 
-  assert.ok(ownsRule(primitives, '.btn-inline'), 'primitives.css 应定义行内轻量按钮原语 .btn-inline')
+  assert.ok(ownsRule(buttonCss, '.btn-inline'), '@helmx/ui Button.css 应定义行内轻量按钮原语 .btn-inline')
   for (const selector of ['.btn-ghost.is-active', '.btn-icon.is-active', '.btn-icon-sm.is-active', '.btn-icon-xs.is-active']) {
-    assert.ok(primitives.includes(selector), `primitives.css 应定义按钮激活态 ${selector}`)
+    assert.ok(buttonCss.includes(selector), `@helmx/ui Button.css 应定义按钮激活态 ${selector}`)
   }
-  for (const { name, css } of shards) {
-    if (name !== 'primitives.css') {
-      assert.ok(!ownsRule(css, '.btn-inline'), `分片 ${name} 不得重复定义 .btn-inline`)
-    }
+  for (const { name, css } of webShards) {
+    assert.ok(!ownsRule(css, '.btn-inline'), `宿主分片 ${name} 不得重复定义 .btn-inline`)
+  }
+  for (const { name, css } of [...uiShards, ...webShards]) {
     for (const legacyCallout of ['.callout--warning', '.callout--error', '.callout--success']) {
       assert.ok(!css.includes(legacyCallout), `分片 ${name} 不得保留历史兼容类 ${legacyCallout}`)
     }
@@ -360,24 +372,27 @@ test('样式边界：.btn-inline 归属 primitives.css，旧 .callout--* 与 .tr
   }
 })
 
-test('样式边界：主舞台 .screen-host-body / SearchBox / EmptyState 与 Tabs pills 归属公共分片，无 :has() 补丁与旧类残留', { timeout: 60_000 }, () => {
-  const segmented = readFileSync(join(STYLES_DIR, 'segmented.css'), 'utf8')
+test('样式边界：主舞台 .screen-host-body / SearchBox / EmptyState 与 Tabs pills 归属 @helmx/ui 公共分片，无 :has() 补丁与旧类残留', { timeout: 60_000 }, () => {
+  const screenCss = readFileSync(join(UI_PRIMITIVES_DIR, 'Screen.css'), 'utf8')
+  const searchBoxCss = readFileSync(join(UI_PRIMITIVES_DIR, 'SearchBox.css'), 'utf8')
+  const feedbackCss = readFileSync(join(UI_PRIMITIVES_DIR, 'Feedback.css'), 'utf8')
+  const tabsCss = readFileSync(join(UI_PRIMITIVES_DIR, 'Tabs.css'), 'utf8')
   const centers = stripCssComments(readFileSync(join(STYLES_DIR, 'centers.css'), 'utf8'))
   const modelCenter = stripCssComments(readFileSync(join(STYLES_DIR, 'model-center.css'), 'utf8'))
+  const strippedScreen = stripCssComments(screenCss)
+  const strippedSearchBox = stripCssComments(searchBoxCss)
   const strippedPrimitives = stripCssComments(primitives)
 
-  for (const selector of [
-    '.screen-host-body',
-    '.search-box-toolbar',
-    '.search-box-clear',
-    '.empty-state-prominent',
-    '.empty-state-action',
-  ]) {
-    assert.ok(ownsRule(primitives, selector), `primitives.css 应定义公共原语规则 ${selector}`)
+  assert.ok(ownsRule(screenCss, '.screen-host-body'), '@helmx/ui Screen.css 应定义公共原语规则 .screen-host-body')
+  for (const selector of ['.search-box-toolbar', '.search-box-clear']) {
+    assert.ok(ownsRule(searchBoxCss, selector), `@helmx/ui SearchBox.css 应定义公共原语规则 ${selector}`)
+  }
+  for (const selector of ['.empty-state-prominent', '.empty-state-action']) {
+    assert.ok(ownsRule(feedbackCss, selector), `@helmx/ui Feedback.css 应定义公共原语规则 ${selector}`)
   }
   // .search-box-toolbar 位于 inline-flex(.screen-toolbar-actions) 内时，flex-basis 必须与 width 一致（auto 或 <= width），
   // 否则 Chromium 按 width 算容器固有宽度、按更大的 flex-basis 排版会强制把同行兄弟按钮折到第二行。
-  const toolbarSearchBlock = strippedPrimitives.match(/(?:^|\n)\.search-box-toolbar\s*\{([^}]*)\}/)?.[1] ?? ''
+  const toolbarSearchBlock = strippedSearchBox.match(/(?:^|\n)\.search-box-toolbar\s*\{([^}]*)\}/)?.[1] ?? ''
   const toolbarWidthPx = toolbarSearchBlock.match(/(?:^|[;\s])width:\s*(\d+(?:\.\d+)?)px\s*;/)?.[1]
   const toolbarFlexBasis = toolbarSearchBlock.match(/(?:^|[;\s])flex:\s*\S+\s+\S+\s+([^;\s]+)\s*;/)?.[1]
   assert.ok(toolbarWidthPx !== undefined && toolbarFlexBasis !== undefined, '.search-box-toolbar 应声明 width 与 flex')
@@ -388,26 +403,33 @@ test('样式边界：主舞台 .screen-host-body / SearchBox / EmptyState 与 Ta
       `.search-box-toolbar 的 flex-basis (${toolbarFlexBasis}) 不得大于 width (${toolbarWidthPx}px)，避免 .screen-toolbar-actions 同行按钮误折行`,
     )
   }
+  assert.ok(!strippedScreen.includes('.screen-host-stage'), 'Screen.css 不得再包含 .screen-host-stage')
+  assert.ok(!strippedScreen.includes(':has('), 'Screen.css 不得再包含 :has() 舞台补丁')
   assert.ok(!strippedPrimitives.includes('.screen-host-stage'), 'primitives.css 不得再包含 .screen-host-stage')
   assert.ok(!strippedPrimitives.includes(':has('), 'primitives.css 不得再包含 :has() 舞台补丁')
 
   for (const selector of ['.helmx-tabs-pills', '.tabs-pills', '.tabs-pill']) {
-    assert.ok(ownsRule(segmented, selector), `segmented.css 应定义 Tabs pills 规则 ${selector}`)
+    assert.ok(ownsRule(tabsCss, selector), `@helmx/ui Tabs.css 应定义 Tabs pills 规则 ${selector}`)
   }
 
   for (const stale of ['.primary-category-pill', '.primary-center-empty', '.primary-search-box']) {
     assert.ok(!centers.includes(stale), `centers.css 不得再残留旧类 ${stale}`)
   }
 
-  // Wave 2 五大中心迁至 SDK Screen / CardGrid / SelectCard / Tabs 后，锁定已退场旧类不得回流任何宿主样式分片
-  // （保留 .primary-drawer-* 供 SDK DetailDrawer 复用）。
-  const allHostCss = [
-    ...readdirSync(STYLES_DIR)
-      .filter((name) => name.endsWith('.css'))
-      .map((name) => ({ name, css: stripCssComments(readFileSync(join(STYLES_DIR, name), 'utf8')) })),
+  // Wave 2 五大中心迁至 @helmx/ui Screen / CardGrid / SelectCard / Tabs 后，锁定已退场旧类不得回流任何样式分片
+  // （保留 .primary-drawer-* 供 DetailDrawer 复用）。
+  const allCss = [
+    ...listCssFiles(UI_SRC_DIR).map((file) => ({
+      name: `ui/${file.slice(UI_SRC_DIR.length + 1)}`,
+      css: stripCssComments(readFileSync(file, 'utf8')),
+    })),
+    ...listCssFiles(STYLES_DIR).map((file) => ({
+      name: file.slice(STYLES_DIR.length + 1),
+      css: stripCssComments(readFileSync(file, 'utf8')),
+    })),
     { name: 'responsive.css', css: stripCssComments(readFileSync(join(__dirname, '../src/responsive.css'), 'utf8')) },
   ]
-  for (const { name, css } of allHostCss) {
+  for (const { name, css } of allCss) {
     for (const stale of [
       '.primary-center',
       '.primary-card-',
@@ -416,7 +438,7 @@ test('样式边界：主舞台 .screen-host-body / SearchBox / EmptyState 与 Ta
       '.model-center-main-tabs',
       '.model-toolbar-inline',
     ]) {
-      assert.ok(!css.includes(stale), `宿主分片 ${name} 不得回流已收口旧类 ${stale}`)
+      assert.ok(!css.includes(stale), `样式分片 ${name} 不得回流已收口旧类 ${stale}`)
     }
   }
   assert.ok(
@@ -425,15 +447,20 @@ test('样式边界：主舞台 .screen-host-body / SearchBox / EmptyState 与 Ta
   )
 })
 
-test('样式边界：统一批量操作栏 .batch-bar 族与 .btn-danger-sm 完整归属 primitives.css（sidebar/overview 分片仅留布局微调）', { timeout: 60_000 }, () => {
+test('样式边界：统一批量操作栏 .batch-bar 族归属 web primitives.css，.btn-danger-sm 归属 @helmx/ui Button.css（sidebar/overview 仅留布局微调）', { timeout: 60_000 }, () => {
+  const buttonCss = readFileSync(join(UI_PRIMITIVES_DIR, 'Button.css'), 'utf8')
   const shards = readdirSync(STYLES_DIR)
     .filter((name) => name.endsWith('.css') && name !== 'primitives.css')
     .map((name) => ({ name, css: readFileSync(join(STYLES_DIR, name), 'utf8') }))
-  for (const selector of ['.batch-bar', '.batch-bar-header', '.batch-bar-count', '.batch-bar-actions', '.btn-danger-sm']) {
+  for (const selector of ['.batch-bar', '.batch-bar-header', '.batch-bar-count', '.batch-bar-actions']) {
     assert.ok(ownsRule(primitives, selector), `primitives.css 应定义公共批量栏规则 ${selector}`)
     for (const { name, css } of shards) {
       assert.ok(!ownsRule(css, selector), `分片 ${name} 不得重新定义公共批量栏壳 ${selector}`)
     }
+  }
+  assert.ok(ownsRule(buttonCss, '.btn-danger-sm'), '@helmx/ui Button.css 应定义 .btn-danger-sm')
+  for (const { name, css } of [{ name: 'primitives.css', css: primitives }, ...shards]) {
+    assert.ok(!ownsRule(css, '.btn-danger-sm'), `宿主分片 ${name} 不得重复定义 .btn-danger-sm`)
   }
   const overview = readFileSync(join(STYLES_DIR, 'overview.css'), 'utf8')
   const responsive = readFileSync(join(__dirname, '../src/responsive.css'), 'utf8')
@@ -458,22 +485,12 @@ test('样式边界：统一批量操作栏 .batch-bar 族与 .btn-danger-sm 完�
 /** 运行时由 JS / Radix 动态注入的 CSS 自定义属性白名单（带明确来源说明，防僵尸登记）。 */
 const RUNTIME_CSS_VAR_ALLOWLIST: Readonly<Record<string, string>> = {
   '--palette-vvh': 'CommandPaletteModal.tsx sets --palette-vvh dynamically from visualViewport.height',
-  '--dialog-layer-z': '@helmx/plugin-client Dialog/AlertDialog sets --dialog-layer-z inline for nested overlays',
+  '--dialog-layer-z': '@helmx/ui Dialog/AlertDialog sets --dialog-layer-z inline for nested overlays',
   '--helmx-split-ratio': 'App.tsx sets --helmx-split-ratio inline for desktop resizable split panes',
   '--radix-popper-transform-origin': 'Radix Popper runtime CSS custom property for popover/dropdown/tooltip/select enter origin',
   '--radix-select-trigger-width': 'Radix Select runtime CSS custom property',
   '--radix-select-content-available-width': 'Radix Select runtime CSS custom property',
   '--radix-select-content-available-height': 'Radix Select runtime CSS custom property',
-}
-
-function listCssFiles(dir: string): string[] {
-  const out: string[] = []
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    const full = join(dir, entry.name)
-    if (entry.isDirectory()) out.push(...listCssFiles(full))
-    else if (entry.name.endsWith('.css')) out.push(full)
-  }
-  return out.sort()
 }
 
 function extractCssVarRefs(text: string): Array<{ name: string; line: number }> {
@@ -500,14 +517,15 @@ function extractCssVarRefs(text: string): Array<{ name: string; line: number }> 
   return refs
 }
 
-test('样式边界：Web 宿主、SDK 与内置插件客户端内全部 var(--token) 必须已定义或登记为运行时注入属性', { timeout: 60_000 }, () => {
+test('样式边界：@helmx/ui、Web 宿主、SDK 与内置插件客户端内全部 var(--token) 必须已定义或登记为运行时注入属性', { timeout: 60_000 }, () => {
   const repoPackagesDir = join(__dirname, '../..')
   const webSrcDir = join(__dirname, '../src')
   const pluginsSrcDir = join(__dirname, '../../plugins/src')
+  const uiCssFiles = listCssFiles(UI_SRC_DIR)
   const webCssFiles = listCssFiles(webSrcDir)
   const pluginCssFiles = listCssFiles(pluginsSrcDir).filter((file) => file.includes('/client/'))
-  const allCssFiles = [...webCssFiles, ...pluginCssFiles]
-  assert.ok(webCssFiles.length > 0, '应能枚举宿主 CSS 文件')
+  const allCssFiles = [...uiCssFiles, ...webCssFiles, ...pluginCssFiles]
+  assert.ok(uiCssFiles.length > 0 && webCssFiles.length > 0, '应能枚举 @helmx/ui 与宿主 CSS 文件')
 
   const definedTokens = new Set<string>()
   const strippedCssByFile = new Map<string, string>()
@@ -533,6 +551,7 @@ test('样式边界：Web 宿主、SDK 与内置插件客户端内全部 var(--to
   }
 
   const tsFiles = [
+    ...listSourceFiles(UI_SRC_DIR),
     ...listSourceFiles(webSrcDir),
     ...listSourceFiles(SDK_SRC_DIR),
     ...listSourceFiles(pluginsSrcDir).filter((file) => file.includes('/client/')),
@@ -560,8 +579,8 @@ test('样式边界：Web 宿主、SDK 与内置插件客户端内全部 var(--to
   }
 })
 
-test('样式边界：tokens.css 明暗主题覆盖对称（dark 主题不漏定义 light 色彩/阴影 token）', { timeout: 60_000 }, () => {
-  const tokensCss = stripCssComments(readFileSync(join(STYLES_DIR, 'tokens.css'), 'utf8'))
+test('样式边界：@helmx/ui tokens.css 明暗主题覆盖对称（dark 主题不漏定义 light 色彩/阴影 token）', { timeout: 60_000 }, () => {
+  const tokensCss = stripCssComments(readFileSync(join(UI_SRC_DIR, 'tokens.css'), 'utf8'))
   const lightBlock = tokensCss.match(/:root,\s*:root\[data-theme='light'\]\s*\{([\s\S]*?)\n\}/)?.[1] ?? ''
   const darkBlock = tokensCss.match(/:root\[data-theme='dark'\]\s*\{([\s\S]*?)\n\}/)?.[1] ?? ''
   assert.ok(lightBlock !== '' && darkBlock !== '', 'tokens.css 必须同时声明 light 与 dark 主题块')
@@ -591,7 +610,7 @@ test('样式边界：tokens.css 明暗主题覆盖对称（dark 主题不漏定�
 })
 
 test('样式边界：流内停靠工作台固定窄列与子会话 50/50 等分 flex 契约（零跨 Portal 变量依赖）', { timeout: 60_000 }, () => {
-  const tokensCss = stripCssComments(readFileSync(join(STYLES_DIR, 'tokens.css'), 'utf8'))
+  const tokensCss = stripCssComments(readFileSync(join(UI_SRC_DIR, 'tokens.css'), 'utf8'))
   const rootBlock = tokensCss.match(/:root\s*\{([\s\S]*?)\n\}/)?.[1] ?? ''
   assert.ok(rootBlock.includes('--helmx-drawer-narrow-width:'), 'tokens.css :root 必须定义 --helmx-drawer-narrow-width')
 
@@ -611,14 +630,19 @@ const hasExactClassSelector = (strippedCss: string, className: string): boolean 
   return new RegExp(`(?<![a-zA-Z0-9_-])\\.${escaped}(?![a-zA-Z0-9_-])`).test(strippedCss)
 }
 
-test('样式边界：Round 2 已退场的 7 组旧容器/表单/浮层样式族不得回流宿主样式表，modals.css 不再滞留已迁出块', { timeout: 60_000 }, () => {
-  const allHostCss = [
-    ...readdirSync(STYLES_DIR)
-      .filter((name) => name.endsWith('.css'))
-      .map((name) => ({ name, css: stripCssComments(readFileSync(join(STYLES_DIR, name), 'utf8')) })),
+test('样式边界：Round 2 已退场的 7 组旧容器/表单/浮层样式族不得回流宿主或 @helmx/ui 样式表，modals.css 不再滞留已迁出块', { timeout: 60_000 }, () => {
+  const allCss = [
+    ...listCssFiles(UI_SRC_DIR).map((file) => ({
+      name: `ui/${file.slice(UI_SRC_DIR.length + 1)}`,
+      css: stripCssComments(readFileSync(file, 'utf8')),
+    })),
+    ...listCssFiles(STYLES_DIR).map((file) => ({
+      name: file.slice(STYLES_DIR.length + 1),
+      css: stripCssComments(readFileSync(file, 'utf8')),
+    })),
     { name: 'responsive.css', css: stripCssComments(readFileSync(join(__dirname, '../src/responsive.css'), 'utf8')) },
   ]
-  assert.ok(allHostCss.length > 0, '应能读取宿主样式表')
+  assert.ok(allCss.length > 0, '应能读取宿主与 @helmx/ui 样式表')
 
   const retiredLegacyClasses = [
     'list',
@@ -635,11 +659,11 @@ test('样式边界：Round 2 已退场的 7 组旧容器/表单/浮层样式族�
     'dropdown-panel',
   ] as const
 
-  for (const { name, css } of allHostCss) {
+  for (const { name, css } of allCss) {
     for (const className of retiredLegacyClasses) {
       assert.ok(
         !ownsRule(css, `.${className}`) && !hasExactClassSelector(css, className),
-        `宿主样式表 ${name} 不得回流已退场的旧类选择器 .${className}（请使用 @helmx/plugin-client 对应原语）`,
+        `样式表 ${name} 不得回流已退场的旧类选择器 .${className}（请使用 @helmx/ui 对应原语）`,
       )
     }
   }

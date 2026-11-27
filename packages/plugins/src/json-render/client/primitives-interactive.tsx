@@ -9,7 +9,6 @@ import {
   Field,
   HelmxIcon,
   Input,
-  PluginSlot,
   Select,
   Stack,
   Switch,
@@ -17,7 +16,8 @@ import {
   TabsList,
   TabsTrigger,
   type ButtonVariant,
-} from '@helmx/plugin-client'
+} from '@helmx/ui'
+import { PluginSlot } from '@helmx/plugin-client'
 import {
   JSON_RENDER_ACTION_LABEL_FALLBACK,
   JSON_RENDER_BUTTON_LABEL_FALLBACK,

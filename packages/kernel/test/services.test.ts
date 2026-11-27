@@ -17,6 +17,7 @@ import {
   PLUGIN_UI_METHOD_NAMES,
   PLUGIN_HOOK_NAMES,
   RESERVED_SLASH_COMMANDS,
+  UI_SHARED_EXPORTS,
   PLUGIN_CLIENT_SHARED_EXPORTS,
   CORE_CLI_COMMAND_PATHS,
   parseSkillFrontmatter,
@@ -341,6 +342,13 @@ test('helmx-cli skill assets stay synchronized with UI extensions and runtime ca
     )
   }
 
+  for (const exportName of UI_SHARED_EXPORTS) {
+    assert.ok(
+      HELMX_CLI_SKILL_AND_PLUGIN_DEV_MD.includes(exportName),
+      `plugin-dev reference must include @helmx/ui export ${exportName}`,
+    )
+  }
+
   for (const exportName of PLUGIN_CLIENT_SHARED_EXPORTS) {
     assert.ok(
       HELMX_CLI_SKILL_AND_PLUGIN_DEV_MD.includes(exportName),
@@ -570,6 +578,23 @@ test('helmx-ui HIG single-source sync: repo skill (.helmx/skills/helmx-ui) match
   const extractTsxBlocks = (md: string): string[] =>
     Array.from(md.matchAll(/```tsx\n([\s\S]*?)```/g), (match) => match[1]!)
 
+  const uiExportSet = new Set<string>(UI_SHARED_EXPORTS)
+  const pluginClientExportSet = new Set<string>(PLUGIN_CLIENT_SHARED_EXPORTS)
+  const assertSharedImportSplit = (label: string, code: string): void => {
+    for (const match of code.matchAll(/import\s*\{([^}]+)\}\s*from\s*['"](@helmx\/(?:ui|plugin-client))['"]/g)) {
+      const pkg = match[2]!
+      const allowed = pkg === '@helmx/ui' ? uiExportSet : pluginClientExportSet
+      const names = match[1]!
+        .split(',')
+        .map((part) => part.trim())
+        .filter((part) => part.length > 0 && !part.startsWith('type '))
+        .map((part) => part.split(/\s+as\s+/)[0]!.trim())
+      for (const sym of names) {
+        assert.ok(allowed.has(sym), `${label} imports ${sym} from ${pkg}, which is not in ${pkg === '@helmx/ui' ? 'UI_SHARED_EXPORTS' : 'PLUGIN_CLIENT_SHARED_EXPORTS'}`)
+      }
+    }
+  }
+
   const devTsxBlocks = extractTsxBlocks(HELMX_CLI_SKILL_AND_PLUGIN_DEV_MD)
   const counterBlock = devTsxBlocks.find((block) => block.includes('export function CounterScreen'))
   assert.ok(counterBlock !== undefined, 'skill-and-plugin-dev.md must contain a CounterScreen tsx example')
@@ -583,6 +608,7 @@ test('helmx-ui HIG single-source sync: repo skill (.helmx/skills/helmx-ui) match
       !counterBlock.includes('direction="row"'),
     'CounterScreen example in skill-and-plugin-dev.md must use valid SDK primitives (<Screen>/<Card>/<Stack direction="horizontal">/<Button variant="primary">)',
   )
+  assertSharedImportSplit('skill-and-plugin-dev.tsx', counterBlock)
   assert.deepEqual(
     scanPluginTsxUiHygiene('skill-and-plugin-dev.tsx', counterBlock),
     [],
@@ -606,6 +632,7 @@ test('helmx-ui HIG single-source sync: repo skill (.helmx/skills/helmx-ui) match
       appClientTsx.includes('<DetailDrawer'),
     'app-builder fullstack template tsx must follow the unified Screen toolbar + List + DetailDrawer HIG',
   )
+  assertSharedImportSplit('app-builder-template.tsx', appClientTsx)
   assert.deepEqual(
     scanPluginTsxUiHygiene('app-builder-template.tsx', appClientTsx),
     [],
@@ -623,6 +650,7 @@ test('helmx-ui HIG single-source sync: repo skill (.helmx/skills/helmx-ui) match
         !block.includes('<button type="button" className="btn'),
       'HIG canonical tsx patterns must stay free of deprecated Button/Tabs default variant, invalid Stack direction="row", native controls, and raw .btn markup',
     )
+    assertSharedImportSplit(`patterns-${index + 1}.tsx`, block)
     assert.deepEqual(
       scanPluginTsxUiHygiene(`patterns-${index + 1}.tsx`, block),
       [],

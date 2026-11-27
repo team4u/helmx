@@ -16,7 +16,7 @@ import {
   TabsList,
   TabsTrigger,
   type SelectOption,
-} from '@helmx/plugin-client'
+} from '@helmx/ui'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { useLocationTargets, useNodes, useSkills, useStoreActions } from '../lib/store-context.js'
 import type { ResolvedTarget } from '../lib/types.js'

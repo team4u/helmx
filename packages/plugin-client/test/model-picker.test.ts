@@ -752,7 +752,7 @@ test('allowOrchestratorTiers hides orchestrator tiers by default and suppresses 
 })
 
 test('ModelPickerControl SSR: variant="field" renders standard 32px/28px bordered form trigger wired to FieldContext', { timeout: 60_000 }, async () => {
-  const { Field } = await import('../src/ui/Field.js')
+  const { Field } = await import('@helmx/ui')
   const handle: CatalogHandle = {
     slice: { models: CATALOG_MODELS },
     listeners: new Set(),

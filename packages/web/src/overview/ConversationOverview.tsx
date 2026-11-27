@@ -43,7 +43,6 @@ import {
   HelmxIcon,
   IconButton,
   LoadingState,
-  PluginSlot,
   Screen,
   ScreenToolbar,
   SearchBox,
@@ -51,7 +50,8 @@ import {
   Select,
   TabCount,
   Tooltip,
-} from '@helmx/plugin-client'
+} from '@helmx/ui'
+import { PluginSlot } from '@helmx/plugin-client'
 import { OVERVIEW_CARD_META_SLOT } from '@helmx/protocol/browser'
 import {
   useAuthConnection,

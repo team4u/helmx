@@ -13,8 +13,7 @@
  *   pass through unchanged inside a localized prefix, mirroring the other
  *   plugin clients.
  */
-import type { HelmxLocale, LocalizedText } from '@helmx/plugin-client'
-import { resolveLocalizedText } from '@helmx/plugin-client'
+import { resolveLocalizedText, type HelmxLocale, type LocalizedText } from '@helmx/ui'
 
 // ---------------------------------------------------------------------------
 // Card chrome (index.tsx)

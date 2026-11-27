@@ -21,7 +21,7 @@ import {
   HelmxIcon,
   IconButton,
   LoadingState,
-} from '@helmx/plugin-client'
+} from '@helmx/ui'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import {
   drawerFrameKey,

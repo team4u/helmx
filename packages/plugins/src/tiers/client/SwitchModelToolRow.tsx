@@ -11,10 +11,9 @@ import {
   StatusLight,
   formatDurationMs,
   resolveLocalizedText,
-  usePluginLocale,
-  useToolActivity,
   type StatusLightTone,
-} from '@helmx/plugin-client'
+} from '@helmx/ui'
+import { usePluginLocale, useToolActivity } from '@helmx/plugin-client'
 import {
   extractFallbackSwitchModelTarget,
   extractFirstErrorLine,

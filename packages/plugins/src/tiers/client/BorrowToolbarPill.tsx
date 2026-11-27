@@ -13,9 +13,8 @@
  */
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import type { ComposerToolbarSlotProps, ConversationSummary } from '@helmx/protocol/browser'
+import { HelmxIcon, resolveLocalizedText } from '@helmx/ui'
 import {
-  HelmxIcon,
-  resolveLocalizedText,
   useComposerModelPickerMode,
   usePluginAction,
   usePluginLocale,

@@ -1,6 +1,7 @@
 /** Dedicated lightweight settings-panel entrypoint for builtin:tiers (`TiersSettingsPanel`). */
 import { useMemo, type ReactNode } from 'react'
-import { Button, KvGrid, LoadingState, Stack, usePluginContext, usePluginDoc, usePluginTranslator } from '@helmx/plugin-client'
+import { Button, KvGrid, LoadingState, Stack } from '@helmx/ui'
+import { usePluginContext, usePluginDoc, usePluginTranslator } from '@helmx/plugin-client'
 import { TIERS_PLUGIN_ID, TIERS_SCREEN_ID, TIERS_STATE_DOC, parseTiersStateDoc } from './models.ts'
 import { TIERS_COPY as C } from './copy.ts'
 import './styles.css'

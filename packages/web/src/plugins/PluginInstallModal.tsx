@@ -11,7 +11,7 @@ import {
   ModalDialog,
   Stack,
   Switch,
-} from '@helmx/plugin-client'
+} from '@helmx/ui'
 import {
   detectPluginSourceKind,
   extractDoctorReport,

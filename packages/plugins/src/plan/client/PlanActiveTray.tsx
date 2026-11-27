@@ -13,9 +13,11 @@ import {
   Button,
   DockTray,
   DockTrayRow,
-  MarkdownView,
   formatCompactTimestamp,
   resolveLocalizedText,
+} from '@helmx/ui'
+import {
+  MarkdownView,
   usePluginAction,
   usePluginContext,
   usePluginLocale,

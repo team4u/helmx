@@ -34,7 +34,7 @@ import {
   LoadingState,
   SearchBox,
   Tooltip,
-} from '@helmx/plugin-client'
+} from '@helmx/ui'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { openStandbyWithFocus } from '../conversation/standby-focus.js'
 import { useAuthConnection, useProfilesSlice, useStoreActions } from '../lib/store-context.js'

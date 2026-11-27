@@ -7,12 +7,10 @@ import {
   Badge,
   HelmxIcon,
   IconButton,
-  MarkdownView,
   formatCompactTimestamp,
   resolveLocalizedText,
-  usePluginContext,
-  usePluginLocale,
-} from '@helmx/plugin-client'
+} from '@helmx/ui'
+import { MarkdownView, usePluginContext, usePluginLocale } from '@helmx/plugin-client'
 import {
   formatReceiptSeqRange,
   isReceiptDefaultOpen,

@@ -4,14 +4,8 @@
  * Exports only React components and TS types (Fast Refresh compliant).
  */
 import type { ReactNode } from 'react'
-import {
-  Tooltip,
-  formatCompactTimestamp,
-  formatDurationMs,
-  formatStopwatchMs,
-  usePluginLocale,
-  useSharedNowMs,
-} from '@helmx/plugin-client'
+import { Tooltip, formatCompactTimestamp, formatDurationMs, formatStopwatchMs } from '@helmx/ui'
+import { usePluginLocale, useSharedNowMs } from '@helmx/plugin-client'
 import type { WorkflowRunSummary } from '../../contracts-types.js'
 import {
   timingNodeTotalLine,

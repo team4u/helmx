@@ -4,7 +4,7 @@
  * Covers:
  * - template name validation: accepts `app`, rejects invalid names while listing valid templates;
  * - generated artifacts: `plugin.json` (clientRoot/app naming), backend (public doc + dual-schema actions +
- *   ctx.ui.screen + sidebar shortcut), frontend (@helmx/plugin-client host primitives), zero Emoji;
+ *   ctx.ui.screen + sidebar shortcut), frontend (`@helmx/ui` primitives + `@helmx/plugin-client` hooks), zero Emoji;
  * - end-to-end (honesty rule: real code, zero mock doctor): runs real `doctorPluginDir` 4-stage check
  *   and verifies `app` template reports `screens: ['main']` while `full` template reports `screens: []`.
  *
@@ -16,7 +16,7 @@ import assert from 'node:assert/strict'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
 import ts from 'typescript'
-import { PLUGIN_CLIENT_SHARED_EXPORTS } from '@helmx/protocol'
+import { PLUGIN_CLIENT_SHARED_EXPORTS, UI_SHARED_EXPORTS } from '@helmx/protocol'
 import { doctorPluginDir } from '@helmx/kernel'
 import { createPluginBuildProvider } from '@helmx/plugin-build'
 import { SCAFFOLD_CLIENT_APP_TSX, SCAFFOLD_CLIENT_INDEX_TSX } from '../src/commands/scaffold-templates.js'
@@ -26,18 +26,22 @@ import {
   useTempDir,
 } from './helpers/cli-harness.js'
 
-function collectPluginClientImports(sourceText: string): { rootValues: string[]; disallowedSubpaths: string[] } {
+function collectSharedPackageImports(
+  sourceText: string,
+  pkgName: '@helmx/ui' | '@helmx/plugin-client',
+): { rootValues: string[]; disallowedSubpaths: string[] } {
   const sf = ts.createSourceFile('client.tsx', sourceText, ts.ScriptTarget.ES2022, true, ts.ScriptKind.TSX)
   const rootValues: string[] = []
   const disallowedSubpaths: string[] = []
+  const subpathPrefix = `${pkgName}/`
   for (const stmt of sf.statements) {
     if (!ts.isImportDeclaration(stmt) || !ts.isStringLiteral(stmt.moduleSpecifier)) continue
     const spec = stmt.moduleSpecifier.text
-    if (spec.startsWith('@helmx/plugin-client/')) {
+    if (spec.startsWith(subpathPrefix)) {
       disallowedSubpaths.push(spec)
       continue
     }
-    if (spec !== '@helmx/plugin-client' || stmt.importClause?.isTypeOnly) continue
+    if (spec !== pkgName || stmt.importClause?.isTypeOnly) continue
     const bindings = stmt.importClause?.namedBindings
     if (bindings !== undefined && ts.isNamedImports(bindings)) {
       for (const el of bindings.elements) {
@@ -156,17 +160,25 @@ test('plugins init --template app: backend and frontend content contracts', { ti
   assert.ok(!client.includes("import './styles.css'"), 'frontend must not import a private stylesheet')
   assert.ok(!/\bapp-(form|input|done|col-check)\b/.test(client), 'frontend must not use private app-* layout classes')
 
-  // Every runtime symbol imported from @helmx/plugin-client in scaffold templates must stay in PLUGIN_CLIENT_SHARED_EXPORTS
-  const allowedExports = new Set<string>(PLUGIN_CLIENT_SHARED_EXPORTS)
+  // Every runtime symbol imported from @helmx/ui and @helmx/plugin-client in scaffold templates must match their disjoint protocol export sets
+  const allowedUiExports = new Set<string>(UI_SHARED_EXPORTS)
+  const allowedPluginClientExports = new Set<string>(PLUGIN_CLIENT_SHARED_EXPORTS)
   for (const [label, src] of [
     ['SCAFFOLD_CLIENT_INDEX_TSX', SCAFFOLD_CLIENT_INDEX_TSX],
     ['SCAFFOLD_CLIENT_APP_TSX', SCAFFOLD_CLIENT_APP_TSX],
   ] as const) {
-    const { rootValues, disallowedSubpaths } = collectPluginClientImports(src)
-    assert.deepEqual(disallowedSubpaths, [], `${label} must not import internal @helmx/plugin-client/* subpaths`)
-    assert.ok(rootValues.length > 0, `${label} should import shared primitives from @helmx/plugin-client`)
-    for (const sym of rootValues) {
-      assert.ok(allowedExports.has(sym), `${label} imports ${sym} which is missing from PLUGIN_CLIENT_SHARED_EXPORTS`)
+    const uiImports = collectSharedPackageImports(src, '@helmx/ui')
+    assert.deepEqual(uiImports.disallowedSubpaths, [], `${label} must not import internal @helmx/ui/* subpaths`)
+    assert.ok(uiImports.rootValues.length > 0, `${label} should import shared UI primitives from @helmx/ui`)
+    for (const sym of uiImports.rootValues) {
+      assert.ok(allowedUiExports.has(sym), `${label} imports ${sym} from @helmx/ui which is missing from UI_SHARED_EXPORTS`)
+    }
+
+    const clientImports = collectSharedPackageImports(src, '@helmx/plugin-client')
+    assert.deepEqual(clientImports.disallowedSubpaths, [], `${label} must not import internal @helmx/plugin-client/* subpaths`)
+    assert.ok(clientImports.rootValues.length > 0, `${label} should import plugin runtime hooks from @helmx/plugin-client`)
+    for (const sym of clientImports.rootValues) {
+      assert.ok(allowedPluginClientExports.has(sym), `${label} imports ${sym} from @helmx/plugin-client which is missing from PLUGIN_CLIENT_SHARED_EXPORTS`)
     }
   }
 

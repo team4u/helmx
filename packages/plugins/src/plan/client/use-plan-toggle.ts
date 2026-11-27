@@ -4,12 +4,8 @@
  * so PlanToolbarButton and PlanMenuItem stay single-source.
  */
 import { useEffect, useRef, useState } from 'react'
-import {
-  resolveLocalizedText,
-  usePluginAction,
-  usePluginLocale,
-  usePluginSessionDocState,
-} from '@helmx/plugin-client'
+import { resolveLocalizedText } from '@helmx/ui'
+import { usePluginAction, usePluginLocale, usePluginSessionDocState } from '@helmx/plugin-client'
 import { PLAN_COPY, planActionFailedNotice } from './copy.ts'
 import { parsePlanSessionView } from './models.ts'
 import { PLAN_SESSION_DOC, type PlanSessionView } from './types.ts'

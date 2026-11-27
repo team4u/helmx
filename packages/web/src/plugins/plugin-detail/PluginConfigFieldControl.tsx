@@ -1,13 +1,7 @@
 import React, { useMemo } from 'react'
 import type { HelmxLocale, PluginConfigFieldSchema } from '@helmx/protocol/browser'
-import {
-  Input,
-  ModelPickerControl,
-  MultiSelect,
-  Select,
-  Switch,
-  Textarea,
-} from '@helmx/plugin-client'
+import { Input, MultiSelect, Select, Switch, Textarea } from '@helmx/ui'
+import { ModelPickerControl } from '@helmx/plugin-client'
 import type { WebMessageTranslator } from '../../i18n/catalog.js'
 import { useOptionalNodes, useOptionalProfiles } from '../../lib/store-context.js'
 import { buildModelPickerControlCopy, useModelPickerControlAdapter } from '../../conversation/model-picker-adapter.js'

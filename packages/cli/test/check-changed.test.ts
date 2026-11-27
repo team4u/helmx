@@ -984,12 +984,16 @@ test('css-hygiene: collectSourceCssFiles returns only packages/<pkg>/src/**/*.cs
     write(root, 'packages/web/src/deep/b.css', '')
     write(root, 'packages/web/dist/x.css', '')
     write(root, 'packages/web/test/fixtures/x.css', '')
+    write(root, 'packages/ui/src/tokens.css', '')
+    write(root, 'packages/ui/src/primitives/Button.css', '')
     write(root, 'packages/plugins/src/client/styles.css', '')
     write(root, 'packages/kernel/package.json', '{}')
     write(root, 'packages/not-a-dir.css', '')
     write(root, 'docs/x.css', '')
     assert.deepEqual(collectSourceCssFiles(root), [
       'packages/plugins/src/client/styles.css',
+      'packages/ui/src/primitives/Button.css',
+      'packages/ui/src/tokens.css',
       'packages/web/src/a.css',
       'packages/web/src/deep/b.css',
     ])
@@ -1005,7 +1009,7 @@ test('ui-hygiene: reports native <select>, <input type="search">, UI Emoji in JS
   const report = analyzeUiSource(
     ts,
     'sample.tsx',
-    `import { Button, CopyButton, Select } from '@helmx/plugin-client'
+    `import { Button, CopyButton, Select } from '@helmx/ui'
 export function BadView({ active, kind, variant }: { active: boolean; kind: string; variant: string }) {
   const greeting = 'Launch 🚀 now'
   const status = \`Done ✅ \${kind}\`
@@ -1057,7 +1061,7 @@ test('ui-hygiene: clean SDK components, comments with Emoji, typography glyphs, 
     'clean.tsx',
     `// Comment with Emoji 🚀 ✅ 🔥 and <select> and type="search" must never trip hygiene
 /* Block comment 🎉 <button className="btn"> */
-import { Button, CopyButton, SearchBox, Select } from '@helmx/plugin-client'
+import { Button, CopyButton, SearchBox, Select } from '@helmx/ui'
 
 const EMOJI_STRIP = /[\\u{1F000}-\\u{1FAFF}]/u
 
@@ -1093,7 +1097,7 @@ test('ui-hygiene: reports legacy container/modal/tab/kbd classes on intrinsic ta
   const bad = analyzeUiSource(
     ts,
     'legacy-bad.tsx',
-    `import { Card, ModalDialog, TabsList, TabsTrigger } from '@helmx/plugin-client'
+    `import { Card, ModalDialog, TabsList, TabsTrigger } from '@helmx/ui'
 export function LegacyBad({ active }: { active: boolean }) {
   return (
     <div className="section-flat">
@@ -1141,7 +1145,7 @@ export function LegacyBad({ active }: { active: boolean }) {
   const clean = analyzeUiSource(
     ts,
     'legacy-clean.tsx',
-    `import { Card, Kbd, ModalDialog, Tabs, TabsList, TabsTrigger } from '@helmx/plugin-client'
+    `import { Card, Kbd, ModalDialog, Tabs, TabsList, TabsTrigger } from '@helmx/ui'
 export function LegacyClean({ active, variant, suffix }: { active: boolean; variant: string; suffix: string }) {
   return (
     <div className="overview-card">
@@ -1181,7 +1185,8 @@ test('ui-hygiene: collectSourceUiFiles returns only packages/web/src/**/*.tsx an
     write(root, 'packages/web/src/model.ts', '')
     write(root, 'packages/web/test/App.test.tsx', '')
     write(root, 'packages/web/dist/App.tsx', '')
-    write(root, 'packages/plugin-client/src/ui/Button.tsx', '')
+    write(root, 'packages/ui/src/primitives/Button.tsx', '')
+    write(root, 'packages/plugin-client/src/ui/ModelPicker.tsx', '')
     write(root, 'packages/plugins/src/tiers/client/manager.tsx', '')
     write(root, 'packages/plugins/src/tiers/client/sub/Row.tsx', '')
     write(root, 'packages/plugins/src/tiers/client/models.ts', '')

@@ -9,8 +9,8 @@ import {
   PopoverTrigger,
   SearchBox,
   SegmentedControl,
-  useSharedNowMs,
-} from '@helmx/plugin-client'
+} from '@helmx/ui'
+import { useSharedNowMs } from '@helmx/plugin-client'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import {
   formatDurationMs,

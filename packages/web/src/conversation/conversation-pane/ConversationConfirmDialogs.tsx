@@ -2,7 +2,7 @@
  * Destructive confirmations of the conversation pane (context reset, delete). Both clear the
  * pending action before running so the dialog closes even when the request fails.
  */
-import { ConfirmDialog } from '@helmx/plugin-client'
+import { ConfirmDialog } from '@helmx/ui'
 import { useWebLocale } from '../../i18n/use-web-locale.js'
 
 /** Destructive action awaiting confirmation (null = no dialog). */

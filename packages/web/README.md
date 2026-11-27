@@ -38,5 +38,5 @@ pnpm test:unit        # web 属 unit 档（happy-dom）
 ## 限制
 
 - 需要内核 Hub 在 3202 运行（dev 模式经 Vite 代理；生产由 Hub 静态托管）；
-- 插件前端不是本包职责：写插件界面请开发 `client.tsx` 并复用 `@helmx/plugin-client`，不向本包添加插件专属代码；
+- 插件前端不是本包职责：写插件界面请开发 `client.tsx` 并复用 `@helmx/ui`（通用原语）与 `@helmx/plugin-client`（插件运行时 hooks），不向本包添加插件专属代码；
 - 界面约定（零 Emoji、Radix 唯一原语、唯一 Hash 导航、Fast Refresh）是硬契约，见 [Web 前端设计系统](../../docs/conventions/web-frontend.md) 与 [Web 导航约定](../../docs/conventions/web-navigation.md)。

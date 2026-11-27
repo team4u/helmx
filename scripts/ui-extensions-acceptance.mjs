@@ -88,15 +88,16 @@ try {
   const auxConv = await app.kernel.createConversation({ title: 'UI 扩展验收辅助会话', tags: ['ui-ext'] })
 
   // 5. Owner plugin clientRoot: a real client.tsx inside the temp dir (esbuild compiles on
-  //    demand; react/lucide/@helmx/plugin-client are virtualized by the compiler into the host's
-  //    globally shared instances).
+  //    demand; react/lucide/@helmx/ui/@helmx/plugin-client are virtualized by the compiler into
+  //    the host's globally shared instances).
   const clientSrcDir = join(dataDir, 'client-src')
   await mkdir(join(clientSrcDir, 'parts'), { recursive: true })
   await writeFile(
     join(clientSrcDir, 'client.tsx'),
     [
       "import { useState } from 'react'",
-      "import { Callout, PluginSlot, usePluginContext, usePluginDoc, usePluginSessionDoc, useScreenParams } from '@helmx/plugin-client'",
+      "import { Callout } from '@helmx/ui'",
+      "import { PluginSlot, usePluginContext, usePluginDoc, usePluginSessionDoc, useScreenParams } from '@helmx/plugin-client'",
       "import { Plus, History, Gauge } from 'lucide-react'",
       "import { sessionNote } from './parts/note'",
       '',

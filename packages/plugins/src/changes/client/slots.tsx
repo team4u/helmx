@@ -11,15 +11,8 @@
  */
 import './styles.css'
 import type { MouseEvent, ReactNode } from 'react'
-import {
-  Button,
-  HelmxIcon,
-  IconButton,
-  resolveLocalizedText,
-  usePluginContext,
-  usePluginLocale,
-  type LocalizedText,
-} from '@helmx/plugin-client'
+import { Button, HelmxIcon, IconButton, resolveLocalizedText, type LocalizedText } from '@helmx/ui'
+import { usePluginContext, usePluginLocale } from '@helmx/plugin-client'
 import { CHG_COPY, chgInspectTitle, chgSlotBrief } from './copy.ts'
 import { buildChangesScreenTarget } from './diff-model.ts'
 

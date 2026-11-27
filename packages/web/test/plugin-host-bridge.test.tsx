@@ -19,13 +19,11 @@ import { afterEach, describe, test } from 'node:test'
 import * as React from 'react'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
+import { CopyButton, SearchBox, Select } from '@helmx/ui'
 import {
-  CopyButton,
   PluginClientContext,
   PluginClientHostContext,
   PluginSlot,
-  SearchBox,
-  Select,
   createPluginClientContext,
   useConversation,
   useConversations,

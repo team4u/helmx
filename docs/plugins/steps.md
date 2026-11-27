@@ -39,7 +39,7 @@
 
 ## 前端界面（`packages/plugins/src/steps/client/`）
 
-- **`StepsActiveTray`（`COMPOSER_DOCK_SLOT`, `order: 15`）**：复用 `@helmx/plugin-client` 的 `DockTray` / `DockTrayRow` 原语；桌面端（`> 680px`）进行中默认展开、全部终态后自动折叠为 `32px` 单行摘要，移动端默认折叠，支持点击 `×` 触发 `dismiss`；
+- **`StepsActiveTray`（`COMPOSER_DOCK_SLOT`, `order: 15`）**：复用 `@helmx/ui` 的 `DockTray` / `DockTrayRow` 原语；桌面端（`> 680px`）进行中默认展开、全部终态后自动折叠为 `32px` 单行摘要，移动端默认折叠，支持点击 `×` 触发 `dismiss`；
 - **`StepsToolRow`（`toolView`, `replaceRow: true`, `foldable: true`）**：仅消费 `props.presentationMeta`，将每次 `update_steps` 调用渲染为紧凑 `26px` `.trace-row`（`check-square` / `loader` 图标、进度摘要、`done/total` Badge 与 `StatusLight`）；因声明 `foldable: true` 而归入 `<StepGroup>` 过程折叠组内，不切碎思考/工具流、也不写入右侧会话大纲。
 
 ## 源码与测试入口

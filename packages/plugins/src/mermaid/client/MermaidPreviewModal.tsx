@@ -1,9 +1,15 @@
 /** Fullscreen zoom/pan Mermaid preview modal (ModalDialog, wheel zoom, pointer-capture pan, Esc close). */
 import { useCallback, useEffect, useRef, useState, type PointerEvent, type ReactNode, type WheelEvent } from 'react'
 import {
-  Badge, Button, Callout, CopyButton, IconButton, LoadingState, ModalDialog,
-  usePluginContext, usePluginLocale, usePluginTranslator,
-} from '@helmx/plugin-client'
+  Badge,
+  Button,
+  Callout,
+  CopyButton,
+  IconButton,
+  LoadingState,
+  ModalDialog,
+} from '@helmx/ui'
+import { usePluginContext, usePluginLocale, usePluginTranslator } from '@helmx/plugin-client'
 import { renderMermaidSvg } from './mermaid-loader.ts'
 import { MERMAID_COPY as C, mermaidModalStatus } from './copy.ts'
 

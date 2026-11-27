@@ -1,0 +1,138 @@
+/* ==========================================================================
+ * DetailDrawer 右侧滑出详情抽屉原语（540px 标准抽屉 + 移动端全宽适配）
+ * ========================================================================== */
+
+@keyframes drawerSlideIn {
+  from { transform: translateX(100%); }
+  to { transform: translateX(0); }
+}
+
+.primary-drawer-backdrop {
+  position: fixed;
+  inset: 0;
+  background: var(--bg-backdrop);
+  backdrop-filter: blur(8px) saturate(1.1);
+  -webkit-backdrop-filter: blur(8px) saturate(1.1);
+  animation: helmxOverlayFadeIn var(--dur-normal) var(--ease-out);
+}
+
+.primary-drawer-content {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(540px, 94vw);
+  box-sizing: border-box;
+  background: var(--bg-elevated);
+  border-left: 1px solid var(--border);
+  box-shadow: -8px 0 24px rgba(0, 0, 0, 0.28);
+  display: flex;
+  flex-direction: column;
+  outline: none;
+  animation: drawerSlideIn var(--dur-normal) var(--ease-out);
+}
+
+.primary-drawer-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--line-2);
+  background: var(--bg-elevated);
+  flex-shrink: 0;
+}
+
+.primary-drawer-header > button:last-child {
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.primary-drawer-header-left {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  flex: 1;
+  min-width: 0;
+}
+
+.primary-drawer-icon-wrap {
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg-subtle);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  color: var(--fg);
+}
+
+.primary-drawer-title-col {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+}
+
+.primary-drawer-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.primary-drawer-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.primary-drawer-body {
+  flex: 1;
+  min-width: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.primary-drawer-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 12px 20px;
+  border-top: 1px solid var(--line-2);
+  background: var(--bg-elevated);
+  flex-shrink: 0;
+}
+
+@media (max-width: 680px) {
+  .primary-drawer-content {
+    width: 100vw;
+    max-width: 100vw;
+    left: 0;
+    right: 0;
+    border-left: none;
+    padding-bottom: env(safe-area-inset-bottom);
+    box-sizing: border-box;
+  }
+  .primary-drawer-header {
+    flex-wrap: nowrap;
+    align-items: flex-start;
+    justify-content: space-between;
+    padding-top: max(12px, env(safe-area-inset-top));
+    padding-left: max(14px, env(safe-area-inset-left));
+    padding-right: max(14px, env(safe-area-inset-right));
+  }
+  .primary-drawer-header > button:last-child {
+    margin-left: auto;
+    flex-shrink: 0;
+  }
+}

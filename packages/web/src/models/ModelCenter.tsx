@@ -15,8 +15,8 @@ import {
   Tabs,
   TabsList,
   TabsTrigger,
-  useHostModels,
-} from '@helmx/plugin-client'
+} from '@helmx/ui'
+import { useHostModels } from '@helmx/plugin-client'
 import { resolveDefaultChainThinkingLevel } from '@helmx/plugin-client/pure'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { assetsApi } from '../lib/api.js'

@@ -1,7 +1,7 @@
 /**
  * Local offline SDK type snapshot sync (`helmx plugins types [dir]`):
  * writes `.helmx/types/` declarations (`@helmx/protocol`, `@helmx/protocol/browser`,
- * `@helmx/plugin-client`, plus minimal standalone shims) into an external plugin directory
+ * `@helmx/ui`, `@helmx/plugin-client`, plus minimal standalone shims) into an external plugin directory
  * without contacting Hub and without destructively modifying existing `tsconfig.json`.
  */
 import { randomUUID } from 'node:crypto'
@@ -52,7 +52,7 @@ function validateSdkTypesBundle(raw: unknown): SdkTypesBundle {
     throw new CliError('embedded SDK types bundle is corrupt (expected object)', 'sdk_types_corrupt')
   }
   const obj = raw as Record<string, unknown>
-  if (obj['formatVersion'] !== 1 || typeof obj['sdkVersion'] !== 'string') {
+  if (obj['formatVersion'] !== 2 || typeof obj['sdkVersion'] !== 'string') {
     throw new CliError('embedded SDK types bundle has unsupported format or version', 'sdk_types_corrupt')
   }
   const filesRaw = obj['files']
@@ -67,13 +67,13 @@ function validateSdkTypesBundle(raw: unknown): SdkTypesBundle {
     }
     files[rel] = content
   }
-  for (const required of ['protocol/index.d.ts', 'protocol/browser.d.ts', 'plugin-client/index.d.ts']) {
+  for (const required of ['protocol/index.d.ts', 'protocol/browser.d.ts', 'ui/index.d.ts', 'plugin-client/index.d.ts']) {
     if (!(required in files)) {
       throw new CliError(`embedded SDK types bundle is missing required declaration: ${required}`, 'sdk_types_corrupt')
     }
   }
   return {
-    formatVersion: 1,
+    formatVersion: 2,
     sdkVersion: obj['sdkVersion'],
     files,
   }
@@ -155,12 +155,14 @@ async function tryLoadFreshDistSnapshot(): Promise<SdkTypesBundle | undefined> {
   const packagesRoot = path.resolve(pkgRoot, '..')
   const sourcesFresh =
     maxTsMtimeMs(path.join(packagesRoot, 'protocol', 'src')) <= distMtimeMs &&
+    maxTsMtimeMs(path.join(packagesRoot, 'ui', 'src')) <= distMtimeMs &&
     maxTsMtimeMs(path.join(packagesRoot, 'plugin-client', 'src')) <= distMtimeMs
   if (!sourcesFresh) return undefined
   for (const rel of [
     'scripts/generate-sdk-types.mjs',
     'package.json',
     '../protocol/package.json',
+    '../ui/package.json',
     '../plugin-client/package.json',
   ]) {
     const depPath = path.resolve(pkgRoot, rel)
@@ -544,6 +546,7 @@ async function runPluginsTypes(ctx: CommandContext): Promise<void> {
   )
   ctx.io.out('  - @helmx/protocol -> ./.helmx/types/protocol/index.d.ts\n')
   ctx.io.out('  - @helmx/protocol/browser -> ./.helmx/types/protocol/browser.d.ts\n')
+  ctx.io.out('  - @helmx/ui -> ./.helmx/types/ui/index.d.ts\n')
   ctx.io.out('  - @helmx/plugin-client -> ./.helmx/types/plugin-client/index.d.ts\n')
   if (result.tsconfigStatus === 'configured') {
     ctx.io.out('tsconfig.json already configures Helmx SDK paths.\n')
@@ -558,7 +561,7 @@ async function runPluginsTypes(ctx: CommandContext): Promise<void> {
 export const pluginsTypesCommand: CommandSpec = {
   path: ['plugins', 'types'],
   description:
-    'Local types: write or refresh offline .helmx/types/ TypeScript declarations (@helmx/protocol, @helmx/plugin-client, and standalone shims) without contacting Hub',
+    'Local types: write or refresh offline .helmx/types/ TypeScript declarations (@helmx/protocol, @helmx/ui, @helmx/plugin-client, and standalone shims) without contacting Hub',
   flags: [
     { name: 'dir', type: 'string', help: 'target plugin directory (defaults to current working directory)' },
   ],

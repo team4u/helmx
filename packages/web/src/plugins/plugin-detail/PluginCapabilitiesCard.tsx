@@ -1,6 +1,6 @@
 import React from 'react'
 import type { PluginSummary, SkillSummary } from '@helmx/protocol/browser'
-import { Badge, Button, Card, HelmxIcon, HelperText, Stack } from '@helmx/plugin-client'
+import { Badge, Button, Card, HelmxIcon, HelperText, Stack } from '@helmx/ui'
 import { useWebLocale } from '../../i18n/use-web-locale.js'
 import type { HelmxStoreActions } from '../../lib/helmx-store.js'
 import { pluginManagedSkills } from './plugin-detail-model.js'

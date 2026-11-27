@@ -4,10 +4,23 @@
 import type { MutableRefObject, ReactNode } from 'react'
 import type { HelmxLocale } from '@helmx/protocol/browser'
 import {
-  Badge, Button, Callout, Checkbox,
-  HelmxIcon, IconButton, List, ListRow, ModalDialog, PluginSlot, Stack, StatusLight, Tooltip, formatModelShortName, resolveLocalizedText,
-  type LocalizedText, type StatusLightTone,
-} from '@helmx/plugin-client'
+  Badge,
+  Button,
+  Callout,
+  Checkbox,
+  HelmxIcon,
+  IconButton,
+  List,
+  ListRow,
+  ModalDialog,
+  Stack,
+  StatusLight,
+  Tooltip,
+  resolveLocalizedText,
+  type LocalizedText,
+  type StatusLightTone,
+} from '@helmx/ui'
+import { PluginSlot, formatModelShortName } from '@helmx/plugin-client'
 import { extractPostRefs, postDigestLine, postKindBadgeTone, type BoardPost } from './board-model.ts'
 import type { SwarmPanelModel } from './model-panel.ts'
 import { resolvePanelMemberTimingView, resolvePostTimeDisplay } from './model-timing.ts'

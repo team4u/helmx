@@ -10,7 +10,7 @@ import {
   Stack,
   StatusLight,
   Switch,
-} from '@helmx/plugin-client'
+} from '@helmx/ui'
 import { createWebTranslator } from '../i18n/catalog.js'
 import { isPluginSummaryActive } from '../lib/live-state.js'
 import { useOptionalGroupedUi, useOptionalLocale, useOptionalStoreActions } from '../lib/store-context.js'

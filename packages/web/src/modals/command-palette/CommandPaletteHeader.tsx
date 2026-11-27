@@ -1,5 +1,5 @@
 import React from 'react'
-import { Badge, Button, DialogClose, HelmxIcon, LoadingState, SearchBox } from '@helmx/plugin-client'
+import { Badge, Button, DialogClose, HelmxIcon, LoadingState, SearchBox } from '@helmx/ui'
 import { useWebLocale } from '../../i18n/use-web-locale.js'
 
 export interface CommandPaletteHeaderProps {

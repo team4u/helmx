@@ -9,13 +9,15 @@ import {
   Field,
   HelmxIcon,
   Input,
-  ModelPickerControl,
   SegmentedControl,
   Stack,
   Textarea,
-  resolveDefaultChainThinkingLevel,
   type BadgeTone,
   type LocalizedText,
+} from '@helmx/ui'
+import {
+  ModelPickerControl,
+  resolveDefaultChainThinkingLevel,
   type ModelPickerControlCopy,
 } from '@helmx/plugin-client'
 import {

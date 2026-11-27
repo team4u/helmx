@@ -12,10 +12,10 @@ import {
   IconButton,
   LoadingState,
   resolveLocalizedText,
-  usePluginLocale,
   type BadgeTone,
   type LocalizedText,
-} from '@helmx/plugin-client'
+} from '@helmx/ui'
+import { usePluginLocale } from '@helmx/plugin-client'
 import type { GitDiffFileResult, GitDiffFileStatus } from '../../contracts-types.js'
 import {
   CHG_COPY,

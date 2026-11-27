@@ -4,16 +4,8 @@
  */
 import './styles.css'
 import type { ReactNode } from 'react'
-import {
-  Button,
-  HelmxIcon,
-  KvGrid,
-  LoadingState,
-  ScreenSection,
-  usePluginContext,
-  usePluginDoc,
-  usePluginTranslator,
-} from '@helmx/plugin-client'
+import { Button, HelmxIcon, KvGrid, LoadingState, ScreenSection } from '@helmx/ui'
+import { usePluginContext, usePluginDoc, usePluginTranslator } from '@helmx/plugin-client'
 import { parseCronJobs, parseWebhooks } from './models.ts'
 import {
   TRIGGERS_KV_CRON_COUNT,

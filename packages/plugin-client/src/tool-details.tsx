@@ -13,10 +13,17 @@
  */
 import { useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
+import type { LocalizedText } from '@helmx/protocol/browser'
+import { Button } from '@helmx/ui'
 import { usePluginContext } from './plugin-context.js'
 import { usePluginTranslator } from './i18n.js'
-import { uiCopy } from './ui-copy.js'
-import { Button } from './ui/Button.js'
+
+const TOOL_DETAILS_COPY = {
+  callDetails: { en: 'Call details', 'zh-CN': '调用详情' },
+  detailsInput: { en: 'Input', 'zh-CN': '输入' },
+  detailsOutput: { en: 'Output', 'zh-CN': '输出' },
+  openFullArtifact: { en: 'Open full artifact', 'zh-CN': '打开完整产物' },
+} as const satisfies Record<string, LocalizedText>
 
 export interface ToolCallDetailsProps {
   /** Raw input of the tool call (strings pass through, objects are pretty-printed as JSON). */
@@ -55,23 +62,23 @@ export function ToolCallDetails({ input, result, artifactRef, defaultOpen = fals
       onClick={(e) => e.stopPropagation()}
       onKeyDown={(e) => e.stopPropagation()}
     >
-      <summary>{t(uiCopy.callDetails)}</summary>
+      <summary>{t(TOOL_DETAILS_COPY.callDetails)}</summary>
       <div className="trace-expanded-body selectable">
         {inputJson !== undefined ? (
           <div>
-            <div className="trace-section-label">{t(uiCopy.detailsInput)}</div>
+            <div className="trace-section-label">{t(TOOL_DETAILS_COPY.detailsInput)}</div>
             <pre className="code-block-pre"><code>{inputJson}</code></pre>
           </div>
         ) : null}
         {resultText !== undefined ? (
           <div>
-            <div className="trace-section-label">{t(uiCopy.detailsOutput)}</div>
+            <div className="trace-section-label">{t(TOOL_DETAILS_COPY.detailsOutput)}</div>
             <pre className="code-block-pre"><code>{resultText}</code></pre>
           </div>
         ) : null}
         {artifactRef !== undefined && artifactRef !== '' ? (
           <Button size="xs" onClick={() => ctx.openArtifact(artifactRef)}>
-            {t(uiCopy.openFullArtifact)} #{artifactRef}
+            {t(TOOL_DETAILS_COPY.openFullArtifact)} #{artifactRef}
           </Button>
         ) : null}
       </div>

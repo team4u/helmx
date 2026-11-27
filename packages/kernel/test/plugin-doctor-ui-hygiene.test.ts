@@ -71,7 +71,7 @@ test('doctorPluginDir: clean external plugin (SDK primitives, gated :hover, comm
   const pluginDir = writeExternalClientPlugin(baseDir, 'ext-ui-clean', {
     tsx: `// Comment with Emoji 🚀 and <select> and type="search" must not fail doctor
 /* Block comment 🎉 <button className="btn"> */
-import { Button, CopyButton, List, ListRow, Screen, ScreenToolbar, SearchBox, Select } from '@helmx/plugin-client'
+import { Button, CopyButton, List, ListRow, Screen, ScreenToolbar, SearchBox, Select } from '@helmx/ui'
 import './styles.css'
 
 export function MainScreen() {
@@ -295,7 +295,7 @@ export function MainScreen() {
 test('plugin-ui-hygiene scanners: handle nested JSX props, JSX text apostrophes/URLs, template classes, and CSS OR/not media lists accurately', { timeout: 60_000 }, () => {
   const tsxViolations = scanPluginTsxUiHygiene(
     'client/nested.tsx',
-    `import { Screen } from '@helmx/plugin-client'
+    `import { Screen } from '@helmx/ui'
 export function Nested({ active, prefix, variant }: { active: boolean; prefix: string; variant: string }) {
   return (
     <Screen
@@ -343,7 +343,7 @@ export function Nested({ active, prefix, variant }: { active: boolean; prefix: s
 });
 
 test('plugin-ui-hygiene TSX scanner matches AST ui-hygiene.mjs across legacy container/modal/tab/kbd edge cases and all repo UI files', { timeout: 60_000 }, () => {
-  const edgeCorpus = `import { Card, Kbd, Tabs, TabsList, TabsTrigger } from '@helmx/plugin-client'
+  const edgeCorpus = `import { Card, Kbd, Tabs, TabsList, TabsTrigger } from '@helmx/ui'
 export function EdgeCorpus({ active, variant, suffix }: { active: boolean; variant: string; suffix: string }) {
   return (
     <div className="section-flat">

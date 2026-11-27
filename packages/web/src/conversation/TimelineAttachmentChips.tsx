@@ -3,7 +3,7 @@
  */
 import { useEffect, useState } from 'react'
 import type { ConversationAttachmentRef } from '@helmx/protocol/browser'
-import { HelmxIcon } from '@helmx/plugin-client'
+import { HelmxIcon } from '@helmx/ui'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { artifactsApi } from '../lib/api.js'
 import { formatBytes } from '../lib/format.js'

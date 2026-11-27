@@ -4,7 +4,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { WorkbenchPanelProps } from '@helmx/protocol/browser'
 import {
-  useConversations, usePluginContext, usePluginDoc, usePluginLocale, usePluginSessionDoc,
+  useConversations,
+  usePluginContext,
+  usePluginDoc,
+  usePluginLocale,
+  usePluginSessionDoc,
 } from '@helmx/plugin-client'
 import type { SwarmIndexDoc } from './models.ts'
 import {

@@ -1,0 +1,101 @@
+/* ==========================================================================
+ * 反馈原语：LoadingState / EmptyState / 通用旋转动效（.spin / .spin-slow）
+ * ========================================================================== */
+
+@keyframes convSpin360 {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.spin,
+.spin-slow {
+  animation: convSpin360 1.1s linear infinite;
+}
+
+.spin {
+  animation-duration: 0.9s;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spin,
+  .spin-slow {
+    animation: none;
+  }
+}
+
+.loading-state {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--fg-muted);
+  padding: 8px 0;
+}
+
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 32px 16px;
+  color: var(--fg-subtle);
+  gap: 8px;
+  min-height: 160px;
+}
+.empty-state-icon {
+  color: var(--fg-muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 4px;
+}
+.empty-state-title {
+  font-size: 13.5px;
+  font-weight: 500;
+  color: var(--fg);
+  margin: 0;
+}
+.empty-state-hint {
+  font-size: 12px;
+  color: var(--fg-muted);
+  max-width: 360px;
+  margin: 0;
+}
+.empty-state-action {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 2px;
+}
+.empty-state-compact {
+  padding: 16px 8px;
+  min-height: 60px;
+  font-size: 12px;
+}
+.empty-state-compact .empty-state-title {
+  font-size: 12px;
+}
+.empty-state-prominent {
+  gap: 10px;
+  padding: 60px 20px;
+  min-height: 0;
+  color: var(--fg-muted);
+}
+.empty-state-prominent .empty-state-icon {
+  width: 48px;
+  height: 48px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  color: var(--fg-subtle);
+  margin-bottom: 4px;
+}
+.empty-state-prominent .empty-state-title {
+  font-size: 14px;
+}
+.empty-state-prominent .empty-state-hint {
+  max-width: 320px;
+}

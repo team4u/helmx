@@ -1,6 +1,6 @@
 import React from 'react'
 import type { HelmxLocale, PluginSummary } from '@helmx/protocol/browser'
-import { Badge } from '@helmx/plugin-client'
+import { Badge } from '@helmx/ui'
 import type { WebMessageTranslator } from '../../i18n/catalog.js'
 import { getPluginDescription } from '../plugin-card-model.js'
 import { isPluginFailed } from '../plugin-center-model.js'

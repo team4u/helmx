@@ -7,8 +7,7 @@
  * action error messages pass through unchanged (only the failure prefix is
  * localized).
  */
-import type { HelmxLocale, LocalizedText } from '@helmx/plugin-client'
-import { resolveLocalizedText } from '@helmx/plugin-client'
+import { resolveLocalizedText, type HelmxLocale, type LocalizedText } from '@helmx/ui'
 
 /** Manager screen chrome. */
 export const TRIGGERS_SCREEN_TITLE: LocalizedText = { en: 'Triggers', 'zh-CN': '触发器管理' }

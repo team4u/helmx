@@ -12,9 +12,9 @@ import {
   Input,
   KvGrid,
   MonoId,
-  PluginSlot,
   Stack,
-} from '@helmx/plugin-client'
+} from '@helmx/ui'
+import { PluginSlot } from '@helmx/plugin-client'
 import { nodesApi } from '../lib/api.js'
 import { useOptionalNodes } from '../lib/store-context.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'

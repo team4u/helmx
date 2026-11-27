@@ -24,7 +24,7 @@ pnpm build && pnpm typecheck && pnpm lint && pnpm check:hygiene && pnpm test:all
 
 **设计原则**：第一性原理最简正确实现（笨重先怀疑设计，不打补丁）；KISS / YAGNI；命名自解释、注释只写 Why；单一职责；**机制与策略分离**。
 
-1. **单向包依赖**：`@helmx/kernel`（机制）、`@helmx/plugins`（内置插件与插件业务契约）、`@helmx/hub`（产品组合根与 `helmx-hub`）；内核不得依赖插件或组合根。`@helmx/plugin-client` 为独立浏览器 SDK，不得反向依赖 `@helmx/web`。`@helmx/plugin-build` 经端口注入宿主。`@helmx/protocol` 只放通用跨包契约，零重依赖。
+1. **单向包依赖**：`@helmx/kernel`（机制）、`@helmx/plugins`（内置插件与插件业务契约）、`@helmx/hub`（产品组合根与 `helmx-hub`）；内核不得依赖插件或组合根。`@helmx/ui` 为独立 Quiet Surface 设计系统包（零插件运行时依赖）；`@helmx/plugin-client` 为独立浏览器插件运行时 SDK（依赖 `@helmx/ui` 与 `@helmx/protocol`，不得反向依赖 `@helmx/web`）。`@helmx/plugin-build` 经端口注入宿主。`@helmx/protocol` 只放通用跨包契约，零重依赖。
 2. **内核四块通用机制**（`@helmx/kernel`，详见 `docs/architecture/overview.md`）：
    - `pi-durable`：通用 `Conversation(nodeId, cwd)` 五态、`state.sqlite` + FTS5（**纯可重建派生索引，禁写 `pi_*` 表语义**）、`AskDoc`、`SecretStash`、`Artifacts`、资产热重载与原生 `spawnAgent`；
    - `EnvFabric` + `NodeRegistry`：`/ws/node`、`/ws/node-tunnel`（TCP-only `openTunnel`）、`local` + `@helmx/node`、`bash/read/write/edit/gate/env exec` 与 `nodeId + canonicalPath` 文件互斥；
@@ -56,7 +56,7 @@ pnpm build && pnpm typecheck && pnpm lint && pnpm check:hygiene && pnpm test:all
 - **Web 界面与插件 `client.tsx`** → 先读唯一 UI 规范真源 [`.helmx/skills/helmx-ui/SKILL.md`](.helmx/skills/helmx-ui/SKILL.md)（含 `references/patterns.md`），再按需读宿主工程约束 `docs/conventions/web-frontend.md` 与 `docs/conventions/web-navigation.md`，严守五条铁律：
   1. **零 Emoji**：全界面文案与控件严禁 Emoji，图标统一 `lucide-react`（`HelmxIcon`）或纯文本；
   2. **模式随业务多元，外壳与原子零件全站唯一**：全站核心页与插件共享唯一 `<Screen toolbar>` 外壳 + 右侧 `520~560px` `DetailDrawer`；按业务选 5 类主流形态（`List`/`ListRow`、`CardGrid`/`SelectCard`、分组态势看板、`DataTable`、`full-bleed` 画布）或扩展领域形态，严禁把目录/管理视图塞进居中弹窗；
-  3. **统一尺码与 Radix 原语**：全站锁定 `32/28/22px` 三档控件高度、5 变体 `Button`（默认 `secondary`，已废除 `default`），共享原语用 `@helmx/plugin-client` Radix 封装（全仓禁原生 `<select>`、禁 `<input type="search">` 与手写浮层），Web 专有在 `packages/web/src/ui/`；禁大面积内联样式或复制通用 CSS；级联层/SSR/移动端见 `web-frontend.md`；
+  3. **统一尺码与 Radix 原语**：全站锁定 `32/28/22px` 三档控件高度、5 变体 `Button`（默认 `secondary`，已废除 `default`），共享 UI 原语用 `@helmx/ui` Radix 封装（全仓禁原生 `<select>`、禁 `<input type="search">` 与手写浮层），插件运行时 Hooks / 插槽与宿主耦合组件（如 `ModelPickerControl`）用 `@helmx/plugin-client`，Web 专有在 `packages/web/src/ui/`；禁大面积内联样式或复制通用 CSS；级联层/SSR/移动端见 `web-frontend.md`；
   4. **唯一 Hash 导航**：由 `url-hash-model.ts` + `HelmxStoreProvider` 唯一管理（`#/c/<id>`、`#/a/<profileId>`、`#/overview`、`#/views/<pluginId>/<screenId>`、`#/settings/*`、`sp.*`/`ssp.*`、`split`；侧栏空间由主屏推导非独立 URL 状态）；统一调 `store.openTarget / setScreenParams / openSpace`，**新建对话进待命页、首次发送才落库**，禁平行路由或直调 `history.*`；
   5. **Fast Refresh**：`.tsx` 只导出组件与 TS 类型，纯函数/常量剥至独立 `.ts`。
 
@@ -75,7 +75,7 @@ pnpm build && pnpm typecheck && pnpm lint && pnpm check:hygiene && pnpm test:all
   5. **钩子不受测试超时覆盖**：`before/beforeEach/after/afterEach`（含 `t.after`）调 `close/dispose/stop/kill` 等 teardown 必传 `{ timeout: 60_000 }`；
   6. **CSS `:hover` 规则必须位于 `@media (hover: hover)` 内**（或显式 `@media (hover: none)` 覆盖）：触屏点按会粘滞 `:hover`；悬停才显露的控件须为 `(hover: none)` 提供常显或 `:focus-within` 替代。
 - **分档归属**（`all = unit ∪ integration`；新包同步 `scripts/test-suites.mjs` `SUITES` 与 `scripts/lib/workspace-meta.mjs` `PACKAGE_TIERS`）：
-  - `unit`：`protocol + env-io + test-kit + cli + web + plugin-client`；
+  - `unit`：`protocol + env-io + test-kit + cli + web + ui + plugin-client`；
   - `integration`：`kernel + plugins + hub + plugin-build + node + payload`，含两条路径例外：`packages/cli/test/launcher/`、`packages/env-io/test/update/`；
   - 跨档两档都跑，合并前跑 `test:all`/`verify`。
 - **共享基座与三禁**：复用 `@helmx/test-kit`（仅 `devDependencies`/`test/`，`package-boundaries` 锁定零生产泄漏）与 harness（`cli-harness` / `dom-harness` / `plugin-test-env` / `hub-test-env` / `host-backend-stub`）：`useTempDir`、`createGitTemplate().cloneTo()`、`sanitizedHostEnv`/`makeCliEnv`、DOM 首行 `import './helpers/register-happy-dom.js'` + `ensureHappyDom()/resetHappyDom()`（禁裸 `GlobalRegistrator.register()`）。等待用 `deferred`/`waitFor`/可注入计时，禁长固定 `sleep`。**三禁**：禁已删功能墓碑测试、禁正则扫 CSS/TSX 脆弱断言、禁碎片一两行测试文件。

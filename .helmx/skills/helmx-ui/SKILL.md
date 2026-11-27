@@ -10,7 +10,7 @@ description: Use when designing, implementing, or refactoring any Helmx Web UI�
 > **Diverse list and stage patterns by domain; single unified shell, atoms, and interaction grammar across core and plugins.**
 > （模式随业务多元，外壳与原子零件全站唯一。）
 
-Core `@helmx/web` views (Five System Centers, Conversation Overview, workbench, modals) and all plugins (built-in and external micro-apps) share **100% of the same `@helmx/plugin-client` primitives, geometry tokens, and interaction grammar**. Never create parallel page shells, legacy aliases, or per-page form/button restyles.
+Core `@helmx/web` views (Five System Centers, Conversation Overview, workbench, modals) and all plugins (built-in and external micro-apps) share **100% of the same `@helmx/ui` primitives, geometry tokens, and interaction grammar** (with plugin runtime hooks, slots, and host-coupled widgets such as `ModelPickerControl` provided by `@helmx/plugin-client`). Never create parallel page shells, legacy aliases, or per-page form/button restyles.
 
 ## 1. Quiet Surface Visual Principles
 

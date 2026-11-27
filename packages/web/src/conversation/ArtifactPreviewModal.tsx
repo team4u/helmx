@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { artifactsApi } from '../lib/api.js'
-import { SegmentedControl } from '@helmx/plugin-client'
+import { SegmentedControl } from '@helmx/ui'
 import {
   useConversationArtifacts,
   useStoreActions,

@@ -1,6 +1,5 @@
 /** Display copy for the builtin:memory profile section (Fast Refresh friendly). */
-import type { HelmxLocale, LocalizedText } from '@helmx/plugin-client'
-import { resolveLocalizedText } from '@helmx/plugin-client'
+import { resolveLocalizedText, type HelmxLocale, type LocalizedText } from '@helmx/ui'
 import { MAX_MEMORY_CHARS } from './models.js'
 
 export const MEMORY_COPY = {

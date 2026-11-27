@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react'
 import type { SkillSummary } from '@helmx/protocol/browser'
-import { Badge, Button, copyToClipboard, SelectCard, type BadgeTone } from '@helmx/plugin-client'
+import { Badge, Button, copyToClipboard, SelectCard, type BadgeTone } from '@helmx/ui'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { getSkillSourceBadge } from './skill-center-model.js'
 

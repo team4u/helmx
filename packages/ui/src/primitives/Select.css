@@ -1,0 +1,287 @@
+/* ==========================================================================
+ * Select & MultiSelect 下拉选择器原语（Radix UI 封装）
+ * ========================================================================== */
+
+.helmx-select {
+  position: relative;
+  display: inline-flex;
+  min-width: 0;
+  vertical-align: middle;
+}
+
+.helmx-select-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  height: var(--control-h-md);
+  padding: 0 8px 0 9px;
+  border-radius: var(--control-radius-md);
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  color: var(--fg);
+  font-size: var(--control-font-md);
+  font-family: inherit;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  white-space: nowrap;
+  user-select: none;
+  box-shadow: var(--shadow-sm);
+  transition: background 100ms ease, border-color 100ms ease, box-shadow 100ms ease;
+  min-width: 0;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+@media (hover: hover) {
+  .helmx-select-trigger:hover:not(:disabled) {
+    background: var(--bg-hover);
+    border-color: var(--border-strong);
+  }
+}
+
+.helmx-select-trigger:focus:not(:focus-visible) {
+  outline: none;
+}
+
+.helmx-select-trigger:focus-visible {
+  outline: none;
+  border-color: var(--border-focus);
+  box-shadow: 0 0 0 2px var(--focus-ring-soft);
+}
+
+.helmx-select-trigger:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.helmx-select-trigger[aria-invalid='true'] {
+  border-color: var(--err);
+  background: color-mix(in srgb, var(--err-bg) 35%, var(--bg-elevated));
+}
+
+.helmx-select-trigger[aria-invalid='true']:focus-visible {
+  outline: none;
+  border-color: var(--err);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--err) 22%, transparent);
+}
+
+.helmx-select-prefix {
+  flex-shrink: 0;
+  color: var(--fg-subtle);
+}
+
+.helmx-select-label {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+}
+
+.helmx-select-label.helmx-select-placeholder {
+  color: var(--fg-muted);
+}
+
+.helmx-select-chevron {
+  flex-shrink: 0;
+  color: var(--fg-muted);
+  transition: transform 120ms ease;
+}
+
+.helmx-select-chevron-open,
+.helmx-select-trigger[data-state="open"] .helmx-select-chevron {
+  transform: rotate(180deg);
+}
+
+/* 浮层下拉列表 */
+.helmx-select-popover {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  min-width: 100%;
+  width: max-content;
+  max-width: 360px;
+  max-height: 240px;
+  overflow-y: auto;
+  background: var(--pop-bg);
+  backdrop-filter: blur(20px) saturate(1.1);
+  -webkit-backdrop-filter: blur(20px) saturate(1.1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  padding: 4px;
+  z-index: var(--z-dialog-top);
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  transform-origin: var(--radix-popper-transform-origin, top left);
+  animation: helmxPopoverEnter var(--dur-fast) var(--ease-out);
+}
+
+[data-radix-popper-content-wrapper] .helmx-select-popover {
+  position: static;
+  top: auto;
+  bottom: auto;
+  left: auto;
+  min-width: var(--radix-select-trigger-width, 100%);
+  max-width: var(--radix-select-content-available-width, 360px);
+  max-height: var(--radix-select-content-available-height, 240px);
+  border-radius: var(--radius-md);
+  z-index: var(--z-dialog-top);
+}
+
+.helmx-select-popover-wide {
+  max-width: 520px;
+}
+
+[data-radix-popper-content-wrapper] .helmx-select-popover-wide {
+  max-width: var(--radix-select-content-available-width, 520px);
+}
+
+.helmx-select-viewport {
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.helmx-select-empty {
+  padding: 8px 10px;
+  text-align: center;
+  font-size: 11.5px;
+  color: var(--fg-subtle);
+}
+
+/* 多选下拉框专用快捷条与搜索框 */
+.helmx-select-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 6px 6px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 4px;
+  gap: 6px;
+}
+
+.helmx-select-action-btn {
+  font-size: 11px;
+  padding: 2px 8px;
+  height: 22px;
+  line-height: 20px;
+}
+
+.helmx-select-search {
+  padding: 4px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+}
+
+.helmx-select-multi-option {
+  cursor: pointer;
+  user-select: none;
+}
+
+.helmx-select-sm .helmx-select-trigger {
+  height: var(--control-h-sm);
+  padding: 0 7px 0 8px;
+  font-size: var(--control-font-sm);
+  border-radius: var(--control-radius-sm);
+  border-color: var(--border);
+}
+
+.helmx-select-sm .helmx-select-option {
+  height: var(--control-h-sm);
+  padding: 0 8px;
+  font-size: var(--control-font-sm);
+  border-radius: var(--radius-xs);
+}
+
+.helmx-select.mono .helmx-select-trigger,
+.helmx-select.mono .helmx-select-option-label {
+  font-family: var(--font-mono);
+}
+
+.helmx-select.w-full {
+  width: 100%;
+}
+
+.helmx-select-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  height: 28px;
+  padding: 0 8px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg);
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 80ms ease, color 80ms ease;
+  box-sizing: border-box;
+}
+
+.helmx-select-option[data-highlighted],
+.helmx-select-option:focus-visible:not(:disabled):not([data-disabled]),
+.helmx-select-option.highlighted:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--fg);
+  outline: none;
+  box-shadow: none;
+}
+@media (hover: hover) {
+  .helmx-select-option:hover:not(:disabled):not([data-disabled]) {
+    background: var(--bg-hover);
+    color: var(--fg);
+    outline: none;
+    box-shadow: none;
+  }
+}
+
+.helmx-select-option[data-state="checked"],
+.helmx-select-option.selected {
+  background: var(--nav-active-bg);
+  color: var(--fg);
+  font-weight: 500;
+  box-shadow: inset 0 0 0 1px var(--accent-border);
+}
+
+.helmx-select-option:disabled,
+.helmx-select-option[data-disabled] {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.helmx-select-option-icon {
+  flex-shrink: 0;
+  color: var(--fg-subtle);
+}
+
+.helmx-select-option-label {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.helmx-select-option-meta {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--fg-muted);
+  margin-left: auto;
+}
+
+.helmx-select-check {
+  flex-shrink: 0;
+  color: var(--accent);
+  margin-left: 4px;
+}
+
+@media (pointer: coarse) {
+  .helmx-select-option {
+    min-height: 36px;
+  }
+}

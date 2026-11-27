@@ -2,7 +2,7 @@
  * Pure derivation for the builtin:swarm composer activity tray (Fast Refresh compliant).
  */
 import type { AskSpec, ConversationLive, ConversationSummary } from '@helmx/protocol/browser'
-import { DEFAULT_HELMX_LOCALE, resolveLocalizedText, type HelmxLocale } from '@helmx/plugin-client'
+import { DEFAULT_HELMX_LOCALE, resolveLocalizedText, type HelmxLocale } from '@helmx/ui'
 import {
   boardProgressOf,
   isMemberInFlight,

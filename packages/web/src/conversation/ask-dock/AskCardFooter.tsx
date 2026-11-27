@@ -1,5 +1,5 @@
 import type * as React from 'react'
-import { Button, HelmxIcon, Stack } from '@helmx/plugin-client'
+import { Button, HelmxIcon, Stack } from '@helmx/ui'
 import { useWebLocale } from '../../i18n/use-web-locale.js'
 import type { AskSubmitting } from './use-ask-card-submission.js'
 

@@ -7,15 +7,8 @@ import {
   type AskFieldSpec,
   type AskKind,
 } from '@helmx/protocol/browser'
-import {
-  Button,
-  HelmxIcon,
-  Input,
-  ModelPickerControl,
-  Select,
-  Stack,
-  Textarea,
-} from '@helmx/plugin-client'
+import { Button, HelmxIcon, Input, Select, Stack, Textarea } from '@helmx/ui'
+import { ModelPickerControl } from '@helmx/plugin-client'
 import { isImeComposing } from '../lib/ime.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { useModelPickerControlAdapter } from './model-picker-adapter.js'

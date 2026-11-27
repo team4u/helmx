@@ -1,0 +1,273 @@
+/* ==========================================================================
+ * Card / SelectCard / CardGrid 结构化卡片与响应式卡片网格原语
+ * ========================================================================== */
+
+.helmx-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: 14px 16px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+.helmx-card-subtle {
+  background: var(--bg-subtle);
+}
+
+.helmx-card-warn {
+  border-color: var(--warn-border);
+  background: color-mix(in srgb, var(--warn-bg) 35%, var(--bg-elevated));
+}
+
+.helmx-card-subtle.helmx-card-warn {
+  background: color-mix(in srgb, var(--warn-bg) 45%, var(--bg-subtle));
+}
+
+.helmx-card-danger {
+  border-color: var(--err-border);
+  background: color-mix(in srgb, var(--err-bg) 35%, var(--bg-elevated));
+}
+
+.helmx-card-subtle.helmx-card-danger {
+  background: color-mix(in srgb, var(--err-bg) 45%, var(--bg-subtle));
+}
+
+.helmx-card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.helmx-card-heading {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.helmx-card-title {
+  margin: 0;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--fg);
+  line-height: 1.35;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.helmx-card-warn .helmx-card-title {
+  color: var(--warn);
+}
+
+.helmx-card-danger .helmx-card-title {
+  color: var(--err);
+}
+
+.helmx-card-subtitle {
+  font-size: 12px;
+  color: var(--fg-muted);
+  line-height: 1.4;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.helmx-card-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex-shrink: 0;
+}
+
+.helmx-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.helmx-card-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--line-2);
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+/* SelectCard：主舞台可点选对象卡，采用独立主触发按钮 + 兄弟动作槽模型 */
+.helmx-select-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: 14px 16px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  transition: border-color var(--dur-fast) ease, background-color var(--dur-fast) ease, box-shadow var(--dur-fast) ease;
+  cursor: pointer;
+  position: relative;
+  min-width: 0;
+  width: 100%;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  box-sizing: border-box;
+}
+
+.helmx-select-card:focus-visible:not(.is-disabled) {
+  outline: none;
+  border-color: var(--border-strong);
+  background: var(--bg-subtle);
+  box-shadow: none;
+}
+@media (hover: hover) {
+  .helmx-select-card:hover:not(.is-disabled) {
+    outline: none;
+    border-color: var(--border-strong);
+    background: var(--bg-subtle);
+    box-shadow: none;
+  }
+}
+
+.helmx-select-card.is-selected,
+.helmx-select-card.is-selected:focus-visible:not(.is-disabled) {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.helmx-select-card-warn {
+  border-color: var(--warn-border);
+}
+
+.helmx-select-card-danger {
+  border-color: var(--err-border);
+}
+
+.helmx-select-card > .helmx-card-footer {
+  margin-top: auto;
+}
+
+.helmx-select-card.is-disabled {
+  opacity: 0.52;
+  cursor: not-allowed;
+}
+
+.helmx-select-card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-2);
+  width: 100%;
+  min-width: 0;
+}
+
+.helmx-select-card-trigger {
+  display: flex;
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 10px;
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  border-radius: var(--radius-xs);
+}
+
+.helmx-select-card-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg-subtle);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  color: var(--fg);
+}
+
+.helmx-select-card-heading {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.helmx-select-card-title-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.helmx-select-card-badges {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.helmx-select-card-desc {
+  font-size: 12px;
+  color: var(--fg-secondary);
+  line-height: 1.45;
+  min-height: 34px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.helmx-select-card-trigger:disabled {
+  cursor: not-allowed;
+}
+
+.helmx-select-card-trigger:focus-visible {
+  outline: none;
+  background: var(--bg-hover);
+  box-shadow: none;
+}
+
+/* CardGrid：响应式卡片网格，min(100%, ...) 保证窄分屏/移动端不横向溢出 */
+.helmx-card-grid {
+  display: grid;
+  gap: var(--space-3);
+  width: 100%;
+  min-width: 0;
+}
+
+.helmx-card-grid-sm {
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 220px), 1fr));
+}
+
+.helmx-card-grid-md {
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 280px), 1fr));
+}
+
+.helmx-card-grid-lg {
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 340px), 1fr));
+}
+
+.helmx-card-grid-gap-sm { gap: var(--space-2); }
+.helmx-card-grid-gap-md { gap: var(--space-3); }
+.helmx-card-grid-gap-lg { gap: var(--space-4); }

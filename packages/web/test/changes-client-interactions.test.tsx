@@ -23,13 +23,8 @@ import type {
   ScreenProps,
 } from '@helmx/protocol/browser'
 import type { PluginClientHostPort } from '@helmx/plugin-client'
-import {
-  PluginClientContext,
-  PluginClientHostContext,
-  ScreenParamsContext,
-  resolveLocalizedText,
-  type HelmxLocale,
-} from '@helmx/plugin-client'
+import { resolveLocalizedText, type HelmxLocale } from '@helmx/ui'
+import { PluginClientContext, PluginClientHostContext, ScreenParamsContext } from '@helmx/plugin-client'
 import {
   importBuiltinClientModule,
   mountSharedPluginNamespaces,

@@ -9,7 +9,7 @@
  * - 点击走标准 store 路由（openTarget），零插件 ID 特判。
  */
 import { useEffect, useMemo, type ReactNode } from 'react'
-import { HelmxIcon } from '@helmx/plugin-client'
+import { HelmxIcon } from '@helmx/ui'
 import { useConversations, useGroupedUi, usePrimaryTarget, useStoreActions } from '../lib/store-context.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { useIsMobileViewport } from '../lib/use-media-query.js'

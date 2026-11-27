@@ -5,7 +5,8 @@
  */
 import type { ReactNode } from 'react'
 import type { HelmxLocale } from '@helmx/protocol/browser'
-import { Badge, HelmxIcon, PluginSlot, resolveLocalizedText } from '@helmx/plugin-client'
+import { Badge, HelmxIcon, resolveLocalizedText } from '@helmx/ui'
+import { PluginSlot } from '@helmx/plugin-client'
 import { resolveNonDefaultWakeBadge, type BoardPost } from './board-model.ts'
 import * as C from './copy.ts'
 

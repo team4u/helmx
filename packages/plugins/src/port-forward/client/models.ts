@@ -9,7 +9,7 @@ import {
   type HelmxLocale,
   type SelectOption,
   type StatusLightTone,
-} from '@helmx/plugin-client'
+} from '@helmx/ui'
 
 export const PF_PLUGIN_ID = 'builtin:port-forward'
 export const PF_SCREEN_ID = 'main'

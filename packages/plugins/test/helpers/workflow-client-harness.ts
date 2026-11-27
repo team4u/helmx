@@ -1,8 +1,8 @@
 /**
  * Shared test harness for `builtin:workflow` client tests inside `@helmx/plugins/test`:
- * - Registers happy-dom and bridges React / ReactDOM / Lucide / @helmx/plugin-client
+ * - Registers happy-dom and bridges React / ReactDOM / Lucide / @helmx/ui / @helmx/plugin-client
  *   onto `CLIENT_SHARED_GLOBALS` so real esbuild-compiled client modules share the host
- *   React & SDK instances without importing `@helmx/web`;
+ *   React, UI & SDK instances without importing `@helmx/web`;
  * - Supports both stub mode (`mountSharedPluginNamespaces()` + `setWorkflowClientStub`)
  *   and real SDK hook mode (`mountSharedPluginNamespaces({ realHooks: true })` +
  *   `createWorkflowHostHarness`), forwarding `useConversation(id, { includeDetail })`
@@ -20,6 +20,7 @@ import type {
   ConversationDetail,
   ConversationLive,
   ConversationSummary,
+  HelmxLocale,
 } from '@helmx/protocol'
 import type { WorkflowRunSummary } from '../../src/contracts.js'
 
@@ -31,9 +32,10 @@ if (typeof window === 'undefined' || typeof document === 'undefined') {
   }
 }
 
-// Import React / ReactDOM / Radix-backed @helmx/plugin-client only AFTER
+// Import React / ReactDOM / Radix-backed @helmx/ui & @helmx/plugin-client only AFTER
 // GlobalRegistrator registers window & document so Radix Popover's layout/DOM hooks see a real browser environment.
 const { CLIENT_SHARED_GLOBALS, compilePluginClientModule } = await import('@helmx/plugin-build')
+const UI = await import('@helmx/ui')
 const SDK = await import('@helmx/plugin-client')
 
 const req = createRequire(new URL('../../../plugin-client/package.json', import.meta.url))
@@ -91,6 +93,7 @@ function syncSharedPluginGlobals(realHooks: boolean): void {
   g[CLIENT_SHARED_GLOBALS['react-dom/client']!] = ReactDOMClient
   g[CLIENT_SHARED_GLOBALS['react/jsx-runtime']!] = ReactJsxRuntime
   g[CLIENT_SHARED_GLOBALS['lucide-react']!] = LucideReact
+  g[CLIENT_SHARED_GLOBALS['@helmx/ui']!] = UI
   g[CLIENT_SHARED_GLOBALS['@helmx/plugin-client']!] =
     realHooks ? SDK : stubPluginClientNamespace
 }
@@ -280,7 +283,7 @@ export function createWorkflowHostHarness(init: {
   runsByConversation?: Record<number, WorkflowRunSummary[]>
   pluginDocs?: Record<string, unknown>
   timelineToolCalls?: SDKTypes.TimelineToolCallsInput
-  locale?: SDKTypes.HelmxLocale
+  locale?: HelmxLocale
   worktreeSlots?: WorktreeSlotComponents
   onAction?: (pluginId: string, actionId: string, input: unknown) => Promise<unknown> | unknown
 }) {
@@ -474,15 +477,19 @@ export function createWorkflowHostHarness(init: {
 
   function HarnessProvider({ children }: { children?: ReactTypes.ReactNode }) {
     return React.createElement(
-      SDK.PluginClientHostContext.Provider,
-      { value: basePort },
+      UI.UiLocaleProvider,
+      { locale: init.locale },
       React.createElement(
-        SDK.PluginClientContext.Provider,
-        { value: ctx },
+        SDK.PluginClientHostContext.Provider,
+        { value: basePort },
         React.createElement(
-          SDK.ToolActivityContext.Provider,
-          { value: toolActivityRegistry },
-          React.createElement(SDK.TimelineToolCallsContext.Provider, { value: timelineToolCallsStore }, children),
+          SDK.PluginClientContext.Provider,
+          { value: ctx },
+          React.createElement(
+            SDK.ToolActivityContext.Provider,
+            { value: toolActivityRegistry },
+            React.createElement(SDK.TimelineToolCallsContext.Provider, { value: timelineToolCallsStore }, children),
+          ),
         ),
       ),
     )

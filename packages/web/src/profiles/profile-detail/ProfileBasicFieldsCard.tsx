@@ -1,5 +1,6 @@
 import React, { useMemo } from 'react'
-import { Card, Field, Input, ModelPickerControl, Select, Stack, Switch, useHostModels } from '@helmx/plugin-client'
+import { Card, Field, Input, Select, Stack, Switch } from '@helmx/ui'
+import { ModelPickerControl, useHostModels } from '@helmx/plugin-client'
 import { resolveDefaultChainThinkingLevel } from '@helmx/plugin-client/pure'
 import { useWebLocale } from '../../i18n/use-web-locale.js'
 import { useNodes } from '../../lib/store-context.js'

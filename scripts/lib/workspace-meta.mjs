@@ -40,6 +40,7 @@ export const PACKAGE_TIERS = {
   'test-kit': 'unit',
   cli: 'unit',
   web: 'unit',
+  ui: 'unit',
   'plugin-client': 'unit',
   'plugin-build': 'integration',
   kernel: 'integration',

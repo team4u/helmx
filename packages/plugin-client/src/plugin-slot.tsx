@@ -17,8 +17,8 @@
 import { createContext, useCallback, useContext, useMemo, useSyncExternalStore } from 'react'
 import type { ReactNode } from 'react'
 import type { ComposerController } from '@helmx/protocol/browser'
+import { HelmxIcon } from '@helmx/ui'
 import { usePluginTranslator } from './i18n.js'
-import { HelmxIcon } from './icons.js'
 import { usePluginClientHost, type PluginSlotPortItem } from './host-port.js'
 import { PluginClientContext } from './plugin-context.js'
 

@@ -11,11 +11,10 @@ import {
   StatusLight,
   formatDurationMs,
   resolveLocalizedText,
-  usePluginLocale,
-  useToolActivity,
   type BadgeTone,
   type StatusLightTone,
-} from '@helmx/plugin-client'
+} from '@helmx/ui'
+import { usePluginLocale, useToolActivity } from '@helmx/plugin-client'
 import { STEPS_COPY, stepsToolRowSummary } from './copy.ts'
 import { extractFirstErrorLine, parseStepsToolPresentationMeta } from './models.ts'
 

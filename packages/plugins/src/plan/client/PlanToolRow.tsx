@@ -12,12 +12,10 @@ import {
   StatusLight,
   formatDurationMs,
   resolveLocalizedText,
-  usePluginContext,
-  usePluginLocale,
-  useToolActivity,
   type BadgeTone,
   type StatusLightTone,
-} from '@helmx/plugin-client'
+} from '@helmx/ui'
+import { usePluginContext, usePluginLocale, useToolActivity } from '@helmx/plugin-client'
 import {
   PLAN_COPY,
   planOutcomeLabel,

@@ -18,6 +18,7 @@ import { existsSync, mkdirSync, readFileSync } from 'node:fs'
 import { join, resolve, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { PluginUiContribution } from '@helmx/protocol'
+import * as HelmxUi from '@helmx/ui'
 import * as HelmxPluginClient from '@helmx/plugin-client'
 import { compilePluginClientModule, safeDirName, safeFileName } from '@helmx/plugin-build'
 import { makeTestStore } from './helpers/store.js'
@@ -35,6 +36,7 @@ const here = dirname(fileURLToPath(import.meta.url))
 ;(globalThis as Record<string, unknown>).__helmx_shared_react_dom = await import('react-dom')
 ;(globalThis as Record<string, unknown>).__helmx_shared_react_dom_client = await import('react-dom/client')
 ;(globalThis as Record<string, unknown>).__helmx_shared_lucide_react = await import('lucide-react')
+;(globalThis as Record<string, unknown>).__helmx_shared_ui = HelmxUi
 ;(globalThis as Record<string, unknown>).__helmx_shared_plugin_client = HelmxPluginClient
 
 const { matchMarkdownCodeBlock } = await import('../src/conversation/codeblock-registry-model.js')
@@ -177,11 +179,14 @@ test('CodeBlockRenderer + json-render：合法 JSON 渲染卡片（真实编译�
     { component: 'Text', text: 'hello-spec' },
   ] })
   const { host, unmount } = await renderBlock(jsonContribs, 'ui', spec)
-  const text = host.textContent ?? ''
-  assert.match(text, /指标/)
-  assert.match(text, /hello-spec/)
-  assert.match(text, /在线/)
-  unmount()
+  try {
+    const text = host.textContent ?? ''
+    assert.match(text, /指标/)
+    assert.match(text, /hello-spec/)
+    assert.match(text, /在线/)
+  } finally {
+    unmount()
+  }
 })
 
 test('CodeBlockRenderer + json-render：非法 JSON 诚实回退源码（不伪报成功）', { timeout: 120_000 }, async () => {
@@ -189,10 +194,13 @@ test('CodeBlockRenderer + json-render：非法 JSON 诚实回退源码（不伪�
   seedPluginClientModule('builtin:json-render', 'index.tsx', mod)
   const broken = '{"component": "Card", "title": "流式截断' // JSON.parse 必败
   const { host, unmount } = await renderBlock(jsonContribs, 'ui', broken)
-  const text = host.textContent ?? ''
-  assert.match(text, /流式截断/, '源码原文可见（可复制）')
-  assert.ok(!text.includes('界面声明无效'), '解析失败不冒充渲染降级')
-  unmount()
+  try {
+    const text = host.textContent ?? ''
+    assert.match(text, /流式截断/, '源码原文可见（可复制）')
+    assert.ok(!text.includes('界面声明无效'), '解析失败不冒充渲染降级')
+  } finally {
+    unmount()
+  }
 })
 
 test('CodeBlockRenderer：加载失败显式诊断 + 源码可复制（诚实性纪律）', { timeout: 60_000 }, async () => {

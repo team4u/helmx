@@ -1,6 +1,6 @@
 import React from 'react'
 import { resolveLocalizedText, type CommandSpec, type HelmxLocale } from '@helmx/protocol/browser'
-import { Button, Stack } from '@helmx/plugin-client'
+import { Button, Stack } from '@helmx/ui'
 import type { QualifiedCommand } from '../../lib/commands-model.js'
 import type { WebMessageTranslator } from '../../i18n/catalog.js'
 import { PluginUiView } from '../../ui/PluginUiView.js'

@@ -2,7 +2,18 @@
  * Inline peek popover for Swarm board `#seq` references (Fast Refresh compliant).
  */
 import type { ReactNode, RefObject } from 'react'
-import { Badge, Button, Callout, IconButton, LoadingState, Popover, PopoverAnchor, PopoverContent, resolveLocalizedText, usePluginLocale } from '@helmx/plugin-client'
+import {
+  Badge,
+  Button,
+  Callout,
+  IconButton,
+  LoadingState,
+  Popover,
+  PopoverAnchor,
+  PopoverContent,
+  resolveLocalizedText,
+} from '@helmx/ui'
+import { usePluginLocale } from '@helmx/plugin-client'
 import { extractPostRefs, postKindBadgeTone, type BoardPost } from './board-model.ts'
 import * as C from './copy.ts'
 import { currentPeekSeq, previousPeekSeq, type PostPeekState } from './model-post-nav.ts'

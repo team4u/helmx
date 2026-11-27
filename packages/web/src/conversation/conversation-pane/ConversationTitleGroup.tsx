@@ -4,14 +4,8 @@
  * timing), and the environment subtitle (full + compact remote tag).
  */
 import type { ConversationSummary } from '@helmx/protocol/browser'
-import {
-  HelmxIcon,
-  Input,
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-  useSharedNowMs,
-} from '@helmx/plugin-client'
+import { HelmxIcon, Input, Popover, PopoverContent, PopoverTrigger } from '@helmx/ui'
+import { useSharedNowMs } from '@helmx/plugin-client'
 import { formatDurationMs, formatFullTimestamp, formatStopwatchMs, resolveConversationTiming } from '../../lib/format.js'
 import { useWebLocale } from '../../i18n/use-web-locale.js'
 import { formatEnvSubtitle } from '../composer-model.js'

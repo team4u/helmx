@@ -1,0 +1,161 @@
+/* ==========================================================================
+ * Input & Textarea 表单输入原语（md 32px / sm 28px + prefix/suffix 容器）
+ * ========================================================================== */
+
+.input,
+.select,
+.textarea {
+  width: 100%;
+  padding: 0 9px;
+  border-radius: var(--control-radius-md);
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  color: var(--fg);
+  outline: none;
+  font-size: var(--control-font-md);
+  font-family: inherit;
+  transition: border-color 100ms ease, box-shadow 100ms ease, background 100ms ease;
+  box-sizing: border-box;
+}
+
+.input,
+.select {
+  height: var(--control-h-md);
+  line-height: normal;
+}
+
+.input-sm {
+  height: var(--control-h-sm);
+  line-height: normal;
+  padding: 0 8px;
+  font-size: var(--control-font-sm);
+  border-radius: var(--control-radius-sm);
+}
+
+/* 带内联前缀/后缀的组合输入框容器（<Input prefix="..." suffix="..." />） */
+.helmx-input-wrap {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  height: var(--control-h-md);
+  padding: 0 9px;
+  border: 1px solid var(--border);
+  border-radius: var(--control-radius-md);
+  background: var(--bg-elevated);
+  color: var(--fg);
+  font-size: var(--control-font-md);
+  box-sizing: border-box;
+  transition: border-color 100ms ease, box-shadow 100ms ease, background 100ms ease;
+}
+
+.helmx-input-wrap-sm {
+  height: var(--control-h-sm);
+  padding: 0 8px;
+  font-size: var(--control-font-sm);
+  border-radius: var(--control-radius-sm);
+}
+
+.helmx-input-wrap:focus-within {
+  border-color: var(--border-focus);
+  box-shadow: 0 0 0 2px var(--focus-ring-soft);
+}
+
+.helmx-input-wrap.is-invalid {
+  border-color: var(--err);
+  background: color-mix(in srgb, var(--err-bg) 35%, var(--bg-elevated));
+}
+
+.helmx-input-wrap.is-invalid:focus-within {
+  border-color: var(--err);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--err) 22%, transparent);
+}
+
+.helmx-input-wrap.is-disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.helmx-input-prefix,
+.helmx-input-suffix {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  color: var(--fg-muted);
+  font-size: inherit;
+  line-height: 1;
+  white-space: nowrap;
+  user-select: none;
+}
+
+.helmx-input-inner {
+  flex: 1 1 auto;
+  min-width: 0;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--fg);
+  font-family: inherit;
+  font-size: inherit;
+  outline: none;
+  box-shadow: none;
+  box-sizing: border-box;
+}
+
+.helmx-input-inner:focus {
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+}
+
+.helmx-input-inner:disabled {
+  opacity: 1;
+  cursor: not-allowed;
+}
+
+textarea.input,
+textarea.textarea,
+.textarea {
+  height: auto;
+  min-height: 72px;
+  padding: 6px 9px;
+  line-height: 1.5;
+  resize: vertical;
+}
+
+.input:focus,
+.select:focus,
+.textarea:focus {
+  border-color: var(--border-focus);
+  box-shadow: 0 0 0 2px var(--focus-ring-soft);
+}
+
+.input[aria-invalid='true'],
+.select[aria-invalid='true'],
+.textarea[aria-invalid='true'] {
+  border-color: var(--err);
+  background: color-mix(in srgb, var(--err-bg) 35%, var(--bg-elevated));
+}
+
+.input[aria-invalid='true']:focus,
+.select[aria-invalid='true']:focus,
+.textarea[aria-invalid='true']:focus {
+  border-color: var(--err);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--err) 22%, transparent);
+}
+
+.input:disabled,
+.select:disabled,
+.textarea:disabled,
+input:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.input::placeholder,
+.textarea::placeholder,
+input::placeholder {
+  color: var(--fg-muted);
+}

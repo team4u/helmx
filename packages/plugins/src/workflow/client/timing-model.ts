@@ -1,7 +1,7 @@
 /**
  * Single unified timing extractor for workflow runs, nodes, and subagent rows.
  */
-import { resolveConversationTiming } from '@helmx/plugin-client'
+import { resolveConversationTiming } from '@helmx/ui'
 import type { ConversationSummary } from '@helmx/protocol/browser'
 import type { WorkflowNodeState, WorkflowRunSummary } from '../../contracts-types.js'
 import type { ExecutionStatus } from './status-model.js'

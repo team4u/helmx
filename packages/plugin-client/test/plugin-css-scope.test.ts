@@ -1,6 +1,6 @@
 /**
  * Synchronized host/plugin CSS scoping contract tests:
- * - Host stylesheets declare `@layer host-base, host-components, plugin-ui;`,
+ * - Host stylesheets declare `@layer ui-base, ui-primitives, host-components, plugin-ui;`,
  *   and `scopePluginCss` wraps plugin CSS inside `@layer plugin-ui { ... }`
  *   with zero-specificity `:where([data-plugin-id="..."])` scoping and
  *   per-plugin `@keyframes` isolation across inline subtrees and portals;
@@ -19,7 +19,7 @@ const { renderToString } = await import('react-dom/server')
 const { PluginClientContext } = await import('../src/plugin-context.js')
 const { PluginScope } = await import('../src/ui/PluginScope.js')
 const { scopePluginCss } = await import('../src/ui/plugin-css-scope.js')
-const { Dialog, DialogContent, DialogOverlay, DialogPortal, DialogTitle } = await import('../src/ui/Dialog.js')
+const { Dialog, DialogContent, DialogOverlay, DialogPortal, DialogTitle } = await import('@helmx/ui')
 
 const e = React.createElement
 
@@ -125,10 +125,10 @@ function unwrapLayersForHappyDom(css: string): string {
     .replace(/@layer\s+[^{]+\{([\s\S]*)\}\s*$/m, '$1')
 }
 
-test('scopePluginCss DOM: layered host-base/host-components/plugin-ui isolates subtrees and portals with predictable cascade', { timeout: 60_000 }, async () => {
+test('scopePluginCss DOM: layered ui-base/ui-primitives/host-components/plugin-ui isolates subtrees and portals with predictable cascade', { timeout: 60_000 }, async () => {
   const hostStyle = document.createElement('style')
   const rawHostCss = `
-    @layer host-base, host-components, plugin-ui;
+    @layer ui-base, ui-primitives, host-components, plugin-ui;
     @layer host-components {
       .box { color: rgb(10, 10, 10); }
       .modal { color: rgb(20, 20, 20); }

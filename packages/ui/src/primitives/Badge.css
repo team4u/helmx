@@ -1,0 +1,251 @@
+/* ==========================================================================
+ * Badge 与工具栏紧凑状态胶囊原语（.badge* / .helmx-toolbar-pill*）
+ * ========================================================================== */
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 20px;
+  padding: 0 7px;
+  border-radius: var(--radius-xs);
+  font-size: 11px;
+  font-weight: 500;
+  border: 1px solid var(--border);
+  background: var(--bg-subtle);
+  color: var(--fg-secondary);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  box-sizing: border-box;
+}
+.badge > svg {
+  flex-shrink: 0;
+}
+.badge > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.badge-neutral {
+  background: var(--bg-subtle);
+  border-color: var(--border);
+  color: var(--fg-secondary);
+}
+.badge-accent {
+  background: var(--accent-bg);
+  border-color: var(--accent-border);
+  color: var(--accent);
+}
+.badge-ok {
+  background: var(--ok-bg);
+  border-color: var(--ok-border);
+  color: var(--ok);
+}
+.badge-warn {
+  background: var(--warn-bg);
+  border-color: var(--warn-border);
+  color: var(--warn);
+}
+.badge-err {
+  background: var(--err-bg);
+  border-color: var(--err-border);
+  color: var(--err);
+}
+
+/* 统一输入区工具栏紧凑状态胶囊（.helmx-toolbar-pill，锁定 --control-h-xs 22px） */
+.helmx-toolbar-pill {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 0;
+  height: var(--control-h-xs);
+  max-width: 240px;
+  padding: 0;
+  margin: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: var(--bg-subtle);
+  color: var(--fg-secondary);
+  font-family: inherit;
+  font-size: var(--control-font-xs);
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  flex-shrink: 0;
+  box-sizing: border-box;
+  transition: background-color var(--dur-fast) ease, border-color var(--dur-fast) ease, color var(--dur-fast) ease;
+}
+
+button.helmx-toolbar-pill,
+a.helmx-toolbar-pill {
+  gap: 4px;
+  padding: 0 7px;
+  cursor: pointer;
+}
+
+.helmx-toolbar-pill > svg,
+.helmx-toolbar-pill-main > svg,
+.helmx-toolbar-pill-clear > svg {
+  flex-shrink: 0;
+}
+
+button.helmx-toolbar-pill:focus-visible,
+a.helmx-toolbar-pill:focus-visible {
+  outline: none;
+  background: var(--bg-hover);
+  box-shadow: none;
+}
+
+button.helmx-toolbar-pill:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+button.helmx-toolbar-pill[aria-busy='true']:disabled {
+  cursor: wait;
+}
+
+@media (hover: hover) {
+  :where(button, a).helmx-toolbar-pill:hover:not(:disabled) {
+    background: var(--bg-hover);
+    border-color: var(--border-strong);
+    color: var(--fg);
+  }
+}
+
+.helmx-toolbar-pill--accent {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 26%, transparent);
+  color: var(--accent);
+}
+
+@media (hover: hover) {
+  .helmx-toolbar-pill--accent:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--accent) 15%, transparent);
+    border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+    color: var(--accent);
+  }
+}
+
+.helmx-toolbar-pill--warn {
+  background: color-mix(in srgb, var(--warn) 10%, transparent);
+  border-color: color-mix(in srgb, var(--warn) 28%, transparent);
+  color: var(--warn);
+}
+
+@media (hover: hover) {
+  .helmx-toolbar-pill--warn:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--warn) 15%, transparent);
+    border-color: color-mix(in srgb, var(--warn) 48%, transparent);
+    color: var(--warn);
+  }
+}
+
+.helmx-toolbar-pill--err {
+  background: color-mix(in srgb, var(--err) 10%, transparent);
+  border-color: color-mix(in srgb, var(--err) 28%, transparent);
+  color: var(--err);
+}
+
+@media (hover: hover) {
+  .helmx-toolbar-pill--err:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--err) 15%, transparent);
+    border-color: color-mix(in srgb, var(--err) 48%, transparent);
+    color: var(--err);
+  }
+}
+
+.helmx-toolbar-pill-main {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 100%;
+  min-width: 0;
+  padding: 0 4px 0 7px;
+  margin: 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font-family: inherit;
+  font-size: var(--control-font-xs);
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.helmx-toolbar-pill-main:focus-visible {
+  outline: none;
+  background: var(--bg-hover);
+}
+
+.helmx-toolbar-pill-main:disabled {
+  cursor: default;
+  opacity: 0.85;
+}
+
+.helmx-toolbar-pill-clear {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 100%;
+  padding: 0 5px 0 2px;
+  margin: 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  opacity: 0.7;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: opacity var(--dur-fast) ease, background-color var(--dur-fast) ease;
+}
+
+@media (hover: hover) {
+  .helmx-toolbar-pill-clear:hover:not(:disabled) {
+    opacity: 1;
+  }
+}
+
+.helmx-toolbar-pill-clear:focus-visible {
+  outline: none;
+  opacity: 1;
+  background: var(--bg-hover);
+}
+
+.helmx-toolbar-pill-clear:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+@media (max-width: 680px) {
+  .helmx-toolbar-pill {
+    max-width: 150px;
+  }
+  button.helmx-toolbar-pill,
+  a.helmx-toolbar-pill {
+    padding: 0 6px;
+  }
+  .helmx-toolbar-pill-main {
+    padding: 0 3px 0 6px;
+  }
+}
+
+@container (max-width: 450px) {
+  .helmx-toolbar-pill {
+    max-width: 150px;
+  }
+  button.helmx-toolbar-pill,
+  a.helmx-toolbar-pill {
+    padding: 0 6px;
+  }
+  .helmx-toolbar-pill-main {
+    padding: 0 3px 0 6px;
+  }
+}

@@ -1,15 +1,17 @@
 /**
  * Layout-transparent CSS scope anchor for plugin client subtrees.
  *
- * Renders `<div data-plugin-id="..." style={{ display: 'contents' }}>` so flex,
- * grid, and inline parent-child layouts keep direct-child semantics while every
- * descendant matches `:where([data-plugin-id="<id>"])` selectors. When rendered
- * outside a `PluginClientContext` without an explicit `pluginId`, passes
- * children through unwrapped.
+ * Bridges `PluginClientContext.pluginId` (or an explicit `pluginId`) into
+ * `@helmx/ui`'s decoupled `<UiScope scopeId={resolved}>`, so both inline
+ * descendants and Radix portalled surfaces (`Dialog`, `AlertDialog`, `Popover`,
+ * `DropdownMenu`, `Tooltip`, `Select`, `Screen`) inherit `data-plugin-id`.
+ * When rendered outside a `PluginClientContext` without an explicit `pluginId`,
+ * passes children through unwrapped.
  *
  * This file only exports components and TS types (Fast Refresh friendly).
  */
 import type { ReactNode } from 'react'
+import { UiScope } from '@helmx/ui'
 import { usePluginScopeId } from './plugin-scope.js'
 
 export interface PluginScopeProps {
@@ -23,9 +25,5 @@ export function PluginScope({ pluginId, children }: PluginScopeProps): ReactNode
   if (resolved === undefined) {
     return <>{children}</>
   }
-  return (
-    <div data-plugin-id={resolved} style={{ display: 'contents' }}>
-      {children}
-    </div>
-  )
+  return <UiScope scopeId={resolved}>{children}</UiScope>
 }

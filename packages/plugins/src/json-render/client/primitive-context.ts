@@ -2,7 +2,7 @@
  * Shared render context and small value helpers for builtin:json-render primitives.
  */
 import type { ReactNode } from 'react'
-import { resolveLocalizedText, type HelmxLocale, type LocalizedText } from '@helmx/plugin-client'
+import { resolveLocalizedText, type HelmxLocale, type LocalizedText } from '@helmx/ui'
 import { evaluateSpecValue, type EvalScope } from './evaluator.ts'
 import type { NormalizedSpecNode } from './spec-normalize.ts'
 

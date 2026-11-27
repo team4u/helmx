@@ -4,6 +4,7 @@ import * as ReactDom from 'react-dom'
 import * as ReactDomClient from 'react-dom/client'
 import * as ReactJsxRuntime from 'react/jsx-runtime'
 import * as HelmxPluginClient from '@helmx/plugin-client'
+import * as HelmxUi from '@helmx/ui'
 import { collectDrawerConversationIds } from './drawer-stack-model.js'
 import { HelmxExternalStore, type StoreBootLocation } from './helmx-store.js'
 import { PluginClientHostBridge } from './plugin-host-bridge.js'
@@ -311,6 +312,7 @@ export function HelmxStoreProvider({
     w.__helmx_shared_react_dom = ReactDom
     w.__helmx_shared_react_dom_client = ReactDomClient
     w.__helmx_shared_react_jsx_runtime = ReactJsxRuntime
+    w.__helmx_shared_ui = HelmxUi
     w.__helmx_shared_plugin_client = HelmxPluginClient
     return () => {
       delete w.__helmx_shared_react
@@ -318,6 +320,7 @@ export function HelmxStoreProvider({
       delete w.__helmx_shared_react_dom_client
       delete w.__helmx_shared_react_jsx_runtime
       delete w.__helmx_shared_lucide_react
+      delete w.__helmx_shared_ui
       delete w.__helmx_shared_plugin_client
     }
   }, [])

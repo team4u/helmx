@@ -5,35 +5,8 @@
  * ========================================================================== */
 
 /* ==========================================================================
- * 4. 会话顶栏（Topbar）与对话主画布（Conversation Canvas）
+ * 4. 会话顶栏（Topbar）专有元素与对话主画布（基础 .pane-topbar / .pane-title* / .pane-actions 已归位 @helmx/ui）
  * ========================================================================== */
-
-.pane-topbar {
-  height: 46px;
-  min-height: 46px;
-  padding: 0 16px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  border-bottom: 1px solid var(--border);
-  background: var(--bg);
-  gap: 12px;
-}
-
-.pane-title-group {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-  flex: 1;
-}
-
-.pane-title-group > .screen-subtitle {
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  min-width: 0;
-}
 
 .pane-parent-link {
   display: inline-flex;
@@ -64,20 +37,6 @@
     color: var(--fg);
     box-shadow: none;
   }
-}
-
-.pane-title {
-  font-size: 13.5px;
-  font-weight: 500;
-  color: var(--fg);
-  line-height: 46px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  cursor: default;
-  display: block;
-  min-width: 0;
-  user-select: text;
 }
 
 .pane-cwd-subtitle {
@@ -181,13 +140,6 @@
   flex-shrink: 0;
 }
 
-.pane-actions {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-shrink: 0;
-}
-
 /* ScreenHost 顶栏动作槽（ScreenHostContext.headerActionsSlot）：插件 `<Screen actions>`
    portal 进来的 .stack-row 直接参与 .pane-actions 弹性排布，槽本身不产生盒子；
    没有动作的视图槽为空，不占位也不留 gap。 */
@@ -279,7 +231,7 @@
   user-select: none;
 }
 
-/* 工作台抽屉页签与产物分栏（复用 segmented.css .tabs-bar / .helmx-tabs-scrollable 与 primitives.css List） */
+/* 工作台抽屉页签与产物分栏（复用 @helmx/ui Tabs .tabs-bar / .helmx-tabs-scrollable 与 List） */
 .workbench-tabs-root {
   display: flex;
   flex-direction: column;

@@ -17,7 +17,7 @@ const {
   TabsContent,
   TabsList,
   TabsTrigger,
-} = await import('@helmx/plugin-client')
+} = await import('@helmx/ui')
 
 // ---------------------------------------------------------------------------
 // 1. SSR 渲染与数据属性（data-state="active"）契约测试

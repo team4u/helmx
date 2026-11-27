@@ -206,7 +206,7 @@ test('client-cache: recordMemoryCache skips on missing stat, readCachedResult va
   // 1. Missing dep file during recordMemoryCache must NOT insert into memory cache (no permanent stale hit).
   const first = await compilePluginClientModule('test:mem-skip', clientRoot, 'index.tsx', cacheDir)
   const missingList = {
-    version: DEPS_LIST_VERSION as 9,
+    version: DEPS_LIST_VERSION as typeof DEPS_LIST_VERSION,
     module: 'index.tsx',
     root: clientRoot,
     contentHash: first.contentHash,
@@ -253,7 +253,7 @@ test('client-cache: recordMemoryCache skips on missing stat, readCachedResult va
   const lruFile = join(clientRoot, 'lru.ts')
   writeFileSync(lruFile, 'export const k = 1;\n')
   const lruList = {
-    version: DEPS_LIST_VERSION as 9,
+    version: DEPS_LIST_VERSION as typeof DEPS_LIST_VERSION,
     module: 'lru.ts',
     root: clientRoot,
     contentHash: first.contentHash,

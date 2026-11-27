@@ -560,7 +560,7 @@ describe('conversation-drawer-nav', () => {
   test('宽屏 (>=1280px 且无 splitTarget) 流内停靠右侧抽屉栈，子会话 50/50 等分、Mod+I 直达主区、设置页/split 退回顶层模态遮罩', { timeout: 60_000 }, async () => {
     const originalMatchMedia = window.matchMedia
     const styleEl = document.createElement('style')
-    const tokensCss = readFileSync(join(__dirname, '../src/styles/tokens.css'), 'utf8')
+    const tokensCss = readFileSync(join(__dirname, '../../ui/src/tokens.css'), 'utf8')
     const shellCss = readFileSync(join(__dirname, '../src/styles/shell.css'), 'utf8')
     // happy-dom evaluates var(--token) to px but cannot resolve clamp()/min() in computed width;
     // overriding :root --helmx-drawer-narrow-width with a px value tests exact in-flow sizing.

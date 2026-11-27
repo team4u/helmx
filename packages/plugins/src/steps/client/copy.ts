@@ -7,7 +7,7 @@ import {
   resolveLocalizedText,
   type HelmxLocale,
   type LocalizedText,
-} from '@helmx/plugin-client'
+} from '@helmx/ui'
 import type { StepStatus, StepsSettledOutcome, StepsToolPresentationMeta } from './types.ts'
 import type { StepsTraySummary } from './models.ts'
 

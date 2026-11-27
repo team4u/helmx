@@ -3,7 +3,7 @@
  * and CompletionPopover (preserves textarea focus & ignores clicks inside the input).
  */
 import type { ReactNode } from 'react'
-import { Popover, PopoverAnchor, PopoverContent } from '@helmx/plugin-client'
+import { Popover, PopoverAnchor, PopoverContent } from '@helmx/ui'
 
 export interface ComposerPopoverShellProps {
   open: boolean

@@ -2,7 +2,7 @@
  * builtin:triggers domain styles.
  *
  * Page shell, toolbar, roster lists, run history rows, badges, and drawers come
- * from `@helmx/plugin-client`; this file keeps only domain micro-styles.
+ * from `@helmx/ui`; this file keeps only domain micro-styles.
  */
 .tg-note {
   font-size: 12.5px;

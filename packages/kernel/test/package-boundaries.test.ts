@@ -78,16 +78,17 @@ function imports(file: string): Array<{ specifier: string; typeOnly: boolean }> 
 }
 
 const forbidden: Record<string, readonly string[]> = {
-  '@helmx/protocol': ['@helmx/kernel', '@helmx/hub', '@helmx/plugins', '@helmx/web', '@helmx/node', '@helmx/plugin-client', '@helmx/plugin-build', '@helmx/env-io'],
-  '@helmx/env-io': ['@helmx/kernel', '@helmx/hub', '@helmx/plugins', '@helmx/web', '@helmx/node', '@helmx/plugin-client', '@helmx/plugin-build'],
-  '@helmx/kernel': ['@helmx/plugins', '@helmx/hub', '@helmx/web', '@helmx/plugin-client', '@helmx/plugin-build'],
+  '@helmx/protocol': ['@helmx/kernel', '@helmx/hub', '@helmx/plugins', '@helmx/web', '@helmx/node', '@helmx/ui', '@helmx/plugin-client', '@helmx/plugin-build', '@helmx/env-io'],
+  '@helmx/env-io': ['@helmx/kernel', '@helmx/hub', '@helmx/plugins', '@helmx/web', '@helmx/node', '@helmx/ui', '@helmx/plugin-client', '@helmx/plugin-build'],
+  '@helmx/kernel': ['@helmx/plugins', '@helmx/hub', '@helmx/web', '@helmx/ui', '@helmx/plugin-client', '@helmx/plugin-build'],
   '@helmx/plugins': ['@helmx/kernel', '@helmx/hub', '@helmx/web'],
-  '@helmx/plugin-build': ['@helmx/kernel', '@helmx/hub', '@helmx/web', '@helmx/plugins', '@helmx/plugin-client', '@helmx/node'],
+  '@helmx/plugin-build': ['@helmx/kernel', '@helmx/hub', '@helmx/web', '@helmx/plugins', '@helmx/ui', '@helmx/plugin-client', '@helmx/node'],
+  '@helmx/ui': ['@helmx/kernel', '@helmx/hub', '@helmx/web', '@helmx/plugins', '@helmx/plugin-client', '@helmx/node', '@helmx/plugin-build', '@helmx/cli', '@helmx/env-io'],
   '@helmx/plugin-client': ['@helmx/kernel', '@helmx/hub', '@helmx/web', '@helmx/plugins', '@helmx/node', '@helmx/plugin-build'],
-  '@helmx/node': ['@helmx/kernel', '@helmx/hub', '@helmx/plugins', '@helmx/web', '@helmx/plugin-client', '@helmx/plugin-build'],
+  '@helmx/node': ['@helmx/kernel', '@helmx/hub', '@helmx/plugins', '@helmx/web', '@helmx/ui', '@helmx/plugin-client', '@helmx/plugin-build'],
   '@helmx/web': ['@helmx/kernel', '@helmx/hub', '@helmx/plugins', '@helmx/node', '@helmx/plugin-build'],
-  '@helmx/cli': ['@helmx/kernel', '@helmx/hub', '@helmx/plugins', '@helmx/web', '@helmx/node', '@helmx/plugin-client', '@helmx/plugin-build'],
-  '@helmx/test-kit': ['@helmx/kernel', '@helmx/hub', '@helmx/plugins', '@helmx/web', '@helmx/node', '@helmx/plugin-client', '@helmx/plugin-build', '@helmx/cli', '@helmx/env-io'],
+  '@helmx/cli': ['@helmx/kernel', '@helmx/hub', '@helmx/plugins', '@helmx/web', '@helmx/node', '@helmx/ui', '@helmx/plugin-client', '@helmx/plugin-build'],
+  '@helmx/test-kit': ['@helmx/kernel', '@helmx/hub', '@helmx/plugins', '@helmx/web', '@helmx/node', '@helmx/ui', '@helmx/plugin-client', '@helmx/plugin-build', '@helmx/cli', '@helmx/env-io'],
 }
 
 function packageName(specifier: string): string {
@@ -111,7 +112,7 @@ function hasPublicExport(manifest: PackageManifest, specifier: string): boolean 
 test('production packages maintain one-way dependencies and cross boundaries only via declared public exports', { timeout: 60_000 }, () => {
   const packages = workspacePackages()
   const names = new Set(packages.map(({ manifest }) => manifest.name))
-  for (const name of ['@helmx/kernel', '@helmx/plugins', '@helmx/hub', '@helmx/plugin-client', '@helmx/plugin-build', '@helmx/env-io']) {
+  for (const name of ['@helmx/kernel', '@helmx/plugins', '@helmx/hub', '@helmx/ui', '@helmx/plugin-client', '@helmx/plugin-build', '@helmx/env-io']) {
     assert.ok(names.has(name), `missing standalone package ${name}`)
   }
   const violations: string[] = []
@@ -122,6 +123,9 @@ test('production packages maintain one-way dependencies and cross boundaries onl
     }
     if (manifest.name === '@helmx/plugins' && '@helmx/plugin-client' in dependencies) {
       violations.push('@helmx/plugins: browser SDK @helmx/plugin-client must stay in devDependencies, not production dependencies')
+    }
+    if (manifest.name === '@helmx/plugins' && '@helmx/ui' in dependencies) {
+      violations.push('@helmx/plugins: browser UI package @helmx/ui must stay in devDependencies, not production dependencies')
     }
     for (const name of forbidden[manifest.name] ?? []) {
       if (name in dependencies) violations.push(`${manifest.name}: forbidden dependency ${name}`)
@@ -147,9 +151,9 @@ test('production packages maintain one-way dependencies and cross boundaries onl
         if ((forbidden[manifest.name] ?? []).includes(target)) violations.push(`${label} reverse dependency`)
         if (manifest.name === '@helmx/test-kit') {
           if (!typeOnly) violations.push(`${label} @helmx/test-kit only allows import type for cross-package references`)
-        } else if (isPluginsBrowserClient && target === '@helmx/plugin-client') {
+        } else if (isPluginsBrowserClient && (target === '@helmx/plugin-client' || target === '@helmx/ui')) {
           if (!(target in (manifest.devDependencies ?? {}))) {
-            violations.push(`${label} undeclared devDependency @helmx/plugin-client`)
+            violations.push(`${label} undeclared devDependency ${target}`)
           }
         } else if (target !== manifest.name && !(target in dependencies)) {
           violations.push(`${label} undeclared production dependency`)
@@ -300,6 +304,22 @@ test('browser sources and @helmx/protocol/browser transitive closure never impor
     }
   }
 
+  for (const file of sourceFiles(join(packagesDir, 'ui/src'))) {
+    for (const { specifier } of imports(file)) {
+      const problem = isForbiddenBrowserRuntimeImport(specifier)
+      if (problem) violations.push(`${relative(packagesDir, file)}: ${problem}`)
+      if (specifier === '@helmx/protocol') {
+        violations.push(`${relative(packagesDir, file)}: must import from @helmx/protocol/browser rather than @helmx/protocol`)
+      }
+      if (specifier === 'react-markdown' || specifier === 'remark-gfm') {
+        violations.push(`${relative(packagesDir, file)}: standalone @helmx/ui must not depend on markdown renderer ${specifier}`)
+      }
+      if (specifier.endsWith('.css')) {
+        violations.push(`${relative(packagesDir, file)}: @helmx/ui TS/TSX must not import CSS directly (keeps tsx --test and SSR loader-free)`)
+      }
+    }
+  }
+
   for (const file of sourceFiles(join(packagesDir, 'plugin-client/src'))) {
     for (const { specifier } of imports(file)) {
       const problem = isForbiddenBrowserRuntimeImport(specifier)
@@ -378,7 +398,7 @@ test('all workspace packages/*/src contain zero any types and zero TS suppressio
 test('sibling package tests never import ../../kernel/src/ across package boundaries', { timeout: 60_000 }, () => {
   const violations: string[] = []
   const kernelSrcRoot = resolve(packagesDir, 'kernel/src')
-  for (const pkgName of ['plugins', 'hub', 'cli', 'web']) {
+  for (const pkgName of ['plugins', 'hub', 'cli', 'web', 'ui', 'plugin-client']) {
     const pkgTestDir = join(packagesDir, pkgName, 'test')
     for (const file of sourceFiles(pkgTestDir)) {
       const rawText = readCachedText(file)

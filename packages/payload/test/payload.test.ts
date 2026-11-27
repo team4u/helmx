@@ -255,12 +255,13 @@ test('payload publish package contract: the dist root package.json is a standalo
   assert.equal(distPkg.dependencies['@helmx/env-io'], 'file:./env-io.tgz');
   assert.equal(distPkg.dependencies['@helmx/hub'], 'file:./hub.tgz');
   // Browser-only SDK and UI/AJV/mermaid trees must never leak into the server payload production closure.
-  for (const excluded of ['@helmx/plugin-client', 'lucide-react', 'react', 'react-dom', 'react-markdown', 'remark-gfm', 'ajv', 'mermaid']) {
+  for (const excluded of ['@helmx/ui', '@helmx/plugin-client', 'lucide-react', 'react', 'react-dom', 'react-markdown', 'remark-gfm', 'ajv', 'mermaid']) {
     assert.equal(distPkg.dependencies[excluded], undefined, `server payload must not pull ${excluded} into production dependencies`);
   }
   // The staged (archive-internal) plugins package.json must not declare browser-tree runtime deps.
   const pluginsStagedPkg = JSON.parse(tarMemberBytes(path.join(stagingDir, 'plugins.tgz'), 'package/package.json').toString('utf-8'));
   assert.equal(pluginsStagedPkg.dependencies?.['mermaid'], undefined, 'staged plugins/package.json must not declare mermaid runtime dependency');
+  assert.equal(pluginsStagedPkg.dependencies?.['@helmx/ui'], undefined, 'staged plugins/package.json must not declare @helmx/ui runtime dependency');
   assert.equal(pluginsStagedPkg.dependencies?.['@helmx/plugin-client'], undefined, 'staged plugins/package.json must not declare @helmx/plugin-client runtime dependency');
   assert.ok(
     Object.keys(distPkg.dependencies).every((name) => !name.startsWith('@radix-ui/')),
@@ -338,6 +339,8 @@ test('payload layout: six tgz-only archives mirror the repo dist trees, assets p
     assert.ok(existsSync(path.join(stagingDir, `${dir}.tgz`)), `the payload root must ship ${dir}.tgz`);
     assert.ok(!existsSync(path.join(stagingDir, dir)), `the payload root must NOT carry the unpacked ${dir}/ directory (tgz-only layout)`);
   }
+  assert.equal(existsSync(path.join(stagingDir, 'ui')), false, 'ui source must not be shipped in server payload');
+  assert.equal(existsSync(path.join(stagingDir, 'ui.tgz')), false, 'ui.tgz must not be shipped in server payload');
   assert.equal(existsSync(path.join(stagingDir, 'plugin-client')), false, 'plugin-client source must not be shipped in server payload');
   assert.equal(existsSync(path.join(stagingDir, 'plugin-client.tgz')), false, 'plugin-client.tgz must not be shipped in server payload');
 
@@ -576,6 +579,7 @@ test('cli bundle: help and honest error paths run for real from the single file'
     const typesBody = JSON.parse(typesRes.stdout) as { filesWritten: number; typesDir: string };
     assert.ok(typesBody.filesWritten >= 10, 'bundled plugins types must materialize the embedded SDK declaration snapshot');
     assert.ok(existsSync(path.join(pluginDir, '.helmx', 'types', 'protocol', 'index.d.ts')));
+    assert.ok(existsSync(path.join(pluginDir, '.helmx', 'types', 'ui', 'index.d.ts')));
     assert.ok(existsSync(path.join(pluginDir, '.helmx', 'types', 'plugin-client', 'index.d.ts')));
   } finally {
     rmSync(dataDir, { recursive: true, force: true });

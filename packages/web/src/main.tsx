@@ -7,7 +7,7 @@ import { preloadWebLocale } from './i18n/catalog.js'
 import { preloadAuthStatus } from './lib/api.js'
 import { registerBrowserNotificationServiceWorker } from './lib/browser-notification.js'
 import { resolveInitialLocale } from './lib/theme-preferences.js'
-import { ViewBoundary } from '@helmx/plugin-client'
+import { ViewBoundary } from '@helmx/ui'
 
 const container = document.getElementById('root')
 if (container) {

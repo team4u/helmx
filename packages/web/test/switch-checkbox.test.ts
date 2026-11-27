@@ -4,8 +4,8 @@ import React from 'react'
 import { renderToString } from 'react-dom/server'
 
 ;(globalThis as Record<string, unknown>).React = React
-const { Switch } = await import('@helmx/plugin-client')
-const { Checkbox } = await import('@helmx/plugin-client')
+const { Switch } = await import('@helmx/ui')
+const { Checkbox } = await import('@helmx/ui')
 
 const e = React.createElement
 

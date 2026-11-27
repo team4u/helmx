@@ -1,5 +1,5 @@
 import React from 'react'
-import { Badge, SelectCard, Stack, StatusLight } from '@helmx/plugin-client'
+import { Badge, SelectCard, Stack, StatusLight } from '@helmx/ui'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { formatUptime } from '../modals/nodes-modal-model.js'
 import {

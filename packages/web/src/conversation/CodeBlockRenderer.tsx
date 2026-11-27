@@ -7,7 +7,8 @@
  */
 import type { ReactNode } from 'react'
 import type { MarkdownCodeBlockProps } from '@helmx/protocol/browser'
-import { Button, CopyButton, HelmxIcon, LoadingState, PluginClientContext, PluginScope, ViewBoundary } from '@helmx/plugin-client'
+import { Button, CopyButton, HelmxIcon, LoadingState, ViewBoundary } from '@helmx/ui'
+import { PluginClientContext, PluginScope } from '@helmx/plugin-client'
 import { isPluginSummaryActive } from '../lib/live-state.js'
 import { usePluginsUi } from '../lib/store-context.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'

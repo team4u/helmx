@@ -14,7 +14,7 @@ import {
   type NodeConnectGuide,
   type NodeInfo,
 } from '@helmx/protocol/browser'
-import type { SelectOption } from '@helmx/plugin-client'
+import type { SelectOption } from '@helmx/ui'
 import { formatBytes } from '../lib/format.js'
 import type { WebMessageKey, WebMessageTranslator } from '../i18n/catalog.js'
 
