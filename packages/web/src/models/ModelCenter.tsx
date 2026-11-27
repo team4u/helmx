@@ -7,8 +7,12 @@ import {
   CardGrid,
   EmptyState,
   HelmxIcon,
+  Screen,
+  ScreenToolbar,
+  SearchBox,
+  SegmentedControl,
+  TabCount,
   Tabs,
-  TabsContent,
   TabsList,
   TabsTrigger,
   useHostModels,
@@ -25,7 +29,7 @@ import {
   useStoreActions,
 } from '../lib/store-context.js'
 import type { ModelsCenterTab } from '../lib/types.js'
-import { SystemCenterShell, SystemCenterToolbar } from '../ui/SystemCenterShell.js'
+import { CloseSplitButton, SplitToggleButton } from '../ui/SplitControls.js'
 import { usePaneSplitToggle } from '../ui/use-pane-split-toggle.js'
 import { GlobalDefaultsPanel, type DefaultModelInfo } from './GlobalDefaultsPanel.js'
 import { ModelCard } from './ModelCard.js'
@@ -342,17 +346,26 @@ export function ModelCenter({
   })
 
   return (
-    <SystemCenterShell
+    <Screen
+      topbar
       dataView="model-center"
-      isSplit={isSplit}
-      isSplitActive={isSplitActive}
-      onCloseSplit={onCloseSplit}
-      onToggleSplit={toggleSplit}
+      className={isSplit ? 'is-split' : undefined}
       icon="cpu"
       title={t('models.title')}
-      wrapContent={false}
-      headerActions={
+      bodyId={centerTab === 'providers' ? providersPanelId : undefined}
+      bodyRole={centerTab === 'providers' ? 'tabpanel' : undefined}
+      actions={
         <>
+          <Button
+            variant="secondary"
+            size="sm"
+            icon={<HelmxIcon name="refresh-cw" size={12} className={refreshingCatalog ? 'spin' : undefined} />}
+            onClick={handleRefreshAll}
+            disabled={refreshingCatalog}
+            title={t('models.refreshCatalogTitle')}
+          >
+            <span className="pane-action-label">{t('models.refreshCatalog')}</span>
+          </Button>
           <Button
             variant="primary"
             size="sm"
@@ -362,55 +375,93 @@ export function ModelCenter({
           >
             <span className="pane-action-label">{t('models.addCustomGateway')}</span>
           </Button>
-          <Button
-            size="sm"
-            icon={<HelmxIcon name="refresh-cw" size={12} className={refreshingCatalog ? 'spin' : undefined} />}
-            onClick={handleRefreshAll}
-            disabled={refreshingCatalog}
-            title={t('models.refreshCatalogTitle')}
-          >
-            <span className="pane-action-label">{t('models.refreshCatalog')}</span>
-          </Button>
         </>
       }
-      belowTopbar={
-        <>
-          <Tabs value={centerTab} onValueChange={handleTabChange} className="model-center-tabs">
-            <TabsList aria-label={t('models.viewsAria')}>
-              <TabsTrigger value="providers" className="model-center-tab-btn">
-                <HelmxIcon name="layers" size={13} />
-                <span>{t('models.tab.providers')}</span>
-              </TabsTrigger>
-              <TabsTrigger value="defaults" className="model-center-tab-btn">
-                <HelmxIcon name="sliders" size={13} />
-                <span>{t('models.tab.defaults')}</span>
-              </TabsTrigger>
-            </TabsList>
-          </Tabs>
-          <div className="model-defaults-status">
-            <HelmxIcon name="sliders" size={13} />
-            <Badge tone={defaultModelInfo?.defaultModel ? 'ok' : 'neutral'}>
-              {defaultModelInfo?.defaultModel ? t('models.configured') : t('models.defaults.notSet')}
-            </Badge>
-            {defaultModelInfo?.defaultModel ? (
-              <span>
-                {t('models.defaults.currentPrefix')} <strong className="mono">{defaultModelInfo.defaultModel}</strong>
-                {defaultThinkingLevel !== '' && t('models.defaults.thinkingLevelSuffix', { level: defaultThinkingLevel })}
-              </span>
-            ) : (
-              <span>{t('models.defaults.unsetHint')}</span>
-            )}
-            {defaultModelInfo?.defaultCompactionModel && (
-              <span>
-                {t('models.defaults.compactionCurrentPrefix')}{' '}
-                <strong className="mono">{defaultModelInfo.defaultCompactionModel}</strong>
-                {compactionThinkingLevel !== '' &&
-                  t('models.defaults.thinkingLevelSuffix', { level: compactionThinkingLevel })}
-              </span>
-            )}
-            <span className="text-subtle">{t('models.defaults.inheritanceChain')}</span>
-          </div>
-        </>
+      topbarEnd={
+        isSplit ? (
+          <CloseSplitButton onCloseSplit={onCloseSplit} />
+        ) : (
+          <SplitToggleButton isSplitActive={isSplitActive} onToggleSplit={toggleSplit} />
+        )
+      }
+      toolbar={
+        <ScreenToolbar
+          label={t('models.viewsAria')}
+          actions={
+            centerTab === 'providers' ? (
+              <SearchBox
+                variant="toolbar"
+                size="sm"
+                value={query}
+                onChange={setQuery}
+                placeholder={t('models.searchPlaceholder')}
+                ariaLabel={t('models.searchAria')}
+                clearLabel={t('models.searchClear')}
+              />
+            ) : undefined
+          }
+        >
+          <SegmentedControl
+            size="sm"
+            aria-label={t('models.viewsAria')}
+            value={centerTab}
+            onValueChange={handleTabChange}
+            items={[
+              {
+                value: 'providers',
+                icon: <HelmxIcon name="layers" size={13} />,
+                label: <span>{t('models.tab.providers')}</span>,
+              },
+              {
+                value: 'defaults',
+                icon: <HelmxIcon name="sliders" size={13} />,
+                label: <span>{t('models.tab.defaults')}</span>,
+              },
+            ]}
+          />
+          {centerTab === 'providers' && (
+            <Tabs
+              value={statusTab}
+              onValueChange={(nextValue) => setStatusTab(nextValue as ProviderFilterTab)}
+              variant="pills"
+              size="sm"
+            >
+              <TabsList aria-label={t('models.filterAria')}>
+                {pills.map((pill) => (
+                  <TabsTrigger key={pill.key} value={pill.key} aria-controls={providersPanelId}>
+                    <span>{pill.label}</span>
+                    <TabCount>{pill.count}</TabCount>
+                  </TabsTrigger>
+                ))}
+              </TabsList>
+            </Tabs>
+          )}
+        </ScreenToolbar>
+      }
+      banner={
+        <div className="model-defaults-status">
+          <HelmxIcon name="sliders" size={13} />
+          <Badge tone={defaultModelInfo?.defaultModel ? 'ok' : 'neutral'}>
+            {defaultModelInfo?.defaultModel ? t('models.configured') : t('models.defaults.notSet')}
+          </Badge>
+          {defaultModelInfo?.defaultModel ? (
+            <span>
+              {t('models.defaults.currentPrefix')} <strong className="mono">{defaultModelInfo.defaultModel}</strong>
+              {defaultThinkingLevel !== '' && t('models.defaults.thinkingLevelSuffix', { level: defaultThinkingLevel })}
+            </span>
+          ) : (
+            <span>{t('models.defaults.unsetHint')}</span>
+          )}
+          {defaultModelInfo?.defaultCompactionModel && (
+            <span>
+              {t('models.defaults.compactionCurrentPrefix')}{' '}
+              <strong className="mono">{defaultModelInfo.defaultCompactionModel}</strong>
+              {compactionThinkingLevel !== '' &&
+                t('models.defaults.thinkingLevelSuffix', { level: compactionThinkingLevel })}
+            </span>
+          )}
+          <span className="text-subtle">{t('models.defaults.inheritanceChain')}</span>
+        </div>
       }
       overlays={
         <ModelDetailDrawer
@@ -427,65 +478,47 @@ export function ModelCenter({
         />
       }
     >
-      <Tabs value={centerTab} onValueChange={handleTabChange} className="model-center-main-tabs">
-        <TabsContent value="providers" className="primary-center-content">
-          <SystemCenterToolbar
-            className="model-toolbar-inline"
-            controlsId={providersPanelId}
-            query={query}
-            onQueryChange={setQuery}
-            searchPlaceholder={t('models.searchPlaceholder')}
-            searchAriaLabel={t('models.searchAria')}
-            clearSearchLabel={t('models.searchClear')}
-            filterAriaLabel={t('models.filterAria')}
-            pills={pills}
-            activePill={statusTab}
-            onSelectPill={setStatusTab}
+      {centerTab === 'providers' ? (
+        filteredProviders.length === 0 ? (
+          <EmptyState
+            prominent
+            icon="search"
+            iconSize={22}
+            title={t('models.emptyTitle')}
+            hint={t('models.emptyHint')}
+            action={
+              Boolean(query) || statusTab !== 'all' ? (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => {
+                    setQuery('')
+                    setStatusTab('all')
+                  }}
+                >
+                  {t('models.resetFilters')}
+                </Button>
+              ) : undefined
+            }
           />
-          <div id={providersPanelId} role="tabpanel">
-            {filteredProviders.length === 0 ? (
-              <EmptyState
-                prominent
-                icon="search"
-                iconSize={22}
-                title={t('models.emptyTitle')}
-                hint={t('models.emptyHint')}
-                action={
-                  Boolean(query) || statusTab !== 'all' ? (
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => {
-                        setQuery('')
-                        setStatusTab('all')
-                      }}
-                    >
-                      {t('models.resetFilters')}
-                    </Button>
-                  ) : undefined
-                }
+        ) : (
+          <CardGrid minWidth="md" gap="md">
+            {filteredProviders.map((provider) => (
+              <ModelCard
+                key={provider.id}
+                provider={provider}
+                selected={selectedProviderId === provider.id}
+                onSelect={() => handleSelectProvider(provider.id)}
               />
-            ) : (
-              <CardGrid minWidth="md" gap="md">
-                {filteredProviders.map((provider) => (
-                  <ModelCard
-                    key={provider.id}
-                    provider={provider}
-                    selected={selectedProviderId === provider.id}
-                    onSelect={() => handleSelectProvider(provider.id)}
-                  />
-                ))}
-              </CardGrid>
-            )}
-          </div>
-        </TabsContent>
-        <TabsContent value="defaults" className="primary-center-content">
-          <GlobalDefaultsPanel
-            defaultModelInfo={defaultModelInfo}
-            onSaved={setSavedDefaultOverride}
-          />
-        </TabsContent>
-      </Tabs>
-    </SystemCenterShell>
+            ))}
+          </CardGrid>
+        )
+      ) : (
+        <GlobalDefaultsPanel
+          defaultModelInfo={defaultModelInfo}
+          onSaved={setSavedDefaultOverride}
+        />
+      )}
+    </Screen>
   )
 }

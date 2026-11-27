@@ -1,5 +1,5 @@
 import React from 'react'
-import { Badge, HelmxIcon, SelectCard, Stack, StatusLight } from '@helmx/plugin-client'
+import { Badge, SelectCard, Stack, StatusLight } from '@helmx/plugin-client'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { formatUptime } from '../modals/nodes-modal-model.js'
 import {
@@ -51,39 +51,33 @@ export function NodeCard({
       selected={selected}
       onSelect={onSelect}
       data-node-id={node.id}
-      title={
-        <span className="primary-card-head-with-icon">
-          <span className="primary-card-icon-wrap" aria-hidden="true">
-            <HelmxIcon name={iconName} size={18} />
-          </span>
-          <span className="primary-card-meta">
-            <span className="primary-card-title-row">
-              <StatusLight
-                tone={isOnline ? 'done' : 'idle'}
-                label={isOnline ? t('common.online') : t('common.offline')}
-              />
-              <span className="primary-card-name" title={displayName}>
-                {displayName}
-              </span>
-              {isLocal && (
-                <Badge tone="neutral" title={t('nodes.localTitle')}>
-                  {t('nodes.local')}
-                </Badge>
-              )}
-              {version && (
-                <Badge tone="neutral" mono title={t('nodes.versionTitle', { version })}>
-                  {version}
-                </Badge>
-              )}
-            </span>
-            <span className="primary-card-id mono text-subtle break-word" title={node.id}>
-              {node.id}
-            </span>
-          </span>
+      icon={iconName}
+      title={<span title={displayName}>{displayName}</span>}
+      badges={
+        <>
+          <StatusLight
+            tone={isOnline ? 'done' : 'idle'}
+            label={isOnline ? t('common.online') : t('common.offline')}
+          />
+          {isLocal && (
+            <Badge tone="neutral" title={t('nodes.localTitle')}>
+              {t('nodes.local')}
+            </Badge>
+          )}
+          {version && (
+            <Badge tone="neutral" mono title={t('nodes.versionTitle', { version })}>
+              {version}
+            </Badge>
+          )}
+        </>
+      }
+      subtitle={
+        <span className="mono break-word" title={node.id}>
+          {node.id}
         </span>
       }
       footer={
-        <Stack direction="horizontal" gap="xs" align="center" wrap className="primary-card-pills">
+        <Stack direction="horizontal" gap="xs" align="center" wrap>
           {tools.slice(0, 4).map((tool) => (
             <Badge key={tool} tone="neutral" mono icon="terminal" title={t('nodes.cardToolTitle', { tool })}>
               {tool}

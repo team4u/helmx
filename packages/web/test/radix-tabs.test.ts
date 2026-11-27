@@ -4,14 +4,20 @@ import assert from 'node:assert/strict'
 import React, { act } from 'react'
 import { renderToString } from 'react-dom/server'
 import { ensureHappyDom } from './helpers/dom-harness.js'
-import type { SystemCenterShellProps } from '../src/ui/SystemCenterShell.js'
 
 ensureHappyDom()
 const { createRoot } = await import('react-dom/client')
-const { Tabs, TabsList, TabsTrigger, TabsContent, SegmentedControl } = await import('@helmx/plugin-client')
-const { SystemCenterShell, SystemCenterToolbar } = await import('../src/ui/SystemCenterShell.js')
-const { HostStoreProviders } = await import('./helpers/host-store.js')
-const { makeTestStore } = await import('./helpers/store.js')
+const {
+  Screen,
+  ScreenToolbar,
+  SearchBox,
+  SegmentedControl,
+  TabCount,
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+} = await import('@helmx/plugin-client')
 
 // ---------------------------------------------------------------------------
 // 1. SSR 渲染与数据属性（data-state="active"）契约测试
@@ -487,33 +493,59 @@ test('DOM：Tabs variant="pills" 点击（含 mousedown+click）仅触发一次 
   }
 })
 
-test('DOM：SystemCenterToolbar 使用 Radix Tabs pills 与 SearchBox toolbar，支持方向键切换分类胶囊', { timeout: 60_000 }, async () => {
+test('DOM：ScreenToolbar 组合 Radix Tabs pills + TabCount 与 SearchBox toolbar(sm)，支持方向键切换分类胶囊', { timeout: 60_000 }, async () => {
   const host = document.createElement('div')
   document.body.appendChild(host)
   const root = createRoot(host)
 
   const selected: string[] = []
+  const pills = [
+    { key: 'all' as const, label: 'All', count: 5 },
+    { key: 'enabled' as const, label: 'Enabled', count: 3 },
+    { key: 'disabled' as const, label: 'Disabled', count: 2 },
+  ]
   function ToolbarHarness() {
     const [query, setQuery] = React.useState('')
     const [activePill, setActivePill] = React.useState<'all' | 'enabled' | 'disabled'>('all')
-    return React.createElement(SystemCenterToolbar<'all' | 'enabled' | 'disabled'>, {
-      query,
-      onQueryChange: setQuery,
-      searchPlaceholder: 'Search items',
-      searchAriaLabel: 'Search items',
-      clearSearchLabel: 'Clear',
-      filterAriaLabel: 'Status filter',
-      pills: [
-        { key: 'all', label: 'All', count: 5 },
-        { key: 'enabled', label: 'Enabled', count: 3 },
-        { key: 'disabled', label: 'Disabled', count: 2 },
-      ],
-      activePill,
-      onSelectPill: (key) => {
-        selected.push(key)
-        setActivePill(key)
+    return React.createElement(
+      ScreenToolbar,
+      {
+        label: 'Status filter',
+        actions: React.createElement(SearchBox, {
+          variant: 'toolbar',
+          size: 'sm',
+          value: query,
+          onChange: setQuery,
+          placeholder: 'Search items',
+          ariaLabel: 'Search items',
+          clearLabel: 'Clear',
+        }),
       },
-    })
+      React.createElement(
+        Tabs,
+        {
+          value: activePill,
+          onValueChange: (key: string) => {
+            selected.push(key)
+            setActivePill(key as 'all' | 'enabled' | 'disabled')
+          },
+          variant: 'pills',
+          size: 'sm',
+        },
+        React.createElement(
+          TabsList,
+          { 'aria-label': 'Status filter' },
+          pills.map((pill) =>
+            React.createElement(
+              TabsTrigger,
+              { key: pill.key, value: pill.key, 'aria-controls': undefined },
+              React.createElement('span', null, pill.label),
+              React.createElement(TabCount, null, pill.count),
+            ),
+          ),
+        ),
+      ),
+    )
   }
 
   try {
@@ -521,29 +553,30 @@ test('DOM：SystemCenterToolbar 使用 Radix Tabs pills 与 SearchBox toolbar，
       root.render(React.createElement(ToolbarHarness))
     })
 
-    assert.ok(host.querySelector('.search-box.search-box-toolbar') !== null, '应渲染 SearchBox toolbar 变体')
+    assert.ok(host.querySelector('.search-box.search-box-toolbar.search-box-sm') !== null, '应渲染 SearchBox toolbar sm 变体')
     const tablist = host.querySelector<HTMLElement>('.tabs-pills[role="tablist"]')
     assert.ok(tablist !== null, '应渲染 Radix TabsList .tabs-pills')
     assert.equal(tablist.getAttribute('aria-label'), 'Status filter')
 
-    const pills = Array.from(host.querySelectorAll<HTMLButtonElement>('.tabs-pill[role="tab"]'))
-    assert.equal(pills.length, 3)
-    assert.equal(pills[0]!.getAttribute('aria-selected'), 'true')
-    for (const pill of pills) {
-      assert.equal(pill.hasAttribute('aria-controls'), false, '独立渲染 SystemCenterToolbar 不得输出悬空 aria-controls')
+    const renderedPills = Array.from(host.querySelectorAll<HTMLButtonElement>('.tabs-pill[role="tab"]'))
+    assert.equal(renderedPills.length, 3)
+    assert.equal(renderedPills[0]!.getAttribute('aria-selected'), 'true')
+    assert.equal(host.querySelectorAll('.helmx-tab-count.tabular-nums').length, 3, '每个分类胶囊应渲染 TabCount')
+    for (const pill of renderedPills) {
+      assert.equal(pill.hasAttribute('aria-controls'), false, '独立渲染 ScreenToolbar 不得输出悬空 aria-controls')
     }
 
     await act(async () => {
-      pills[0]!.focus()
-      pills[0]!.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }))
+      renderedPills[0]!.focus()
+      renderedPills[0]!.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }))
       await new Promise((r) => setTimeout(r, 20))
     })
 
     assert.deepEqual(selected, ['enabled'])
-    assert.equal(pills[1]!.getAttribute('aria-selected'), 'true')
-    assert.equal(pills[1]!.getAttribute('data-state'), 'active')
-    assert.equal(pills[1]!.getAttribute('tabindex'), '0')
-    assert.equal(pills[0]!.getAttribute('tabindex'), '-1')
+    assert.equal(renderedPills[1]!.getAttribute('aria-selected'), 'true')
+    assert.equal(renderedPills[1]!.getAttribute('data-state'), 'active')
+    assert.equal(renderedPills[1]!.getAttribute('tabindex'), '0')
+    assert.equal(renderedPills[0]!.getAttribute('tabindex'), '-1')
   } finally {
     await act(async () => {
       root.unmount()
@@ -552,43 +585,66 @@ test('DOM：SystemCenterToolbar 使用 Radix Tabs pills 与 SearchBox toolbar，
   }
 })
 
-test('DOM：SystemCenterShell + SystemCenterToolbar 的每个 [role="tab"] aria-controls 均指向真实 [role="tabpanel"]', { timeout: 60_000 }, async () => {
+test('DOM：Screen(topbar) + ScreenToolbar 的每个 [role="tab"] aria-controls 均指向真实 [role="tabpanel"]', { timeout: 60_000 }, async () => {
   const host = document.createElement('div')
   document.body.appendChild(host)
   const root = createRoot(host)
-  const store = makeTestStore({ locale: 'en' })
 
   function ShellToolbarHarness() {
+    const panelId = React.useId()
     const [query, setQuery] = React.useState('')
     const [activePill, setActivePill] = React.useState<'all' | 'enabled'>('all')
     return React.createElement(
-      HostStoreProviders,
-      { value: store },
-      React.createElement(
-        SystemCenterShell,
-        {
-          dataView: 'test-center',
-          isSplitActive: false,
-          onToggleSplit: () => {},
-          icon: 'layers',
-          title: 'Test Center',
-          toolbar: React.createElement(SystemCenterToolbar<'all' | 'enabled'>, {
-            query,
-            onQueryChange: setQuery,
-            searchPlaceholder: 'Search',
-            searchAriaLabel: 'Search',
-            clearSearchLabel: 'Clear',
-            filterAriaLabel: 'Status filter',
-            pills: [
-              { key: 'all', label: 'All', count: 2 },
-              { key: 'enabled', label: 'Enabled', count: 1 },
-            ],
-            activePill,
-            onSelectPill: setActivePill,
-          }),
-        } as SystemCenterShellProps,
-        React.createElement('div', { className: 'test-center-cards' }, 'Cards'),
-      ),
+      Screen,
+      {
+        topbar: true,
+        dataView: 'test-center',
+        icon: 'layers',
+        title: 'Test Center',
+        bodyId: panelId,
+        bodyRole: 'tabpanel',
+        toolbar: React.createElement(
+          ScreenToolbar,
+          {
+            label: 'Status filter',
+            actions: React.createElement(SearchBox, {
+              variant: 'toolbar',
+              size: 'sm',
+              value: query,
+              onChange: setQuery,
+              placeholder: 'Search',
+              ariaLabel: 'Search',
+              clearLabel: 'Clear',
+            }),
+          },
+          React.createElement(
+            Tabs,
+            {
+              value: activePill,
+              onValueChange: (val: string) => setActivePill(val as 'all' | 'enabled'),
+              variant: 'pills',
+              size: 'sm',
+            },
+            React.createElement(
+              TabsList,
+              { 'aria-label': 'Status filter' },
+              React.createElement(
+                TabsTrigger,
+                { value: 'all', 'aria-controls': panelId },
+                React.createElement('span', null, 'All'),
+                React.createElement(TabCount, null, 2),
+              ),
+              React.createElement(
+                TabsTrigger,
+                { value: 'enabled', 'aria-controls': panelId },
+                React.createElement('span', null, 'Enabled'),
+                React.createElement(TabCount, null, 1),
+              ),
+            ),
+          ),
+        ),
+      },
+      React.createElement('div', { className: 'test-center-cards' }, 'Cards'),
     )
   }
 

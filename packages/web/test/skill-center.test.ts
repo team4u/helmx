@@ -721,9 +721,9 @@ test('SkillDetailDrawer: SSR renders the single-row file toolbar and rich reader
   assert.ok(html.includes('3 lines'), 'must show the current file line count')
   assert.ok(html.includes('aria-label="Copy"'), 'the toolbar must offer a copy button')
 
-  // The tab wall is gone: no role=tab file buttons and no file list block
-  assert.ok(!html.includes('role="tab"'), 'the multi-file tab wall (role=tab) must not render')
+  // The file tab wall is gone: file switching uses Select (no file list block); reading mode uses SDK SegmentedControl(sm)
   assert.ok(!html.includes('skill file list'), 'no file list block may render')
+  assert.ok(html.includes('helmx-tabs-segmented helmx-tabs-sm'), 'reading mode switch must use SDK SegmentedControl(size="sm")')
 
   // Rich reader area: MarkdownView renders the heading and body; raw Markdown hashes never show by default
   assert.ok(html.includes('skill-reader-doc'), 'must include the skill-reader-doc rich reader area')
@@ -1222,12 +1222,15 @@ test('SkillCenter: SSR renders the top bar, search bar, grid flow and zero-emoji
   )
 
   // Top bar assertions (subtitle and stats summary removed per the minimal top-bar contract)
-  assert.ok(html.includes('primary-center-topbar'), 'must include the primary-center-topbar')
+  assert.ok(html.includes('pane-topbar'), 'must include the unified pane-topbar')
   assert.ok(html.includes('Skills Center'), 'must show the Skills Center title')
-  assert.ok(!html.includes('primary-center-subtitle'), 'the subtitle must no longer render')
+  assert.ok(!html.includes('screen-subtitle'), 'the subtitle must no longer render')
+  assert.ok(!html.includes('btn-primary'), 'SkillCenter refresh-only topbar stays secondary')
 
   // Search bar and category tabs
-  assert.ok(html.includes('primary-center-toolbar'), 'must include the primary-center-toolbar')
+  assert.ok(html.includes('screen-toolbar-bar'), 'must include the unified screen-toolbar-bar')
+  assert.ok(html.includes('screen-toolbar'), 'must include the unified screen-toolbar')
+  assert.ok(html.includes('helmx-tab-count'), 'must render TabCount inside category pills')
   assert.ok(html.includes('Search skill name, ID, description or reference files'), 'must include the search placeholder')
   assert.ok(html.includes('tabs-pill'), 'must include the category filter pills')
   assert.ok(html.includes('All'), 'must include the All tab')

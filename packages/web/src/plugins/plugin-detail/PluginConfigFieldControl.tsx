@@ -123,6 +123,7 @@ export function PluginConfigFieldControl({
   if (schema.format === 'model') {
     return (
       <ModelPickerControl
+        variant="field"
         buttonId={fieldId}
         buttonAriaLabel={fieldTitle}
         buttonTitle={String(value ?? '') || t('plugins.config.modelUnset')}
@@ -131,7 +132,6 @@ export function PluginConfigFieldControl({
         activeThinkingLevel=""
         resetLabel={t('plugins.config.modelUnset')}
         resetTitle={t('plugins.config.resetDefaultTitle')}
-        popoverSide={inline ? 'bottom' : 'top'}
         enableShortcut={false}
         showThinkingLevels={false}
         disabled={disabled}

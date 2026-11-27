@@ -118,11 +118,9 @@ export function ProfileCard({
       data-profile-id={profile.id}
       selected={selected}
       onSelect={onSelect}
-      title={
-        <span className="primary-card-title-row">
-          <span className="primary-card-name" title={displayName}>
-            {displayName}
-          </span>
+      title={<span title={displayName}>{displayName}</span>}
+      badges={
+        <>
           {isSystem && (
             <Badge tone="neutral" mono icon="lock" title={t('profiles.card.systemPillTitle')}>
               {t('profiles.card.systemPill')}
@@ -131,11 +129,16 @@ export function ProfileCard({
           <StatusLight
             tone={ACTIVITY_LIGHT_TONE[activity.stateKind]}
             label={activity.stateLabel}
-            className="primary-card-activity tabular-nums"
+            className="tabular-nums"
           />
-        </span>
+        </>
       }
       subtitle={<span className="mono break-word">{profile.id}</span>}
+      description={
+        <span title={profile.description || undefined}>
+          {profile.description || t('profiles.card.noDescription')}
+        </span>
+      }
       footer={
         <>
           <span className="text-subtle tabular-nums">
@@ -160,35 +163,31 @@ export function ProfileCard({
         </>
       }
     >
-      <div className="primary-card-desc" title={profile.description || undefined}>
-        {profile.description || t('profiles.card.noDescription')}
-      </div>
-
       <Stack direction="vertical" gap="xs">
         <Stack
           direction="horizontal"
           gap="xs"
           align="start"
-          className="primary-card-location text-subtle mono"
+          className="profile-card-location text-subtle mono"
           title={t('profiles.card.locationTitle', { location: locationText })}
         >
           <HelmxIcon name={location.isRemoteNode ? 'server' : 'laptop'} size={11} />
           <span className="break-word">{locationText}</span>
         </Stack>
 
-        <Stack direction="horizontal" gap="xs" align="center" wrap className="primary-card-pills">
+        <Stack direction="horizontal" gap="xs" align="center" wrap className="profile-card-pills">
           {shortModelName ? (
             <Badge tone="neutral" mono icon="cpu" title={modelTitle}>
-              <span className="primary-card-pill-inner">
-                <span className="primary-card-pill-label">{shortModelName}</span>
+              <span className="profile-card-pill-inner">
+                <span className="profile-card-pill-label">{shortModelName}</span>
                 {effectiveModel.thinkingLevel && (
-                  <span className="primary-card-pill-suffix">· {effectiveModel.thinkingLevel}</span>
+                  <span className="profile-card-pill-suffix">· {effectiveModel.thinkingLevel}</span>
                 )}
               </span>
             </Badge>
           ) : (
             <Badge tone="neutral" icon="cpu" title={modelTitle}>
-              <span className="primary-card-pill-label">{t('profiles.card.followGlobalDefault')}</span>
+              <span className="profile-card-pill-label">{t('profiles.card.followGlobalDefault')}</span>
             </Badge>
           )}
           {effectiveModel.source === 'global' && (

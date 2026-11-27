@@ -7,8 +7,12 @@ import {
   CardGrid,
   EmptyState,
   HelmxIcon,
+  Screen,
+  ScreenToolbar,
+  SearchBox,
+  SegmentedControl,
+  TabCount,
   Tabs,
-  TabsContent,
   TabsList,
   TabsTrigger,
 } from '@helmx/plugin-client'
@@ -23,7 +27,7 @@ import {
   useStoreActions,
 } from '../lib/store-context.js'
 import type { PluginsCenterTab } from '../lib/types.js'
-import { SystemCenterShell, SystemCenterToolbar } from '../ui/SystemCenterShell.js'
+import { CloseSplitButton, SplitToggleButton } from '../ui/SplitControls.js'
 import { usePaneSplitToggle } from '../ui/use-pane-split-toggle.js'
 import { CoreCapabilityCard } from './CoreCapabilityCard.js'
 import { CoreCapabilityDetailDrawer } from './CoreCapabilityDetailDrawer.js'
@@ -391,20 +395,20 @@ export function PluginCenter({
   })
 
   return (
-    <SystemCenterShell
+    <Screen
+      topbar
       dataView="plugin-center"
-      isSplit={isSplit}
-      isSplitActive={isSplitActive}
-      onCloseSplit={onCloseSplit}
-      onToggleSplit={toggleSplit}
+      className={isSplit ? 'is-split' : undefined}
       icon="puzzle"
       title={t('plugins.center.title')}
-      wrapContent={false}
-      headerActions={
+      bodyId={centerTab === 'plugins' ? pluginsPanelId : corePanelId}
+      bodyRole="tabpanel"
+      actions={
         centerTab === 'plugins' ? (
           <>
             {managedPlugins.length > 0 && (
               <Button
+                variant="secondary"
                 size="sm"
                 icon={<HelmxIcon name="refresh-cw" size={12} className={batchUpdate !== null ? 'spin' : undefined} />}
                 disabled={batchUpdate !== null || updatingIds.size > 0}
@@ -420,6 +424,7 @@ export function PluginCenter({
               </Button>
             )}
             <Button
+              variant="primary"
               size="sm"
               icon="download"
               title={t('plugins.center.installTitle')}
@@ -431,6 +436,7 @@ export function PluginCenter({
           </>
         ) : (
           <Button
+            variant="secondary"
             size="sm"
             icon={<HelmxIcon name="refresh-cw" size={12} className={refreshingCore ? 'spin' : undefined} />}
             disabled={refreshingCore}
@@ -441,19 +447,92 @@ export function PluginCenter({
           </Button>
         )
       }
-      belowTopbar={
-        <Tabs value={centerTab} onValueChange={handleTabChange} className="model-center-tabs">
-          <TabsList aria-label={t('plugins.center.viewsAria')}>
-            <TabsTrigger value="plugins" className="model-center-tab-btn">
-              <HelmxIcon name="puzzle" size={13} />
-              <span>{t('plugins.center.tabPlugins')}</span>
-            </TabsTrigger>
-            <TabsTrigger value="core" className="model-center-tab-btn">
-              <HelmxIcon name="shield" size={13} />
-              <span>{t('plugins.center.tabCore')}</span>
-            </TabsTrigger>
-          </TabsList>
-        </Tabs>
+      topbarEnd={
+        isSplit ? (
+          <CloseSplitButton onCloseSplit={onCloseSplit} />
+        ) : (
+          <SplitToggleButton isSplitActive={isSplitActive} onToggleSplit={toggleSplit} />
+        )
+      }
+      toolbar={
+        <ScreenToolbar
+          label={t('plugins.center.viewsAria')}
+          actions={
+            centerTab === 'plugins' ? (
+              <SearchBox
+                variant="toolbar"
+                size="sm"
+                value={query}
+                onChange={setQuery}
+                placeholder={t('plugins.center.searchPlaceholder')}
+                ariaLabel={t('plugins.center.searchAria')}
+                clearLabel={t('plugins.center.clearSearch')}
+              />
+            ) : (
+              <SearchBox
+                variant="toolbar"
+                size="sm"
+                value={coreQuery}
+                onChange={setCoreQuery}
+                placeholder={t('plugins.core.searchPlaceholder')}
+                ariaLabel={t('plugins.core.searchAria')}
+                clearLabel={t('plugins.core.clearSearch')}
+              />
+            )
+          }
+        >
+          <SegmentedControl
+            size="sm"
+            aria-label={t('plugins.center.viewsAria')}
+            value={centerTab}
+            onValueChange={handleTabChange}
+            items={[
+              {
+                value: 'plugins',
+                icon: <HelmxIcon name="puzzle" size={13} />,
+                label: <span>{t('plugins.center.tabPlugins')}</span>,
+              },
+              {
+                value: 'core',
+                icon: <HelmxIcon name="shield" size={13} />,
+                label: <span>{t('plugins.center.tabCore')}</span>,
+              },
+            ]}
+          />
+          {centerTab === 'plugins' ? (
+            <Tabs
+              value={statusFilter}
+              onValueChange={(nextValue) => setStatusFilter(nextValue as PluginStatusFilter)}
+              variant="pills"
+              size="sm"
+            >
+              <TabsList aria-label={t('plugins.center.filterAria')}>
+                {pills.map((pill) => (
+                  <TabsTrigger key={pill.key} value={pill.key} aria-controls={pluginsPanelId}>
+                    <span>{pill.label}</span>
+                    <TabCount>{pill.count}</TabCount>
+                  </TabsTrigger>
+                ))}
+              </TabsList>
+            </Tabs>
+          ) : (
+            <Tabs
+              value={coreFilter}
+              onValueChange={(nextValue) => setCoreFilter(nextValue as CoreCapabilityFilter)}
+              variant="pills"
+              size="sm"
+            >
+              <TabsList aria-label={t('plugins.core.filterAria')}>
+                {corePills.map((pill) => (
+                  <TabsTrigger key={pill.key} value={pill.key} aria-controls={corePanelId}>
+                    <span>{pill.label}</span>
+                    <TabCount>{pill.count}</TabCount>
+                  </TabsTrigger>
+                ))}
+              </TabsList>
+            </Tabs>
+          )}
+        </ScreenToolbar>
       }
       overlays={
         <>
@@ -492,116 +571,80 @@ export function PluginCenter({
         </>
       }
     >
-      <Tabs value={centerTab} onValueChange={handleTabChange} className="model-center-main-tabs">
-        <TabsContent value="plugins" className="primary-center-content">
-          <SystemCenterToolbar
-            className="model-toolbar-inline"
-            controlsId={pluginsPanelId}
-            query={query}
-            onQueryChange={setQuery}
-            searchPlaceholder={t('plugins.center.searchPlaceholder')}
-            searchAriaLabel={t('plugins.center.searchAria')}
-            clearSearchLabel={t('plugins.center.clearSearch')}
-            filterAriaLabel={t('plugins.center.filterAria')}
-            pills={pills}
-            activePill={statusFilter}
-            onSelectPill={setStatusFilter}
-          />
-          <div id={pluginsPanelId} role="tabpanel">
-            {filteredPlugins.length > 0 ? (
-              <CardGrid minWidth="md" gap="md">
-                {filteredPlugins.map((plugin) => (
-                  <PluginCard
-                    key={plugin.id}
-                    plugin={plugin}
-                    selected={selectedPluginId === plugin.id}
-                    onSelect={() => openPluginTarget(plugin.id)}
-                    onToggle={(enabled) => handleTogglePlugin(plugin, enabled)}
-                    toggling={togglingId === plugin.id}
-                    onUpdate={plugin.managed !== undefined ? () => handleUpdateSingle(plugin) : undefined}
-                    updating={updatingIds.has(plugin.id)}
-                    updateDisabled={batchUpdate !== null || updatingIds.size > 0}
-                  />
-                ))}
-              </CardGrid>
-            ) : (
-              <EmptyState
-                prominent
-                icon="search"
-                title={t('plugins.center.emptyTitle')}
-                hint={t('plugins.center.emptyHint')}
-                hintSubtle
-                action={
-                  Boolean(query) || statusFilter !== 'all' ? (
-                    <Button
-                      size="sm"
-                      icon="rotate-ccw"
-                      onClick={() => {
-                        setQuery('')
-                        setStatusFilter('all')
-                      }}
-                    >
-                      {t('plugins.center.resetSearch')}
-                    </Button>
-                  ) : undefined
-                }
+      {centerTab === 'plugins' ? (
+        filteredPlugins.length > 0 ? (
+          <CardGrid minWidth="md" gap="md">
+            {filteredPlugins.map((plugin) => (
+              <PluginCard
+                key={plugin.id}
+                plugin={plugin}
+                selected={selectedPluginId === plugin.id}
+                onSelect={() => openPluginTarget(plugin.id)}
+                onToggle={(enabled) => handleTogglePlugin(plugin, enabled)}
+                toggling={togglingId === plugin.id}
+                onUpdate={plugin.managed !== undefined ? () => handleUpdateSingle(plugin) : undefined}
+                updating={updatingIds.has(plugin.id)}
+                updateDisabled={batchUpdate !== null || updatingIds.size > 0}
               />
-            )}
-          </div>
-        </TabsContent>
-
-        <TabsContent value="core" className="primary-center-content">
-          <SystemCenterToolbar
-            className="model-toolbar-inline"
-            controlsId={corePanelId}
-            query={coreQuery}
-            onQueryChange={setCoreQuery}
-            searchPlaceholder={t('plugins.core.searchPlaceholder')}
-            searchAriaLabel={t('plugins.core.searchAria')}
-            clearSearchLabel={t('plugins.core.clearSearch')}
-            filterAriaLabel={t('plugins.core.filterAria')}
-            pills={corePills}
-            activePill={coreFilter}
-            onSelectPill={setCoreFilter}
+            ))}
+          </CardGrid>
+        ) : (
+          <EmptyState
+            prominent
+            icon="search"
+            title={t('plugins.center.emptyTitle')}
+            hint={t('plugins.center.emptyHint')}
+            hintSubtle
+            action={
+              Boolean(query) || statusFilter !== 'all' ? (
+                <Button
+                  size="sm"
+                  icon="rotate-ccw"
+                  onClick={() => {
+                    setQuery('')
+                    setStatusFilter('all')
+                  }}
+                >
+                  {t('plugins.center.resetSearch')}
+                </Button>
+              ) : undefined
+            }
           />
-          <div id={corePanelId} role="tabpanel">
-            {filteredCoreOwners.length > 0 ? (
-              <CardGrid minWidth="md" gap="md">
-                {filteredCoreOwners.map((owner) => (
-                  <CoreCapabilityCard
-                    key={owner.id}
-                    owner={owner}
-                    selected={selectedCoreOwnerId === owner.id}
-                    onSelect={() => openCoreTarget(owner.id)}
-                  />
-                ))}
-              </CardGrid>
-            ) : (
-              <EmptyState
-                prominent
-                icon="search"
-                title={t('plugins.core.emptyTitle')}
-                hint={t('plugins.core.emptyHint')}
-                hintSubtle
-                action={
-                  Boolean(coreQuery) || coreFilter !== 'all' ? (
-                    <Button
-                      size="sm"
-                      icon="rotate-ccw"
-                      onClick={() => {
-                        setCoreQuery('')
-                        setCoreFilter('all')
-                      }}
-                    >
-                      {t('plugins.center.resetSearch')}
-                    </Button>
-                  ) : undefined
-                }
-              />
-            )}
-          </div>
-        </TabsContent>
-      </Tabs>
-    </SystemCenterShell>
+        )
+      ) : filteredCoreOwners.length > 0 ? (
+        <CardGrid minWidth="md" gap="md">
+          {filteredCoreOwners.map((owner) => (
+            <CoreCapabilityCard
+              key={owner.id}
+              owner={owner}
+              selected={selectedCoreOwnerId === owner.id}
+              onSelect={() => openCoreTarget(owner.id)}
+            />
+          ))}
+        </CardGrid>
+      ) : (
+        <EmptyState
+          prominent
+          icon="search"
+          title={t('plugins.core.emptyTitle')}
+          hint={t('plugins.core.emptyHint')}
+          hintSubtle
+          action={
+            Boolean(coreQuery) || coreFilter !== 'all' ? (
+              <Button
+                size="sm"
+                icon="rotate-ccw"
+                onClick={() => {
+                  setCoreQuery('')
+                  setCoreFilter('all')
+                }}
+              >
+                {t('plugins.center.resetSearch')}
+              </Button>
+            ) : undefined
+          }
+        />
+      )}
+    </Screen>
   )
 }

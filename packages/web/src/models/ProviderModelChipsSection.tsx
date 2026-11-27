@@ -110,6 +110,7 @@ export function ProviderModelChipsSection({
         <div className="models model-chips-container">
           <div className="mbulk model-chips-toolbar">
             <SearchBox
+              size="sm"
               className="search-box flex-1"
               value={modelFilter}
               onChange={onModelFilterChange}
@@ -186,8 +187,9 @@ export function ProviderModelChipsSection({
           </div>
 
           {models.length > 12 && (
-            <button
-              type="button"
+            <Button
+              variant="secondary"
+              size="sm"
               className="mchips-fold"
               onClick={onToggleExpanded}
               aria-expanded={isExpanded}
@@ -201,7 +203,7 @@ export function ProviderModelChipsSection({
                     : t('models.models.expandAll')}
               </span>
               <HelmxIcon name={isExpanded ? 'chevron-up' : 'chevron-down'} size={12} />
-            </button>
+            </Button>
           )}
         </div>
       )}

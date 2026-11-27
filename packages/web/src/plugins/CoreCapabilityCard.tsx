@@ -32,23 +32,20 @@ export function CoreCapabilityCard({
       selected={selected}
       onSelect={onSelect}
       data-core-owner={owner.id}
-      title={
-        <span className="primary-card-title-row">
-          <span className="primary-card-name" title={owner.name}>
-            {owner.name}
-          </span>
-          <Badge tone="accent" icon="shield" title={t('plugins.core.readOnlyHint')}>
-            {t('plugins.core.badge')}
-          </Badge>
-        </span>
+      title={<span title={owner.name}>{owner.name}</span>}
+      badges={
+        <Badge tone="accent" icon="shield" title={t('plugins.core.readOnlyHint')}>
+          {t('plugins.core.badge')}
+        </Badge>
       }
       subtitle={
         <span className="mono break-word" title={owner.id}>
           {owner.id}
         </span>
       }
+      description={<span title={owner.description}>{owner.description}</span>}
       footer={
-        <Stack direction="horizontal" gap="xs" align="center" wrap className="primary-card-pills">
+        <Stack direction="horizontal" gap="xs" align="center" wrap>
           {owner.actions.length > 0 && (
             <Badge
               tone="neutral"
@@ -71,10 +68,6 @@ export function CoreCapabilityCard({
           )}
         </Stack>
       }
-    >
-      <div className="primary-card-desc" title={owner.description}>
-        {owner.description}
-      </div>
-    </SelectCard>
+    />
   )
 }

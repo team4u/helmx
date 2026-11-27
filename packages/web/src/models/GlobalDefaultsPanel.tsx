@@ -207,6 +207,7 @@ export function GlobalDefaultsPanel({
             layout="horizontal"
           >
             <ModelPickerControl
+              variant="field"
               buttonId="model-defaults-model"
               buttonAriaLabel={t('models.defaults.modelAria')}
               buttonTitle={formModel || t('models.defaults.optionUnset')}
@@ -215,7 +216,6 @@ export function GlobalDefaultsPanel({
               activeThinkingLevel={defaultPickerLevel}
               resetLabel={t('models.defaults.optionUnset')}
               resetTitle={t('models.defaults.optionUnset')}
-              popoverSide="bottom"
               enableShortcut={false}
               allowOrchestratorTiers={true}
               disabled={saving}
@@ -239,6 +239,7 @@ export function GlobalDefaultsPanel({
             layout="horizontal"
           >
             <ModelPickerControl
+              variant="field"
               buttonId="model-defaults-compaction-model"
               buttonAriaLabel={t('models.defaults.compactionAria')}
               buttonTitle={formCompactionModel || t('models.defaults.compactionOptionUnset')}
@@ -247,7 +248,6 @@ export function GlobalDefaultsPanel({
               activeThinkingLevel={compactionPickerLevel}
               resetLabel={t('models.defaults.compactionOptionUnset')}
               resetTitle={t('models.defaults.compactionOptionUnset')}
-              popoverSide="bottom"
               enableShortcut={false}
               disabled={saving}
               copy={copy}
@@ -284,6 +284,7 @@ export function GlobalDefaultsPanel({
           {perModelRows.map((row, index) => (
             <div className="model-defaults-row" key={row.key}>
               <ModelPickerControl
+                variant="field"
                 buttonId={`model-defaults-permodel-${index}`}
                 buttonAriaLabel={t('models.defaults.perModelAria')}
                 buttonTitle={row.model || t('models.defaults.perModelPick')}
@@ -292,7 +293,6 @@ export function GlobalDefaultsPanel({
                 activeThinkingLevel={row.level}
                 resetLabel={t('models.defaults.perModelClear')}
                 resetTitle={t('models.defaults.perModelClear')}
-                popoverSide="bottom"
                 enableShortcut={false}
                 allowTiers={false}
                 disabled={saving}
@@ -312,7 +312,7 @@ export function GlobalDefaultsPanel({
               <IconButton
                 icon="x"
                 variant="ghost"
-                size="sm"
+                size="md"
                 onClick={() => setPerModelRows((rows) => rows.filter((existing) => existing.key !== row.key))}
                 disabled={saving}
                 label={t('models.defaults.perModelRemove')}

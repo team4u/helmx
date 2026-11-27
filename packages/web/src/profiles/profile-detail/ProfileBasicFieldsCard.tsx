@@ -90,6 +90,7 @@ export function ProfileBasicFieldsCard({
               跟随默认链（保存时省略 thinkingLevel 键）。触发按钮显示该绑定
               实际运行的等级：档位预设 > 按模型默认 > Profile 等级（与内核同序）。 */}
           <ModelPickerControl
+            variant="field"
             buttonId="profile-form-model"
             buttonAriaLabel={t('profiles.drawer.field.defaultModel')}
             buttonTitle={form.model || t('profiles.modelOption.followSystemDefault')}
@@ -98,7 +99,6 @@ export function ProfileBasicFieldsCard({
             activeThinkingLevel={resolveDefaultChainThinkingLevel(hostModels, form.model, form.thinkingLevel)}
             resetLabel={t('profiles.modelOption.followSystemDefault')}
             resetTitle={t('profiles.modelOption.followSystemDefault')}
-            popoverSide={inline ? 'bottom' : 'top'}
             enableShortcut={false}
             allowOrchestratorTiers={true}
             disabled={disabled}

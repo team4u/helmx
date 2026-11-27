@@ -122,11 +122,16 @@ test('PluginCenter SSR：渲染搜索框、统计徽章与卡片网格', { timeo
     e(HostStoreProviders, { value: store }, e(PluginCenter)),
   )
 
-  // 1. 主容器类名
-  assert.match(html, /class="[^"]*primary-center[^"]*"/)
+  // 1. 主容器与统一单层工具栏（含分段切换、primary 安装按钮、TabCount，无双顶栏）
+  assert.match(html, /class="[^"]*screen-pane[^"]*"/)
+  assert.match(html, /class="[^"]*screen-toolbar-bar[^"]*"/)
+  assert.match(html, /class="[^"]*segmented-control[^"]*"/)
+  assert.match(html, /class="[^"]*btn-primary[^"]*"[^>]*aria-label="Install plugin"/)
+  assert.match(html, /helmx-tab-count/)
+  assert.doesNotMatch(html, /model-center-tabs/)
 
   // 2. 搜索框与搜索图标
-  assert.match(html, /class="[^"]*search-box-toolbar[^"]*"/)
+  assert.match(html, /class="[^"]*search-box-toolbar[^"]*search-box-sm[^"]*"/)
   assert.match(html, /placeholder="[^"]*Search/)
 
   // 3. 统计指标显示（无故障态时不展示异常计数）
@@ -613,8 +618,8 @@ test('PluginCenter: 顶栏页签切换（Plugins <-> Core）、动作点击选�
       root.render(e(HostStoreProviders, { value: store }, e(PluginCenter, { inlineDrawer: true })))
     })
 
-    // 点击顶部 Core 页签 -> openTarget({ kind: 'plugins', tab: 'core' })
-    const coreTabTrigger = Array.from(host.querySelectorAll<HTMLButtonElement>('.model-center-tabs [role="tab"]')).find(
+    // 点击工具栏分段切换器 Core 页签 -> openTarget({ kind: 'plugins', tab: 'core' })
+    const coreTabTrigger = Array.from(host.querySelectorAll<HTMLButtonElement>('.segmented-control [role="tab"]')).find(
       (btn) => btn.textContent?.includes('Core'),
     )
     assert.ok(coreTabTrigger, '应渲染 Core 顶栏页签')

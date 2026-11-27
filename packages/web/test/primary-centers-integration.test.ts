@@ -190,32 +190,39 @@ test('four-center main-stage components: SSR structure and base container contra
   const profileHtml = renderToString(
     e(HostStoreProviders, { value: store }, e(ProfileCenter)),
   )
-  assert.ok(profileHtml.includes('primary-center-topbar'))
+  assert.ok(profileHtml.includes('pane-topbar'))
+  assert.ok(profileHtml.includes('screen-toolbar-bar'))
   assert.ok(profileHtml.includes('Agent Profile Center'))
   assert.ok(profileHtml.includes('New profile'))
+  assert.ok(profileHtml.includes('btn-primary'))
 
   // 2. SkillCenter
   const skillHtml = renderToString(
     e(HostStoreProviders, { value: store }, e(SkillCenter)),
   )
-  assert.ok(skillHtml.includes('primary-center-topbar'))
+  assert.ok(skillHtml.includes('pane-topbar'))
   assert.ok(skillHtml.includes('Skills Center'))
-  assert.ok(skillHtml.includes('primary-center-toolbar'))
+  assert.ok(skillHtml.includes('screen-toolbar'))
+  assert.ok(!skillHtml.includes('btn-primary'), 'SkillCenter refresh-only topbar stays secondary')
 
   // 3. NodeCenter
   const nodeHtml = renderToString(
     e(HostStoreProviders, { value: store }, e(NodeCenter)),
   )
-  assert.ok(nodeHtml.includes('primary-center-topbar'))
+  assert.ok(nodeHtml.includes('pane-topbar'))
+  assert.ok(nodeHtml.includes('screen-toolbar-bar'))
   assert.ok(nodeHtml.includes('Compute Nodes Center'))
   assert.ok(nodeHtml.includes('Connect node'))
+  assert.ok(nodeHtml.includes('btn-primary'))
 
   // 4. ModelCenter
   const modelHtml = renderToString(
     e(HostStoreProviders, { value: store }, e(ModelCenter)),
   )
-  assert.ok(modelHtml.includes('primary-center-topbar'))
+  assert.ok(modelHtml.includes('pane-topbar'))
+  assert.ok(modelHtml.includes('screen-toolbar-bar'))
   assert.ok(modelHtml.includes('Models &amp; Credentials Center'))
+  assert.ok(modelHtml.includes('btn-primary'))
 })
 
 test('four-center drawer wiring: carrying a sub-item ID auto-opens the matching 540px right slide-over drawer', { timeout: 60_000 }, () => {

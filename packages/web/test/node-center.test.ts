@@ -445,13 +445,16 @@ test('NodeCenter: SSR renders top bar, search toolbar, category pills, grid flow
   )
 
   // 1. Top bar
-  assert.match(html, /primary-center/)
+  assert.match(html, /screen-pane/)
   assert.match(html, /node-center/)
   assert.match(html, /Compute Nodes Center/)
   assert.match(html, /Connect node/)
+  assert.match(html, /btn-primary/)
 
   // 2. Search bar and category pills
+  assert.match(html, /screen-toolbar-bar/)
   assert.match(html, /search-box-toolbar/)
+  assert.match(html, /helmx-tab-count/)
   assert.match(html, /Search node ID, name, platform, version or OS/)
   assert.match(html, /tabs-pill/)
   assert.match(html, /All/)
@@ -547,7 +550,8 @@ test('NodeCard & NodeDetailDrawer: fixed top-right .btn-icon-sm and unified .cal
     ),
   )
   assert.match(cardHtml, /GPU 推理集群节点 A/)
-  assert.ok(!cardHtml.includes('primary-card-desc'), 'NodeCard status badges must not be wrapped by the 2-line clamp container')
+  assert.match(cardHtml, /helmx-select-card-icon/)
+  assert.ok(!cardHtml.includes('helmx-select-card-desc'), 'NodeCard status badges must not be wrapped by the 2-line clamp container')
 
   const store = makeTestStore({ nodes: mockNodes() as never })
   const container = document.createElement('div')

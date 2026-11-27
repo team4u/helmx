@@ -154,7 +154,8 @@
 
 .plugin-config-field-value .input,
 .plugin-config-field-value .textarea,
-.plugin-config-field-value .helmx-select {
+.plugin-config-field-value .helmx-select,
+.plugin-config-field-value .helmx-model-picker-field {
   flex: 1;
   min-width: 0;
 }

@@ -97,11 +97,9 @@ export function PluginCard({
       tone={failed ? 'danger' : 'default'}
       onSelect={onSelect}
       data-plugin-id={plugin.id}
-      title={
-        <span className="primary-card-title-row">
-          <span className="primary-card-name" title={name}>
-            {name}
-          </span>
+      title={<span title={name}>{name}</span>}
+      badges={
+        <>
           {versionLabel && (
             <span className="plugin-card-version" title={t('plugins.card.versionTitle', { version: versionLabel })}>
               {versionLabel}
@@ -118,16 +116,27 @@ export function PluginCard({
               label={t('plugins.status.error')}
             />
           )}
-        </span>
+        </>
       }
       subtitle={
         <span className="mono break-word" title={plugin.id}>
           {plugin.id}
         </span>
       }
+      description={
+        <span
+          title={
+            failed && plugin.error?.message
+              ? `${description}\n${plugin.error.message}`
+              : description
+          }
+        >
+          {description}
+        </span>
+      }
       footer={
         <>
-          <Stack direction="horizontal" gap="xs" align="center" wrap className="primary-card-pills">
+          <Stack direction="horizontal" gap="xs" align="center" wrap>
             {(plugin.tools?.length ?? 0) > 0 && (
               <Badge tone="neutral" mono icon="wrench" title={t('plugins.card.toolsTitle', { count: plugin.tools.length })}>
                 {`${plugin.tools.length} Tools`}
@@ -233,24 +242,11 @@ export function PluginCard({
         </>
       }
     >
-      {/* Middle: short description (with an error summary on failure for quick triage without opening the drawer) */}
-      <div
-        className="primary-card-desc"
-        title={
-          failed && plugin.error?.message
-            ? `${description}\n${plugin.error.message}`
-            : description
-        }
-      >
-        {failed && plugin.error?.message ? (
-          <>
-            {description}
-            <div className="plugin-card-error-summary">{plugin.error.message}</div>
-          </>
-        ) : (
-          description
-        )}
-      </div>
+      {failed && plugin.error?.message ? (
+        <div className="plugin-card-error-summary" title={plugin.error.message}>
+          {plugin.error.message}
+        </div>
+      ) : null}
     </SelectCard>
   )
 }

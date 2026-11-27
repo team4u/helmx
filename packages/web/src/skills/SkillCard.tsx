@@ -64,27 +64,24 @@ export function SkillCard({
       selected={selected}
       onSelect={onSelect}
       data-skill-id={skill.id}
-      title={
-        <span className="primary-card-title-row">
-          <span className="primary-card-name" title={skill.name || skill.id}>
-            {skill.name || skill.id}
-          </span>
-          <Badge
-            tone={badgeTone}
-            mono={sourceBadge.variant === 'plugin'}
-            title={t('skills.card.sourceTitle', { label: sourceTitleLabel })}
-          >
-            {sourceBadge.label}
-          </Badge>
-        </span>
+      title={<span title={skill.name || skill.id}>{skill.name || skill.id}</span>}
+      badges={
+        <Badge
+          tone={badgeTone}
+          mono={sourceBadge.variant === 'plugin'}
+          title={t('skills.card.sourceTitle', { label: sourceTitleLabel })}
+        >
+          {sourceBadge.label}
+        </Badge>
       }
       subtitle={
         <span className="mono break-word" title={skill.id}>
           {skill.id}
         </span>
       }
+      description={<span title={description}>{description}</span>}
       footer={
-        <Stack direction="horizontal" gap="xs" align="center" wrap className="primary-card-pills">
+        <Stack direction="horizontal" gap="xs" align="center" wrap>
           <Button
             variant="secondary"
             size="xs"
@@ -110,11 +107,6 @@ export function SkillCard({
           )}
         </Stack>
       }
-    >
-      {/* Middle: description */}
-      <div className="primary-card-desc" title={description}>
-        {description}
-      </div>
-    </SelectCard>
+    />
   )
 }
