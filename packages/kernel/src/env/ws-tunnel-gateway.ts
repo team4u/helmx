@@ -16,11 +16,11 @@
  * - After handoff, all JSON parsing stops: subsequent frames flow strictly over the Duplex byte stream
  *   (data-phase single-frame limit is governed by `wss maxPayload`, far larger than the 4096-byte hello cap).
  */
-import type { Server as HttpServer, IncomingMessage } from 'node:http'
-import type { Duplex } from 'node:stream'
+import type { Server as HttpServer } from 'node:http'
 import { WebSocketServer, createWebSocketStream, type WebSocket } from 'ws'
 import type { NodeTunnelControl, NodeTunnelErrorCode, NodeTunnelHello } from '@helmx/protocol'
 import type { NodeRegistry } from './registry.js'
+import { attachWsUpgradeRoute } from './ws-upgrade-route.js'
 
 export interface NodeTunnelGatewayOptions {
   registry: NodeRegistry
@@ -92,21 +92,13 @@ export function attachNodeTunnelGateway(server: HttpServer, options: NodeTunnelG
   // first-frame hello is independently capped at <= 4096 bytes.
   const wss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 })
   let closing: Promise<void> | undefined
-
-  const onUpgrade = (request: IncomingMessage, socket: Duplex, head: Buffer): void => {
-    let url: URL
-    try {
-      url = new URL(request.url ?? '/', 'http://localhost')
-    } catch {
-      socket.destroy()
-      return
-    }
-    if (url.pathname !== path) return
-    if (closing) { socket.destroy(); return }
-    wss.handleUpgrade(request, socket, head, (ws) => handleConnection(ws))
-  }
-  // Share the same server `upgrade` event stream (demuxed by pathname with `/ws/node` gateway).
-  server.on('upgrade', onUpgrade)
+  // Shares the server `upgrade` event stream with `/ws/node` (demuxed by pathname).
+  const detachUpgradeRoute = attachWsUpgradeRoute(server, {
+    wss,
+    path,
+    isClosing: () => closing !== undefined,
+    onConnection: (ws) => handleConnection(ws),
+  })
 
   function fail(ws: WebSocket, code: NodeTunnelErrorCode, message: string): void {
     const frame: NodeTunnelControl = { type: 'error', code, message }
@@ -186,7 +178,7 @@ export function attachNodeTunnelGateway(server: HttpServer, options: NodeTunnelG
   return {
     close() {
       if (!closing) closing = (async () => {
-        server.removeListener('upgrade', onUpgrade)
+        detachUpgradeRoute()
         for (const socket of wss.clients) socket.terminate()
         await new Promise<void>((resolve) => wss.close(() => resolve()))
       })()

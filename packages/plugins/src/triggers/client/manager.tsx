@@ -42,12 +42,15 @@ import {
   type UsePluginActionResult,
 } from '@helmx/plugin-client'
 import {
+  asAlertingRunStatus,
   formatTriggerTargetSummary,
   parseCronJobs,
   parseWebhooks,
+  selectableRowProps,
   selectTriggerRuns,
   summarizeTriggerRunHealth,
   triggerRunStatusLabel,
+  type AlertingRunStatus,
   type CronJobRow,
   type TriggerDetailSelection,
   type WebhookRow,
@@ -116,8 +119,23 @@ function ActionError({ message }: { message: string }): ReactNode {
   )
 }
 
-function triggerHealthTone(status: 'error' | 'blocked' | 'working'): StatusLightTone {
+function triggerHealthTone(status: AlertingRunStatus): StatusLightTone {
   return status === 'error' ? 'failed' : status
+}
+
+/** 表格首列：ID + 仅在告警态（error / blocked / working）常显的状态灯。 */
+function TriggerIdCell({ id, status }: { id: string; status: AlertingRunStatus | undefined }): ReactNode {
+  const locale = usePluginLocale()
+  return (
+    <td data-label="ID" className="mono">
+      <span className="tg-id-cell">
+        {status !== undefined ? (
+          <StatusLight tone={triggerHealthTone(status)} label={triggerRunStatusLabel(status, locale)} />
+        ) : null}
+        <span>{id}</span>
+      </span>
+    </td>
+  )
 }
 
 function RowAction({
@@ -195,31 +213,9 @@ function CronTable({
           {jobs.map((job) => {
             const runs = selectTriggerRuns(conversations, 'cron', job.id)
             const health = summarizeTriggerRunHealth(runs)
-            const showLight = health.status === 'error' || health.status === 'blocked' || health.status === 'working'
             return (
-              <tr
-                key={job.id}
-                className={selectedId === job.id ? 'tg-row is-selected' : 'tg-row'}
-                tabIndex={0}
-                onClick={() => onSelect(job.id)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' || e.key === ' ') {
-                    e.preventDefault()
-                    onSelect(job.id)
-                  }
-                }}
-              >
-                <td data-label="ID" className="mono">
-                  <span className="tg-id-cell">
-                    {showLight && (health.status === 'error' || health.status === 'blocked' || health.status === 'working') ? (
-                      <StatusLight
-                        tone={triggerHealthTone(health.status)}
-                        label={triggerRunStatusLabel(health.status, locale)}
-                      />
-                    ) : null}
-                    <span>{job.id}</span>
-                  </span>
-                </td>
+              <tr key={job.id} {...selectableRowProps(job.id, selectedId, onSelect)}>
+                <TriggerIdCell id={job.id} status={asAlertingRunStatus(health.status)} />
                 <td data-label={t(TRIGGERS_COL_SCHEDULE)} className="mono">{job.schedule}</td>
                 <td data-label={t(TRIGGERS_COL_COMMAND)} className="cell-ellipsis" title={job.text}>{job.text}</td>
                 <td data-label={t(TRIGGERS_COL_ENABLED)}>
@@ -291,7 +287,6 @@ function WebhookTable({
   onSelect: (id: string) => void
   onRequestDelete: (id: string) => void
 }): ReactNode {
-  const locale = usePluginLocale()
   const t = usePluginTranslator()
   return (
     <div className="tg-table-wrap">
@@ -314,31 +309,9 @@ function WebhookTable({
           {webhooks.map((hook) => {
             const runs = selectTriggerRuns(conversations, 'webhook', hook.id)
             const health = summarizeTriggerRunHealth(runs)
-            const showLight = health.status === 'error' || health.status === 'blocked' || health.status === 'working'
             return (
-              <tr
-                key={hook.id}
-                className={selectedId === hook.id ? 'tg-row is-selected' : 'tg-row'}
-                tabIndex={0}
-                onClick={() => onSelect(hook.id)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' || e.key === ' ') {
-                    e.preventDefault()
-                    onSelect(hook.id)
-                  }
-                }}
-              >
-                <td data-label="ID" className="mono">
-                  <span className="tg-id-cell">
-                    {showLight && (health.status === 'error' || health.status === 'blocked' || health.status === 'working') ? (
-                      <StatusLight
-                        tone={triggerHealthTone(health.status)}
-                        label={triggerRunStatusLabel(health.status, locale)}
-                      />
-                    ) : null}
-                    <span>{hook.id}</span>
-                  </span>
-                </td>
+              <tr key={hook.id} {...selectableRowProps(hook.id, selectedId, onSelect)}>
+                <TriggerIdCell id={hook.id} status={asAlertingRunStatus(health.status)} />
                 <td data-label={t(TRIGGERS_COL_DESCRIPTION)} className="cell-ellipsis" title={hook.description ?? ''}>
                   {hook.description ?? '—'}
                 </td>

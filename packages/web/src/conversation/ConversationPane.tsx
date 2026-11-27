@@ -1,44 +1,17 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { conversationsApi } from '../lib/api.js'
-import type { ConversationAttachmentRef, ConversationEntry, ConversationSummary } from '@helmx/protocol/browser'
-import {
-  Badge,
-  Button,
-  ConfirmDialog,
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuPortal,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-  HelmxIcon,
-  IconButton,
-  Input,
-  LoadingState,
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-  Tooltip,
-  useSharedNowMs,
-  type BadgeTone,
-} from '@helmx/plugin-client'
-import { isConversationArchived } from '../conversation/archive-model.js'
-import {
-  collectEnabledPluginIds,
-  isHumanSelectableProfile,
-} from '../shell/conversation-status-model.js'
-import {
-  isConversationArchivable,
-  isConversationDeletable,
-} from '../shell/sidebar-model.js'
-import { patchConversationArchived } from '../shell/archive-ops.js'
-import { formatModShiftShortcut, formatModShortcut } from '../shell/shortcuts-model.js'
+/**
+ * Conversation pane: top bar (title / actions), timeline + outline, Composer (with AskDock),
+ * and the destructive confirmations. Data normalization lives in the `conversation-pane/`
+ * hooks; the top-bar pieces and dialogs are the sibling components under the same directory.
+ */
+import { useCallback, useEffect, useRef, useState } from 'react'
+import type { ConversationAttachmentRef } from '@helmx/protocol/browser'
+import { isConversationArchived } from './archive-model.js'
+import { collectEnabledPluginIds, isHumanSelectableProfile } from '../shell/conversation-status-model.js'
+import { isConversationArchivable } from '../shell/sidebar-model.js'
 import {
   useConversationArtifacts,
   useConversationDetail,
-  useConversationLive,
   useConversationSummary,
-  useGroupedUi,
   useLoadError,
   usePlugins,
   useProfilesSlice,
@@ -47,81 +20,36 @@ import {
 } from '../lib/store-context.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { useStableCallback } from '../lib/use-stable-callback.js'
-import { CloseSplitButton, SplitToggleButton } from '../ui/SplitControls.js'
 import { usePaneSplitToggle } from '../ui/use-pane-split-toggle.js'
 import { Composer } from './Composer.js'
 import { openStandbyWithFocus } from './standby-focus.js'
-import { formatEnvSubtitle, sendingPendingVisible } from './composer-model.js'
-import { ConversationOutlinePopover, type OutlineJumpTarget } from './ConversationOutlinePopover.js'
-import { ConversationTimeline, type OutlineScrollRequest } from './ConversationTimeline.js'
-import {
-  buildConversationOutline,
-  countTimelineHumanTurns,
-  resolveOutlineNodeKey,
-  type OutlineAnchor,
-  type OutlineNode,
-} from './outline-model.js'
+import { sendingPendingVisible } from './composer-model.js'
+import { ConversationTimeline } from './ConversationTimeline.js'
 import { resolveActiveWorkbenchTab, summarizeWorkbenchBadge } from './workbench-model.js'
 import { useWorkbenchTabs } from './workbench-hooks.js'
-import { buildLiveTimelineTail, buildSettledTimelinePrefix, type EditRequestTarget } from './timeline-model.js'
-import { conversationDurationNeedsLiveClock } from './conversation-duration-model.js'
+import type { EditRequestTarget } from './timeline-model.js'
+import { ConversationPaneActions } from './conversation-pane/ConversationPaneActions.js'
 import {
-  formatDurationMs,
-  formatFullTimestamp,
-  formatStopwatchMs,
-  resolveConversationTiming,
-} from '../lib/format.js'
+  ConversationConfirmDialogs,
+  type ConversationConfirmAction,
+} from './conversation-pane/ConversationConfirmDialogs.js'
+import { ConversationDrawerEnvBar } from './conversation-pane/ConversationDrawerEnvBar.js'
+import {
+  ConversationPaneError,
+  ConversationPaneLoading,
+} from './conversation-pane/ConversationPaneStates.js'
+import { ConversationTitleGroup } from './conversation-pane/ConversationTitleGroup.js'
+import { useConversationPaneActions } from './conversation-pane/use-conversation-pane-actions.js'
+import { useConversationPaneOutline } from './conversation-pane/use-conversation-pane-outline.js'
+import { useConversationPaneTimeline } from './conversation-pane/use-conversation-pane-timeline.js'
 
-const EMPTY_ENTRIES: ReadonlyArray<ConversationEntry> = []
-const EMPTY_OUTLINE_NODES: ReadonlyArray<OutlineNode> = []
-
-/** 顶栏标题浮层内的时间与耗时明细：仅在 Popover 打开并挂载时订阅共享时钟，关闭即零定时器。 */
-function ConversationTitleTimingMeta({ conversation }: { conversation: ConversationSummary }) {
-  const { t } = useWebLocale()
-  const liveActive = conversationDurationNeedsLiveClock(conversation)
-  const nowMs = useSharedNowMs(liveActive)
-  const timing = resolveConversationTiming(conversation, nowMs)
-  const createdText = formatFullTimestamp(conversation.createdAt)
-  return (
-    <>
-      {createdText !== '' ? (
-        <>
-          <span className="kv-key">{t('conv.pane.metaCreatedAt')}</span>
-          <span className="kv-val mono tabular-nums">{createdText}</span>
-        </>
-      ) : null}
-      {timing.totalRunMs !== undefined && timing.totalRunMs > 0 ? (
-        <>
-          <span className="kv-key">{t('conv.pane.metaTotalRun')}</span>
-          <span className="kv-val mono tabular-nums">
-            {timing.currentRunMs !== undefined
-              ? formatStopwatchMs(timing.totalRunMs)
-              : formatDurationMs(timing.totalRunMs)}
-          </span>
-        </>
-      ) : null}
-      {timing.currentRunMs !== undefined ? (
-        <>
-          <span className="kv-key">{t('conv.pane.metaCurrentRun')}</span>
-          <span className="kv-val mono tabular-nums">{formatStopwatchMs(timing.currentRunMs)}</span>
-        </>
-      ) : null}
-      {timing.waitingMs !== undefined ? (
-        <>
-          <span className="kv-key">{t('conv.pane.metaWaitingApproval')}</span>
-          <span className="kv-val mono tabular-nums pane-title-meta-warn">
-            {formatStopwatchMs(timing.waitingMs)}
-          </span>
-        </>
-      ) : null}
-      {conversation.completionSeq > 0 ? (
-        <>
-          <span className="kv-key">{t('conv.pane.metaSettledTurns')}</span>
-          <span className="kv-val mono tabular-nums">{conversation.completionSeq}</span>
-        </>
-      ) : null}
-    </>
-  )
+/** Prefill request handed to the Composer (edit-and-resend / starter). */
+interface PanePrefill {
+  text: string
+  entryId?: number
+  attachments?: ConversationAttachmentRef[]
+  tick: number
+  onlyIfEmpty?: boolean
 }
 
 export interface ConversationPaneProps {
@@ -144,94 +72,38 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
   const summary = useConversationSummary(conversationId)
   const parentConversationId = summary?.parentConversationId ?? detail?.parentConversationId
   const parentSummary = useConversationSummary(parentConversationId)
-  const live = useConversationLive(conversationId, staged)
-  const groupedUi = useGroupedUi()
   const convArtifacts = useConversationArtifacts(conversationId)
   const detailError = useLoadError(`conversation:${conversationId}`)
   const { profiles } = useProfilesSlice()
   const plugins = usePlugins()
   const { workbenchOpen, workbenchTab } = useWorkbenchState()
-  const {
-    loadConversationDetail,
-    loadEarlierEntries,
-    pushNotice,
-    openTarget,
-    openWorkbenchDrawer,
-  } = useStoreActions()
+  const { loadConversationDetail, openTarget, openWorkbenchDrawer } = useStoreActions()
   const { t } = useWebLocale()
   const conversation = summary ?? detail
+  const isWorking = conversation?.status === 'working'
+  const isCompacting = conversation?.contextUsage?.compacting === true
+  const { detailEntries, hasEarlierHistory, timelineItems, live } = useConversationPaneTimeline(
+    conversationId,
+    detail,
+    staged,
+    isWorking,
+    isCompacting,
+  )
+  const outline = useConversationPaneOutline(conversationId, timelineItems, hasEarlierHistory, conversation?.status)
+  const actions = useConversationPaneActions(conversationId, conversation)
   const [renaming, setRenaming] = useState(false)
   const [titleDraft, setTitleDraft] = useState('')
-  const [actionPending, setActionPending] = useState<string | null>(null)
   const [moreOpen, setMoreOpen] = useState(false)
-  const [prefill, setPrefill] = useState<{ text: string; entryId?: number; attachments?: ConversationAttachmentRef[]; tick: number; onlyIfEmpty?: boolean } | null>(null)
+  const [prefill, setPrefill] = useState<PanePrefill | null>(null)
   const [sendingInFlight, setSendingInFlight] = useState(false)
-  const [confirmAction, setConfirmAction] = useState<'reset' | 'delete' | null>(null)
-  const [outlineOpen, setOutlineOpen] = useState(false)
-  const [outlineScrollReq, setOutlineScrollReq] = useState<OutlineScrollRequest | null>(null)
-  const [activeOutlineAnchor, setActiveOutlineAnchor] = useState<OutlineAnchor | undefined>(undefined)
-  const [loadingOlderOutline, setLoadingOlderOutline] = useState(false)
-  const outlineTickRef = useRef(0)
+  const [confirmAction, setConfirmAction] = useState<ConversationConfirmAction | null>(null)
   const prefillTickRef = useRef(0)
   const prevConversationIdRef = useRef(conversationId)
-  const moreButtonRef = useRef<HTMLButtonElement | null>(null)
-  const moreInteractedOutsideRef = useRef(false)
   const { isSplitActive, toggleSplit } = usePaneSplitToggle({
     isSplit,
     onCloseSplit,
     getSplitTarget: () => ({ kind: 'conversation', conversationId }),
   })
-
-  const isWorking = conversation?.status === 'working'
-  const isCompacting = conversation?.contextUsage?.compacting === true
-  const compactPending = actionPending === 'compact' || isCompacting
-  const detailEntries = detail?.entries ?? EMPTY_ENTRIES
-  const settledTimelinePrefix = useMemo(
-    () =>
-      buildSettledTimelinePrefix(detailEntries, {
-        timelineRenderers: groupedUi.timelineRenderers,
-        toolViews: groupedUi.toolViews,
-      }),
-    [detailEntries, groupedUi.timelineRenderers, groupedUi.toolViews],
-  )
-  const timelineTail = useMemo(
-    () =>
-      buildLiveTimelineTail(settledTimelinePrefix, {
-        ...(live !== undefined ? { live } : {}),
-        working: isWorking,
-        compacting: isCompacting,
-        toolViews: groupedUi.toolViews,
-      }),
-    [settledTimelinePrefix, live, isWorking, isCompacting, groupedUi.toolViews],
-  )
-  const timelineItems = useMemo(
-    () =>
-      timelineTail.length === 0
-        ? settledTimelinePrefix.items
-        : [...settledTimelinePrefix.items, ...timelineTail],
-    [settledTimelinePrefix.items, timelineTail],
-  )
-  const outlineTurnCount = useMemo(() => countTimelineHumanTurns(timelineItems), [timelineItems])
-  const outlineNodes = useMemo(
-    () =>
-      outlineOpen
-        ? buildConversationOutline(
-            timelineItems,
-            { latestAssistantTurnFailed: conversation?.status === 'error' },
-            t,
-          )
-        : EMPTY_OUTLINE_NODES,
-    [outlineOpen, timelineItems, conversation?.status, t],
-  )
-  // 大纲当前项唯一通路：阅读锚点（entryId + 回合内 headingIndex / cardId）映射为单个节点 key，
-  // 同一助手回合的多个标题节点不会一起高亮。
-  const activeOutlineNodeKey = useMemo(
-    () =>
-      !outlineOpen || activeOutlineAnchor === undefined
-        ? undefined
-        : resolveOutlineNodeKey(outlineNodes, activeOutlineAnchor),
-    [outlineOpen, outlineNodes, activeOutlineAnchor],
-  )
 
   useEffect(() => {
     if (detail === undefined) {
@@ -244,9 +116,7 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
     if (prevConversationIdRef.current === conversationId) return
     prevConversationIdRef.current = conversationId
     setMoreOpen(false)
-    setOutlineOpen(false)
-    setOutlineScrollReq(null)
-    setActiveOutlineAnchor(undefined)
+    outline.close()
     setPrefill(null)
   }, [conversationId])
 
@@ -255,26 +125,10 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
   useEffect(() => {
     if (staged) return
     setMoreOpen(false)
-    setOutlineOpen(false)
+    outline.onOpenChange(false)
     setConfirmAction(null)
     setRenaming(false)
   }, [staged])
-
-  const jumpToOutlineTarget = useCallback((target: OutlineJumpTarget): void => {
-    outlineTickRef.current += 1
-    setOutlineScrollReq({
-      entryId: target.entryId,
-      ...(target.headingIndex !== undefined ? { headingIndex: target.headingIndex } : {}),
-      ...(target.cardId !== undefined ? { cardId: target.cardId } : {}),
-      tick: outlineTickRef.current,
-    })
-  }, [])
-
-  const loadEarlierForOutline = useStableCallback((): void => {
-    if (loadingOlderOutline || !detail?.nextCursor) return
-    setLoadingOlderOutline(true)
-    void loadEarlierEntries(conversationId).finally(() => setLoadingOlderOutline(false))
-  })
 
   const requestEdit = useCallback((target: EditRequestTarget): void => {
     // prefill 绑定会话 id：即使未来 Pane 复用不重挂载，旧会话的编辑目标也不会注入新会话 Composer
@@ -318,93 +172,35 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
   const workbenchBadge = summarizeWorkbenchBadge(workbenchTabs)
   const hasWorkbenchPanel = workbenchTabs.some((tab) => tab.id !== 'artifacts')
   const hasAnyArtifacts = Array.isArray(convArtifacts) && convArtifacts.length > 0
+
   if (detailError) {
     return (
-      <div className={`${isSplit ? 'helmx-split-pane' : 'helmx-pane'} pane-error`} role="alert">
-        <div className="pane-error-row">
-          <p>{t('conv.pane.loadFailed', { id: conversationId, error: detailError })}</p>
-          <span className="pane-error-actions">
-            <Button onClick={() => void loadConversationDetail(conversationId, true)}>{t('common.retry')}</Button>
-            {isDrawer && onCloseDrawer !== undefined ? (
-              <Button size="sm" variant="ghost" className="conversation-drawer-close-btn" aria-label={t('conv.pane.closeDrawerAria')} onClick={onCloseDrawer}>{t('common.close')}</Button>
-            ) : isSplit && onCloseSplit !== undefined ? <CloseSplitButton onCloseSplit={onCloseSplit} /> : null}
-          </span>
-        </div>
-      </div>
+      <ConversationPaneError
+        conversationId={conversationId}
+        detailError={detailError}
+        isSplit={isSplit}
+        onCloseSplit={onCloseSplit}
+        isDrawer={isDrawer}
+        onCloseDrawer={onCloseDrawer}
+        onRetry={() => void loadConversationDetail(conversationId, true)}
+      />
     )
   }
 
   if (conversation === undefined) {
     return (
-      <div className={`${isSplit ? 'helmx-split-pane' : 'helmx-pane'} pane-loading`}>
-        <LoadingState label={t('conv.pane.loading', { id: conversationId })} iconSize={13} />
-        {isDrawer && onCloseDrawer !== undefined ? (
-          <span className="pane-loading-split-close">
-            <IconButton
-              icon={<HelmxIcon name="x" size={14} />}
-              variant="ghost"
-              size="sm"
-              className="conversation-drawer-close-btn"
-              aria-label={t('conv.pane.closeDrawerAria')}
-              onClick={onCloseDrawer}
-            />
-          </span>
-        ) : isSplit && onCloseSplit !== undefined ? (
-          <span className="pane-loading-split-close">
-            <CloseSplitButton onCloseSplit={onCloseSplit} />
-          </span>
-        ) : null}
-      </div>
+      <ConversationPaneLoading
+        conversationId={conversationId}
+        isSplit={isSplit}
+        onCloseSplit={onCloseSplit}
+        isDrawer={isDrawer}
+        onCloseDrawer={onCloseDrawer}
+      />
     )
   }
 
-  const sendingPending = sendingPendingVisible(sendingInFlight, conversation.status)
-  // 计数与色调由插件 public-doc badge 与内置产物共同决定。
-  const workbenchCount = workbenchBadge.totalCount
-  const workbenchBadgeTone: BadgeTone = workbenchBadge.tone === 'warn' ? 'warn' : workbenchBadge.tone === 'accent' ? 'accent' : 'neutral'
+  const compactPending = actions.actionPending === 'compact' || isCompacting
   const currentNodeId = conversation.nodeId || 'local'
-  const envSubtitle = formatEnvSubtitle(
-    {
-      profileId: conversation.profileId,
-      nodeId: currentNodeId,
-      cwd: conversation.cwd,
-    },
-    t,
-  )
-  const envSubtitleCompact = formatEnvSubtitle(
-    {
-      profileId: conversation.profileId,
-      nodeId: currentNodeId,
-      cwd: conversation.cwd,
-      compact: true,
-    },
-    t,
-  )
-  const remoteNodeTag = envSubtitleCompact.text !== '' ? envSubtitleCompact.text : null
-
-  const runAction = async (name: string, fn: () => Promise<unknown>, successTitle: string): Promise<void> => {
-    setActionPending(name)
-    try {
-      await fn()
-      pushNotice({
-        type: 'notification',
-        level: 'info',
-        title: successTitle,
-        target: { kind: 'conversation', conversationId },
-      })
-    } catch (err) {
-      pushNotice({
-        type: 'notification',
-        level: 'error',
-        title: t('conv.pane.actionFailedTitle', { title: successTitle }),
-        body: err instanceof Error ? err.message : String(err),
-        target: { kind: 'conversation', conversationId },
-      })
-    } finally {
-      setActionPending(null)
-    }
-  }
-
   const parentTitle = parentSummary?.title.trim() || t('conv.pane.titleFallback', { id: parentConversationId ?? 0 })
   const openParentConversation = (): void => {
     if (parentConversationId === undefined) return
@@ -413,357 +209,92 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
       isSplit ? { split: true } : undefined,
     )
   }
-
   const profile = profiles.find((p) => p.id === conversation.profileId)
   const profileStarters = profile !== undefined && profile.starters !== undefined && profile.starters.length > 0 ? profile.starters : undefined
   const enabledPluginIds = collectEnabledPluginIds(plugins)
   const canCreateThread = profile !== undefined &&
     isHumanSelectableProfile(profile, enabledPluginIds) &&
     (conversation.ownedBy ?? 'human') === 'human'
-
   const archived = isConversationArchived(conversation)
   const canManageArchive = isConversationArchivable(conversation)
-
-  const saveTitle = async (): Promise<void> => {
-    const next = titleDraft.trim()
+  const commitTitle = (): void => {
     setRenaming(false)
-    if (next === '' || next === conversation.title) return
-    await runAction('rename', () => conversationsApi.patch(conversationId, { title: next }), t('conv.pane.conversationRenamed'))
+    void actions.saveTitle(titleDraft)
+  }
+  const openWorkbench = (): void => {
+    // 打开首个可用页签；已打开时保持当前有效页签，并显式绑定当前会话。
+    const target = resolveActiveWorkbenchTab(
+      workbenchOpen && !isDrawer ? workbenchTab : undefined,
+      workbenchTabs,
+    )
+    openWorkbenchDrawer({ tab: target, conversationId })
+  }
+  const openFullscreen = (): void => {
+    onCloseDrawer?.()
+    openTarget({ kind: 'conversation', conversationId })
   }
 
   return (
     <div className="helmx-pane">
       <header className="pane-topbar conversation-topbar">
-        <div className="pane-title-group">
-          {parentConversationId !== undefined ? (
-            <button
-              type="button"
-              className="pane-parent-link"
-              title={t('conv.pane.openParent', { title: parentTitle })}
-              aria-label={t('conv.pane.openParent', { title: parentTitle })}
-              onClick={openParentConversation}
-            >
-              <HelmxIcon name="arrow-left" size={11} />
-              <span>{parentTitle}</span>
-            </button>
-          ) : null}
-          {renaming ? (
-            <Input
-              size="sm"
-              className="pane-title-rename-input"
-              aria-label={t('conv.pane.renameConversation')}
-              value={titleDraft}
-              autoFocus
-              onChange={(e) => setTitleDraft(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') void saveTitle()
-                else if (e.key === 'Escape') setRenaming(false)
-              }}
-              onBlur={() => void saveTitle()}
-            />
-          ) : (
-            <Popover>
-              <PopoverTrigger asChild>
-                <button
-                  type="button"
-                  className="pane-title pane-title-btn"
-                  title={conversation.title === '' ? t('conv.pane.titleFallback', { id: conversationId }) : conversation.title}
-                >
-                  {conversation.title === '' ? t('conv.pane.titleFallback', { id: conversationId }) : conversation.title}
-                </button>
-              </PopoverTrigger>
-              <PopoverContent
-                align="start"
-                sideOffset={6}
-                portalled
-                className="pane-title-popover"
-                onCloseAutoFocus={(event) => {
-                  // Radix FocusScope defers close auto-focus via setTimeout(0); if another
-                  // control/overlay already claimed focus, never steal focus back and dismiss it.
-                  const active = document.activeElement
-                  if (active !== null && active !== document.body && active !== document.documentElement) {
-                    event.preventDefault()
-                  }
-                }}
-              >
-                <div className="pane-title-popover-heading">
-                  {conversation.title === '' ? t('conv.pane.titleFallback', { id: conversationId }) : conversation.title}
-                </div>
-                <div className="kv-grid pane-title-popover-meta">
-                  <span className="kv-key">{t('conv.pane.metaConversationId')}</span>
-                  <span className="kv-val mono">#{conversationId}</span>
-                  <span className="kv-key">{t('conv.pane.metaAgents')}</span>
-                  <span className="kv-val">{conversation.profileId}</span>
-                  <span className="kv-key">{t('conv.pane.metaNode')}</span>
-                  <span className="kv-val mono">{currentNodeId}</span>
-                  <span className="kv-key">{t('conv.pane.metaCwd')}</span>
-                  <span className="kv-val mono">{conversation.cwd || t('conv.pane.cwdNotSet')}</span>
-                  {conversation.ownedBy !== undefined ? (
-                    <>
-                      <span className="kv-key">{t('conv.pane.metaOwnership')}</span>
-                      <span className="kv-val mono">{conversation.ownedBy}</span>
-                    </>
-                  ) : null}
-                  {conversation.model !== '' ? (
-                    <>
-                      <span className="kv-key">{t('conv.pane.metaModel')}</span>
-                      <span className="kv-val mono">{conversation.model}</span>
-                    </>
-                  ) : null}
-                  <ConversationTitleTimingMeta conversation={conversation} />
-                </div>
-              </PopoverContent>
-            </Popover>
-          )}
-          <span className="pane-cwd-subtitle" title={envSubtitle.tooltip}>
-            <span className="env-subtitle-full">{envSubtitle.text}</span>
-            {remoteNodeTag !== null ? <span className="env-subtitle-compact">{remoteNodeTag}</span> : null}
-          </span>
-        </div>
-        <div className="pane-actions">
-          <ConversationOutlinePopover
-            open={outlineOpen}
-            onOpenChange={setOutlineOpen}
-            hasItems={timelineItems.length > 0}
-            badgeCount={outlineTurnCount}
-            nodes={outlineNodes}
-            activeNodeKey={activeOutlineNodeKey}
-            totalRunMs={conversation.runDurationMs}
-            liveTiming={conversation}
-            summaryTurnCount={conversation.completionSeq > 0 ? conversation.completionSeq : undefined}
-            hasEarlierHistory={Boolean(detail?.nextCursor)}
-            loadingEarlierHistory={loadingOlderOutline}
-            onLoadEarlierHistory={loadEarlierForOutline}
-            onSelectTarget={jumpToOutlineTarget}
-          />
-          {/* 抽屉是叠加在主语境之上的检视面（任务会话 / 子代理轨迹 / 总览直达共用），
-              「新话题」属于主屏导航动作，在抽屉里只会把底下主屏带走——一律不渲染。 */}
-          {canCreateThread && !isDrawer ? (
-            <Button
-              size="sm"
-              icon={<HelmxIcon name="plus" size={12} />}
-              aria-label={t('conv.pane.newTopic')}
-              title={t('conv.pane.newTopicTitle', { shortcut: formatModShiftShortcut('O') })}
-              disabled={actionPending !== null}
-              onClick={() => startNewThread()}
-            >
-              <span className="pane-action-label">{t('conv.pane.newTopic')}</span>
-            </Button>
-          ) : null}
-          {(workbenchCount > 0 || hasWorkbenchPanel || hasAnyArtifacts) ? (
-            <Button
-              size="sm"
-              variant={workbenchOpen && !isDrawer ? 'primary' : 'default'}
-              icon={<HelmxIcon name="panel-right" size={12} />}
-              aria-label={workbenchCount > 0 ? t('conv.pane.workbenchWithCount', { count: workbenchCount }) : t('conv.pane.workbench')}
-              title={t('conv.pane.workbenchTitle', { shortcut: formatModShortcut('J') })}
-              onClick={() => {
-                // 打开首个可用页签；已打开时保持当前有效页签，并显式绑定当前会话。
-                const target = resolveActiveWorkbenchTab(
-                  workbenchOpen && !isDrawer ? workbenchTab : undefined,
-                  workbenchTabs,
-                )
-                openWorkbenchDrawer({ tab: target, conversationId })
-              }}
-            >
-              <span className="pane-action-label">{t('conv.pane.workbench')}</span>
-              {workbenchCount > 0 && (
-                <Badge tone={workbenchBadgeTone} className="tabular-nums">
-                  {workbenchCount}
-                </Badge>
-              )}
-            </Button>
-          ) : null}
-          {isDrawer && onCloseDrawer !== undefined ? (
-            <Button
-              size="sm"
-              variant="ghost"
-              icon={<HelmxIcon name="external-link" size={12} />}
-              className="conversation-drawer-primary-btn"
-              aria-label={t('conv.pane.openFullscreen')}
-              title={t('conv.pane.openFullscreenTitle')}
-              onClick={() => {
-                onCloseDrawer()
-                openTarget({ kind: 'conversation', conversationId })
-              }}
-            >
-              <span className="pane-action-label">{t('conv.pane.fullscreen')}</span>
-            </Button>
-          ) : isSplit && onCloseSplit !== undefined ? (
-            <CloseSplitButton onCloseSplit={onCloseSplit} />
-          ) : (
-            <span className={isSplitActive ? undefined : 'pane-split-btn'}>
-              <SplitToggleButton
-                isSplitActive={isSplitActive}
-                onToggleSplit={toggleSplit}
-              />
-            </span>
-          )}
-          <span className="pane-more-menu">
-            <DropdownMenu
-              open={moreOpen}
-              onOpenChange={(next) => {
-                if (next) moreInteractedOutsideRef.current = false
-                setMoreOpen(next)
-              }}
-            >
-              <DropdownMenuTrigger asChild>
-                <IconButton
-                  ref={moreButtonRef}
-                  icon={<HelmxIcon name="more" size={14} />}
-                  variant="ghost"
-                  size="sm"
-                  label={t('conv.pane.moreActions')}
-                  aria-expanded={moreOpen}
-                />
-              </DropdownMenuTrigger>
-              <DropdownMenuPortal>
-                <DropdownMenuContent
-                  className="pane-more-popover"
-                  align="end"
-                  sideOffset={6}
-                  onInteractOutside={() => {
-                    moreInteractedOutsideRef.current = true
-                  }}
-                  onCloseAutoFocus={(e) => {
-                    if (moreInteractedOutsideRef.current) {
-                      moreInteractedOutsideRef.current = false
-                      return
-                    }
-                    e.preventDefault()
-                    moreButtonRef.current?.focus()
-                  }}
-                >
-                  <DropdownMenuItem
-                    className="popover-item"
-                    onSelect={() => {
-                      setTitleDraft(conversation.title)
-                      setRenaming(true)
-                    }}
-                  >
-                    <span className="pane-more-item-label">
-                      <HelmxIcon name="edit" size={13} />
-                      {t('conv.pane.renameConversation')}
-                    </span>
-                  </DropdownMenuItem>
-                  <DropdownMenuItem
-                    className="popover-item"
-                    disabled={actionPending !== null || isCompacting}
-                    onSelect={() => {
-                      void runAction('compact', () => conversationsApi.compact(conversationId), t('conv.pane.compactionSubmitted'))
-                    }}
-                  >
-                    <span className="pane-more-item-label">
-                      <HelmxIcon
-                        name={compactPending ? 'loader' : 'archive'}
-                        size={13}
-                        className={compactPending ? 'spin-slow' : undefined}
-                      />
-                      {isCompacting ? t('conv.divider.compacting') : t('conv.pane.compactContext')}
-                    </span>
-                  </DropdownMenuItem>
-                  {canManageArchive && (
-                    <DropdownMenuItem
-                      className="popover-item"
-                      disabled={actionPending !== null}
-                      onSelect={() => {
-                        void runAction(
-                          archived ? 'restore-archive' : 'archive',
-                          () => patchConversationArchived(conversation, !archived),
-                          archived ? t('conv.pane.restored') : t('conv.pane.archived'),
-                        )
-                      }}
-                    >
-                      <span className="pane-more-item-label">
-                        <HelmxIcon
-                          name={actionPending === 'archive' || actionPending === 'restore-archive'
-                            ? 'loader'
-                            : archived ? 'rotate-ccw' : 'archive'}
-                          size={13}
-                          className={actionPending === 'archive' || actionPending === 'restore-archive' ? 'spin-slow' : undefined}
-                        />
-                        {archived ? t('conv.pane.restoreConversation') : t('conv.pane.archiveConversation')}
-                      </span>
-                    </DropdownMenuItem>
-                  )}
-                  <DropdownMenuSeparator className="popover-separator" />
-                  <DropdownMenuItem
-                    className="popover-item popover-item-danger"
-                    danger
-                    disabled={actionPending !== null}
-                    onSelect={() => {
-                      setConfirmAction('reset')
-                    }}
-                  >
-                    <span className="pane-more-item-label">
-                      <HelmxIcon name={actionPending === 'reset' ? 'loader' : 'rotate-ccw'} size={13} />
-                      {t('conv.pane.resetContextCmd')}
-                    </span>
-                  </DropdownMenuItem>
-                  {isConversationDeletable(conversation) && (
-                    <DropdownMenuItem
-                      className="popover-item popover-item-danger"
-                      danger
-                      onSelect={() => {
-                        setConfirmAction('delete')
-                      }}
-                    >
-                      <span className="pane-more-item-label">
-                        <HelmxIcon name="trash-2" size={13} />
-                        {t('conv.pane.deleteConversation')}
-                      </span>
-                    </DropdownMenuItem>
-                  )}
-                </DropdownMenuContent>
-              </DropdownMenuPortal>
-            </DropdownMenu>
-          </span>
-          {isDrawer && onCloseDrawer !== undefined ? (
-            <Tooltip content={t('conv.pane.closeChildDrawer')} side="bottom">
-              <Button
-                size="sm"
-                variant="ghost"
-                icon={<HelmxIcon name="x" size={13} />}
-                className="conversation-drawer-close-btn"
-                aria-label={t('conv.pane.closeDrawerAria')}
-                onClick={onCloseDrawer}
-              >
-                <span className="pane-action-label">{t('common.close')}</span>
-              </Button>
-            </Tooltip>
-          ) : null}
-        </div>
+        <ConversationTitleGroup
+          conversation={conversation}
+          currentNodeId={currentNodeId}
+          renaming={renaming}
+          titleDraft={titleDraft}
+          onTitleDraftChange={setTitleDraft}
+          onRenameCommit={commitTitle}
+          onRenameCancel={() => setRenaming(false)}
+          parentConversationId={parentConversationId}
+          parentTitle={parentTitle}
+          onOpenParent={openParentConversation}
+        />
+        <ConversationPaneActions
+          conversation={conversation}
+          isSplit={isSplit}
+          isDrawer={isDrawer}
+          isCompacting={isCompacting}
+          compactPending={compactPending}
+          actionPending={actions.actionPending}
+          canCreateThread={canCreateThread}
+          archived={archived}
+          canManageArchive={canManageArchive}
+          outline={outline}
+          timelineHasItems={timelineItems.length > 0}
+          workbench={{
+            tabs: workbenchTabs,
+            badge: workbenchBadge,
+            hasPanel: hasWorkbenchPanel,
+            active: workbenchOpen && !isDrawer,
+            hasAnyArtifacts,
+          }}
+          split={{ isSplitActive, toggleSplit }}
+          moreOpen={moreOpen}
+          onMoreOpenChange={setMoreOpen}
+          runAction={actions.runAction}
+          onRename={() => {
+            setTitleDraft(conversation.title)
+            setRenaming(true)
+          }}
+          onNewThread={() => startNewThread()}
+          onOpenWorkbench={openWorkbench}
+          onOpenFullscreen={openFullscreen}
+          onRequestReset={() => setConfirmAction('reset')}
+          onRequestDelete={() => setConfirmAction('delete')}
+          onCloseSplit={onCloseSplit}
+          onCloseDrawer={onCloseDrawer}
+        />
       </header>
-      {isDrawer ? (
-        <div className="pane-drawer-env-bar" aria-label={t('conv.pane.childEnv')}>
-          <span className="pane-drawer-env-item mono">#{conversationId}</span>
-          <span className="pane-drawer-env-sep" aria-hidden="true">·</span>
-          <span className="pane-drawer-env-item">
-            <HelmxIcon name="bot" size={11} />
-            <span>{conversation.profileId}</span>
-          </span>
-          <span className="pane-drawer-env-sep" aria-hidden="true">·</span>
-          <span className="pane-drawer-env-item mono" title={`${currentNodeId}:${conversation.cwd || t('conv.pane.cwdNotSet')}`}>
-            <HelmxIcon name={currentNodeId === 'local' ? 'laptop' : 'server'} size={11} />
-            <span>{`${currentNodeId}:${conversation.cwd || t('conv.pane.cwdNotSet')}`}</span>
-          </span>
-          {conversation.ownedBy !== undefined ? (
-            <>
-              <span className="pane-drawer-env-sep" aria-hidden="true">·</span>
-              <Badge tone="neutral">{t('conv.pane.ownerBadge', { owner: conversation.ownedBy })}</Badge>
-            </>
-          ) : null}
-        </div>
-      ) : null}
+      {isDrawer ? <ConversationDrawerEnvBar conversation={conversation} currentNodeId={currentNodeId} /> : null}
 
       <ConversationTimeline
         conversation={conversation}
         detailEntries={detailEntries}
         timelineItems={timelineItems}
-        sendingPending={sendingPending}
-        outlineOpen={outlineOpen}
-        outlineScrollRequest={outlineScrollReq}
-        onActiveOutlineChange={setActiveOutlineAnchor}
+        sendingPending={sendingPendingVisible(sendingInFlight, conversation.status)}
+        outlineOpen={outline.open}
+        outlineScrollRequest={outline.scrollRequest}
+        onActiveOutlineChange={outline.onActiveAnchorChange}
         {...(live !== undefined ? { live } : {})}
         starters={profileStarters}
         onRequestEdit={requestEdit}
@@ -772,55 +303,12 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
 
       <Composer key={`composer-${conversation.id}`} conversation={conversation} prefill={prefill} onSendingChange={setSendingInFlight} onNewThread={startNewThread} isSplit={isSplit} staged={staged} isDrawer={isDrawer} />
 
-      <ConfirmDialog
-        open={confirmAction === 'reset'}
-        onOpenChange={(open) => {
-          if (!open) setConfirmAction(null)
-        }}
-        title={t('conv.pane.resetConfirmTitle', { id: conversationId })}
-        description={t('conv.pane.resetConfirmDesc')}
-        confirmText={t('conv.pane.resetConfirmAction')}
-        danger
-        onConfirm={() => {
-          setConfirmAction(null)
-          void runAction('reset', () => conversationsApi.reset(conversationId), t('conv.pane.contextReset'))
-        }}
-        onCancel={() => setConfirmAction(null)}
-      />
-
-      <ConfirmDialog
-        open={confirmAction === 'delete'}
-        onOpenChange={(open) => {
-          if (!open) setConfirmAction(null)
-        }}
-        title={t('conv.pane.deleteConfirmTitle', { id: conversationId })}
-        description={t('conv.pane.deleteConfirmDesc')}
-        confirmText={t('conv.pane.deleteConversation')}
-        danger
-        onConfirm={() => {
-          setConfirmAction(null)
-          void (async () => {
-            try {
-              await conversationsApi.remove(conversationId)
-              // 导航由 conversation.deleted 事件按当前目标做条件更新；这里不使用
-              // await 前捕获的主屏/分屏快照，避免删除完成时打断用户的新导航。
-              pushNotice({
-                type: 'notification',
-                level: 'info',
-                title: t('conv.pane.conversationDeleted'),
-                body: t('conv.pane.conversationDeletedBody', { id: conversationId }),
-              })
-            } catch (err) {
-              pushNotice({
-                type: 'notification',
-                level: 'error',
-                title: t('conv.pane.deleteFailed'),
-                body: err instanceof Error ? err.message : String(err),
-              })
-            }
-          })()
-        }}
-        onCancel={() => setConfirmAction(null)}
+      <ConversationConfirmDialogs
+        conversationId={conversationId}
+        confirmAction={confirmAction}
+        onConfirmActionChange={setConfirmAction}
+        onConfirmReset={() => void actions.resetContext()}
+        onConfirmDelete={() => void actions.deleteConversation()}
       />
     </div>
   )

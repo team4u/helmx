@@ -22,6 +22,60 @@ type FtsRebuildOverlayOp =
   | { op: 'deleteConv'; conversationId: number }
   | { op: 'updateTitle'; conversationId: number; title: string }
 
+/** Replays every conversation entry into `index` (redaction happens inside the repo, never in the caller). */
+type FtsReplay = (index: (conversationId: number, entryId: string, title: string, body: string) => void) => Promise<void>
+
+/** Replayed, already-redacted FTS row awaiting the atomic swap (tuple read by index while folding overlays). */
+type RebuildRow = [conversationId: number, entryId: string, title: string, body: string]
+/** Replay batch keyed by `${conversationId}\0${entryId}` so per-conversation overlays can address rows by key prefix. */
+type RebuildBatch = Map<string, RebuildRow>
+
+const rebuildRowKey = (conversationId: number, entryId: string): string => `${conversationId}\0${entryId}`
+
+/** Overlay `deleteConv`: drop every replayed row of a conversation so deleted conversations never resurrect in the swap. */
+function dropConversationRows(batch: RebuildBatch, conversationId: number): void {
+  const prefix = `${conversationId}\0`
+  for (const key of [...batch.keys()]) {
+    if (key.startsWith(prefix)) batch.delete(key)
+  }
+}
+
+/** Overlay `updateTitle`: overwrite the title of every replayed row of a conversation. */
+function retitleConversationRows(batch: RebuildBatch, conversationId: number, title: string): void {
+  const prefix = `${conversationId}\0`
+  for (const [key, row] of batch) {
+    if (key.startsWith(prefix)) row[2] = title
+  }
+}
+
+/** Fold one captured live mutation onto the replay batch. */
+function foldOverlayOp(batch: RebuildBatch, op: FtsRebuildOverlayOp): void {
+  switch (op.op) {
+    case 'upsert':
+      batch.set(rebuildRowKey(op.conversationId, op.entryId), [op.conversationId, op.entryId, op.title, op.body])
+      return
+    case 'removeEntries':
+      for (const entryId of op.entryIds) batch.delete(rebuildRowKey(op.conversationId, entryId))
+      return
+    case 'deleteConv':
+      return dropConversationRows(batch, op.conversationId)
+    case 'updateTitle':
+      return retitleConversationRows(batch, op.conversationId, op.title)
+  }
+}
+
+/** Drop tombstoned conversations and prefer live titles so the swapped index mirrors current state, not stale replay text. */
+function reconcileBatchWithLiveState(batch: RebuildBatch, deps: FtsRepoDeps): void {
+  for (const [key, row] of [...batch.entries()]) {
+    if (deps.isDeleted(row[0])) {
+      batch.delete(key)
+      continue
+    }
+    const liveTitle = deps.getLiveTitle(row[0])
+    if (liveTitle !== undefined) row[2] = deps.redact(liveTitle)
+  }
+}
+
 export interface FtsRepoDeps {
   redact(text: string): string
   isDeleted(conversationId: number): boolean
@@ -226,11 +280,7 @@ export class FtsRepo {
    * than dropping it and faking success). Concurrent rebuilds are serialized and live mutations during async replay
    * are captured in an overlay and folded atomically before swap so no writes are lost and no deleted conversations resurrect.
    */
-  async rebuild(
-    replay: (
-      index: (conversationId: number, entryId: string, title: string, body: string) => void,
-    ) => Promise<void>,
-  ): Promise<void> {
+  async rebuild(replay: FtsReplay): Promise<void> {
     this.queue.assertWritable()
     const run = this.ftsRebuildChain.then(() => this.runRebuild(replay))
     this.ftsRebuildChain = run.then(
@@ -244,82 +294,65 @@ export class FtsRepo {
     return this.ftsRebuildChain
   }
 
-  private async runRebuild(
-    replay: (
-      index: (conversationId: number, entryId: string, title: string, body: string) => void,
-    ) => Promise<void>,
-  ): Promise<void> {
+  private async runRebuild(replay: FtsReplay): Promise<void> {
     this.queue.assertWritable()
     await this.queue.flushPublic()
     const overlay: FtsRebuildOverlayOp[] = []
     this.ftsRebuildOverlay = overlay
-    const batch = new Map<string, [number, string, string, string]>()
     try {
-      await replay((conversationId, entryId, title, body) => {
-        batch.set(`${conversationId}\0${entryId}`, [
-          conversationId,
-          entryId,
-          this.deps.redact(title),
-          this.deps.redact(body),
-        ])
-      })
+      const batch = await this.replayIntoBatch(replay)
       await this.queue.drainQuiescent()
       this.queue.assertWritable()
-      for (const op of overlay) {
-        if (op.op === 'upsert') {
-          batch.set(`${op.conversationId}\0${op.entryId}`, [op.conversationId, op.entryId, op.title, op.body])
-        } else if (op.op === 'removeEntries') {
-          for (const entryId of op.entryIds) batch.delete(`${op.conversationId}\0${entryId}`)
-        } else if (op.op === 'deleteConv') {
-          const prefix = `${op.conversationId}\0`
-          for (const key of [...batch.keys()]) {
-            if (key.startsWith(prefix)) batch.delete(key)
-          }
-        } else if (op.op === 'updateTitle') {
-          const prefix = `${op.conversationId}\0`
-          for (const [key, row] of batch) {
-            if (key.startsWith(prefix)) row[2] = op.title
-          }
-        }
-      }
-      for (const [key, row] of [...batch.entries()]) {
-        if (this.deps.isDeleted(row[0])) {
-          batch.delete(key)
-          continue
-        }
-        const liveTitle = this.deps.getLiveTitle(row[0])
-        if (liveTitle !== undefined) row[2] = this.deps.redact(liveTitle)
-      }
+      for (const op of overlay) foldOverlayOp(batch, op)
+      reconcileBatchWithLiveState(batch, this.deps)
       this.ftsRebuildOverlay = null
-
-      await this.queue.db.transaction(async (tx) => {
-        await tx.exec('DELETE FROM helmx_conversation_fts')
-        await tx.exec('DELETE FROM helmx_fts_map')
-        let nextRowId = 0
-        for (const [conversationId, entryId, title, body] of batch.values()) {
-          nextRowId += 1
-          await tx.run(
-            'INSERT INTO helmx_conversation_fts (rowid, conversation_id, entry_id, title, body) VALUES (?, ?, ?, ?, ?)',
-            nextRowId,
-            conversationId,
-            entryId,
-            title,
-            body,
-          )
-          await tx.run(
-            'INSERT INTO helmx_fts_map (conversation_id, entry_id, fts_rowid) VALUES (?, ?, ?)',
-            conversationId,
-            entryId,
-            nextRowId,
-          )
-        }
-        await this.deps.markFtsRebuiltInTx(tx)
-      })
+      await this.swapIndex(batch)
       this.deps.onFtsRebuilt()
     } finally {
       if (this.ftsRebuildOverlay === overlay) {
         this.ftsRebuildOverlay = null
       }
     }
+  }
+
+  /** Replay all conversation text into a fresh redacted batch (the overlay is armed first so live writes are captured). */
+  private async replayIntoBatch(replay: FtsReplay): Promise<RebuildBatch> {
+    const batch: RebuildBatch = new Map()
+    await replay((conversationId, entryId, title, body) => {
+      batch.set(rebuildRowKey(conversationId, entryId), [
+        conversationId,
+        entryId,
+        this.deps.redact(title),
+        this.deps.redact(body),
+      ])
+    })
+    return batch
+  }
+
+  /** Replace the whole derived index with the replay batch and stamp `fts_schema_version` in one transaction. */
+  private async swapIndex(batch: RebuildBatch): Promise<void> {
+    await this.queue.db.transaction(async (tx) => {
+      await tx.exec('DELETE FROM helmx_conversation_fts')
+      await tx.exec('DELETE FROM helmx_fts_map')
+      let nextRowId = 0
+      for (const [conversationId, entryId, title, body] of batch.values()) {
+        nextRowId += 1
+        await tx.run(
+          'INSERT INTO helmx_conversation_fts (rowid, conversation_id, entry_id, title, body) VALUES (?, ?, ?, ?, ?)',
+          nextRowId,
+          conversationId,
+          entryId,
+          title,
+          body,
+        )
+        await tx.run(
+          'INSERT INTO helmx_fts_map (conversation_id, entry_id, fts_rowid) VALUES (?, ?, ?)',
+          conversationId,
+          entryId,
+          nextRowId,
+        )
+      }
+      await this.deps.markFtsRebuiltInTx(tx)
+    })
   }
 }

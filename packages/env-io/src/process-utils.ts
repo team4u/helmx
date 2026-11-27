@@ -21,6 +21,8 @@ const DEFAULT_LOG_TAIL_MAX_BYTES = 64 * 1024;
 const DEFAULT_LOG_READ_MAX_BYTES = 1_000_000;
 const MAX_STALE_BREAK_ATTEMPTS = 8;
 
+const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
 /** Return true if `pid` exists (treating `EPERM` as alive so cross-user PIDs are never declared dead). */
 export function isProcessAlive(pid: number): boolean {
   if (!Number.isInteger(pid) || pid <= 0) return false;
@@ -42,7 +44,7 @@ export async function waitForPidExit(
   if (!isAlive(pid)) return true;
   const deadline = Date.now() + Math.max(0, timeoutMs);
   while (Date.now() < deadline) {
-    await new Promise((resolve) => setTimeout(resolve, pollMs));
+    await sleep(pollMs);
     if (!isAlive(pid)) return true;
   }
   return !isAlive(pid);
@@ -224,6 +226,220 @@ export interface CrossProcessFileLockOptions {
   onError?: (lockPath: string, error: unknown, phase: 'create' | 'read') => Error;
 }
 
+/** Normalized options plus the per-acquisition state shared by the lock steps below. */
+interface LockAttempt {
+  readonly lockPath: string;
+  /** `<pid> <uuid>` token written into the lock file; release is owner-checked against it. */
+  readonly owner: string;
+  readonly waitMs: number;
+  readonly pollMs: number;
+  readonly settleGraceMs: number;
+  readonly staleRecovery: boolean;
+  readonly isAlive: (pid: number) => boolean;
+  readonly hooks: CrossProcessFileLockOptions;
+  /** Wall-clock instant after which waiting for a live holder fails. */
+  readonly deadline: number;
+  /** Confirmed-dead locks broken so far; bounded so a pathological loop fails loudly. */
+  staleBreaks: number;
+}
+
+/** What to do after our publish lost to an existing lock file: retry at once (it vanished or was broken) or wait first. */
+type LockDecision = { readonly kind: 'retry-now' } | { readonly kind: 'wait'; readonly delayMs: number };
+
+const RETRY_NOW: LockDecision = { kind: 'retry-now' };
+
+function describeError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function lockIoError(attempt: LockAttempt, error: unknown, phase: 'create' | 'read', fallbackMessage: string): Error {
+  return attempt.hooks.onError ? attempt.hooks.onError(attempt.lockPath, error, phase) : new Error(fallbackMessage);
+}
+
+function lockBusyError(attempt: LockAttempt, ownerPid: number | undefined, fallbackMessage: string): Error {
+  return attempt.hooks.onBusy ? attempt.hooks.onBusy(attempt.lockPath, ownerPid) : new Error(fallbackMessage);
+}
+
+/** Corrupt/unowned lock files are never deleted: surface `onCorrupt`, else `onBusy`, else the default error. */
+function lockCorruptError(attempt: LockAttempt): Error {
+  const { onCorrupt, onBusy } = attempt.hooks;
+  if (onCorrupt) return onCorrupt(attempt.lockPath);
+  if (onBusy) return onBusy(attempt.lockPath);
+  return new Error(`lock file is corrupt or unowned (${attempt.lockPath}): cannot determine owner`);
+}
+
+/**
+ * Atomically publish `owner` as the lock holder: write + fsync a temp file, then hard-link it onto the
+ * lock path (`EEXIST` means someone else holds it). Filesystems that reject hard links fall back to an
+ * exclusive `wx` create. The temp file is always removed.
+ */
+async function publishLockOwner(attempt: LockAttempt): Promise<boolean> {
+  const { lockPath, owner } = attempt;
+  const tmp = `${lockPath}.${process.pid}.${Date.now()}-${Math.random().toString(36).slice(2)}.tmp`;
+  try {
+    const handle = await fsp.open(tmp, 'w', 0o600);
+    try {
+      await handle.writeFile(`${owner}\n`);
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+    await fsp.link(tmp, lockPath);
+    return true;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'EEXIST') return false;
+    if (code === 'EXDEV' || code === 'ENOSYS' || code === 'EPERM' || code === 'EINVAL') {
+      // Awaited inside the try so the temp file is removed only after the fallback has settled.
+      return await createLockExclusively(lockPath, owner);
+    }
+    throw error;
+  } finally {
+    await fsp.rm(tmp, { force: true }).catch(() => undefined);
+  }
+}
+
+/** Hard-link fallback: exclusive `wx` create; `false` when the lock already exists. */
+async function createLockExclusively(lockPath: string, owner: string): Promise<boolean> {
+  try {
+    await fsp.writeFile(lockPath, `${owner}\n`, { flag: 'wx', mode: 0o600 });
+    return true;
+  } catch (fallbackError) {
+    if ((fallbackError as NodeJS.ErrnoException).code === 'EEXIST') return false;
+    throw fallbackError;
+  }
+}
+
+/** One publish attempt; create failures surface through `onError` and the lock file is preserved. */
+async function tryPublishLock(attempt: LockAttempt): Promise<boolean> {
+  try {
+    return await publishLockOwner(attempt);
+  } catch (error) {
+    throw lockIoError(attempt, error, 'create', `failed to create lock file (${attempt.lockPath}): ${describeError(error)}`);
+  }
+}
+
+/** Publish-and-inspect loop: returns once this process owns the lock, throws when it cannot get it. */
+async function acquireLock(attempt: LockAttempt): Promise<void> {
+  for (;;) {
+    if (await tryPublishLock(attempt)) return;
+    const decision = await inspectHeldLock(attempt);
+    if (decision.kind === 'wait') await sleep(decision.delayMs);
+  }
+}
+
+/**
+ * Inspect the lock that beat our publish: wait for a live holder (within the budget), break a
+ * confirmed-dead one, or wait out a half-written file's settle window. Throws when the holder is
+ * live and the budget is spent, the file is corrupt, or I/O fails.
+ */
+async function inspectHeldLock(attempt: LockAttempt): Promise<LockDecision> {
+  if (!attempt.staleRecovery) {
+    if (Date.now() >= attempt.deadline) throw lockBusyError(attempt, undefined, `lock file already exists (${attempt.lockPath})`);
+    return { kind: 'wait', delayMs: attempt.pollMs };
+  }
+  const raw = await readLockFile(attempt);
+  if (raw === undefined) return RETRY_NOW;
+  const head = raw.trim().split(/\s+/)[0] ?? '';
+  if (!/^\d+$/.test(head)) return await inspectUnownedLock(attempt);
+  const pid = Number(head);
+  if (Number.isSafeInteger(pid) && pid > 0 && !attempt.isAlive(pid)) return await breakStaleLock(attempt, raw, pid);
+  if (Date.now() >= attempt.deadline) {
+    throw lockBusyError(attempt, pid, `lock file is held by pid ${pid} (${attempt.lockPath})`);
+  }
+  return { kind: 'wait', delayMs: attempt.pollMs };
+}
+
+/** Lock file contents, or `undefined` when it vanished between our failed publish and this read. */
+async function readLockFile(attempt: LockAttempt): Promise<string | undefined> {
+  try {
+    return await fsp.readFile(attempt.lockPath, 'utf8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    throw lockIoError(attempt, error, 'read', `failed to read lock file (${attempt.lockPath}): ${describeError(error)}`);
+  }
+}
+
+/**
+ * Non-numeric / empty lock file: never auto-delete (could be mid-write fallback or corrupt remnant).
+ * With a wait budget, give a freshly written file its settle window before declaring it corrupt.
+ */
+async function inspectUnownedLock(attempt: LockAttempt): Promise<LockDecision> {
+  if (attempt.waitMs <= 0) throw lockCorruptError(attempt);
+  const mtimeMs = await statLockFile(attempt);
+  if (mtimeMs === undefined) return RETRY_NOW;
+  if (Date.now() - mtimeMs < attempt.settleGraceMs && Date.now() < attempt.deadline) {
+    return { kind: 'wait', delayMs: attempt.pollMs * 4 };
+  }
+  throw lockCorruptError(attempt);
+}
+
+/** Lock file mtime, or `undefined` when it vanished; other stat failures surface through `onError`. */
+async function statLockFile(attempt: LockAttempt): Promise<number | undefined> {
+  try {
+    return (await fsp.stat(attempt.lockPath)).mtimeMs;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    throw lockIoError(attempt, error, 'read', `failed to stat lock file (${attempt.lockPath}): ${describeError(error)}`);
+  }
+}
+
+/**
+ * Break a lock whose recorded PID is confirmed dead. The file is quarantined by rename before it is
+ * inspected and deleted, so concurrent stale-lock breakers cannot delete a fresh live lock created
+ * right after an unlink; a quarantined file that turned out to be newer/live is restored in place.
+ */
+async function breakStaleLock(attempt: LockAttempt, observedRaw: string, pid: number): Promise<LockDecision> {
+  attempt.staleBreaks += 1;
+  if (attempt.staleBreaks > MAX_STALE_BREAK_ATTEMPTS) {
+    throw lockIoError(
+      attempt,
+      new Error(`unable to clear stale lock held by dead pid ${pid}`),
+      'create',
+      `unable to clear stale lock file (${attempt.lockPath}) held by dead pid ${pid}`,
+    );
+  }
+  const quarantine = `${attempt.lockPath}.${process.pid}.${randomUUID()}.stale`;
+  try {
+    await fsp.rename(attempt.lockPath, quarantine);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return RETRY_NOW;
+    throw lockIoError(attempt, error, 'create', `failed to clear stale lock (${attempt.lockPath}): ${describeError(error)}`);
+  }
+  try {
+    await restoreIfNotStale(attempt, quarantine, observedRaw);
+  } finally {
+    await fsp.rm(quarantine, { force: true }).catch(() => undefined);
+  }
+  return RETRY_NOW;
+}
+
+/** Put the quarantined lock back when it is no longer the dead-owner content we set out to break. */
+async function restoreIfNotStale(attempt: LockAttempt, quarantine: string, observedRaw: string): Promise<void> {
+  const movedRaw = await fsp.readFile(quarantine, 'utf8');
+  if (movedRaw === observedRaw) return;
+  const movedHead = movedRaw.trim().split(/\s+/)[0] ?? '';
+  const movedPid = /^\d+$/.test(movedHead) ? Number(movedHead) : NaN;
+  const movedIsDead = Number.isSafeInteger(movedPid) && movedPid > 0 && !attempt.isAlive(movedPid);
+  if (movedIsDead) return;
+  // Restore newer live/unproven lock without overwriting any concurrent replacement.
+  try {
+    await fsp.link(quarantine, attempt.lockPath);
+  } catch {
+    await fsp.writeFile(attempt.lockPath, movedRaw, { flag: 'wx', mode: 0o600 }).catch(() => undefined);
+  }
+}
+
+/** Owner-checked release: remove the lock file only while it still carries our owner token. */
+async function releaseLock(attempt: LockAttempt): Promise<void> {
+  try {
+    const current = await fsp.readFile(attempt.lockPath, 'utf8');
+    if (current.trim() === attempt.owner) await fsp.rm(attempt.lockPath, { force: true });
+  } catch {
+    // If release fails, dead-PID stale detection cleans it up after this process exits.
+  }
+}
+
 /**
  * Exclusive cross-process file lock with atomic publish (`temp + fsync + fs.link`, falling back to
  * `wx` when hard links are unsupported), confirmed-dead PID stale recovery, and owner-checked CAS release.
@@ -239,165 +455,24 @@ export async function withCrossProcessFileLock<T>(
   options: CrossProcessFileLockOptions = {},
 ): Promise<T> {
   const waitMs = Math.max(0, options.waitMs ?? 0);
-  const pollMs = Math.max(5, options.pollMs ?? DEFAULT_LOCK_POLL_MS);
-  const settleGraceMs = Math.max(0, options.settleGraceMs ?? DEFAULT_LOCK_SETTLE_GRACE_MS);
-  const staleRecovery = options.staleRecovery !== false;
-  const isAlive = options.isAlive ?? isProcessAlive;
-  const owner = `${process.pid} ${randomUUID()}`;
-  const deadline = Date.now() + waitMs;
-
-  await fsp.mkdir(path.dirname(lockPath), { recursive: true });
-
-  const publish = async (): Promise<boolean> => {
-    const tmp = `${lockPath}.${process.pid}.${Date.now()}-${Math.random().toString(36).slice(2)}.tmp`;
-    try {
-      const handle = await fsp.open(tmp, 'w', 0o600);
-      try {
-        await handle.writeFile(`${owner}\n`);
-        await handle.sync();
-      } finally {
-        await handle.close();
-      }
-      await fsp.link(tmp, lockPath);
-      return true;
-    } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code;
-      if (code === 'EEXIST') return false;
-      if (code === 'EXDEV' || code === 'ENOSYS' || code === 'EPERM' || code === 'EINVAL') {
-        try {
-          await fsp.writeFile(lockPath, `${owner}\n`, { flag: 'wx', mode: 0o600 });
-          return true;
-        } catch (fallbackError) {
-          if ((fallbackError as NodeJS.ErrnoException).code === 'EEXIST') return false;
-          throw fallbackError;
-        }
-      }
-      throw error;
-    } finally {
-      await fsp.rm(tmp, { force: true }).catch(() => undefined);
-    }
+  const attempt: LockAttempt = {
+    lockPath,
+    owner: `${process.pid} ${randomUUID()}`,
+    waitMs,
+    pollMs: Math.max(5, options.pollMs ?? DEFAULT_LOCK_POLL_MS),
+    settleGraceMs: Math.max(0, options.settleGraceMs ?? DEFAULT_LOCK_SETTLE_GRACE_MS),
+    staleRecovery: options.staleRecovery !== false,
+    isAlive: options.isAlive ?? isProcessAlive,
+    hooks: options,
+    deadline: Date.now() + waitMs,
+    staleBreaks: 0,
   };
 
-  let staleBreaks = 0;
-  let acquired = false;
-
-  for (;;) {
-    let held = false;
-    try {
-      held = await publish();
-    } catch (error) {
-      throw options.onError
-        ? options.onError(lockPath, error, 'create')
-        : new Error(`failed to create lock file (${lockPath}): ${error instanceof Error ? error.message : String(error)}`);
-    }
-    if (held) {
-      acquired = true;
-      break;
-    }
-
-    if (!staleRecovery) {
-      if (Date.now() >= deadline) {
-        throw options.onBusy
-          ? options.onBusy(lockPath)
-          : new Error(`lock file already exists (${lockPath})`);
-      }
-      await new Promise((resolve) => setTimeout(resolve, pollMs));
-      continue;
-    }
-
-    let raw: string;
-    try {
-      raw = await fsp.readFile(lockPath, 'utf8');
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
-      throw options.onError
-        ? options.onError(lockPath, error, 'read')
-        : new Error(`failed to read lock file (${lockPath}): ${error instanceof Error ? error.message : String(error)}`);
-    }
-
-    const head = raw.trim().split(/\s+/)[0] ?? '';
-    if (/^\d+$/.test(head)) {
-      const pid = Number(head);
-      if (Number.isSafeInteger(pid) && pid > 0 && !isAlive(pid)) {
-        staleBreaks += 1;
-        if (staleBreaks > MAX_STALE_BREAK_ATTEMPTS) {
-          throw options.onError
-            ? options.onError(lockPath, new Error(`unable to clear stale lock held by dead pid ${pid}`), 'create')
-            : new Error(`unable to clear stale lock file (${lockPath}) held by dead pid ${pid}`);
-        }
-        // Atomically quarantine the stale lock via rename before inspecting and deleting it, so
-        // concurrent stale-lock breakers cannot delete a fresh live lock created right after unlink.
-        const quarantine = `${lockPath}.${process.pid}.${randomUUID()}.stale`;
-        try {
-          await fsp.rename(lockPath, quarantine);
-        } catch (error) {
-          if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
-          throw options.onError
-            ? options.onError(lockPath, error, 'create')
-            : new Error(`failed to clear stale lock (${lockPath}): ${error instanceof Error ? error.message : String(error)}`);
-        }
-        try {
-          const movedRaw = await fsp.readFile(quarantine, 'utf8');
-          if (movedRaw !== raw) {
-            const movedHead = movedRaw.trim().split(/\s+/)[0] ?? '';
-            const movedPid = /^\d+$/.test(movedHead) ? Number(movedHead) : NaN;
-            const movedIsDead = Number.isSafeInteger(movedPid) && movedPid > 0 && !isAlive(movedPid);
-            if (!movedIsDead) {
-              // Restore newer live/unproven lock without overwriting any concurrent replacement.
-              try {
-                await fsp.link(quarantine, lockPath);
-              } catch {
-                await fsp.writeFile(lockPath, movedRaw, { flag: 'wx', mode: 0o600 }).catch(() => undefined);
-              }
-            }
-          }
-        } finally {
-          await fsp.rm(quarantine, { force: true }).catch(() => undefined);
-        }
-        continue;
-      }
-      if (Date.now() >= deadline) {
-        throw options.onBusy
-          ? options.onBusy(lockPath, pid)
-          : new Error(`lock file is held by pid ${pid} (${lockPath})`);
-      }
-      await new Promise((resolve) => setTimeout(resolve, pollMs));
-      continue;
-    }
-
-    // Non-numeric / empty lock file: never auto-delete (could be mid-write fallback or corrupt remnant).
-    if (waitMs > 0) {
-      let stat: Awaited<ReturnType<typeof fsp.stat>>;
-      try {
-        stat = await fsp.stat(lockPath);
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
-        throw options.onError
-          ? options.onError(lockPath, error, 'read')
-          : new Error(`failed to stat lock file (${lockPath}): ${error instanceof Error ? error.message : String(error)}`);
-      }
-      if (Date.now() - stat.mtimeMs < settleGraceMs && Date.now() < deadline) {
-        await new Promise((resolve) => setTimeout(resolve, pollMs * 4));
-        continue;
-      }
-    }
-    throw options.onCorrupt
-      ? options.onCorrupt(lockPath)
-      : (options.onBusy
-          ? options.onBusy(lockPath)
-          : new Error(`lock file is corrupt or unowned (${lockPath}): cannot determine owner`));
-  }
-
+  await fsp.mkdir(path.dirname(lockPath), { recursive: true });
+  await acquireLock(attempt);
   try {
     return await fn();
   } finally {
-    if (acquired) {
-      try {
-        const current = await fsp.readFile(lockPath, 'utf8');
-        if (current.trim() === owner) await fsp.rm(lockPath, { force: true });
-      } catch {
-        // If release fails, dead-PID stale detection cleans it up after this process exits.
-      }
-    }
+    await releaseLock(attempt);
   }
 }

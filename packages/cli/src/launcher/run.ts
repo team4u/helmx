@@ -99,14 +99,8 @@ async function stopHeldChild(child: ChildProcess, pid: number, root: string, isA
   }
 }
 
-/** The foreground run. Resolves with the process exit code when the operator stops it or the hub dies. */
-export async function runHubForeground(options: RunHubOptions): Promise<number> {
-  const { io, root } = options;
-  const tag = options.tag ?? 'latest';
-  const paths = pathsOf(root);
-  const isAlive = isAliveOf(io);
-
-  // Startup: never adopt a hub started elsewhere — stopping and restarting stay explicit.
+/** Startup: never adopt a hub started elsewhere — stopping and restarting stay explicit. */
+async function refuseIfHubRunning(root: string, isAlive: (pid: number) => boolean): Promise<void> {
   const record = await readPidRecord(root);
   if (record !== null && isAlive(record.pid)) {
     throw new UsageError(
@@ -114,55 +108,138 @@ export async function runHubForeground(options: RunHubOptions): Promise<number> 
       'run_refuses_existing_hub',
     );
   }
+}
 
-  let state: FollowState;
-  const current = await readCurrentRelease(root);
-  if (current === null) {
-    io.out(`no release installed under ${root}; installing ${options.pkgName} (tag ${tag})\n`);
-    const outcome = await performHubUpdate({
-      io,
-      root,
-      pkgName: options.pkgName,
-      registryUrl: options.registryUrl,
-      tag,
-      startIfNotRunning: true,
-      launchFlags: options.launchFlags,
-      ...(options.healthTimeoutMs !== undefined ? { healthTimeoutMs: options.healthTimeoutMs } : {}),
-      ...(options.fetchFn !== undefined ? { fetchFn: options.fetchFn } : {}),
-      ...(options.core !== undefined ? { core: options.core } : {}),
-    });
-    const pidNote = outcome.pid !== undefined ? ` (pid ${outcome.pid}, ${outcome.url})` : '';
-    io.out(`installed ${outcome.previousVersion ?? '(none)'} -> ${outcome.targetVersion}; hub started${pidNote}\n`);
-    if (outcome.pid === undefined || !outcome.url) {
-      throw new UsageError('bootstrap install finished without a running hub (internal error)', 'bootstrap_start_failed');
-    }
-    state = {
-      pid: outcome.pid,
-      version: outcome.targetVersion,
-      url: outcome.url as string,
-      logPath: paths.hubLogPath,
-      logOffset: await fsp.stat(paths.hubLogPath).then((s) => s.size, () => 0),
-    };
-  } else {
-    let captured: ChildProcess | undefined;
-    const started = await startHub(root, io, {
-      flags: options.launchFlags,
-      healthTimeoutMs: options.healthTimeoutMs,
-      pollMs: options.pollMs,
-      ...(options.fetchFn !== undefined ? { fetchFn: options.fetchFn } : {}),
-      onSpawn: (child) => {
-        captured = child;
-      },
-    });
-    state = {
-      pid: started.pid,
-      version: started.version,
-      url: started.url,
-      logPath: started.logPath,
-      logOffset: started.logStartOffset,
-      child: captured,
+/** Bootstrap path (no committed release): install the package, let the update start it detached, and attach to its log. */
+async function bootstrapInstallHub(options: RunHubOptions, tag: string): Promise<FollowState> {
+  const { io, root } = options;
+  const outcome = await performHubUpdate({
+    io,
+    root,
+    pkgName: options.pkgName,
+    registryUrl: options.registryUrl,
+    tag,
+    startIfNotRunning: true,
+    launchFlags: options.launchFlags,
+    ...(options.healthTimeoutMs !== undefined ? { healthTimeoutMs: options.healthTimeoutMs } : {}),
+    ...(options.fetchFn !== undefined ? { fetchFn: options.fetchFn } : {}),
+    ...(options.core !== undefined ? { core: options.core } : {}),
+  });
+  const pidNote = outcome.pid !== undefined ? ` (pid ${outcome.pid}, ${outcome.url})` : '';
+  io.out(`installed ${outcome.previousVersion ?? '(none)'} -> ${outcome.targetVersion}; hub started${pidNote}\n`);
+  if (outcome.pid === undefined || !outcome.url) {
+    throw new UsageError('bootstrap install finished without a running hub (internal error)', 'bootstrap_start_failed');
+  }
+  const logPath = pathsOf(root).hubLogPath;
+  return {
+    pid: outcome.pid,
+    version: outcome.targetVersion,
+    url: outcome.url as string,
+    logPath,
+    logOffset: await fsp.stat(logPath).then((s) => s.size, () => 0),
+  };
+}
+
+/** Normal path: start the committed release through the detached readiness gate, keeping the spawned handle. */
+async function startCommittedHub(options: RunHubOptions): Promise<FollowState> {
+  let captured: ChildProcess | undefined;
+  const started = await startHub(options.root, options.io, {
+    flags: options.launchFlags,
+    healthTimeoutMs: options.healthTimeoutMs,
+    pollMs: options.pollMs,
+    ...(options.fetchFn !== undefined ? { fetchFn: options.fetchFn } : {}),
+    onSpawn: (child) => {
+      captured = child;
+    },
+  });
+  return {
+    pid: started.pid,
+    version: started.version,
+    url: started.url,
+    logPath: started.logPath,
+    logOffset: started.logStartOffset,
+    child: captured,
+  };
+}
+
+/** Bring a hub up to attach to: bootstrap-install when nothing is committed, otherwise start the committed release. */
+async function launchHubToAttach(options: RunHubOptions, tag: string): Promise<FollowState> {
+  const current = await readCurrentRelease(options.root);
+  if (current !== null) return startCommittedHub(options);
+  options.io.out(`no release installed under ${options.root}; installing ${options.pkgName} (tag ${tag})\n`);
+  return bootstrapInstallHub(options, tag);
+}
+
+/** Surface an unexpected hub death honestly: exit code 1 plus a pointer to the log and its tail. */
+async function reportHubDeath(state: FollowState, io: LauncherIo): Promise<string> {
+  const exitMessage = `the hub process exited (pid ${state.pid}); inspect ${state.logPath}`;
+  io.err(`${exitMessage}\n`);
+  const tail = await readLogTailBounded(state.logPath, 40);
+  if (tail !== '') io.err(`--- ${state.logPath} last 40 lines ---\n${tail}\n`);
+  return exitMessage;
+}
+
+interface StopOutcome {
+  exitCode: number;
+  exitMessage: string;
+}
+
+/** Stop a hub this process spawned and still holds a handle for; a failed stop is reported, not hidden. */
+async function stopHeldHub(
+  child: ChildProcess,
+  state: FollowState,
+  options: RunHubOptions,
+  isAlive: (pid: number) => boolean,
+): Promise<StopOutcome> {
+  try {
+    await stopHeldChild(child, state.pid, options.root, isAlive, options.stopTimeoutMs ?? DEFAULTS.stopTimeoutMs);
+    return { exitCode: 0, exitMessage: `hub pid ${state.pid} stopped` };
+  } catch (error) {
+    return {
+      exitCode: 1,
+      exitMessage: `failed to stop hub pid ${state.pid}: ${error instanceof Error ? error.message : String(error)}`,
     };
   }
+}
+
+/**
+ * Stop order: a hub this process spawned is stopped through the held handle (the strongest ownership
+ * proof, platform-independent); the bootstrap-install path (no handle) falls back to the verified
+ * control channel and then the pid-record identity proof.
+ */
+async function stopHubOnShutdown(
+  state: FollowState,
+  options: RunHubOptions,
+  isAlive: (pid: number) => boolean,
+): Promise<StopOutcome> {
+  const child = state.child;
+  if (child !== undefined && child.pid === state.pid) return stopHeldHub(child, state, options, isAlive);
+
+  const stop = await stopHubGraceful(options.root, options.io, {
+    ...(options.stopTimeoutMs !== undefined ? { stopTimeoutMs: options.stopTimeoutMs } : {}),
+    ...(options.stopEscalationWaitMs !== undefined ? { stopEscalationWaitMs: options.stopEscalationWaitMs } : {}),
+  });
+  if (!stop.wasRunning) {
+    // The hub died between attach and stop — surface honestly instead of reporting success.
+    return {
+      exitCode: 1,
+      exitMessage: `the hub process exited before the stop request completed (pid ${state.pid}); inspect ${state.logPath}`,
+    };
+  }
+  if (stop.escalated) {
+    return { exitCode: 0, exitMessage: `hub pid ${stop.pid} stopped (escalated after graceful timeout)` };
+  }
+  return { exitCode: 0, exitMessage: `hub pid ${stop.pid} stopped${stop.via === 'control-channel' ? ' (control channel)' : ''}` };
+}
+
+/** The foreground run. Resolves with the process exit code when the operator stops it or the hub dies. */
+export async function runHubForeground(options: RunHubOptions): Promise<number> {
+  const { io, root } = options;
+  const tag = options.tag ?? 'latest';
+  const isAlive = isAliveOf(io);
+
+  await refuseIfHubRunning(root, isAlive);
+  const state = await launchHubToAttach(options, tag);
 
   io.out(`hub ${state.version} running: pid ${state.pid} at ${state.url}\n`);
   io.out(`attached in the foreground: Ctrl+C stops the hub (updates are manual: helmx update)\n`);
@@ -202,38 +279,11 @@ export async function runHubForeground(options: RunHubOptions): Promise<number> 
 
     if (signalOrDeath === 'gone') {
       exitCode = 1;
-      exitMessage = `the hub process exited (pid ${state.pid}); inspect ${state.logPath}`;
-      io.err(`${exitMessage}\n`);
-      const tail = await readLogTailBounded(state.logPath, 40);
-      if (tail !== '') io.err(`--- ${state.logPath} last 40 lines ---\n${tail}\n`);
+      exitMessage = await reportHubDeath(state, io);
     } else {
-      // Stop order: a hub this process spawned is stopped through the held handle (the strongest
-      // ownership proof, platform-independent); the bootstrap-install path (no handle) falls back
-      // to the verified control channel and then the pid-record identity proof.
-      if (state.child !== undefined && state.child.pid === state.pid) {
-        try {
-          await stopHeldChild(state.child, state.pid, root, isAlive, options.stopTimeoutMs ?? DEFAULTS.stopTimeoutMs);
-          exitMessage = `hub pid ${state.pid} stopped`;
-        } catch (error) {
-          exitCode = 1;
-          exitMessage = `failed to stop hub pid ${state.pid}: ${error instanceof Error ? error.message : String(error)}`;
-        }
-      } else {
-        const stop = await stopHubGraceful(root, io, {
-          ...(options.stopTimeoutMs !== undefined ? { stopTimeoutMs: options.stopTimeoutMs } : {}),
-          ...(options.stopEscalationWaitMs !== undefined ? { stopEscalationWaitMs: options.stopEscalationWaitMs } : {}),
-        });
-        if (!stop.wasRunning) {
-          // The hub died between attach and stop — surface honestly instead of reporting success.
-          exitCode = 1;
-          exitMessage = `the hub process exited before the stop request completed (pid ${state.pid}); inspect ${state.logPath}`;
-        } else if (stop.escalated) {
-          exitCode = 0;
-          exitMessage = `hub pid ${stop.pid} stopped (escalated after graceful timeout)`;
-        } else {
-          exitMessage = `hub pid ${stop.pid} stopped${stop.via === 'control-channel' ? ' (control channel)' : ''}`;
-        }
-      }
+      const stop = await stopHubOnShutdown(state, options, isAlive);
+      exitCode = stop.exitCode;
+      exitMessage = stop.exitMessage;
       io.err(`launcher stopping${signalName !== undefined ? ` (${signalName})` : ''}: ${exitMessage}\n`);
     }
   } finally {

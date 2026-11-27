@@ -88,13 +88,21 @@ export interface PlanBadgesDoc {
   byConversation: Record<string, PlanBadgeEntry>
 }
 
+export type PlanProposeOutcome =
+  | 'approved'
+  | 'approved_handoff'
+  | 'revised'
+  | 'cancelled'
+  | 'superseded'
+  | 'error'
+
 export type PlanToolPresentationMeta =
   | { kind: 'save'; title: string; version: number; lineCount: number; charCount: number }
   | {
       kind: 'propose'
       title: string
       version: number
-      outcome: 'approved' | 'approved_handoff' | 'revised' | 'cancelled' | 'superseded' | 'error'
+      outcome: PlanProposeOutcome
       artifactId?: string
       artifactName?: string
       executionModel?: string

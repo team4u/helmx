@@ -5,13 +5,12 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { ConversationSummary, HelmxEventFrame } from '@helmx/protocol'
 import { KernelRuntime } from '../src/runtime/index.js'
+import type { ConversationTracker } from '../src/runtime/conversations.js'
 
 // Holds the real tracker emission callback to deterministically simulate an async summary arriving after deletion.
 function summaryCallback(kernel: KernelRuntime): (summary: ConversationSummary) => void {
-  const internals = kernel as unknown as {
-    tracker: { events: { onSummaryChanged(summary: ConversationSummary): void } }
-  }
-  return internals.tracker.events.onSummaryChanged
+  const tracker = (kernel as unknown as { tracker: ConversationTracker }).tracker
+  return tracker.core.events.onSummaryChanged
 }
 
 test('late tracker summary after deletion never publishes upsert or resurrects conversation', { timeout: 60_000 }, async () => {

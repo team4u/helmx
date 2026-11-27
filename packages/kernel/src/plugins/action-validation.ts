@@ -444,45 +444,62 @@ export function validateCoreNamespaceAction<TIn, TOut>(
   }
 }
 
-export function assertNoIntraPluginActionConflicts(
-  pluginId: string,
-  specId: string,
-  exposeAsToolEnabled: boolean,
-  resolvedToolName: string,
-  cliCommand: readonly string[] | undefined,
-  existingTools: ReadonlyMap<string, unknown> | undefined,
-  existingActions: ReadonlyMap<string, {
-    id: string;
-    exposeAsTool: boolean;
-    toolAlias: string;
-    visibility: PluginActionVisibility;
-    cli?: PluginActionSpec<unknown, unknown>['cli'];
-  }>,
-): void {
+/** Registration-relevant projection of an action already registered by the same plugin. */
+export interface SiblingActionView {
+  readonly id: string;
+  readonly exposeAsTool: boolean;
+  readonly toolAlias: string;
+  readonly visibility: PluginActionVisibility;
+  readonly cli?: PluginActionSpec<unknown, unknown>['cli'];
+}
+
+/** Inputs of the intra-plugin conflict check for a newly registered action. */
+export interface IntraPluginActionConflictInput {
+  readonly pluginId: string;
+  readonly actionId: string;
+  readonly exposeAsToolEnabled: boolean;
+  readonly resolvedToolName: string;
+  readonly cliCommand: readonly string[] | undefined;
+  /** Tool names already registered by the same plugin (`ctx.tool`); empty when the plugin has none. */
+  readonly existingTools: ReadonlyMap<string, unknown>;
+  /** Actions already registered by the same plugin. */
+  readonly existingActions: ReadonlyMap<string, SiblingActionView>;
+}
+
+export function assertNoIntraPluginActionConflicts(input: IntraPluginActionConflictInput): void {
+  const {
+    pluginId,
+    actionId,
+    exposeAsToolEnabled,
+    resolvedToolName,
+    cliCommand,
+    existingTools,
+    existingActions,
+  } = input;
   if (exposeAsToolEnabled) {
     if (KERNEL_TOOL_NAME_SET.has(resolvedToolName)) {
       throw new HelmxError(
         'duplicate_tool_name',
-        `Plugin ${pluginId} action ${specId} tool name "${resolvedToolName}" conflicts with built-in kernel tool "${resolvedToolName}"`,
+        `Plugin ${pluginId} action ${actionId} tool name "${resolvedToolName}" conflicts with built-in kernel tool "${resolvedToolName}"`,
         409,
-        { pluginId, actionId: specId, toolName: resolvedToolName, owner: 'kernel' },
+        { pluginId, actionId: actionId, toolName: resolvedToolName, owner: 'kernel' },
       );
     }
-    if (existingTools?.has(resolvedToolName)) {
+    if (existingTools.has(resolvedToolName)) {
       throw new HelmxError(
         'duplicate_tool_name',
-        `Plugin ${pluginId} action ${specId} tool name "${resolvedToolName}" conflicts with existing tool "${resolvedToolName}"`,
+        `Plugin ${pluginId} action ${actionId} tool name "${resolvedToolName}" conflicts with existing tool "${resolvedToolName}"`,
         409,
-        { pluginId, actionId: specId, toolName: resolvedToolName },
+        { pluginId, actionId: actionId, toolName: resolvedToolName },
       );
     }
     for (const existing of existingActions.values()) {
       if (existing.exposeAsTool && existing.toolAlias === resolvedToolName) {
         throw new HelmxError(
           'duplicate_tool_name',
-          `Plugin ${pluginId} action ${specId} tool name "${resolvedToolName}" conflicts with exposeAsTool action ${pluginId}.${existing.id}`,
+          `Plugin ${pluginId} action ${actionId} tool name "${resolvedToolName}" conflicts with exposeAsTool action ${pluginId}.${existing.id}`,
           409,
-          { pluginId, actionId: specId, toolName: resolvedToolName, conflictingActionId: existing.id },
+          { pluginId, actionId: actionId, toolName: resolvedToolName, conflictingActionId: existing.id },
         );
       }
     }
@@ -492,11 +509,11 @@ export function assertNoIntraPluginActionConflicts(
     if (cliPathsConflict(corePath, cliCommand)) {
       throw new HelmxError(
         'duplicate_cli_command',
-        `Plugin ${pluginId} action ${specId} CLI command "helmx ${cliCommand.join(' ')}" conflicts with core CLI command "helmx ${corePath.join(' ')}"`,
+        `Plugin ${pluginId} action ${actionId} CLI command "helmx ${cliCommand.join(' ')}" conflicts with core CLI command "helmx ${corePath.join(' ')}"`,
         409,
         {
           pluginId,
-          actionId: specId,
+          actionId: actionId,
           command: [...cliCommand],
           conflictingCommand: [...corePath],
           owner: 'core',
@@ -509,11 +526,11 @@ export function assertNoIntraPluginActionConflicts(
     if (existingCmd !== undefined && cliPathsConflict(existingCmd, cliCommand)) {
       throw new HelmxError(
         'duplicate_cli_command',
-        `Plugin ${pluginId} action ${specId} CLI command "helmx ${cliCommand.join(' ')}" conflicts with action ${pluginId}.${existing.id} ("helmx ${existingCmd.join(' ')}")`,
+        `Plugin ${pluginId} action ${actionId} CLI command "helmx ${cliCommand.join(' ')}" conflicts with action ${pluginId}.${existing.id} ("helmx ${existingCmd.join(' ')}")`,
         409,
         {
           pluginId,
-          actionId: specId,
+          actionId: actionId,
           command: [...cliCommand],
           conflictingActionId: existing.id,
           conflictingCommand: [...existingCmd],

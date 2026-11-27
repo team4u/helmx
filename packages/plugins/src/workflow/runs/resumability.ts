@@ -133,6 +133,23 @@ function inspectJournalHealth(
   return { ok: true, journal }
 }
 
+/** Positive verdict for a workflow run whose script source resolved: gated on its journal being healthy. */
+function workflowResumableVerdict(
+  header: Extract<RunHeader, { kind: 'workflow' }>,
+  scriptRes: { ok: true; script: string; scriptPath?: string; savedName?: string },
+): RunResumabilityVerdict {
+  const j = inspectJournalHealth(header.id, header.journalPath)
+  if (!j.ok) return { resumable: false, code: j.code, reason: j.reason, journal: j.journal }
+  return {
+    resumable: true,
+    kind: 'workflow',
+    script: scriptRes.script,
+    ...(scriptRes.scriptPath !== undefined ? { scriptPath: scriptRes.scriptPath } : {}),
+    ...(scriptRes.savedName !== undefined ? { savedName: scriptRes.savedName } : {}),
+    journal: j.journal,
+  }
+}
+
 /** Single authoritative resumability evaluator across startup recovery, explicit resume, and summary badges. */
 export function inspectRunResumability(
   header: RunHeader,
@@ -169,16 +186,7 @@ export function inspectRunResumability(
         reason: 'run interrupted by process restart（未持久化脚本源，无法原位续跑）',
       }
     }
-    const j = inspectJournalHealth(header.id, header.journalPath)
-    if (!j.ok) return { resumable: false, code: j.code, reason: j.reason, journal: j.journal }
-    return {
-      resumable: true,
-      kind: 'workflow',
-      script: scriptRes.script,
-      ...(scriptRes.scriptPath !== undefined ? { scriptPath: scriptRes.scriptPath } : {}),
-      ...(scriptRes.savedName !== undefined ? { savedName: scriptRes.savedName } : {}),
-      journal: j.journal,
-    }
+    return workflowResumableVerdict(header, scriptRes)
   }
 
   if (mode === 'explicit_resume') {
@@ -263,14 +271,5 @@ export function inspectRunResumability(
   if (!scriptRes.ok) {
     return { resumable: false, code: 'missing_script_source', reason: '未持久化脚本源' }
   }
-  const j = inspectJournalHealth(header.id, header.journalPath)
-  if (!j.ok) return { resumable: false, code: j.code, reason: j.reason, journal: j.journal }
-  return {
-    resumable: true,
-    kind: 'workflow',
-    script: scriptRes.script,
-    ...(scriptRes.scriptPath !== undefined ? { scriptPath: scriptRes.scriptPath } : {}),
-    ...(scriptRes.savedName !== undefined ? { savedName: scriptRes.savedName } : {}),
-    journal: j.journal,
-  }
+  return workflowResumableVerdict(header, scriptRes)
 }

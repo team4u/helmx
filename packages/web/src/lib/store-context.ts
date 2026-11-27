@@ -291,37 +291,41 @@ export function usePluginDocsState(): Record<string, unknown> {
 const EMPTY_PLUGIN_DOCS_SUBSET: Readonly<Record<string, unknown>> = Object.freeze({})
 const EMPTY_LOAD_ERRORS_SUBSET: Readonly<Record<string, string>> = Object.freeze({})
 
+interface KeyedSubsetCache<T> {
+  keys: string
+  map: Readonly<Record<string, T>>
+}
+
 /**
- * Subscribe only to the specified `pluginId/docName` keys rather than the global `pluginDocsMap` domain.
- * Registers zero store listeners when `docKeys` is empty.
+ * 按键集合订阅的通用子集 Hook：只注册给定 key 的监听（空集合零监听），
+ * 快照按键读取并经 `cacheSame` 复用上一份引用，避免无关更新触发重渲染。
  */
-export function usePluginDocsSubset(docKeys: ReadonlyArray<string>): Readonly<Record<string, unknown>> {
+function useKeyedSubsetMap<T>(
+  subscribeKey: (store: HelmxExternalStore, key: string, listener: () => void) => () => void,
+  readKey: (store: HelmxExternalStore, key: string) => T | undefined,
+  keys: ReadonlyArray<string>,
+  emptyMap: Readonly<Record<string, T>>,
+): Readonly<Record<string, T>> {
   const external = useContext(HelmxExternalStoreContext)
-  const serializedKeys = docKeys.length === 0 ? '' : JSON.stringify([...new Set(docKeys)].sort())
-  const cacheRef = useRef<{ keys: string; map: Record<string, unknown> }>({
-    keys: '',
-    map: EMPTY_PLUGIN_DOCS_SUBSET as Record<string, unknown>,
-  })
+  const serializedKeys = keys.length === 0 ? '' : JSON.stringify([...new Set(keys)].sort())
+  const cacheRef = useRef<KeyedSubsetCache<T>>({ keys: '', map: emptyMap })
   const subscribe = useCallback(
     (listener: () => void) => {
       if (external === null || serializedKeys === '') return NOOP_UNSUBSCRIBE
-      const keys = JSON.parse(serializedKeys) as string[]
-      const unsubs = keys.map((key) => external.subscribePluginDoc(key, listener))
+      const unsubs = (JSON.parse(serializedKeys) as string[]).map((key) => subscribeKey(external, key, listener))
       return () => {
         for (const off of unsubs) off()
       }
     },
-    [external, serializedKeys],
+    [external, serializedKeys, subscribeKey],
   )
-  const getSnapshot = (): Readonly<Record<string, unknown>> | typeof UNSET => {
+  const getSnapshot = (): Readonly<Record<string, T>> | typeof UNSET => {
     if (external === null) return UNSET
-    if (serializedKeys === '') return EMPTY_PLUGIN_DOCS_SUBSET
-    const keys = JSON.parse(serializedKeys) as string[]
-    const next: Record<string, unknown> = {}
-    for (const key of keys) {
-      if (external.hasPluginDoc(key)) {
-        next[key] = external.getPluginDoc(key)
-      }
+    if (serializedKeys === '') return emptyMap
+    const next: Record<string, T> = {}
+    for (const key of JSON.parse(serializedKeys) as string[]) {
+      const value = readKey(external, key)
+      if (value !== undefined) next[key] = value
     }
     const prev = cacheRef.current
     if (prev.keys === serializedKeys && cacheSame(prev.map, next)) {
@@ -336,46 +340,24 @@ export function usePluginDocsSubset(docKeys: ReadonlyArray<string>): Readonly<Re
 }
 
 /**
+ * Subscribe only to the specified `pluginId/docName` keys rather than the global `pluginDocsMap` domain.
+ * Registers zero store listeners when `docKeys` is empty.
+ */
+export function usePluginDocsSubset(docKeys: ReadonlyArray<string>): Readonly<Record<string, unknown>> {
+  return useKeyedSubsetMap(
+    subscribePluginDocKey,
+    (store, key) => (store.hasPluginDoc(key) ? store.getPluginDoc(key) : undefined),
+    docKeys,
+    EMPTY_PLUGIN_DOCS_SUBSET,
+  )
+}
+
+/**
  * Subscribe only to the specified `loadErrors` keys (e.g. `doc:pluginId/docName`) rather than all load errors.
  * Registers zero store listeners when `errorKeys` is empty.
  */
 export function useLoadErrorsSubset(errorKeys: ReadonlyArray<string>): Readonly<Record<string, string>> {
-  const external = useContext(HelmxExternalStoreContext)
-  const serializedKeys = errorKeys.length === 0 ? '' : JSON.stringify([...new Set(errorKeys)].sort())
-  const cacheRef = useRef<{ keys: string; map: Record<string, string> }>({
-    keys: '',
-    map: EMPTY_LOAD_ERRORS_SUBSET as Record<string, string>,
-  })
-  const subscribe = useCallback(
-    (listener: () => void) => {
-      if (external === null || serializedKeys === '') return NOOP_UNSUBSCRIBE
-      const keys = JSON.parse(serializedKeys) as string[]
-      const unsubs = keys.map((key) => external.subscribeLoadError(key, listener))
-      return () => {
-        for (const off of unsubs) off()
-      }
-    },
-    [external, serializedKeys],
-  )
-  const getSnapshot = (): Readonly<Record<string, string>> | typeof UNSET => {
-    if (external === null) return UNSET
-    if (serializedKeys === '') return EMPTY_LOAD_ERRORS_SUBSET
-    const keys = JSON.parse(serializedKeys) as string[]
-    const next: Record<string, string> = {}
-    for (const key of keys) {
-      const err = external.getLoadError(key)
-      if (err !== undefined) next[key] = err
-    }
-    const prev = cacheRef.current
-    if (prev.keys === serializedKeys && cacheSame(prev.map, next)) {
-      return prev.map
-    }
-    cacheRef.current = { keys: serializedKeys, map: next }
-    return next
-  }
-  const value = useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
-  if (value !== UNSET) return value
-  throw new Error('useHelmxStore must be called inside <HelmxStoreProvider>')
+  return useKeyedSubsetMap(subscribeLoadErrorKey, readLoadErrorKey, errorKeys, EMPTY_LOAD_ERRORS_SUBSET)
 }
 
 export function useConversationDetailsMap(): Record<number, ConversationDetail> {

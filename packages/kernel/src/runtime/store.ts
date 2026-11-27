@@ -18,6 +18,7 @@ import {
   convStatusOf,
   summaryOf,
   type ConvMeta,
+  type ConversationSummaryInput,
 } from './store/conversation-repo.js'
 import { FtsRepo } from './store/fts-repo.js'
 import { PluginDocRepo } from './store/plugin-doc-repo.js'
@@ -27,7 +28,7 @@ import { SeqRepo } from './store/seq-repo.js'
 import { TombstoneRepo } from './store/tombstone-repo.js'
 import { SqliteMirrorQueue } from './store/write-queue.js'
 
-export { convStatusOf, summaryOf, type ConvMeta }
+export { convStatusOf, summaryOf, type ConvMeta, type ConversationSummaryInput }
 
 interface HelmxStoreOptions {
   /** Instance-level persistence failure callback (e.g., `KernelRuntime` fatal storage closure hook); falls back to diagnostic channel. */

@@ -386,26 +386,33 @@ export function toDiagnosticError(
   };
 }
 
+/**
+ * Returns the thrown `HelmxError` with `rollbackError` merged into its details (or untouched when no
+ * rollback failed); `undefined` for any other thrown value so each stage wraps it with its own code.
+ */
+function attachRollbackError(err: unknown, rollbackError?: JsonSafeErrorInfo): HelmxError | undefined {
+  if (!(err instanceof HelmxError)) return undefined;
+  if (!rollbackError) return err;
+  return new HelmxError(err.code, err.message, err.status, {
+    ...((err.details as object) ?? {}),
+    rollbackError,
+  });
+}
+
 export function wrapRegistrationError(
   pluginId: string,
   seq: number,
   err: unknown,
   rollbackError?: JsonSafeErrorInfo,
 ): HelmxError {
-  if (err instanceof HelmxError) {
-    if (rollbackError) {
-      return new HelmxError(err.code, err.message, err.status, {
-        ...((err.details as object) ?? {}),
-        rollbackError,
-      });
-    }
-    return err;
-  }
-  return new HelmxError(
-    'plugin_registration_failed',
-    `Plugin ${pluginId} registration failed: ${err instanceof Error ? err.message : String(err)}`,
-    500,
-    { pluginId, registerSeq: seq, ...(rollbackError ? { rollbackError } : {}) },
+  return (
+    attachRollbackError(err, rollbackError) ??
+    new HelmxError(
+      'plugin_registration_failed',
+      `Plugin ${pluginId} registration failed: ${err instanceof Error ? err.message : String(err)}`,
+      500,
+      { pluginId, registerSeq: seq, ...(rollbackError ? { rollbackError } : {}) },
+    )
   );
 }
 
@@ -414,20 +421,14 @@ export function wrapEnableError(
   err: unknown,
   rollbackError?: JsonSafeErrorInfo,
 ): HelmxError {
-  if (err instanceof HelmxError) {
-    if (rollbackError) {
-      return new HelmxError(err.code, err.message, err.status, {
-        ...((err.details as object) ?? {}),
-        rollbackError,
-      });
-    }
-    return err;
-  }
-  return new HelmxError(
-    'plugin_enable_failed',
-    `Failed to enable plugin ${pluginId}: ${err instanceof Error ? err.message : String(err)}`,
-    500,
-    { pluginId, ...(rollbackError ? { rollbackError } : {}) },
+  return (
+    attachRollbackError(err, rollbackError) ??
+    new HelmxError(
+      'plugin_enable_failed',
+      `Failed to enable plugin ${pluginId}: ${err instanceof Error ? err.message : String(err)}`,
+      500,
+      { pluginId, ...(rollbackError ? { rollbackError } : {}) },
+    )
   );
 }
 

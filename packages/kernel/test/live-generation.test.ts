@@ -325,7 +325,7 @@ describe('ConversationTracker real SDK: live frame generation facts', { timeout:
         BACKGROUND_CONTEXT,
       )
       const id = conv.id as number
-      const store = (tracker as unknown as { store: HelmxStore }).store
+      const store = tracker.core.store
       store.upsertConv(convMeta(id))
       await tracker.observe(id)
 
@@ -381,7 +381,7 @@ describe('ConversationTracker real SDK: live frame generation facts', { timeout:
         BACKGROUND_CONTEXT,
       )
       const id = conv.id as number
-      const store = (tracker as unknown as { store: HelmxStore }).store
+      const store = tracker.core.store
       store.upsertConv(convMeta(id))
       await tracker.observe(id)
 

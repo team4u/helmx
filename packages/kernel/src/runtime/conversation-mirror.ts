@@ -74,7 +74,7 @@ export interface ConversationMirror {
    * handOver rounds; reset only when a new logical run starts). */
   consumedInputs: Set<string> | undefined
   /** taskId of the generation currently owning the active run (changes on same-run handOver after each tool
-   * round; logical run identity is compared via run first/inputs, see isContinuedRun in conversations.ts). */
+   * round; logical run identity is compared via run first/inputs, see isContinuedRun in tracker/tracker-observer.ts). */
   runTaskId: number | undefined
   /** Insertion order of settled runKeys (for bounded eviction, synchronized with global settledRuns). */
   settledRunOrder: string[]

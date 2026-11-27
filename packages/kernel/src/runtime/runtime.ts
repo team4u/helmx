@@ -710,7 +710,7 @@ export class KernelRuntime {
     try {
       return this.conversations.withOwnership(this.svc.tracker.summaryOf(id))
     } catch {
-      return this.conversations.withOwnership(summaryOf(meta, 'idle', 0))
+      return this.conversations.withOwnership(summaryOf({ meta, status: 'idle', pendingAskCount: 0 }))
     }
   }
 

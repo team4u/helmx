@@ -110,15 +110,14 @@ export async function inspectWorktree(
     }),
     (async () => {
       const authority = await resolveRepoAuthority(ports, record.nodeId, repoProbeDir, signal)
-      const referenceHead = await resolveMergeReferenceHead(
-        ports,
-        record.nodeId,
-        authority.mainPath,
-        authority.entries[0]!.head,
-        undefined,
-        record.baseBranch,
+      const referenceHead = await resolveMergeReferenceHead(ports, {
+        nodeId: record.nodeId,
+        repoRoot: authority.mainPath,
+        mainHead: authority.entries[0]!.head,
+        mergedInto: undefined,
+        baseBranch: record.baseBranch,
         signal,
-      )
+      })
       return { authority, referenceHead }
     })(),
     run(['diff', '--no-ext-diff', '--no-textconv', '--stat', diffRef], {

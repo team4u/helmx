@@ -248,3 +248,21 @@ test('scopePluginCss: quote-aware comment stripping preserves /* */ inside strin
   assert.match(scoped, new RegExp(`&:hover\\s*\\{[\\s\\S]*?animation-name:\\s*${scopedName};`))
   assert.match(scoped, new RegExp(`@media \\(max-width: 640px\\)\\s*\\{[\\s\\S]*?animation:\\s*${scopedName} 400ms linear;`))
 })
+
+test('scopePluginCss: selector lists split only on top-level commas; parens, brackets, strings, and comments stay intact', { timeout: 60_000 }, () => {
+  const scope = ':where([data-plugin-id="builtin:alpha"])'
+  const scoped = scopePluginCss(
+    ':is(.a, .b):not(.c, .d), [data-tags="x,y"], .lead /* drop, me */ .tail { color: red; }',
+    'builtin:alpha',
+  )
+  // Three top-level selectors survive; the comment (and its comma) is stripped, leaving `.lead  .tail`.
+  assert.equal(
+    scoped,
+    `@layer plugin-ui {\n${scope} :is(.a, .b):not(.c, .d), ${scope}:is(.a, .b):not(.c, .d), ` +
+      `${scope} [data-tags="x,y"], ${scope}[data-tags="x,y"], ${scope} .lead  .tail, ${scope}.lead  .tail { color: red; }\n}`,
+  )
+
+  // Parens and brackets are tracked separately: a stray `]` does not close `:not(`, so the comma stays inside it.
+  const strayCloser = scopePluginCss('a:not(b], c) { color: blue; }', 'builtin:alpha')
+  assert.equal(strayCloser, `@layer plugin-ui {\n${scope} a:not(b], c), a${scope}:not(b], c) { color: blue; }\n}`)
+})

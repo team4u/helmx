@@ -173,3 +173,63 @@ test('withCrossProcessFileLock stale-lock recovery preserves mutual exclusion un
   assert.equal(maxActive, 1, 'concurrent stale-lock breakers must never enter critical section simultaneously');
   assert.equal(await fsp.stat(lockPath).then(() => true, () => false), false, 'lock removed cleanly after all waiters finish');
 });
+
+test('withCrossProcessFileLock waits out the settle window for a fresh unowned lock before surfacing it as corrupt', { timeout: 60_000 }, async (t) => {
+  const dir = useTempDir(t, 'helmx-env-io-lock-settle-');
+  const lockPath = path.join(dir, 'settle.lock');
+
+  // 1. A freshly written empty lock inside the grace window is polled, not declared corrupt at once.
+  await fsp.writeFile(lockPath, '', 'utf8');
+  const startedAt = Date.now();
+  await assert.rejects(
+    withCrossProcessFileLock(lockPath, async () => 'never', {
+      waitMs: 5_000,
+      pollMs: 5,
+      settleGraceMs: 80,
+      isAlive: () => true,
+      onCorrupt: (p) => new Error(`corrupt:${path.basename(p)}`),
+    }),
+    /corrupt:settle\.lock/,
+  );
+  assert.ok(Date.now() - startedAt >= 70, 'corrupt verdict must wait for the settle window to elapse');
+  assert.equal(await fsp.readFile(lockPath, 'utf8'), '', 'unowned lock is preserved, never deleted');
+
+  // 2. An unowned lock that disappears during the window lets the waiter in.
+  const removal = setTimeout(() => {
+    void fsp.rm(lockPath, { force: true });
+  }, 40);
+  t.after(() => clearTimeout(removal), { timeout: 60_000 });
+  const ran = await withCrossProcessFileLock(lockPath, async () => 'acquired', {
+    waitMs: 5_000,
+    pollMs: 5,
+    settleGraceMs: 5_000,
+    isAlive: () => true,
+  });
+  assert.equal(ran, 'acquired');
+  assert.equal(await fsp.stat(lockPath).then(() => true, () => false), false, 'lock removed after completion');
+});
+
+test('withCrossProcessFileLock falls back to an exclusive wx create when the filesystem rejects hard links', { timeout: 60_000 }, async (t) => {
+  const dir = useTempDir(t, 'helmx-env-io-lock-wx-');
+  const lockPath = path.join(dir, 'wx.lock');
+  const realLink = fsp.link;
+  fsp.link = (async () => {
+    throw Object.assign(new Error('hard links unsupported on this filesystem'), { code: 'EXDEV' });
+  }) as typeof fsp.link;
+  t.after(() => {
+    fsp.link = realLink;
+  }, { timeout: 60_000 });
+
+  const ran = await withCrossProcessFileLock(
+    lockPath,
+    async () => {
+      const content = await fsp.readFile(lockPath, 'utf8');
+      assert.ok(content.startsWith(`${process.pid} `), 'fallback write must carry the owner token');
+      return 'ok';
+    },
+    { waitMs: 0 },
+  );
+  assert.equal(ran, 'ok');
+  assert.equal(await fsp.stat(lockPath).then(() => true, () => false), false, 'lock removed after completion');
+  assert.deepEqual((await fsp.readdir(dir)).filter((name) => name.includes('wx.lock')), [], 'no temp or stale leftovers');
+});
