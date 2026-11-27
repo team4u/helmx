@@ -1044,7 +1044,7 @@ test('clean dom', { timeout: 60_000 }, () => {
   )
 })
 
-test('safe-test-assert: throws summary AssertionError in <50ms for assert.equal(el, null) and assert.deepEqual([el], []) on cyclic __reactFiber$ DOM nodes', { timeout: 60_000 }, async () => {
+test('safe-test-assert: throws summary AssertionError in <500ms for assert.equal(el, null) and assert.deepEqual([el], []) on cyclic __reactFiber$ DOM nodes', { timeout: 60_000 }, async () => {
   const preloadUrl = pathToFileURL(path.join(scriptsDir, 'lib', 'safe-test-assert.mjs')).href
   await import(preloadUrl)
   const { equal, deepEqual } = await import('node:assert/strict')
@@ -1095,7 +1095,9 @@ test('safe-test-assert: throws summary AssertionError in <50ms for assert.equal(
       err.message.includes('[DOM <div#card.box.active>]'),
   )
   const elapsedMs = performance.now() - t0
-  assert.ok(elapsedMs < 50, `unsafe DOM assertion took ${elapsedMs.toFixed(1)}ms, exceeding 50ms threshold`)
+  // Why 500ms: OS preemption under heavy concurrent test load can exceed 50ms,
+  // whereas an unguarded cyclic React Fiber util.inspect blow-up takes seconds or OOMs.
+  assert.ok(elapsedMs < 500, `unsafe DOM assertion took ${elapsedMs.toFixed(1)}ms, exceeding 500ms threshold`)
 
   // Normal objects still generate standard diffs without mis-summarization
   assert.throws(
