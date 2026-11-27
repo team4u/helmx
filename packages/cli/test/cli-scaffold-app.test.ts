@@ -112,12 +112,44 @@ test('plugins init --template app: backend and frontend content contracts', { ti
   assert.ok(index.includes("target: 'screen:desk-app/main'"), 'sidebar entry should target this plugin screen')
 
   const client = await fsp.readFile(path.join(dir, 'client', 'index.tsx'), 'utf8')
-  for (const primitive of ['Screen', 'ScreenSection', 'DataTable', 'KvGrid', 'Checkbox', 'Button', 'Field', 'Input', 'usePluginDoc', 'usePluginContext']) {
+  for (const primitive of [
+    'Screen',
+    'ScreenToolbar',
+    'SearchBox',
+    'Tabs',
+    'TabCount',
+    'List',
+    'ListRow',
+    'DetailDrawer',
+    'LoadingState',
+    'EmptyState',
+    'KvGrid',
+    'Checkbox',
+    'Button',
+    'Field',
+    'Input',
+    'StatusLight',
+    'usePluginDoc',
+    'usePluginAction',
+    'usePluginContext',
+    'useScreenDrawer',
+  ]) {
     assert.ok(client.includes(primitive), `frontend should use host primitive/hook ${primitive}`)
   }
   assert.ok(client.includes('export function MainScreen'), 'frontend should export MainScreen matching screen declaration')
+  assert.ok(!client.includes('variant="default"'), 'app template must not use retired variant="default"')
+  assert.ok(!client.includes('DataTable'), 'app template should use Hairline Roster List instead of DataTable')
   assert.ok(!/\b(font-medium|text-subtle|text-xs)\b/.test(client), 'must not contain pseudo-Tailwind class names')
   assert.ok(client.includes("'items'"), 'frontend subscribes to matching public doc')
+
+  // Full template narrow panel should also use HIG primitives without raw loading-state div or 1-col DataTable
+  for (const primitive of ['LoadingState', 'Card', 'KvGrid', 'List', 'ListRow', 'Button', 'usePluginAction', 'usePluginDoc']) {
+    assert.ok(SCAFFOLD_CLIENT_INDEX_TSX.includes(primitive), `full template should use ${primitive}`)
+  }
+  assert.ok(SCAFFOLD_CLIENT_INDEX_TSX.includes('density="compact"'), 'full template narrow panel should use compact List density')
+  assert.ok(!SCAFFOLD_CLIENT_INDEX_TSX.includes('className="loading-state"'), 'full template must not use raw loading-state div')
+  assert.ok(!SCAFFOLD_CLIENT_INDEX_TSX.includes('DataTable'), 'full template must not use 1-col DataTable')
+  assert.ok(!SCAFFOLD_CLIENT_INDEX_TSX.includes('variant="default"'), 'full template must not use retired variant="default"')
 
   // Zero private CSS by default: no stylesheet artifact, host SDK primitives only
   await assert.rejects(fsp.access(path.join(dir, 'client', 'styles.css')), 'app template must not generate client/styles.css')

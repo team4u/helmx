@@ -40,6 +40,7 @@ import {
   resolvePluginEntry,
 } from './external-loader.js';
 import { readPrebuiltClientBundle, verifyPrebuiltClientDir } from './ui-registry.js';
+import { scanPluginClientDirUiHygiene } from './plugin-ui-hygiene.js';
 
 export interface PluginDoctorHost {
   register(definition: PluginDefinition, options?: PluginRegisterOptions): Promise<void>;
@@ -380,6 +381,7 @@ async function doctorPluginDirInternal(
             );
           }
         }
+        assertClientDirUiHygiene(resolvedDef.id, dir, resolvedDef.clientRoot);
         return;
       }
       if (clientRefs.length > 0 && options.buildProvider === undefined) {
@@ -390,8 +392,11 @@ async function doctorPluginDirInternal(
           { dir },
         );
       }
-      if (options.buildProvider === undefined) return;
       const clientRoot = resolvedDef.clientRoot;
+      if (options.buildProvider === undefined) {
+        assertClientDirUiHygiene(resolvedDef.id, dir, clientRoot);
+        return;
+      }
       if (clientRoot === undefined) {
         if (clientRefs.length > 0) {
           throw new HelmxError(
@@ -425,10 +430,34 @@ async function doctorPluginDirInternal(
           );
         }
       }
+      assertClientDirUiHygiene(resolvedDef.id, dir, clientRoot);
     }),
   );
 
   return report(dir, resolvedDef.id, checks, summary, screenIds, manifest);
+}
+
+/** Runs static UI/CSS hygiene checks on `clientRoot` and throws `plugin_client_ui_hygiene_failed` on violations. */
+function assertClientDirUiHygiene(pluginId: string, pluginDir: string, clientRoot: string | undefined): void {
+  if (clientRoot === undefined) return;
+  const violations = scanPluginClientDirUiHygiene(pluginDir, clientRoot);
+  if (violations.length === 0) return;
+  const formatted = violations.map((v) => `${v.file}:${v.line}:${v.rule} (${v.message})`);
+  throw new HelmxError(
+    'plugin_client_ui_hygiene_failed',
+    `Plugin ${pluginId} client UI hygiene failed (${violations.length} violation(s)): ${formatted.join('; ')}`,
+    422,
+    {
+      pluginId,
+      violations: violations.map((v) => ({
+        file: v.file,
+        line: v.line,
+        rule: v.rule,
+        message: v.message,
+        location: `${v.file}:${v.line}:${v.rule}`,
+      })),
+    },
+  );
 }
 
 function report(

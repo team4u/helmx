@@ -6,6 +6,7 @@
  *   timeout-missing / skip-without-reason / suite-timeout-env / unsafe-dom-assert /
  *   hook-timeout-missing（AGENTS §5）。
  *   hover-media-gate（scripts/lib/css-hygiene.mjs，AGENTS §5：:hover 规则必须门禁进 @media (hover: hover) 或显式 (hover: none)；逗号 OR 列表与 not 分支不算门禁）。
+ *   no-native-select / no-search-input / no-ui-emoji / no-raw-control-class（scripts/lib/ui-hygiene.mjs，.helmx/skills/helmx-ui/SKILL.md：业务 TSX 禁原生 <select>、禁 <input type="search">、禁 UI Emoji、禁原生标签绕过 SDK 直写 .btn/.input 类名）。
  * Newly added t.test calls and cross-package test helper imports receive additional AST checks
  * in --changed/--files mode; existing code remains visible to the historical rules without
  * forcing a broad test rewrite.
@@ -33,6 +34,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { collectChangedFiles, GitChangeError, resolveBaseline } from './lib/git-changes.mjs';
 import { collectSourceCssFiles, findUngatedHoverRules } from './lib/css-hygiene.mjs';
+import { analyzeUiSource, collectSourceUiFiles } from './lib/ui-hygiene.mjs';
 import {
   analyzeTestSource,
   collectAllTestFiles,
@@ -44,12 +46,13 @@ import {
 } from './lib/test-hygiene.mjs';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const HYGIENE_CACHE_SCHEMA_VERSION = 1;
+const HYGIENE_CACHE_SCHEMA_VERSION = 2;
 const HYGIENE_CACHE_PATH = path.join(repoRoot, 'node_modules', '.cache', 'helmx-test-hygiene-cache.json');
 const RULE_SOURCE_FILES = [
   'scripts/check-test-hygiene.mjs',
   'scripts/lib/test-hygiene.mjs',
   'scripts/lib/css-hygiene.mjs',
+  'scripts/lib/ui-hygiene.mjs',
 ];
 
 function tryRealpathNative(filePath) {
@@ -97,6 +100,7 @@ function loadHygieneCache(ruleFingerprints) {
     ruleFingerprints,
     testEntries: {},
     cssEntries: {},
+    uiEntries: {},
   };
   if (!ruleFingerprints || !existsSync(HYGIENE_CACHE_PATH)) return empty;
   try {
@@ -111,7 +115,10 @@ function loadHygieneCache(ruleFingerprints) {
       Array.isArray(parsed.testEntries) ||
       !parsed.cssEntries ||
       typeof parsed.cssEntries !== 'object' ||
-      Array.isArray(parsed.cssEntries)
+      Array.isArray(parsed.cssEntries) ||
+      !parsed.uiEntries ||
+      typeof parsed.uiEntries !== 'object' ||
+      Array.isArray(parsed.uiEntries)
     ) {
       return empty;
     }
@@ -120,6 +127,7 @@ function loadHygieneCache(ruleFingerprints) {
       ruleFingerprints,
       testEntries: parsed.testEntries,
       cssEntries: parsed.cssEntries,
+      uiEntries: parsed.uiEntries,
     };
   } catch {
     return empty;
@@ -574,6 +582,42 @@ for (const rel of cssFiles) {
   }
 }
 
+// 业务 UI TSX 卫生门禁与模式无关：与 CSS 门禁一致，--changed/--files 模式下同样全量扫描并走磁盘缓存。
+const uiFiles = collectSourceUiFiles(repoRoot);
+let uiViolationCount = 0;
+for (const rel of uiFiles) {
+  const abs = path.join(repoRoot, rel);
+  const cacheKey = toPosixPath(rel);
+  const fp = statFingerprint(abs);
+  const cachedUi = cache.uiEntries[cacheKey];
+  let uiViolations;
+  if (isValidCssCacheEntry(cachedUi, fp)) {
+    uiViolations = cachedUi.violations;
+  } else {
+    let source;
+    try {
+      source = readFileSync(abs, 'utf8');
+    } catch (err) {
+      console.error(`[check-hygiene] cannot read ${rel}: ${err.message}`);
+      process.exit(2);
+    }
+    const ts = getTs();
+    uiViolations = analyzeUiSource(ts, rel, source).violations;
+    if (fp) {
+      cache.uiEntries[cacheKey] = {
+        mtimeMs: fp.mtimeMs,
+        size: fp.size,
+        violations: uiViolations,
+      };
+      cacheDirty = true;
+    }
+  }
+  for (const violation of uiViolations) {
+    uiViolationCount += 1;
+    allViolations.push(violation);
+  }
+}
+
 if (isWholeRepoMode) {
   const activeTests = new Set(files.map(toPosixPath));
   for (const key of Object.keys(cache.testEntries)) {
@@ -586,6 +630,13 @@ if (isWholeRepoMode) {
   for (const key of Object.keys(cache.cssEntries)) {
     if (!activeCss.has(key)) {
       delete cache.cssEntries[key];
+      cacheDirty = true;
+    }
+  }
+  const activeUi = new Set(uiFiles.map(toPosixPath));
+  for (const key of Object.keys(cache.uiEntries)) {
+    if (!activeUi.has(key)) {
+      delete cache.uiEntries[key];
       cacheDirty = true;
     }
   }
@@ -608,7 +659,8 @@ const ruleSummary = Object.entries(byRule)
 console.error(
   `[check-hygiene] stats: test/it ${totals.testCalls} (skip ${totals.skipCalls}, todo ${totals.todoCalls});` +
     ` t.test subtests: ${totals.subtestCalls}; hooks: ${totals.hookCalls}; cross-package test helper imports: ${totals.helperImports};` +
-    ` css files: ${cssFiles.length}, css hover rules ungated: ${ungatedHoverRules}`,
+    ` css files: ${cssFiles.length}, css hover rules ungated: ${ungatedHoverRules};` +
+    ` ui files: ${uiFiles.length}, ui violations: ${uiViolationCount}`,
 );
 if (allViolations.length > 0) {
   console.error(`[check-hygiene] ${allViolations.length} violation(s) (${ruleSummary}), exiting 1`);
