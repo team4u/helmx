@@ -9,9 +9,14 @@ import {
   Badge,
   Button,
   Callout,
+  Card,
+  CardGrid,
   ConfirmDialog,
-  DataTable,
   DetailDrawer,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
   EmptyState,
   Field,
   HelmxIcon,
@@ -21,14 +26,15 @@ import {
   LoadingState,
   MonoId,
   Screen,
-  ScreenSection,
-  ScreenToolbar,
   SearchBox,
-  SegmentedControl,
   Select,
+  SelectCard,
   Stack,
   StatusLight,
   Switch,
+  Tabs,
+  TabsList,
+  TabsTrigger,
   useHostNodes,
   usePluginAction,
   usePluginConfig,
@@ -41,13 +47,13 @@ import {
   PF_RULES_DOC,
   PF_RUNTIME_DOC,
   buildNodeSelectOptions,
+  countRulesByStatus,
   createEmptyDraft,
   filterMappingRows,
   isLoopbackHostInput,
   parseRulesDoc,
   parseRuntimeDoc,
   ruleToDraft,
-  selectableRowProps,
   synthesizeMappingRow,
   validateDraftForm,
   type PortForwardDraftForm,
@@ -57,13 +63,7 @@ import {
 import {
   PF_CANCEL,
   PF_CLEAR_NODE_FILTER,
-  PF_COL_ACTIONS,
-  PF_COL_CONNS,
-  PF_COL_LISTEN,
-  PF_COL_NAME,
-  PF_COL_NODE,
   PF_COL_STATUS,
-  PF_COL_TARGET,
   PF_CONFIRM_DELETE_TITLE,
   PF_CONFIRM_PAUSE_BODY,
   PF_CONFIRM_PAUSE_TITLE,
@@ -76,7 +76,6 @@ import {
   PF_DRAWER_EDIT_TITLE,
   PF_DRAWER_NOT_FOUND_BODY,
   PF_DRAWER_NOT_FOUND_TITLE,
-  PF_EDIT,
   PF_EMPTY_HINT,
   PF_EMPTY_TITLE,
   PF_FIELD_ENABLED,
@@ -95,29 +94,28 @@ import {
   PF_FILTER_EMPTY,
   PF_FILTER_ERROR,
   PF_FILTER_STOPPED,
-  PF_KV_ACTIVE_CONNS,
-  PF_KV_ERRORS,
-  PF_KV_LISTENING,
-  PF_KV_TOTAL_RULES,
+  PF_KV_CONNECTIONS,
+  PF_KV_LAST_ERROR,
+  PF_KV_STATUS,
   PF_LOADING,
+  PF_MORE_ACTIONS,
   PF_NEW_MAPPING,
   PF_NODES_LOADING,
   PF_NODE_OFFLINE,
-  PF_NODE_ONLINE,
   PF_NODE_SELECT_PLACEHOLDER,
   PF_NODE_UNKNOWN,
   PF_PUBLIC_BIND_BLOCKED_HINT,
   PF_PUBLIC_BIND_WARN_BODY,
   PF_PUBLIC_BIND_WARN_TITLE,
-  PF_RULES_SECTION,
+  PF_RESET_FILTERS,
   PF_SAVE,
-  PF_SCREEN_SUBTITLE,
   PF_SCREEN_TITLE,
   PF_SEARCH_PLACEHOLDER,
-  PF_SPLIT_SUFFIX,
   PF_STOP_ALL,
   PF_TOGGLE_ENABLE,
   pfActionFailed,
+  pfActiveConnsPill,
+  pfCardConnectionsLabel,
   pfConfirmDeleteBody,
   pfNodeFilterLabel,
   pfPausedRuntimeNotice,
@@ -132,6 +130,15 @@ import {
 } from './copy.ts'
 
 type PendingBulkConfirm = 'pause' | 'stop_all' | null
+
+function statusBadgeTone(
+  statusKind: SynthesizedPortForwardRow['statusKind'],
+): 'err' | 'warn' | 'ok' | 'neutral' {
+  if (statusKind === 'error') return 'err'
+  if (statusKind === 'waiting_node') return 'warn'
+  if (statusKind === 'active_traffic' || statusKind === 'listening') return 'ok'
+  return 'neutral'
+}
 
 export function PortForwardManagerScreen(
   props: ScreenProps & { inlineDrawer?: boolean },
@@ -166,6 +173,7 @@ export function PortForwardManagerScreen(
     () => rules.map((rule) => synthesizeMappingRow(rule, runtimeById, nodes)),
     [rules, runtimeById, nodes],
   )
+  const counts = useMemo(() => countRulesByStatus(rows), [rows])
   const filteredRows = useMemo(
     () => filterMappingRows(rows, { query, statusFilter, nodeFilter }),
     [rows, query, statusFilter, nodeFilter],
@@ -174,6 +182,10 @@ export function PortForwardManagerScreen(
   const editingRule = useMemo(
     () => (editingId !== undefined ? rules.find((r) => r.id === editingId) : undefined),
     [rules, editingId],
+  )
+  const editingRow = useMemo(
+    () => (editingId !== undefined ? rows.find((r) => r.id === editingId) : undefined),
+    [rows, editingId],
   )
 
   const [draft, setDraft] = useState<PortForwardDraftForm>(() => createEmptyDraft(nodeFilter || 'local'))
@@ -218,11 +230,6 @@ export function PortForwardManagerScreen(
     setFormError(null)
     props.setParams({ edit: ruleId, create: undefined })
   }
-
-  const listeningCount = rows.filter((r) => r.listenerState === 'listening').length
-  const activeConnsTotal = rows.reduce((sum, r) => sum + r.activeConnections, 0)
-  const errorCount = rows.filter((r) => r.listenerState === 'error').length
-  const enabledCount = rows.filter((r) => r.enabled).length
 
   const handleToggleRule = (row: SynthesizedPortForwardRow, nextEnabled: boolean): void => {
     actions.clearError()
@@ -327,238 +334,239 @@ export function PortForwardManagerScreen(
 
   if (rawRules === undefined) {
     return (
-      <Screen
-        title={t(PF_SCREEN_TITLE)}
-        subtitle={
-          <>
-            {t(PF_SCREEN_SUBTITLE)}
-            {props.isSplit ? t(PF_SPLIT_SUFFIX) : ''}
-          </>
-        }
-      >
-        <LoadingState label={t(PF_LOADING)} />
+      <Screen layout="full-bleed" className="pf-screen" title={t(PF_SCREEN_TITLE)}>
+        <div className="pf-stage">
+          <LoadingState label={t(PF_LOADING)} />
+        </div>
       </Screen>
     )
   }
 
   const nodeOptions = buildNodeSelectOptions(nodes, draft.nodeId, locale)
   const nonLoopbackDraft = !isLoopbackHostInput(draft.listenHost)
-  const statusTabs: Array<{ value: StatusFilter; label: string }> = [
-    { value: 'all', label: t(PF_FILTER_ALL) },
-    { value: 'active', label: t(PF_FILTER_ACTIVE) },
-    { value: 'stopped', label: t(PF_FILTER_STOPPED) },
-    { value: 'error', label: t(PF_FILTER_ERROR) },
+  const statusTabs: Array<{ value: StatusFilter; label: string; count: number }> = [
+    { value: 'all', label: t(PF_FILTER_ALL), count: counts.all },
+    { value: 'active', label: t(PF_FILTER_ACTIVE), count: counts.active },
+    { value: 'stopped', label: t(PF_FILTER_STOPPED), count: counts.stopped },
+    { value: 'error', label: t(PF_FILTER_ERROR), count: counts.error },
   ]
 
   return (
-    <Screen
-      title={t(PF_SCREEN_TITLE)}
-      subtitle={
-        <>
-          {t(PF_SCREEN_SUBTITLE)}
-          {props.isSplit ? t(PF_SPLIT_SUFFIX) : ''}
-        </>
-      }
-    >
-      <ScreenToolbar
-        actions={
-          <>
-            <SegmentedControl
-              size="sm"
-              value={statusFilter}
-              onValueChange={setStatusFilter}
-              items={statusTabs}
-              aria-label={t(PF_COL_STATUS)}
-            />
-            <Button
-              variant="secondary"
-              size="sm"
-              icon="rotate-ccw"
-              disabled={actions.pending || (listeningCount === 0 && activeConnsTotal === 0)}
-              pending={actions.pendingKey === 'pause_runtime'}
-              onClick={() => setPendingBulkConfirm('pause')}
-            >
-              {t(PF_DISCONNECT_ALL)}
-            </Button>
-            <Button
-              variant="secondary"
-              size="sm"
-              icon="square"
-              disabled={actions.pending || (enabledCount === 0 && listeningCount === 0)}
-              pending={actions.pendingKey === 'stop_all'}
-              onClick={() => setPendingBulkConfirm('stop_all')}
-            >
-              {t(PF_STOP_ALL)}
-            </Button>
-            <Button
-              variant="primary"
-              size="sm"
-              icon="plus"
-              disabled={actions.pending}
-              onClick={openCreateDrawer}
-            >
-              {t(PF_NEW_MAPPING)}
-            </Button>
-          </>
-        }
-      >
-        <SearchBox
-          variant="toolbar"
-          value={query}
-          onChange={setQuery}
-          placeholder={t(PF_SEARCH_PLACEHOLDER)}
-          ariaLabel={t(PF_SEARCH_PLACEHOLDER)}
-        />
-        {nodeFilter !== '' && (
-          <Badge tone="accent" icon="server">
-            <span>{pfNodeFilterLabel(nodeFilter, locale)}</span>
-            <button
-              type="button"
-              className="btn btn-ghost btn-icon-xs"
-              aria-label={t(PF_CLEAR_NODE_FILTER)}
-              title={t(PF_CLEAR_NODE_FILTER)}
-              onClick={() => props.setParams({ node: undefined })}
-            >
-              <HelmxIcon name="x" size={11} />
-            </button>
-          </Badge>
+    <Screen layout="full-bleed" className="pf-screen" title={t(PF_SCREEN_TITLE)}>
+      <div className="pf-toolbar">
+        <div className="pf-toolbar-main">
+          <SearchBox
+            variant="toolbar"
+            value={query}
+            onChange={setQuery}
+            placeholder={t(PF_SEARCH_PLACEHOLDER)}
+            ariaLabel={t(PF_SEARCH_PLACEHOLDER)}
+          />
+          <Tabs
+            value={statusFilter}
+            onValueChange={(nextValue) => setStatusFilter(nextValue as StatusFilter)}
+            variant="pills"
+          >
+            <TabsList aria-label={t(PF_COL_STATUS)}>
+              {statusTabs.map((pill) => (
+                <TabsTrigger key={pill.value} value={pill.value}>
+                  <span>{pill.label}</span>
+                  <Badge className="tabular-nums">{pill.count}</Badge>
+                </TabsTrigger>
+              ))}
+            </TabsList>
+          </Tabs>
+          {nodeFilter !== '' && (
+            <Badge tone="accent" icon="server">
+              <span>{pfNodeFilterLabel(nodeFilter, locale)}</span>
+              <button
+                type="button"
+                className="btn btn-ghost btn-icon-xs"
+                aria-label={t(PF_CLEAR_NODE_FILTER)}
+                title={t(PF_CLEAR_NODE_FILTER)}
+                onClick={() => props.setParams({ node: undefined })}
+              >
+                <HelmxIcon name="x" size={11} />
+              </button>
+            </Badge>
+          )}
+          {counts.activeConnections > 0 && (
+            <Badge tone="accent" icon="activity" className="tabular-nums">
+              {pfActiveConnsPill(counts.activeConnections, locale)}
+            </Badge>
+          )}
+        </div>
+
+        <div className="pf-toolbar-actions">
+          {rules.length > 0 && (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <IconButton
+                  variant="default"
+                  size="sm"
+                  icon="more-horizontal"
+                  label={t(PF_MORE_ACTIONS)}
+                  disabled={actions.pending}
+                  pending={actions.pendingKey === 'pause_runtime' || actions.pendingKey === 'stop_all'}
+                />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent portalled inline={props.inlineDrawer} align="end">
+                <DropdownMenuItem
+                  disabled={actions.pending || (counts.active === 0 && counts.activeConnections === 0)}
+                  onSelect={() => setPendingBulkConfirm('pause')}
+                >
+                  <HelmxIcon name="rotate-ccw" size={13} />
+                  <span>{t(PF_DISCONNECT_ALL)}</span>
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  danger
+                  disabled={actions.pending || (counts.enabled === 0 && counts.active === 0)}
+                  onSelect={() => setPendingBulkConfirm('stop_all')}
+                >
+                  <HelmxIcon name="square" size={13} />
+                  <span>{t(PF_STOP_ALL)}</span>
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
+          <Button
+            variant="primary"
+            size="sm"
+            icon="plus"
+            disabled={actions.pending}
+            onClick={openCreateDrawer}
+          >
+            {t(PF_NEW_MAPPING)}
+          </Button>
+        </div>
+      </div>
+
+      <div className="pf-stage">
+        {actions.error !== undefined && !drawerOpen && (
+          <Callout tone="err">
+            <span>{actions.error}</span>
+          </Callout>
         )}
-      </ScreenToolbar>
 
-      {actions.error !== undefined && (
-        <Callout tone="err">
-          <span>{actions.error}</span>
-        </Callout>
-      )}
-
-      <KvGrid
-        items={[
-          { key: t(PF_KV_TOTAL_RULES), value: rules.length },
-          { key: t(PF_KV_LISTENING), value: listeningCount },
-          { key: t(PF_KV_ACTIVE_CONNS), value: activeConnsTotal },
-          { key: t(PF_KV_ERRORS), value: errorCount },
-        ]}
-      />
-
-      <ScreenSection title={t(PF_RULES_SECTION)} titleExtra={filteredRows.length}>
         {rules.length === 0 ? (
           <EmptyState
+            prominent
             icon="network"
             title={t(PF_EMPTY_TITLE)}
             hint={t(PF_EMPTY_HINT)}
+            hintSubtle
+          />
+        ) : filteredRows.length === 0 ? (
+          <EmptyState
+            prominent
+            icon="search"
+            title={t(PF_FILTER_EMPTY)}
             action={
-              <Button variant="primary" size="sm" icon="plus" onClick={openCreateDrawer}>
-                {t(PF_NEW_MAPPING)}
+              <Button
+                size="sm"
+                icon="rotate-ccw"
+                onClick={() => {
+                  setQuery('')
+                  setStatusFilter('all')
+                  if (nodeFilter !== '') props.setParams({ node: undefined })
+                }}
+              >
+                {t(PF_RESET_FILTERS)}
               </Button>
             }
           />
         ) : (
-          <div className="pf-table-wrap">
-            <DataTable
-              columns={7}
-              empty={filteredRows.length === 0}
-              emptyLabel={t(PF_FILTER_EMPTY)}
-              label={t(PF_RULES_SECTION)}
-            >
-              <thead>
-                <tr>
-                  <th>{t(PF_COL_STATUS)}</th>
-                  <th>{t(PF_COL_NAME)}</th>
-                  <th>{t(PF_COL_LISTEN)}</th>
-                  <th>{t(PF_COL_NODE)}</th>
-                  <th>{t(PF_COL_TARGET)}</th>
-                  <th>{t(PF_COL_CONNS)}</th>
-                  <th className="cell-actions">{t(PF_COL_ACTIONS)}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filteredRows.map((row) => {
-                  const statusText = pfStatusLabel(row.statusKind, locale)
-                  const nodeBadgeTone =
-                    row.nodeKnown === false
-                      ? 'warn'
-                      : row.nodeOnline === true
-                        ? 'ok'
-                        : row.nodeOnline === false
-                          ? 'warn'
-                          : 'neutral'
-                  const nodeBadgeLabel =
-                    row.nodeKnown === false
-                      ? t(PF_NODE_UNKNOWN)
-                      : row.nodeOnline === true
-                        ? t(PF_NODE_ONLINE)
-                        : row.nodeOnline === false
-                          ? t(PF_NODE_OFFLINE)
-                          : t(PF_NODE_UNKNOWN)
-                  return (
-                    <tr key={row.id} {...selectableRowProps(row.id, editingId, openEditDrawer)}>
-                      <td data-label={t(PF_COL_STATUS)}>
-                        <div className="pf-status-cell">
-                          <StatusLight tone={row.displayTone} label={statusText} />
-                          <span>{statusText}</span>
-                        </div>
-                        {row.lastError !== undefined && (
-                          <div className="cell-error" title={row.lastError}>
-                            {row.lastError}
-                          </div>
-                        )}
-                      </td>
-                      <td data-label={t(PF_COL_NAME)} className="cell-ellipsis" title={row.name}>
+          <CardGrid minWidth="lg" gap="md">
+            {filteredRows.map((row) => {
+              const statusText = pfStatusLabel(row.statusKind, locale)
+              return (
+                <SelectCard
+                  key={row.id}
+                  className={`pf-card ${row.enabled ? 'is-enabled' : 'is-stopped'}`}
+                  data-rule-id={row.id}
+                  selected={editingId === row.id}
+                  tone={
+                    row.statusKind === 'error'
+                      ? 'danger'
+                      : row.statusKind === 'waiting_node'
+                        ? 'warn'
+                        : 'default'
+                  }
+                  onSelect={() => openEditDrawer(row.id)}
+                  title={
+                    <span className="pf-card-title-row">
+                      <StatusLight tone={row.displayTone} label={statusText} />
+                      <span className="pf-card-name" title={row.name}>
                         {row.name}
-                      </td>
-                      <td data-label={t(PF_COL_LISTEN)}>
-                        <MonoId value={row.listenAddr} />
-                      </td>
-                      <td data-label={t(PF_COL_NODE)}>
-                        <div className="pf-node-cell">
-                          <span className="mono">{row.nodeId}</span>
-                          {nodes !== undefined && <Badge tone={nodeBadgeTone}>{nodeBadgeLabel}</Badge>}
-                        </div>
-                      </td>
-                      <td data-label={t(PF_COL_TARGET)}>
-                        <MonoId value={row.targetAddr} />
-                      </td>
-                      <td data-label={t(PF_COL_CONNS)} className="mono">
-                        {row.activeConnections} / {row.totalConnections}
-                      </td>
-                      <td data-label={t(PF_COL_ACTIONS)} className="cell-actions">
-                        <div
-                          className="row-actions-group"
-                          onClick={(e) => e.stopPropagation()}
-                          onKeyDown={(e) => e.stopPropagation()}
-                        >
-                          <Switch
-                            checked={row.enabled}
-                            disabled={actions.pending}
-                            aria-label={`${t(PF_TOGGLE_ENABLE)}: ${row.name}`}
-                            onChange={(checked) => handleToggleRule(row, checked)}
-                          />
-                          <IconButton
-                            icon="edit"
-                            size="xs"
-                            label={t(PF_EDIT)}
-                            disabled={actions.pending}
-                            onClick={() => openEditDrawer(row.id)}
-                          />
-                          <IconButton
-                            icon="trash-2"
-                            size="xs"
-                            variant="ghost"
-                            label={t(PF_DELETE)}
-                            disabled={actions.pending}
-                            pending={actions.pendingKey === `delete:${row.id}`}
-                            onClick={() => setPendingDelete(row)}
-                          />
-                        </div>
-                      </td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </DataTable>
-          </div>
+                      </span>
+                    </span>
+                  }
+                  subtitle={
+                    <span className="pf-card-node-line">
+                      <HelmxIcon name={row.nodeId === 'local' ? 'laptop' : 'server'} size={11} />
+                      <span className="mono">{row.nodeId}</span>
+                      {nodes !== undefined && row.nodeKnown === false && (
+                        <Badge tone="warn">{t(PF_NODE_UNKNOWN)}</Badge>
+                      )}
+                      {nodes !== undefined && row.nodeKnown === true && row.nodeOnline === false && (
+                        <Badge tone="warn">{t(PF_NODE_OFFLINE)}</Badge>
+                      )}
+                    </span>
+                  }
+                  actions={
+                    <Switch
+                      checked={row.enabled}
+                      disabled={actions.pending}
+                      aria-label={`${t(PF_TOGGLE_ENABLE)}: ${row.name}`}
+                      onChange={(checked) => handleToggleRule(row, checked)}
+                    />
+                  }
+                  footer={
+                    <>
+                      <div className="pf-card-meta-row">
+                        <span className={`pf-card-status pf-status-${row.statusKind}`}>{statusText}</span>
+                        <span className="pf-card-dot" aria-hidden="true">
+                          ·
+                        </span>
+                        <span className="pf-card-conns tabular-nums">
+                          {pfCardConnectionsLabel(row.activeConnections, row.totalConnections, locale)}
+                        </span>
+                      </div>
+                      <IconButton
+                        icon="trash-2"
+                        size="xs"
+                        variant="ghost"
+                        className="pf-card-delete-btn"
+                        label={t(PF_DELETE)}
+                        disabled={actions.pending}
+                        pending={actions.pendingKey === `delete:${row.id}`}
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          setPendingDelete(row)
+                        }}
+                        onKeyDown={(e) => e.stopPropagation()}
+                      />
+                    </>
+                  }
+                >
+                  <div className="pf-route-box">
+                    <MonoId value={row.listenAddr} className="pf-route-listen" />
+                    <HelmxIcon name="arrow-right" size={12} className="pf-route-arrow" />
+                    <code className="pf-route-target" title={row.targetAddr}>
+                      {row.targetAddr}
+                    </code>
+                  </div>
+                  {row.lastError !== undefined && (
+                    <div className="pf-card-error" title={row.lastError}>
+                      {row.lastError}
+                    </div>
+                  )}
+                </SelectCard>
+              )
+            })}
+          </CardGrid>
         )}
-      </ScreenSection>
+      </div>
 
       <DetailDrawer
         open={drawerOpen}
@@ -571,6 +579,13 @@ export function PortForwardManagerScreen(
             : editingRule !== undefined
               ? t(PF_DRAWER_EDIT_TITLE)
               : t(PF_DRAWER_NOT_FOUND_TITLE)
+        }
+        titleExtra={
+          !creating && editingRow !== undefined ? (
+            <Badge tone={statusBadgeTone(editingRow.statusKind)}>
+              {pfStatusLabel(editingRow.statusKind, locale)}
+            </Badge>
+          ) : undefined
         }
         meta={editingRule?.id}
         footer={
@@ -620,6 +635,39 @@ export function PortForwardManagerScreen(
               <Callout tone="err">
                 <span>{formError ?? actions.error}</span>
               </Callout>
+            )}
+
+            {!creating && editingRow !== undefined && (
+              <Card variant="subtle">
+                <KvGrid
+                  items={[
+                    {
+                      key: t(PF_KV_STATUS),
+                      value: (
+                        <span className="pf-status-cell">
+                          <StatusLight
+                            tone={editingRow.displayTone}
+                            label={pfStatusLabel(editingRow.statusKind, locale)}
+                          />
+                          <span>{pfStatusLabel(editingRow.statusKind, locale)}</span>
+                        </span>
+                      ),
+                    },
+                    {
+                      key: t(PF_KV_CONNECTIONS),
+                      value: `${editingRow.activeConnections} / ${editingRow.totalConnections}`,
+                    },
+                    ...(editingRow.lastError !== undefined
+                      ? [
+                          {
+                            key: t(PF_KV_LAST_ERROR),
+                            value: <span className="pf-error-text">{editingRow.lastError}</span>,
+                          },
+                        ]
+                      : []),
+                  ]}
+                />
+              </Card>
             )}
 
             <Field label={t(PF_FIELD_NAME)}>

@@ -7,11 +7,6 @@ import { resolveLocalizedText } from '@helmx/plugin-client'
 import type { DraftValidationErrorCode, PortForwardViewStatusKind } from './models.ts'
 
 export const PF_SCREEN_TITLE: LocalizedText = { en: 'Port Forwarding', 'zh-CN': '端口映射' }
-export const PF_SCREEN_SUBTITLE: LocalizedText = {
-  en: 'Map local Hub TCP ports through EnvFabric tunnels to local or remote compute nodes',
-  'zh-CN': '经 EnvFabric 隧道将 Hub 本机 TCP 端口映射至本地或远端计算节点服务',
-}
-export const PF_SPLIT_SUFFIX: LocalizedText = { en: ' · Split', 'zh-CN': ' · 分屏' }
 
 export const PF_LOADING: LocalizedText = { en: 'Loading port-forward rules…', 'zh-CN': '端口映射规则读取中...' }
 export const PF_SEARCH_PLACEHOLDER: LocalizedText = {
@@ -24,20 +19,26 @@ export const PF_FILTER_STOPPED: LocalizedText = { en: 'Stopped', 'zh-CN': '已�
 export const PF_FILTER_ERROR: LocalizedText = { en: 'Error', 'zh-CN': '异常' }
 
 export const PF_NEW_MAPPING: LocalizedText = { en: 'New mapping', 'zh-CN': '新建映射' }
+export const PF_MORE_ACTIONS: LocalizedText = { en: 'More actions', 'zh-CN': '更多操作' }
 export const PF_DISCONNECT_ALL: LocalizedText = { en: 'Pause & disconnect all', 'zh-CN': '断开活动连接' }
 export const PF_STOP_ALL: LocalizedText = { en: 'Stop all', 'zh-CN': '全部停止' }
 export const PF_CLEAR_NODE_FILTER: LocalizedText = { en: 'Show all nodes', 'zh-CN': '显示全部节点' }
+export const PF_RESET_FILTERS: LocalizedText = { en: 'Reset filters', 'zh-CN': '重置筛选' }
 
 export const PF_KV_TOTAL_RULES: LocalizedText = { en: 'Total rules', 'zh-CN': '规则总数' }
 export const PF_KV_LISTENING: LocalizedText = { en: 'Listening', 'zh-CN': '监听中' }
 export const PF_KV_ACTIVE_CONNS: LocalizedText = { en: 'Active connections', 'zh-CN': '当前连接数' }
-export const PF_KV_ERRORS: LocalizedText = { en: 'Errors', 'zh-CN': '异常数' }
+export const PF_KV_STATUS: LocalizedText = { en: 'Runtime status', 'zh-CN': '运行状态' }
+export const PF_KV_CONNECTIONS: LocalizedText = {
+  en: 'Connections (active / total)',
+  'zh-CN': '连接数（活跃 / 累计）',
+}
+export const PF_KV_LAST_ERROR: LocalizedText = { en: 'Last error', 'zh-CN': '最近错误' }
 
-export const PF_RULES_SECTION: LocalizedText = { en: 'Port-forward rules', 'zh-CN': '映射规则列表' }
 export const PF_EMPTY_TITLE: LocalizedText = { en: 'No port-forward rules yet', 'zh-CN': '暂无端口映射规则' }
 export const PF_EMPTY_HINT: LocalizedText = {
-  en: 'Create a rule to forward a Hub local port to any service reachable from a compute node.',
-  'zh-CN': '创建规则后，可将 Hub 本机端口安全转发至任意计算节点可达的内部服务。',
+  en: 'Use "New mapping" in the top right to forward a Hub port to a compute node service.',
+  'zh-CN': '点击右上角「新建映射」，将 Hub 本机端口转发至计算节点服务。',
 }
 export const PF_FILTER_EMPTY: LocalizedText = {
   en: 'No rules match the current search or filter criteria.',
@@ -45,20 +46,13 @@ export const PF_FILTER_EMPTY: LocalizedText = {
 }
 
 export const PF_COL_STATUS: LocalizedText = { en: 'Status', 'zh-CN': '状态' }
-export const PF_COL_NAME: LocalizedText = { en: 'Name', 'zh-CN': '名称' }
-export const PF_COL_LISTEN: LocalizedText = { en: 'Hub Listen', 'zh-CN': 'Hub 监听地址' }
-export const PF_COL_NODE: LocalizedText = { en: 'Target Node', 'zh-CN': '目标节点' }
-export const PF_COL_TARGET: LocalizedText = { en: 'Target Endpoint', 'zh-CN': '节点侧目标地址' }
 export const PF_COL_CONNS: LocalizedText = { en: 'Connections', 'zh-CN': '连接数' }
-export const PF_COL_ACTIONS: LocalizedText = { en: 'Actions', 'zh-CN': '操作' }
 
-export const PF_NODE_ONLINE: LocalizedText = { en: 'Online', 'zh-CN': '在线' }
 export const PF_NODE_OFFLINE: LocalizedText = { en: 'Offline', 'zh-CN': '离线' }
 export const PF_NODE_UNKNOWN: LocalizedText = { en: 'Unknown', 'zh-CN': '未知' }
 export const PF_NODES_LOADING: LocalizedText = { en: 'Loading nodes…', 'zh-CN': '节点列表加载中...' }
 export const PF_NODE_SELECT_PLACEHOLDER: LocalizedText = { en: 'Select a node', 'zh-CN': '选择计算节点' }
 
-export const PF_EDIT: LocalizedText = { en: 'Edit', 'zh-CN': '编辑' }
 export const PF_DELETE: LocalizedText = { en: 'Delete', 'zh-CN': '删除' }
 export const PF_CANCEL: LocalizedText = { en: 'Cancel', 'zh-CN': '取消' }
 export const PF_SAVE: LocalizedText = { en: 'Save', 'zh-CN': '保存' }
@@ -141,6 +135,24 @@ export const PF_SETTINGS_ALLOW_PUBLIC: LocalizedText = {
 export const PF_SETTINGS_ALLOWED: LocalizedText = { en: 'Allowed', 'zh-CN': '已允许' }
 export const PF_SETTINGS_DENIED: LocalizedText = { en: 'Loopback only', 'zh-CN': '仅限回环' }
 export const PF_OPEN_MANAGER: LocalizedText = { en: 'Open port forwarding', 'zh-CN': '打开端口映射' }
+
+export function pfActiveConnsPill(count: number, locale: HelmxLocale): string {
+  return resolveLocalizedText(
+    { en: `${count} active`, 'zh-CN': `${count} 活跃连接` },
+    locale,
+  )
+}
+
+export function pfCardConnectionsLabel(
+  active: number,
+  total: number,
+  locale: HelmxLocale,
+): string {
+  return resolveLocalizedText(
+    { en: `${active} active · ${total} total`, 'zh-CN': `${active} 活跃 · 累计 ${total}` },
+    locale,
+  )
+}
 
 export function pfStatusLabel(kind: PortForwardViewStatusKind, locale: HelmxLocale): string {
   switch (kind) {

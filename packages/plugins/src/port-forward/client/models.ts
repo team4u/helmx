@@ -2,7 +2,6 @@
  * Pure data models and helper functions for `builtin:port-forward` client UI
  * (no component exports — Fast Refresh friendly; zero runtime `@helmx/protocol` imports).
  */
-import type { KeyboardEvent } from 'react'
 import type { NodeInfo } from '@helmx/protocol/browser'
 import {
   DEFAULT_HELMX_LOCALE,
@@ -59,6 +58,15 @@ export interface SynthesizedPortForwardRow extends PortForwardRule, PortForwardR
 }
 
 export type StatusFilter = 'all' | 'active' | 'stopped' | 'error'
+
+export interface PortForwardStatusCounts {
+  all: number
+  active: number
+  stopped: number
+  error: number
+  activeConnections: number
+  enabled: number
+}
 
 export interface PortForwardDraftForm {
   name: string
@@ -208,6 +216,31 @@ export function synthesizeMappingRow(
     nodeKnown,
     listenAddr: formatEndpoint(rule.listenHost, rule.listenPort),
     targetAddr: formatEndpoint(rule.targetHost, rule.targetPort),
+  }
+}
+
+export function countRulesByStatus(
+  rows: ReadonlyArray<SynthesizedPortForwardRow>,
+): PortForwardStatusCounts {
+  let active = 0
+  let stopped = 0
+  let error = 0
+  let activeConnections = 0
+  let enabled = 0
+  for (const row of rows) {
+    if (row.listenerState === 'listening') active += 1
+    else if (row.listenerState === 'error') error += 1
+    else stopped += 1
+    activeConnections += row.activeConnections
+    if (row.enabled) enabled += 1
+  }
+  return {
+    all: rows.length,
+    active,
+    stopped,
+    error,
+    activeConnections,
+    enabled,
   }
 }
 
@@ -391,22 +424,4 @@ export function buildScreenTarget(params: {
   const qs = search.toString()
   const base = `screen:${PF_PLUGIN_ID}/${PF_SCREEN_ID}`
   return qs === '' ? base : `${base}?${qs}`
-}
-
-export function selectableRowProps(
-  id: string,
-  selectedId: string | undefined,
-  onSelect: (id: string) => void,
-) {
-  return {
-    tabIndex: 0,
-    className: selectedId === id ? 'pf-row is-selected' : 'pf-row',
-    onClick: () => onSelect(id),
-    onKeyDown: (e: KeyboardEvent<HTMLTableRowElement>) => {
-      if (e.key === 'Enter' || e.key === ' ') {
-        e.preventDefault()
-        onSelect(id)
-      }
-    },
-  }
 }
