@@ -119,6 +119,6 @@ Runs a saved nested workflow by name, or a local reference such as `{ scriptPath
 
 ## Running and replaying
 
-- In a conversation, call `SubagentWorkflow` with exactly one of `script`, `scriptPath`, or `name`; pass `args` for runtime input.
-- In a terminal, use `helmx workflows run <nameOrFile> --args <json> --current`; add `--wait` only when the CLI caller needs the terminal result.
-- Use `resumeFromRunId` or `--resume-from-run-id` to replay the ledger. Replay matches completed nodes by canonical v5 key hash within each scope prefix; changed inputs, options, or non-idempotent side effects may invalidate reuse.
+- Inside Agent turns, call `SubagentWorkflow` (or `run_action({ actionId: "builtin:workflow.run", input: ... })`) with exactly one of `script`, `scriptPath`, or `name`, passing `args` for runtime input — do not shell out to `helmx` via `bash`.
+- (CLI for terminals/scripts: `helmx workflows run <nameOrFile> --args <json> --current`; add `--wait` only when the CLI caller needs the terminal result.)
+- Pass `resumeFromRunId` (CLI for terminals/scripts: `--resume-from-run-id`) to replay the ledger. Replay matches completed nodes by canonical v5 key hash within each scope prefix; changed inputs, options, or non-idempotent side effects may invalidate reuse.

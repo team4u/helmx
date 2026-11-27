@@ -1,6 +1,6 @@
 ---
 name: worktree
-description: Use when working inside or managing isolated Git worktrees (isolation: "worktree")—covers inspection, merging, safe cleanup via cleanup_worktree / helmx worktrees, and durable lease/hold guardrails.
+description: Use when working inside or managing isolated Git worktrees (isolation: "worktree")—covers inspection, merging, safe cleanup via run_action and the cleanup_worktree tool, and durable lease/hold guardrails.
 managedByPlugin: builtin:worktree
 ---
 
@@ -11,7 +11,7 @@ Use `builtin:worktree` to inspect and safely clean up Helmx-managed isolated Git
 ## Golden Rule
 
 - **NEVER delete a Helmx-managed worktree with `rm -rf` or raw `git worktree remove`.** Bypassing the plugin leaves orphaned lease/registration entries (`409 worktree_missing`) and skips occupancy and unmerged-commit checks.
-- Always inspect and merge (or intentionally discard) changes first, then clean up via the `cleanup_worktree` tool, `builtin:worktree.cleanup_worktree`, or `helmx worktrees cleanup`.
+- Always inspect and merge (or intentionally discard) changes first, then clean up inside Agent turns via the direct `cleanup_worktree` tool or `run_action({ actionId: "builtin:worktree.cleanup_worktree", ... })` — do not shell out to `helmx` via `bash` (CLI for terminals/scripts: `helmx worktrees cleanup`).
 
 ## Layout, Context & Resume Rules
 
@@ -20,14 +20,14 @@ Use `builtin:worktree` to inspect and safely clean up Helmx-managed isolated Git
 - **Inside a worktree session**: `<worktree_context>` provides `worktreeId`, `path`, `branch`, `baseCommit`, and `baseBranch`. Run `git add` and `git commit` before finishing your turn so the branch captures all edits cleanly.
 - **Resuming an isolated sub-session**: reuses the original node and worktree. Passing `nodeId` on resume fails with `400 validation_error`; passing a conflicting `cwd` fails with `409 resume_cwd_conflict`; resuming after cleanup fails with `409 worktree_missing`.
 
-## Public Actions & CLI
+## Public Actions (`run_action` & `cleanup_worktree` Tool)
 
-Call actions via `run_action({ actionId, input })` (or `run_action({ actionId, describe: true })` to inspect full schemas), use the direct `cleanup_worktree` tool (exposed whenever active managed worktrees exist), or run `helmx worktrees <subcommand>`:
+Inside Agent turns, always use the direct `cleanup_worktree` tool (exposed whenever active managed worktrees exist) and `run_action({ actionId, input })` (or `run_action({ actionId, describe: true })` to inspect full schemas) — do not shell out to `helmx` via `bash`. Equivalent `helmx worktrees <subcommand>` CLI commands are strictly for human terminals or external scripts:
 
-- `builtin:worktree.list_worktrees` (`{}`) — list all managed worktree registrations, including `status: "removed"` audit records and active `hold` metadata. CLI: `helmx worktrees list --json`.
-- `builtin:worktree.inspect_worktree` (`{ worktreeId? | conversationId? | path?, nodeId?, scope?, commit? }`) — read-only metadata plus a lightweight git summary probe on the target node (`exists`, `currentBranch`, `currentHead`, `branchChanged`, `commitsAhead`, `unmergedCommits`, `diffBase`, `scope`, `commits`, `summary`, `files`). `scope` defaults to `'all'` (`'all' | 'committed' | 'uncommitted'`). Never runs full-repo diff. CLI: `helmx worktrees inspect <worktreeId> --json`.
-- `builtin:worktree.inspect_worktree_file` (`{ worktreeId? | conversationId? | path?, nodeId?, filePath, oldPath?, scope?, commit?, contextLines? }`) — read-only single-file diff or bounded untracked preview (`diff | untracked | binary | too_large | special_file | unchanged | absent`). CLI: `helmx worktrees file <worktreeId> --file-path <path> --json`.
-- `builtin:worktree.cleanup_worktree` / `cleanup_worktree` tool (`{ worktreeId? | conversationId? | path?, nodeId?, deleteBranch?, mergedInto?, force?, allowUnverifiedUsage? }`) — safely remove a registered worktree and update the ledger. CLI: `helmx worktrees cleanup`.
+- `builtin:worktree.list_worktrees` (`{}`) — list all managed worktree registrations, including `status: "removed"` audit records and active `hold` metadata. (CLI for terminals/scripts: `helmx worktrees list --json`)
+- `builtin:worktree.inspect_worktree` (`{ worktreeId? | conversationId? | path?, nodeId?, scope?, commit? }`) — read-only metadata plus a lightweight git summary probe on the target node (`exists`, `currentBranch`, `currentHead`, `branchChanged`, `commitsAhead`, `unmergedCommits`, `diffBase`, `scope`, `commits`, `summary`, `files`). `scope` defaults to `'all'` (`'all' | 'committed' | 'uncommitted'`). Never runs full-repo diff. (CLI for terminals/scripts: `helmx worktrees inspect <worktreeId> --json`)
+- `builtin:worktree.inspect_worktree_file` (`{ worktreeId? | conversationId? | path?, nodeId?, filePath, oldPath?, scope?, commit?, contextLines? }`) — read-only single-file diff or bounded untracked preview (`diff | untracked | binary | too_large | special_file | unchanged | absent`). (CLI for terminals/scripts: `helmx worktrees file <worktreeId> --file-path <path> --json`)
+- `builtin:worktree.cleanup_worktree` / `cleanup_worktree` tool (`{ worktreeId? | conversationId? | path?, nodeId?, deleteBranch?, mergedInto?, force?, allowUnverifiedUsage? }`) — safely remove a registered worktree and update the ledger. (CLI for terminals/scripts: `helmx worktrees cleanup`)
 
 ### Selector Rules
 
@@ -38,10 +38,10 @@ Call actions via `run_action({ actionId, input })` (or `run_action({ actionId, d
 
 ## Cleanup Guardrails & Recommended Flow
 
-1. **Discover**: call `builtin:worktree.list_worktrees` (`{}`) or use the `worktreeId` from execution metadata.
-2. **Inspect**: call `builtin:worktree.inspect_worktree` (`{ worktreeId }`) to verify `summary`, `files`, `commits`, and `unmergedCommits`; then call `builtin:worktree.inspect_worktree_file` (`{ worktreeId, filePath }`) on individual files you need to review.
+1. **Discover**: call `run_action({ actionId: "builtin:worktree.list_worktrees", input: {} })` or use the `worktreeId` from execution metadata.
+2. **Inspect**: call `run_action({ actionId: "builtin:worktree.inspect_worktree", input: { worktreeId } })` to verify `summary`, `files`, `commits`, and `unmergedCommits`; then call `run_action({ actionId: "builtin:worktree.inspect_worktree_file", input: { worktreeId, filePath } })` on individual files you need to review.
 3. **Merge & verify**: merge the `helmx/spawn-*` branch into your target branch in the main or integration worktree and run verification.
-4. **Clean up**: call `cleanup_worktree({ worktreeId, mergedInto: "<target-branch>", deleteBranch: true })`.
+4. **Clean up**: call `cleanup_worktree({ worktreeId, mergedInto: "<target-branch>", deleteBranch: true })` (or `run_action({ actionId: "builtin:worktree.cleanup_worktree", input: ... })`).
 
 Key safety flags and error semantics:
 
@@ -53,5 +53,5 @@ Key safety flags and error semantics:
   - `git worktree lock` (`409 worktree_locked`),
   - ownership/branch/symlink/main-worktree mismatches,
   - process-scan failures (`502 worktree_process_check_failed`).
-- **`allowUnverifiedUsage`**: omit by default. Pass `allowUnverifiedUsage: true` (CLI `--allow-unverified-usage`) ONLY after receiving `501 worktree_usage_unverifiable` on non-Linux nodes once you have confirmed no sub-session, terminal, IDE, or background process still occupies the directory.
+- **`allowUnverifiedUsage`**: omit by default. Pass `allowUnverifiedUsage: true` (CLI for terminals/scripts: `--allow-unverified-usage`) ONLY after receiving `501 worktree_usage_unverifiable` on non-Linux nodes once you have confirmed no sub-session, terminal, IDE, or background process still occupies the directory.
 - **Durable plugin holds**: sibling plugins (such as `builtin:swarm`) attach `ManagedWorktreeHold` via internal plugin-only actions (`acquire_worktree` / `release_worktree_hold`, not callable via `run_action` or HTTP). Release or close the owning group (e.g. `swarm_close_group`) before cleaning up a held worktree.

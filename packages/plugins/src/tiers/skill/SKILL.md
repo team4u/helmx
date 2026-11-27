@@ -23,7 +23,7 @@ Model tiers decouple **semantic capability tiers** (`tier/<id>`) from **concrete
 ## Discovering Active Tiers
 
 - When auto-injection is enabled, active usable tiers appear directly in `<available_model_tiers>` with their `tier/<id>`, preset effort, and routing guidance.
-- Otherwise (or to inspect saved templates and disabled/unavailable entries), query the live roster via `run_action({ actionId: "builtin:tiers.list", input: {} })` (CLI: `helmx tiers list --json`).
+- Otherwise (or to inspect saved templates and disabled/unavailable entries), query the live roster via `run_action({ actionId: "builtin:tiers.list", input: {} })` — do not shell out to `helmx` via `bash` (CLI for terminals/scripts: `helmx tiers list --json`).
 - Always match tasks against the **actually configured tiers** rather than assuming fixed tier names exist.
 
 ## Multi-Tier Orchestration Patterns
@@ -53,24 +53,26 @@ When a **top-level human conversation** only needs a stronger or specialized mod
   - Use `subagent` / `SubagentWorkflow` for parallelizable tasks, isolated worktree edits, fresh-context blind review, or long background execution.
 - **Target syntax (works with or without configured tiers)**:
   - Accepts `tier/<id>`, bare `<tierId>`, exact concrete `provider/modelId`, or a unique bare `<modelId>`.
-  - When no tiers are configured, inspect live available models via `core:models.list` (CLI: `helmx models list --json`) and pass a concrete `provider/modelId`.
+  - When no tiers are configured, inspect live available models via `run_action({ actionId: "core:models.list", input: {} })` and pass a concrete `provider/modelId` (CLI for terminals/scripts: `helmx models list --json`).
 - **Auto-restore discipline (`restoreAfterTurn`, default `true`)**:
   - After calling `switch_model({ model: "...", effort?: "..." })`, the next reasoning step in the **same turn** immediately runs on the new model.
   - When `restoreAfterTurn` is `true` (default), Helmx automatically restores the conversation's original model and thinking level once the turn settles. **Simply continue and finish your answer — NEVER call `switch_model` a second time just to switch back.**
   - Pass `restoreAfterTurn: false` only when the user explicitly asks to switch the conversation permanently.
 - **User-initiated one-turn borrow**:
-  - Users can arm a one-turn borrow directly from the bottom model picker's top **"Next turn"** mode tab (or click the armed `[ Next turn: <model> × ]` toolbar pill to re-pick or cancel), or via `helmx tiers set-borrow --current --model <target> [--effort <level>]` / `builtin:tiers.set_borrow`.
+  - Users can arm a one-turn borrow directly from the bottom model picker's top **"Next turn"** mode tab (or click the armed `[ Next turn: <model> × ]` toolbar pill to re-pick or cancel). Inside Agent turns, inspect or manage borrow state via `run_action` with `builtin:tiers.get_borrow` / `builtin:tiers.set_borrow` / `builtin:tiers.clear_borrow` — do not shell out to `helmx` via `bash` (CLI for terminals/scripts: `helmx tiers set-borrow --current --model <target> [--effort <level>]`).
 - **Plan mode boundary**:
   - While a conversation is in read-only `/plan` mode, tool access is restricted to the plan-mode read-only whitelist (`switch_model` is unavailable during planning; pick an execution model in `plan_propose` approval or borrow before/after planning).
 
-## Managing Tiers & Preset Templates
+## Managing Tiers & Preset Templates (`run_action`)
 
-All management operations are exposed as plugin actions (CLI via `helmx tiers <action>` or `run_action`):
+Inside Agent turns, always call tier management actions via `run_action({ actionId, input })` (or `run_action({ actionId, describe: true })` to inspect full schemas) — do not shell out to `helmx` via `bash`. Equivalent `helmx tiers ...` CLI commands are strictly for human terminals or external scripts:
 
-- List active tiers & saved templates: `helmx tiers list --json`
-- Add or update one tier: `helmx tiers set --id <id> --model <provider/model> [--thinking-level <level>] [--description "..."]`
-- Remove one tier (blocks with `409 model_tier_in_use` if referenced by defaults/profiles unless `--force`): `helmx tiers remove --id <id>`
-- Save active tiers as a reusable template: `helmx tiers save-template --id <tpl-id> --name "<title>" [--description "..."]`
-- Switch entire tier roster in one step: `helmx tiers apply-template --id <tpl-id>`
-- Delete a saved template: `helmx tiers delete-template --id <tpl-id>`
-- Inspect / arm / clear one-turn borrow: `helmx tiers get-borrow --current`, `helmx tiers set-borrow --current --model <target> [--effort <level>]`, `helmx tiers clear-borrow --current`
+- `builtin:tiers.list` (`{}`) — list active tiers (with live availability), saved preset templates, and catalog injection state. (CLI for terminals/scripts: `helmx tiers list --json`)
+- `builtin:tiers.set` (`{ id, model, kind?, thinkingLevel?, executorModel?, executorThinkingLevel?, maxExecutionSteps?, description? }`) — create or update one tier binding (`model` is a concrete `provider/model`; `kind` is `"single" | "orchestrator"`; `thinkingLevel` / `executorThinkingLevel` accept `"" | "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max"`; `executorModel`, `executorThinkingLevel`, and `maxExecutionSteps` apply to dual-phase `orchestrator` tiers). (CLI for terminals/scripts: `helmx tiers set --id <id> --model <provider/model> [--thinking-level <level>] [--description "..."]`)
+- `builtin:tiers.remove` (`{ id, force? }`) — delete a tier binding (blocks with `409 model_tier_in_use` if referenced by defaults/profiles unless `force: true`). (CLI for terminals/scripts: `helmx tiers remove --id <id> [--force]`)
+- `builtin:tiers.save_template` (`{ id, name, description?, tiers? }`) — save active tiers as a reusable preset template (omitting `tiers` snapshots the currently active tiers). (CLI for terminals/scripts: `helmx tiers save-template --id <tpl-id> --name "<title>" [--description "..."]`)
+- `builtin:tiers.apply_template` (`{ id, force? }`) — switch the entire active tier roster to a saved preset template in one step (pass `force: true` to bypass in-use reference blocks). (CLI for terminals/scripts: `helmx tiers apply-template --id <tpl-id> [--force]`)
+- `builtin:tiers.delete_template` (`{ id }`) — delete a saved preset template (does not affect currently active tiers). (CLI for terminals/scripts: `helmx tiers delete-template --id <tpl-id>`)
+- `builtin:tiers.get_borrow` (`{ conversationId? }`) — inspect armed or active one-turn model borrow state (`conversationId` defaults to the current conversation). (CLI for terminals/scripts: `helmx tiers get-borrow --current --json`)
+- `builtin:tiers.set_borrow` (`{ conversationId?, model, effort? }`) — arm a one-turn model borrow for the next message in a top-level human conversation (`model` accepts `tier/<id>`, `<tierId>`, `provider/modelId`, or unique `<modelId>`). (CLI for terminals/scripts: `helmx tiers set-borrow --current --model <target> [--effort <level>]`)
+- `builtin:tiers.clear_borrow` (`{ conversationId? }`) — cancel an armed one-turn borrow or disable auto-restore on an active borrow. (CLI for terminals/scripts: `helmx tiers clear-borrow --current`)

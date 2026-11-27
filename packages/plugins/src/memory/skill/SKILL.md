@@ -1,6 +1,6 @@
 ---
 name: memory
-description: Use when reading, updating, toggling, or consolidating per-Profile long-term memory (MEMORY.md) or managing daily Dream consolidation via update_memory, builtin:memory actions, and helmx memory CLI.
+description: Use when reading, updating, toggling, or consolidating per-Profile long-term memory (MEMORY.md) or managing daily Dream consolidation via the update_memory tool and run_action (builtin:memory actions).
 managedByPlugin: builtin:memory
 ---
 
@@ -29,17 +29,17 @@ The `update_memory({ text, mode: "append" | "replace" })` tool updates the curre
   - Secrets, API keys, tokens, or credentials.
   - Routine conversational details — daily Dream consolidates normal turns automatically.
 
-## Public Actions (`run_action` & CLI)
+## Public Actions (`run_action`)
 
-Call actions via `run_action({ actionId, input })` (or `run_action({ actionId, describe: true })` to inspect schemas) or run `helmx memory <action>`:
+Inside Agent turns, prefer the direct `update_memory` tool for the current top-level conversation's `MEMORY.md`, and always call the actions below via `run_action({ actionId, input })` (or `run_action({ actionId, describe: true })` to inspect schemas) — do not shell out to `helmx` via `bash`. Equivalent `helmx memory <action>` CLI commands are strictly for human terminals or external scripts:
 
-- **Target resolution** (`get`, `set`, `configure`, `dream`): explicit `profileId` (`--profile-id`) wins; omitting it resolves the current conversation's Profile (`--current` in CLI); missing both fails with `400 validation_error`; an unknown Profile fails with `404 profile_not_found`.
-- `builtin:memory.get` (`{ profileId? }`) — read `{ profileId, enabled, content, initialized }`. CLI: `helmx memory get --current --json`.
-- `builtin:memory.set` (`{ profileId?, text, mode?: "replace" | "append" }`) — write `MEMORY.md` (defaults to `mode: "replace"`). Rejects if memory is disabled (`403`) or over `4,000` chars (`400 memory_limit_exceeded`). CLI: `helmx memory set --current --text "<str>" [--mode replace|append]`.
-- `builtin:memory.configure` (`{ profileId?, enabled, text? }`) — toggle per-Profile memory on/off, optionally replacing `MEMORY.md` atomically before committing the toggle (enabling lazily initializes an uninitialized file). CLI: `helmx memory configure --current --enabled <true|false> [--text "<str>"]`.
-- `builtin:memory.dream` (`{ profileId? }`) — trigger Dream consolidation immediately for one Profile (`cli.timeoutMs: 0`; returns `{ profileId, ran, reason?, applied?, conflict?, candidateCount, beforeChars?, afterChars?, sentCount?, consumed? }`). CLI: `helmx memory dream --current`.
-- `builtin:memory.dream_status` (`{ profileId? }`) — inspect global schedule config (`enabled`, `hour`, `timezone`), `nextRunAt`, `running` profiles, and per-Profile `{ profileId, enabled, candidateCount, memoryChars, lastRun }` (optional `profileId` or conversation context focuses on that Profile). CLI: `helmx memory dream_status --json`.
-- `builtin:memory.dream_configure` (`{ enabled?, hour?, timezone? }`) — update the global daily Dream schedule (`hour`: integer `0..23`, `timezone`: IANA timezone name; at least one field required; disabling clears `nextRunAt`). CLI: `helmx memory dream_configure --enabled <true|false> --hour <0-23> --timezone <IANA>`.
+- **Target resolution** (`get`, `set`, `configure`, `dream`): explicit `profileId` wins; omitting it resolves the current conversation's Profile; missing both fails with `400 validation_error`; an unknown Profile fails with `404 profile_not_found`. (In CLI: `--profile-id` or `--current`.)
+- `builtin:memory.get` (`{ profileId? }`) — read `{ profileId, enabled, content, initialized }`. (CLI for terminals/scripts: `helmx memory get --current --json`)
+- `builtin:memory.set` (`{ profileId?, text, mode?: "replace" | "append" }`) — write `MEMORY.md` (defaults to `mode: "replace"`). Rejects if memory is disabled (`403`) or over `4,000` chars (`400 memory_limit_exceeded`). (CLI for terminals/scripts: `helmx memory set --current --text "<str>" [--mode replace|append]`)
+- `builtin:memory.configure` (`{ profileId?, enabled, text? }`) — toggle per-Profile memory on/off, optionally replacing `MEMORY.md` atomically before committing the toggle (enabling lazily initializes an uninitialized file). (CLI for terminals/scripts: `helmx memory configure --current --enabled <true|false> [--text "<str>"]`)
+- `builtin:memory.dream` (`{ profileId? }`) — trigger Dream consolidation immediately for one Profile (`cli.timeoutMs: 0`; returns `{ profileId, ran, reason?, applied?, conflict?, candidateCount, beforeChars?, afterChars?, sentCount?, consumed? }`). (CLI for terminals/scripts: `helmx memory dream --current`)
+- `builtin:memory.dream_status` (`{ profileId? }`) — inspect global schedule config (`enabled`, `hour`, `timezone`), `nextRunAt`, `running` profiles, and per-Profile `{ profileId, enabled, candidateCount, memoryChars, lastRun }` (optional `profileId` or conversation context focuses on that Profile). (CLI for terminals/scripts: `helmx memory dream_status --json`)
+- `builtin:memory.dream_configure` (`{ enabled?, hour?, timezone? }`) — update the global daily Dream schedule (`hour`: integer `0..23`, `timezone`: IANA timezone name; at least one field required; disabling clears `nextRunAt`). (CLI for terminals/scripts: `helmx memory dream_configure --enabled <true|false> --hour <0-23> --timezone <IANA>`)
 
 ## Daily Dream Consolidation
 

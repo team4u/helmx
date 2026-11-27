@@ -12,10 +12,10 @@ Use `builtin:workflow` for focused task delegation and deterministic multi-agent
 
 - **Work directly in the current turn** when the task is small, sequential, or tightly coupled to 1-2 files and delegation overhead outweighs parallel gain.
 - **Use `subagent`** for **one** self-contained delegated task (focused research, blind review, or an isolated slice with a `gate`). It returns one business result plus independent execution metadata without script or board overhead.
-- **Use `SubagentWorkflow`** when the topology can be written as a deterministic JavaScript graph up front: fan-out `parallel` checks where branches do not talk to each other, staged `pipeline` passes, strict output `schema` / `gate` verification, reusable saved definitions, or `resumeFromRunId` ledger replay. Prefer the native tool in a conversation (and use this, not peer boards, when orchestrating inside a child or automation-owned session); use the CLI for terminal or scheduled operation.
+- **Use `SubagentWorkflow`** when the topology can be written as a deterministic JavaScript graph up front: fan-out `parallel` checks where branches do not talk to each other, staged `pipeline` passes, strict output `schema` / `gate` verification, reusable saved definitions, or `resumeFromRunId` ledger replay. Inside Agent turns, always use the native `SubagentWorkflow` tool (do not shell out to `helmx` via `bash`; use this, not peer boards, when orchestrating inside a child or automation-owned session); CLI commands are strictly for human terminals or external scripts.
 - **Prefer peer blackboard collaboration (`swarm`, if available in `<available_skills>`)** instead of `SubagentWorkflow` in a top-level human conversation when peers must hand off work back and forth across multiple review/fix rounds, negotiate cross-slice boundaries live, or reshape the squad mid-flight.
 - **Managed worktrees (`worktree`, if available in `<available_skills>`)**: when using `isolation: "worktree"`, load the `worktree` skill via `load_skill` for managed worktree inspection, merge checks, and safe cleanup rules; never invent a path, branch, or completion result.
-- **Use `run_action`** for workflow actions (`builtin:workflow.{list,get,save,delete,runs,inspect,abort,run,steer,resume_failed}`). Call `run_action({ actionId, describe: true })` before using an unfamiliar action so nested schemas are read without side effects.
+- **Use `run_action` (or direct model tools)** for workflow management and run-control actions (`builtin:workflow.list`, `builtin:workflow.get`, `builtin:workflow.save`, `builtin:workflow.delete`, `builtin:workflow.runs`, `builtin:workflow.inspect`, `builtin:workflow.abort`, `builtin:workflow.run`, `builtin:workflow.steer` / `workflow_steer`, `builtin:workflow.resume_failed`) — inside Agent turns, always call via `run_action({ actionId, input })` (or direct model tools when exposed) and never shell out to `helmx workflows` via `bash`. Call `run_action({ actionId, describe: true })` before using an unfamiliar action so nested schemas are read without side effects.
 
 ## Operating rules
 
@@ -35,14 +35,20 @@ Use `builtin:workflow` for focused task delegation and deterministic multi-agent
 - Use `gate` for a real verification command in the agent's effective workspace. A non-zero exit is a failed node, not a reason to fabricate a pass.
 - When `isolation: "worktree"` is used and the `worktree` skill is available in `<available_skills>`, load `worktree` via `load_skill` for inspection, merge checks, and safe cleanup rules; never invent a path, branch, or completion result.
 
-## Saved definitions and recovery
+## Saved definitions and recovery (`run_action`)
 
-- Use `helmx workflows save` for a reusable script and `helmx workflows list/get` to inspect the source. Definitions are cross-conversation assets; duplicate names refuse by default.
-- Use `resumeFromRunId` for ledger checkpoint replay. Completed idempotent nodes are reused without re-execution; uncertain side effects are refused explicitly.
-- `agent(..., { resume })` continues an existing agent conversation. It is different from `resumeFromRunId` and should not be described as ledger replay.
-- Inspect failed runs before resuming. Do not double-trigger an automatic recovery or claim recovery when the underlying execution is unavailable.
+Inside Agent turns, manage saved definitions and runs via `run_action({ actionId, input })` — do not shell out to `helmx workflows` via `bash`:
+
+- **Save, list, read, or delete reusable definitions** (cross-conversation assets; duplicate names refuse unless `overwrite: true`):
+  - `builtin:workflow.save` (`{ script, name?, overwrite? }`) — save script source as a reusable workflow (`name` defaults to `meta.name`). When saving a workspace script file in-session, read its contents with `read` first and pass them as `script`, because `run_action` runs on the Hub whereas the CLI positional `readFileInto` reads local files. (CLI for terminals/scripts: `helmx workflows save <file>`)
+  - `builtin:workflow.list` (`{}`), `builtin:workflow.get` (`{ name }`), and `builtin:workflow.delete` (`{ name }`) — list, inspect source/metadata, or remove saved definitions. (CLI for terminals/scripts: `helmx workflows list --json`, `helmx workflows get <name> --json`, `helmx workflows delete <name>`)
+- **Inspect, abort, or replay runs**:
+  - Use `builtin:workflow.runs` (`{ conversationId? }`), `builtin:workflow.inspect` (`{ runId }`), `builtin:workflow.abort` (`{ runId }`), and `builtin:workflow.resume_failed` (`{ conversationId? | all? }`) to inspect and control runs. (CLI for terminals/scripts: `helmx workflows runs --json`, `helmx workflows inspect <runId> --json`, `helmx workflows abort <runId>`, `helmx workflows resume-failed --current`)
+  - Use `resumeFromRunId` (on `SubagentWorkflow` or `builtin:workflow.run`) for ledger checkpoint replay. Completed idempotent nodes are reused without re-execution; uncertain side effects are refused explicitly.
+  - `agent(..., { resume })` continues an existing agent conversation. It is different from `resumeFromRunId` and should not be described as ledger replay.
+  - Inspect failed runs before resuming. Do not double-trigger an automatic recovery or claim recovery when the underlying execution is unavailable.
 
 ## References
 
 - `references/dsl.md`: injected JavaScript APIs, examples, determinism rules, limits, and replay behavior.
-- `references/subagents.md`: `subagent` options, lifecycle defaults, external runtimes, worktree cleanup, and CLI equivalents.
+- `references/subagents.md`: `subagent` options, lifecycle defaults, external runtimes, worktree cleanup, and terminal/script CLI reference.
