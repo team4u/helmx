@@ -190,7 +190,7 @@ export function resolveLocalizedText(
 ## 安全边界与 CAS 水位纪律
 
 1. **`core:asks.answer` 禁止在会话内调用（`NO_CONVERSATION_SCOPE`）**：
-   [`core-actions.ts`](../../packages/kernel/src/runtime/core-actions.ts) 中的 `core:asks.answer` 刻意设置了 `scope: { conversationIds: [] }`，防止模型或子代理通过 `run_action` 自问自答、绕过人类审批。**严禁**为适配通道而放宽该 scope；外部 IM 桥必须以人类凭据直连 Hub HTTP（`POST /api/asks/:id/answer`）或 CLI（`helmx asks answer`）。
+   [`core-actions/ask.ts`](../../packages/kernel/src/runtime/core-actions/ask.ts) 中的 `core:asks.answer` 刻意设置了 `scope: { conversationIds: [] }`，防止模型或子代理通过 `run_action` 自问自答、绕过人类审批。**严禁**为适配通道而放宽该 scope；外部 IM 桥必须以人类凭据直连 Hub HTTP（`POST /api/asks/:id/answer`）或 CLI（`helmx asks answer`）。
 2. **携带 `expectedStateSeq` 的 CAS 语义**：
    若 `AskSpec.expectedStateSeq` 存在，桥应在 `POST /api/asks/:id/answer` 时原样带回，防止并发推进后误提交：
    - 携带的 `expectedStateSeq` 与记录不一致 → `409 ask_state_conflict`（客户端视图陈旧）；

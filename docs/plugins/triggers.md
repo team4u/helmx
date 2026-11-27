@@ -66,7 +66,7 @@ Cron 与 Webhook 共享同一套互斥投递契约（`delivery.ts`）：
 | 内容 | 位置 |
 | :--- | :--- |
 | 插件入口 | `packages/plugins/src/triggers.ts` |
-| Cron 调度 / Webhook / 投递与清理 | `packages/plugins/src/triggers/cron.ts`、`webhook.ts`、`delivery.ts` |
+| Cron 调度 / Webhook / 投递与清理 | `packages/plugins/src/triggers/cron.ts`（门面再导出；实现按职责位于 `triggers/cron/`：解析 `parse.ts`、输入契约 `inputs.ts`、存储 `store.ts`、动作 `actions.ts`、调度 `scheduler.ts` 与 `tick.ts`）、`webhook.ts`、`delivery.ts` |
 | 前端管理界面 | `packages/plugins/src/triggers/client/` |
 | 测试 | `packages/plugins/test/triggers.test.ts`、`triggers-cron.test.ts`、`triggers-webhook.test.ts` |
 
