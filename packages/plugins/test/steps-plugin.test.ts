@@ -45,6 +45,7 @@ import {
   createEmptyStepsSessionView,
   createStepsPlugin,
   formatStepsToolOutput,
+  isStepsAllCompleted,
   isStepsAllTerminal,
   isStepsConversationEligible,
   normalizeStepItems,
@@ -305,6 +306,11 @@ test('contracts & pure helpers: normalizeStepItems, bounds, redaction, and prese
   assert.equal(isStepsAllTerminal([]), false)
   assert.equal(isStepsAllTerminal([{ status: 'done' }, { status: 'in_progress' }]), false)
   assert.equal(isStepsAllTerminal([{ status: 'done' }, { status: 'skipped' }, { status: 'failed' }]), true)
+  assert.equal(isStepsAllCompleted([]), false)
+  assert.equal(isStepsAllCompleted([{ status: 'done' }, { status: 'skipped' }]), true)
+  assert.equal(isStepsAllCompleted([{ status: 'done' }, { status: 'failed' }]), false)
+  assert.equal(isStepsAllCompleted([{ status: 'done' }, { status: 'in_progress' }]), false)
+  assert.equal(isStepsAllCompleted([{ status: 'done' }, { status: 'pending' }]), false)
 
   const meta = buildStepsPresentationMeta(
     [
@@ -337,6 +343,7 @@ test('registration & manifest: bilingual UI copy, English tool schemas, replay=s
     const tool = h.host.listTools().find((t) => t.name === STEPS_TOOL_UPDATE)
     assert.ok(tool, 'update_steps must be registered')
     assert.equal(tool.replay, 'safe')
+    assert.equal(tool.promptSnippet, undefined, 'update_steps uses description + promptGuidelines without duplicating promptSnippet')
     assert.equal(HAN_RE.test(tool.description), false)
     assert.equal(HAN_RE.test(JSON.stringify(tool.promptGuidelines)), false)
     assert.deepEqual(tool.scope, { topLevelOnly: true, ownedBy: 'human' })
@@ -346,6 +353,7 @@ test('registration & manifest: bilingual UI copy, English tool schemas, replay=s
     const toolView = manifest.ui.find((u) => u.surface === 'tool.view')
     assert.deepEqual(toolView?.spec['toolNames'], [STEPS_TOOL_UPDATE])
     assert.equal(toolView?.spec['replaceRow'], true)
+    assert.equal(toolView?.spec['foldable'], true)
 
     assert.equal(manifest.actions.find((a) => a.id === 'get')?.idempotent, true)
     assert.equal(manifest.actions.find((a) => a.id === 'dismiss')?.visibility, 'ui')
@@ -496,7 +504,7 @@ test('lifecycle convergence: turn_settled, human input auto-clear, pi.reset, mul
     assert.equal(afterResumeInput.settledOutcome, undefined)
     assert.equal(afterResumeInput.steps.length, 3)
 
-    // 3. Completed allTerminal list is preserved on turn_settled, then cleared on next human input
+    // 3. Cleanly completed checklist (done/skipped only) clears immediately when turn settles
     await h.host.executeTool(
       STEPS_TOOL_UPDATE,
       {
@@ -504,6 +512,27 @@ test('lifecycle convergence: turn_settled, human input auto-clear, pi.reset, mul
           { title: 'Prepare files', status: 'done' },
           { title: 'Edit handler', status: 'done' },
           { title: 'Verify', status: 'skipped' },
+        ],
+      },
+      { conversationId: 1 },
+    )
+    assert.equal(h.readSessionDoc(1)?.allTerminal, true)
+    await h.host.runHook('turn_settled', {
+      conversation: h.conversations.get(1)!,
+      inputs: [],
+      outcome: 'completed',
+      settledAt: Date.now(),
+    })
+    assert.equal(h.readSessionDoc(1), null, 'Cleanly completed checklist clears immediately on turn_settled')
+    assert.equal(h.kvStore.get(STEPS_PLUGIN_ID, STEPS_KV_NAMESPACE, '1'), undefined)
+
+    // 3b. Terminal checklist containing a failed step stays visible on turn_settled until dismissed or next regular human input
+    await h.host.executeTool(
+      STEPS_TOOL_UPDATE,
+      {
+        steps: [
+          { title: 'Prepare files', status: 'done' },
+          { title: 'Run verify', status: 'failed' },
         ],
       },
       { conversationId: 1 },
@@ -517,7 +546,7 @@ test('lifecycle convergence: turn_settled, human input auto-clear, pi.reset, mul
     assert.equal(h.readSessionDoc(1)?.allTerminal, true)
     assert.equal(h.readSessionDoc(1)?.settledOutcome, undefined)
 
-    // Non-human / reject inputs do NOT clear completed checklist
+    // Non-human / reject inputs do NOT clear failed terminal checklist
     await h.host.runHook('input', {
       conversationId: 1,
       input: { id: 'in-2', text: 'bg ping', origin: 'agent', createdAt: Date.now() },
@@ -528,7 +557,7 @@ test('lifecycle convergence: turn_settled, human input auto-clear, pi.reset, mul
     })
     assert.equal(h.readSessionDoc(1)?.allTerminal, true)
 
-    // Regular human input clears the completed checklist
+    // Regular human input clears the remaining terminal checklist
     await h.host.runHook('input', {
       conversationId: 1,
       input: { id: 'in-4', text: 'new topic', origin: 'human', createdAt: Date.now() },

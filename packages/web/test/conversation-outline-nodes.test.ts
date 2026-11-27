@@ -198,7 +198,11 @@ test('无正文有顶层 tool.view 业务卡：卡片代表回合，不产生空
   assert.equal(card.parentHumanKey, nodes[0]!.key)
 })
 
-test('step-group 内普通工具与 thinking 不进大纲：只有命中 tool.view 的工具独立成卡', { timeout: 60_000 }, () => {
+test('step-group 内普通工具与 foldable tool.view 不进大纲：只有非折叠 tool.view 独立成卡', { timeout: 60_000 }, () => {
+  const toolViews: QualifiedToolView[] = [
+    ...TOOL_VIEWS,
+    { pluginId: 'builtin:steps', spec: { id: 'steps-tool-row', toolNames: ['update_steps'], replaceRow: true, foldable: true } },
+  ]
   const items = buildTimelineItems([
     humanEntry('1', '改一下再验证'),
     {
@@ -210,6 +214,7 @@ test('step-group 内普通工具与 thinking 不进大纲：只有命中 tool.vi
           content: [
             { type: 'thinking', thinking: '先看文件再动手。' },
             { type: 'toolCall', id: 'call-read', name: 'read', arguments: { path: 'a.ts' } },
+            { type: 'toolCall', id: 'call-steps', name: 'update_steps', arguments: { steps: [{ title: 'Edit file', status: 'in_progress' }] } },
             { type: 'toolCall', id: 'call-edit', name: 'edit', arguments: { path: 'a.ts' } },
             { type: 'toolCall', id: 'call-sub', name: 'subagent', arguments: { prompt: '复查改动' } },
           ],
@@ -217,11 +222,12 @@ test('step-group 内普通工具与 thinking 不进大纲：只有命中 tool.vi
       ],
     },
     toolResultEntry('3', 'call-read', 'read'),
+    toolResultEntry('3b', 'call-steps', 'update_steps'),
     toolResultEntry('4', 'call-edit', 'edit'),
     toolResultEntry('5', 'call-sub', 'subagent'),
-  ], { toolViews: TOOL_VIEWS })
+  ], { toolViews })
   const nodes = buildConversationOutline(items, undefined, enT)
-  assert.deepEqual(kindsOf(nodes), ['human', 'card'], '普通 bash/read/edit 与 thinking 均不进大纲')
+  assert.deepEqual(kindsOf(nodes), ['human', 'card'], '普通工具、thinking 与 foldable tool.view 均不进大纲')
   const card = nodes[1] as OutlineCardNode
   assert.equal(card.cardId, 'tool:call-sub')
   assert.equal(card.label, 'subagent：复查改动')

@@ -42,6 +42,7 @@ export {
   STEPS_SESSION_VIEW_SCHEMA,
   isStepsConversationEligible,
   isStepTerminalStatus,
+  isStepsAllCompleted,
   isStepsAllTerminal,
   createEmptyStepsSessionView,
   toStepsSessionView,
@@ -63,10 +64,10 @@ export {
 } from './steps/contracts.js'
 
 export const STEPS_PROMPT_GUIDELINES: string[] = [
-  `Call ${STEPS_TOOL_UPDATE} once committed to an ordered list of 3-${STEPS_MAX_ITEMS} distinct steps; skip for 1-2 step edits, pure questions, or early exploration where steps are not known yet.`,
-  'Always send the full ordered list (each call replaces the previous state); pass steps: [] to clear. Mark active step(s) in_progress and remaining steps pending, done, skipped, or failed.',
-  `Batch ${STEPS_TOOL_UPDATE} in parallel with the first tool call of each step so it adds zero extra turns; when the final step completes, call ${STEPS_TOOL_UPDATE} once more with all steps terminal before writing your final reply.`,
-  'Keep titles short and imperative (2-6 words, matching the user language) without leading step numbers or IDs.',
+  `Call ${STEPS_TOOL_UPDATE} once committed to an ordered list of 3-${STEPS_MAX_ITEMS} distinct steps (aim for 3-8; group small tasks rather than listing each), whatever their source: an approved plan, a user-provided list, a skill procedure, or steps you worked out yourself. Skip for 1-2 step edits, pure questions, or open-ended exploration where steps are not known yet; never invent steps just to fill the list.`,
+  'Always send the full ordered list (each call replaces the previous state; pass steps: [] to clear). Keep steps in execution order: when splitting or adding a step, insert it where it happens rather than appending to the end. Mark active step(s) in_progress (mark multiple when running parallel work such as subagents) and remaining steps pending, done, skipped, or failed.',
+  `Call ${STEPS_TOOL_UPDATE} in parallel with the first tool call of each step so it adds zero extra turns: once at the start (first step in_progress), then at each transition (marking finished step(s) done and the next in_progress together). Each time you mark a step done, briefly tell the user in 1-2 sentences what you did and what comes next alongside that call. When the final step finishes, call ${STEPS_TOOL_UPDATE} once more with all steps terminal before your final reply.`,
+  'Keep titles short and imperative (2-6 words, matching the user language) in plain words the user would use—no leading numbers, plan IDs or labels ("0.1", "Step 2:", "P0"), and no code identifiers unless the user named them.',
 ]
 
 export function createStepsPlugin(options: StepsPluginOptions = {}): PluginDefinition {
@@ -116,8 +117,6 @@ export function createStepsPlugin(options: StepsPluginOptions = {}): PluginDefin
         name: STEPS_TOOL_UPDATE,
         description:
           'Show a live step checklist for multi-step work (full-list replacement semantics; up to 12 short steps).',
-        promptSnippet:
-          'Publish and update the live multi-step task checklist shown above the composer (full list, batched with work tools).',
         promptGuidelines: STEPS_PROMPT_GUIDELINES,
         inputSchema: UPDATE_STEPS_INPUT_SCHEMA,
         presentationMetaSchema: STEPS_PRESENTATION_META_SCHEMA,
@@ -239,6 +238,7 @@ export function createStepsPlugin(options: StepsPluginOptions = {}): PluginDefin
           id: 'steps-tool-row',
           toolNames: [STEPS_TOOL_UPDATE],
           replaceRow: true,
+          foldable: true,
           client: { module: 'index.tsx', export: 'StepsToolRow' },
         })
       }

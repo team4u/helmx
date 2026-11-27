@@ -160,6 +160,11 @@ export interface ToolViewSpec extends UiSpecBase {
    * avoiding double bars.
    */
   replaceRow?: boolean
+  /**
+   * When true, keeps this tool view foldable inside `<StepGroup>` (and out of the
+   * top-level conversation outline) instead of splitting step groups as a standalone milestone card.
+   */
+  foldable?: boolean
 }
 
 // 5. composer.completer

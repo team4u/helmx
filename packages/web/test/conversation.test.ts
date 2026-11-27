@@ -222,10 +222,11 @@ test('连续常规步骤收拢为 step-group；出错工具保留在组内，too
   assert.ok(turn.segments.some((s) => s.kind === 'text' && s.text === '结论'))
 })
 
-test('isFoldableStep：tool.view 命中与内置 ask_user 均豁免折叠并按时间顺序独立展示', { timeout: 60_000 }, () => {
+test('isFoldableStep：tool.view 命中与内置 ask_user 均豁免折叠，声明 foldable: true 的 tool.view 可进 step-group', { timeout: 60_000 }, () => {
   const toolViews = [
     { pluginId: 'builtin:superagent', spec: { id: 'v', toolNames: ['dispatch_worker'] } },
     { pluginId: 'builtin:workflow', spec: { id: 'subagent', toolNames: ['subagent', 'SubagentWorkflow'] } },
+    { pluginId: 'builtin:steps', spec: { id: 'steps-row', toolNames: ['update_steps'], replaceRow: true, foldable: true } },
   ]
   const items = buildTimelineItems(
     [
@@ -234,25 +235,29 @@ test('isFoldableStep：tool.view 命中与内置 ask_user 均豁免折叠并按�
         toolCallBlock('c2', 'subagent', { prompt: '子代理' }),
         toolCallBlock('c3', 'SubagentWorkflow', { script: 'wf' }),
         toolCallBlock('c4', 'read', { file_path: '/x' }),
+        toolCallBlock('c4b', 'update_steps', { steps: [{ title: 'Step 1', status: 'in_progress' }] }),
         toolCallBlock('c5', 'ask_user', { questions: [{ id: 'q1', question: 'Deploy?' }] }),
       ]),
       toolResultEntry('2', 'c1', 'dispatch_worker', { text: '{"workerConversationId":9}' }),
       toolResultEntry('3', 'c2', 'subagent', { text: 'ok' }),
       toolResultEntry('4', 'c3', 'SubagentWorkflow', { text: 'ok' }),
       toolResultEntry('5', 'c4', 'read', { text: 'ok' }),
+      toolResultEntry('5b', 'c4b', 'update_steps', { text: 'Updated' }),
       toolResultEntry('6', 'c5', 'ask_user', { text: 'User answers:\n- q1 (Deploy?): yes' }),
     ],
     { toolViews },
   )
   const traces = collectToolTraces(items)
-  assert.equal(traces.length, 5)
+  assert.equal(traces.length, 6)
   assert.equal(traces[0]!.toolView?.pluginId, 'builtin:superagent')
   assert.equal(traces[1]!.toolView?.pluginId, 'builtin:workflow')
+  assert.equal(traces[4]!.toolView?.pluginId, 'builtin:steps')
   assert.equal(isFoldableStep({ kind: 'tool', tool: traces[0]! }), false)
   assert.equal(isFoldableStep({ kind: 'tool', tool: traces[1]! }), false)
   assert.equal(isFoldableStep({ kind: 'tool', tool: traces[2]! }), false)
   assert.equal(isFoldableStep({ kind: 'tool', tool: traces[3]! }), true)
-  assert.equal(isFoldableStep({ kind: 'tool', tool: traces[4]! }), false)
+  assert.equal(isFoldableStep({ kind: 'tool', tool: traces[4]! }), true, 'foldable: true tool.view folds into step-group')
+  assert.equal(isFoldableStep({ kind: 'tool', tool: traces[5]! }), false)
   // 未注册 tool.view 的 subagent 工具（如插件停用）与普通工具一样可折叠。
   const plain = buildTimelineItems(
     [assistantEntry('1', [toolCallBlock('cx', 'subagent', { prompt: 'p' })])],
@@ -261,7 +266,7 @@ test('isFoldableStep：tool.view 命中与内置 ask_user 均豁免折叠并按�
   const plainTraces = collectToolTraces(plain)
   assert.equal(plainTraces[0]!.toolView, undefined)
   assert.equal(isFoldableStep({ kind: 'tool', tool: plainTraces[0]! }), true)
-  // 命中 tool.view 与内置 ask_user 的行独立露出；唯一的普通工具 c4 从第一步起进入分组。
+  // 命中独立 tool.view 与内置 ask_user 的行独立露出；普通工具 c4 与 foldable tool.view c4b 一同进入同一分组。
   const turn = items.find((i) => i.kind === 'assistant')!
   assert.ok(turn.kind === 'assistant')
   const exposed = turn.segments.filter((s) => s.kind === 'tool') as Array<{ kind: 'tool'; tool: ToolTrace }>
@@ -269,7 +274,7 @@ test('isFoldableStep：tool.view 命中与内置 ask_user 均豁免折叠并按�
   assert.deepEqual(exposed.map((e) => e.tool.callId), ['c1', 'c2', 'c3', 'c5'])
   const group = turn.segments.find((s) => s.kind === 'step-group')
   assert.ok(group?.kind === 'step-group')
-  assert.deepEqual(group.steps.map((step) => step.kind === 'tool' ? step.tool.callId : undefined), ['c4'])
+  assert.deepEqual(group.steps.map((step) => step.kind === 'tool' ? step.tool.callId : undefined), ['c4', 'c4b'])
 })
 
 test('findToolView / matchTimelineRenderer 匹配判定', { timeout: 60_000 }, () => {
