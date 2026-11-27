@@ -199,9 +199,15 @@ export class EventHub {
    * (public emitEvent) await `internal`; kernel auto-events (trackers, etc.) ignore the return value (fire-and-forget) so synchronous
    * observation paths (e.g., SDK callbacks) are never blocked.
    */
-  publish(type: string, payload: unknown): EventPublishResult {
+  publish(
+    type: string,
+    payload: unknown,
+    options?: { internalPayload?: unknown },
+  ): EventPublishResult {
     const nextSeq = this.seqValue + 1
     const event = this.buildEvent(type, payload)
+    const internalEvent =
+      options?.internalPayload !== undefined ? this.buildEvent(type, options.internalPayload) : event
     const frame: HelmxEventFrame = { seq: nextSeq, event }
     // V8 cannot freeze non-empty TypedArray views; immutability is guaranteed structurally: the ring only retains these isolated
     // encoded bytes (never sharing mutable event object graphs with subscribers), and all internal consumers (ring replay /
@@ -218,7 +224,17 @@ export class EventHub {
         // Isolate errors from individual subscriber callbacks (cleanup is handled per-subscriber) without impacting others.
       }
     }
-    return { frame, internal: this.hostDispatcher?.(event) }
+    return { frame, internal: this.hostDispatcher?.(internalEvent) }
+  }
+
+  /**
+   * Validate and redact an event and deliver it exclusively to the internal host
+   * dispatcher (`ctx.host.onEvent`), without advancing `seq`, persisting, appending
+   * to the replay ring, or broadcasting to SSE subscribers.
+   */
+  dispatchInternalOnly(type: string, payload: unknown): MaybePromise<void> | undefined {
+    const event = this.buildEvent(type, payload)
+    return this.hostDispatcher?.(event)
   }
 
   /**

@@ -25,6 +25,7 @@ import type {
 } from '@helmx/protocol/browser'
 import { resolveLocalizedText } from '@helmx/protocol/browser'
 import { createWebTranslator, type WebMessageKey } from '../i18n/catalog.js'
+import { DEFAULT_CONVERSATION_WINDOW_LIMIT } from '../conversation/conversation-window-model.js'
 import { resetStandbyDrafts } from '../conversation/standby-model.js'
 import type { WorkspaceConversationNode } from '../conversation/workspace-file-url.js'
 import { ESC_ABORT_WINDOW_MS, getStoredSidebarCollapsed } from '../shell/shortcuts-model.js'
@@ -32,7 +33,7 @@ import { setStoredToken, type ModelCatalogDefaults, type ModelDescriptor } from 
 import { requestBrowserNotificationPermission } from './browser-notification.js'
 import { DEFAULT_WORKBENCH_TAB, isSameDrawerStack, topDrawerFrame, type DrawerFrame } from './drawer-stack-model.js'
 import { errorText } from './error-text.js'
-import { emptyLiveState, type LiveState, type SseCursor } from './live-state.js'
+import { clearPendingEntries, emptyLiveState, evictConversationDetails, type LiveState, type SseCursor } from './live-state.js'
 import { resetPluginClientCache } from './plugin-client.js'
 import { StoreRequestManager } from './request-manager.js'
 import { getSessionDocState, resetSessionDocSubscriptions, retrySessionDoc, subscribeSessionDoc } from './session-docs.js'
@@ -116,12 +117,33 @@ export type {
 
 const INFO_NOTICE_DURATION_MS = 6000
 
+function collectSecondaryNavConversationIds(nav: Pick<NavSlice, 'splitTarget' | 'drawerStack' | 'activeModal' | 'highlightedEntry'>): Set<number> {
+  const ids = new Set<number>()
+  if (nav.splitTarget?.kind === 'conversation') ids.add(nav.splitTarget.conversationId)
+  for (const frame of nav.drawerStack) {
+    if (frame.conversationId !== undefined) ids.add(frame.conversationId)
+  }
+  const modal = nav.activeModal
+  if ((modal?.kind === 'artifact-preview' || modal?.kind === 'workspace-file') && modal.conversationId !== undefined) {
+    ids.add(modal.conversationId)
+  }
+  if (nav.highlightedEntry !== null) ids.add(nav.highlightedEntry.conversationId)
+  return ids
+}
+
 export class HelmxExternalStore {
   readonly requests = new StoreRequestManager()
-  private readonly bus = new StoreSubscriptionBus()
+  private readonly bus: StoreSubscriptionBus
   private readonly notices: StoreNoticeController
   private readonly auth: StoreAuthController
   private readonly live: StoreLiveController
+  private disposed = false
+  private pruningCaches = false
+  private activeWindowStageToken: symbol | null = null
+  private retainedWindowIds = new Set<number>()
+  private readonly pendingIdlePruneIds = new Set<number>()
+  private idlePruneScheduled = false
+  private readonly detailAccessOrder = new Set<number>()
 
   sseCursor: SseCursor | null = null
   lastSyncedLocation: WorkspaceLocationState
@@ -183,6 +205,14 @@ export class HelmxExternalStore {
       localePreference,
       locale,
       quietNotifyEnabled: getStoredQuietNotify(),
+    }
+
+    this.bus = new StoreSubscriptionBus({
+      onConversationDetailIdle: (id) => this.scheduleIdleConversationPrune(id),
+      onConversationArtifactsIdle: (id) => this.scheduleIdleConversationPrune(id),
+    })
+    this.requests.onDetailLoadCleared = (id) => {
+      if (!this.disposed) this.updateLive((state) => clearPendingEntries(state, id))
     }
 
     this.notices = new StoreNoticeController({
@@ -275,6 +305,9 @@ export class HelmxExternalStore {
     )
 
     this.navActions.rememberSpaceTarget(bootLocation.primaryTarget)
+    if (bootLocation.primaryTarget.kind === 'conversation') {
+      this.touchDetailAccessOrder(bootLocation.primaryTarget.conversationId)
+    }
     if (
       bootLocation.primaryTarget.kind === 'conversation' &&
       bootLocation.drawerStack.length > 0 &&
@@ -338,10 +371,213 @@ export class HelmxExternalStore {
   }
 
   dispose(): void {
+    this.disposed = true
+    this.activeWindowStageToken = null
+    this.retainedWindowIds.clear()
+    this.pendingIdlePruneIds.clear()
+    this.detailAccessOrder.clear()
     this.auth.cancelInFlightAuthCheck()
     this.navActions.clearEscTimer()
     this.notices.clearAllTimers()
     this.requests.dispose()
+  }
+
+  attachWindowStage(token: symbol): void {
+    if (this.disposed) return
+    this.activeWindowStageToken = token
+  }
+
+  detachWindowStage(token: symbol): void {
+    queueMicrotask(() => {
+      if (this.disposed || this.activeWindowStageToken !== token) return
+      this.activeWindowStageToken = null
+      const previous = [...this.retainedWindowIds]
+      this.retainedWindowIds.clear()
+      if (previous.length > 0) this.pruneConversationCaches(previous)
+    })
+  }
+
+  syncRetainedConversationWindows(token: symbol, ids: readonly number[]): void {
+    if (this.disposed || this.activeWindowStageToken !== token) return
+    const next = new Set(ids)
+    const dropped: number[] = []
+    for (const prevId of this.retainedWindowIds) {
+      if (!next.has(prevId)) dropped.push(prevId)
+    }
+    this.retainedWindowIds = next
+    for (const id of ids) this.touchDetailAccessOrder(id)
+    if (dropped.length > 0) this.pruneConversationCaches(dropped)
+  }
+
+  private touchDetailAccessOrder(id: number): void {
+    this.detailAccessOrder.delete(id)
+    this.detailAccessOrder.add(id)
+  }
+
+  private scheduleIdleConversationPrune(id: number): void {
+    if (this.disposed) return
+    this.pendingIdlePruneIds.add(id)
+    if (this.idlePruneScheduled) return
+    this.idlePruneScheduled = true
+    queueMicrotask(() => {
+      this.idlePruneScheduled = false
+      if (this.disposed || this.pendingIdlePruneIds.size === 0) return
+      const candidates = [...this.pendingIdlePruneIds]
+      this.pendingIdlePruneIds.clear()
+      this.pruneConversationCaches(candidates)
+    })
+  }
+
+  private isConversationDetailProtected(id: number): boolean {
+    if (this.retainedWindowIds.has(id)) return true
+    if (this.navState.primaryTarget.kind === 'conversation' && this.navState.primaryTarget.conversationId === id) {
+      return true
+    }
+    if (this.navState.splitTarget?.kind === 'conversation' && this.navState.splitTarget.conversationId === id) {
+      return true
+    }
+    if (this.navState.drawerStack.some((frame) => frame.conversationId === id)) return true
+    const modal = this.navState.activeModal
+    if (
+      (modal?.kind === 'artifact-preview' || modal?.kind === 'workspace-file') &&
+      modal.conversationId === id
+    ) {
+      return true
+    }
+    if (this.navState.highlightedEntry?.conversationId === id) return true
+    if (this.bus.hasConversationDetailListeners(id)) return true
+    if (this.requests.loadingDetailIds.has(id) || this.requests.inFlight.has(`history:${id}`)) return true
+    return false
+  }
+
+  private isConversationArtifactsProtected(id: number): boolean {
+    return (
+      this.isConversationDetailProtected(id) ||
+      this.bus.hasConversationArtifactListeners(id) ||
+      this.requests.artifactsInFlight.has(id)
+    )
+  }
+
+  private pruneConversationCaches(
+    candidateIds: Iterable<number>,
+    externalPlan?: NotifyPlan,
+    deferEmit = false,
+  ): void {
+    if (this.disposed || this.pruningCaches) return
+    this.pruningCaches = true
+    try {
+      const liveState = this.live.getLiveState()
+      const evictDetailIds: number[] = []
+      const evictArtifactIds: number[] = []
+      for (const id of candidateIds) {
+        if (
+          !this.isConversationDetailProtected(id) &&
+          (Object.hasOwn(liveState.conversationDetails, id) ||
+            Object.hasOwn(liveState.pendingEntries, id) ||
+            Object.hasOwn(this.loadErrorsState, `conversation:${id}`) ||
+            Object.hasOwn(this.loadErrorsState, `history:${id}`))
+        ) {
+          evictDetailIds.push(id)
+        }
+        if (
+          !this.isConversationArtifactsProtected(id) &&
+          (Object.hasOwn(this.artifactsState, id) ||
+            this.requests.artifactsWatermarks.has(id) ||
+            this.requests.dirtyArtifacts.has(id) ||
+            Object.hasOwn(this.loadErrorsState, `artifacts:${id}`))
+        ) {
+          evictArtifactIds.push(id)
+        }
+      }
+      if (evictDetailIds.length === 0 && evictArtifactIds.length === 0) return
+
+      const plan = externalPlan ?? emptyPlan()
+      if (evictDetailIds.length > 0) {
+        this.live.updateLive((state) => evictConversationDetails(state, evictDetailIds), plan, true)
+        for (const id of evictDetailIds) this.detailAccessOrder.delete(id)
+      }
+      if (evictArtifactIds.length > 0) {
+        const evictArtifactSet = new Set(evictArtifactIds)
+        let artifactsChanged = false
+        const nextArtifacts: Record<number, ArtifactMetadata[]> = {}
+        for (const [key, value] of Object.entries(this.artifactsState)) {
+          const numId = Number(key)
+          if (evictArtifactSet.has(numId)) artifactsChanged = true
+          else nextArtifacts[numId] = value
+        }
+        for (const id of evictArtifactIds) {
+          this.requests.artifactsWatermarks.delete(id)
+          this.requests.dirtyArtifacts.delete(id)
+        }
+        if (artifactsChanged) {
+          this.artifactsState = nextArtifacts
+          for (const id of evictArtifactIds) plan.artifactIds.add(id)
+          plan.domains.add('conversationArtifactsMap')
+          plan.domains.add('all')
+        }
+      }
+      let errorsChanged = false
+      const nextErrors = { ...this.loadErrorsState }
+      for (const id of evictDetailIds) {
+        for (const key of [`conversation:${id}`, `history:${id}`]) {
+          if (Object.hasOwn(nextErrors, key)) {
+            delete nextErrors[key]
+            errorsChanged = true
+          }
+        }
+      }
+      for (const id of evictArtifactIds) {
+        const key = `artifacts:${id}`
+        if (Object.hasOwn(nextErrors, key)) {
+          delete nextErrors[key]
+          errorsChanged = true
+        }
+      }
+      if (errorsChanged) {
+        this.setLoadErrors(nextErrors, plan, true)
+      }
+      if (!deferEmit) this.emit(plan)
+    } finally {
+      this.pruningCaches = false
+    }
+  }
+
+  private pruneUnstagedExcessDetails(plan: NotifyPlan, deferEmit: boolean): void {
+    const details = this.live.getConversationDetailsMap()
+    const detailKeys = Object.keys(details)
+    const artifactKeys = Object.keys(this.artifactsState)
+    if (
+      detailKeys.length <= DEFAULT_CONVERSATION_WINDOW_LIMIT &&
+      artifactKeys.length <= DEFAULT_CONVERSATION_WINDOW_LIMIT
+    ) {
+      return
+    }
+    const orderedIds = new Set<number>()
+    for (const id of this.detailAccessOrder) orderedIds.add(id)
+    for (const key of detailKeys) orderedIds.add(Number(key))
+    for (const key of artifactKeys) orderedIds.add(Number(key))
+
+    const victims = new Set<number>()
+    let remainingDetails = detailKeys.length
+    let remainingArtifacts = artifactKeys.length
+    for (const id of orderedIds) {
+      const hasDetail = Object.hasOwn(details, id)
+      const hasArtifact = Object.hasOwn(this.artifactsState, id)
+      const needDetailEvict = remainingDetails > DEFAULT_CONVERSATION_WINDOW_LIMIT && hasDetail
+      const needArtifactEvict = remainingArtifacts > DEFAULT_CONVERSATION_WINDOW_LIMIT && hasArtifact
+      if (!needDetailEvict && !needArtifactEvict) continue
+      let evicted = false
+      if (needDetailEvict && !this.isConversationDetailProtected(id)) {
+        remainingDetails -= 1
+        evicted = true
+      }
+      if (needArtifactEvict && !this.isConversationArtifactsProtected(id)) {
+        remainingArtifacts -= 1
+        evicted = true
+      }
+      if (evicted) victims.add(id)
+    }
+    if (victims.size > 0) this.pruneConversationCaches(victims, plan, deferEmit)
   }
 
   translate = (text: LocalizedText): string => resolveLocalizedText(text, this.prefsState.locale)
@@ -617,7 +853,23 @@ export class HelmxExternalStore {
   }
 
   updateLive = (update: (state: LiveState) => LiveState, plan = emptyPlan(), deferEmit = false): void => {
-    this.live.updateLive(update, plan, deferEmit)
+    const prevDetails = this.live.getConversationDetailsMap()
+    this.live.updateLive(update, plan, true)
+    const nextDetails = this.live.getConversationDetailsMap()
+    if (nextDetails !== prevDetails) {
+      for (const key of Object.keys(prevDetails)) {
+        const id = Number(key)
+        if (!Object.hasOwn(nextDetails, id)) this.detailAccessOrder.delete(id)
+      }
+      for (const key of Object.keys(nextDetails)) {
+        const id = Number(key)
+        if (!Object.hasOwn(prevDetails, id)) this.touchDetailAccessOrder(id)
+      }
+      if (!this.pruningCaches && this.activeWindowStageToken === null) {
+        this.pruneUnstagedExcessDetails(plan, true)
+      }
+    }
+    if (!deferEmit) this.emit(plan)
   }
 
   setConversationArtifacts = (
@@ -633,6 +885,14 @@ export class HelmxExternalStore {
     this.artifactsState = next
     plan.domains.add('conversationArtifactsMap')
     plan.domains.add('all')
+    if (!this.pruningCaches && this.activeWindowStageToken === null) {
+      for (const id of plan.artifactIds) {
+        if (Object.hasOwn(next, id) && !Object.hasOwn(prev, id)) {
+          this.touchDetailAccessOrder(id)
+        }
+      }
+      this.pruneUnstagedExcessDetails(plan, true)
+    }
     if (!deferEmit) this.emit(plan)
   }
 
@@ -731,7 +991,16 @@ export class HelmxExternalStore {
       return
     }
 
+    const prevSecondaryIds = collectSecondaryNavConversationIds(prev)
     this.navState = next
+    if (next.primaryTarget.kind === 'conversation') {
+      this.touchDetailAccessOrder(next.primaryTarget.conversationId)
+    }
+    const nextSecondaryIds = collectSecondaryNavConversationIds(next)
+    const removedSecondaryIds: number[] = []
+    for (const id of prevSecondaryIds) {
+      if (!nextSecondaryIds.has(id)) removedSecondaryIds.push(id)
+    }
     plan.domains.add('nav')
     plan.domains.add('all')
     if (primaryChanged) plan.domains.add('primaryTarget')
@@ -775,6 +1044,11 @@ export class HelmxExternalStore {
       plan.domains.add('highlightedEntry')
       if (prev.highlightedEntry !== null) plan.highlightIds.add(prev.highlightedEntry.conversationId)
       if (next.highlightedEntry !== null) plan.highlightIds.add(next.highlightedEntry.conversationId)
+    }
+    if (removedSecondaryIds.length > 0) {
+      this.pruneConversationCaches(removedSecondaryIds, plan, true)
+    } else if (primaryChanged && this.activeWindowStageToken === null) {
+      this.pruneUnstagedExcessDetails(plan, true)
     }
     if (!deferEmit) this.emit(plan)
   }
@@ -871,6 +1145,9 @@ export class HelmxExternalStore {
     this.navActions.clearEscTimer()
     this.notices.clearAllTimers()
     this.requests.resetOnLogout()
+    this.retainedWindowIds.clear()
+    this.pendingIdlePruneIds.clear()
+    this.detailAccessOrder.clear()
     this.sseCursor = null
     resetStandbyDrafts()
     resetPluginClientCache()
@@ -903,6 +1180,9 @@ export class HelmxExternalStore {
       true,
     )
     this.updateLive(emptyLiveState, plan, true)
+    this.retainedWindowIds.clear()
+    this.pendingIdlePruneIds.clear()
+    this.detailAccessOrder.clear()
     this.setConversationArtifacts({}, plan, true)
     this.setLoadErrors({}, plan, true)
     this.notices.clearEscAbortNotice(plan, true)

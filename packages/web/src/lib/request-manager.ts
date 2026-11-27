@@ -12,6 +12,14 @@ export function isAbortError(error: unknown): boolean {
   return error !== null && typeof error === 'object' && (error as { name?: string }).name === 'AbortError'
 }
 
+export function parseConversationDetailKey(key: string): number | undefined {
+  if (!key.startsWith('conversation:')) return undefined
+  const raw = key.slice('conversation:'.length)
+  if (!/^[1-9]\d*$/.test(raw)) return undefined
+  const id = Number(raw)
+  return Number.isSafeInteger(id) && id > 0 ? id : undefined
+}
+
 export interface ControlledRequestContext {
   signal: AbortSignal
   isStale: () => boolean
@@ -45,6 +53,10 @@ export class StoreRequestManager {
   readonly artifactsInFlight = new Map<number, ArtifactsInFlightMeta>()
   readonly dirtyArtifacts = new Set<number>()
   readonly prevVisibleConversationIds = new Set<number>()
+  /** Conversations whose initial/refresh detail HTTP request is currently in flight (`pendingEntries` gate). */
+  readonly loadingDetailIds = new Set<number>()
+  /** Invoked whenever a tracked detail load clears without merging (`abort`, error, stale finish). */
+  onDetailLoadCleared?: (conversationId: number) => void
   assetGeneration = 0
   assetsController: AbortController | null = null
   readonly timers = new Set<ReturnType<typeof setTimeout>>()
@@ -97,12 +109,17 @@ export class StoreRequestManager {
         this.dirtyArtifacts.delete(id)
       }
     }
+    const detailId = parseConversationDetailKey(key)
     const ctrl = this.inFlightControllers.get(key)
     if (ctrl !== undefined) {
       this.inFlightControllers.delete(key)
       ctrl.abort()
     }
     this.inFlight.delete(key)
+    if (detailId !== undefined) {
+      this.loadingDetailIds.delete(detailId)
+      this.onDetailLoadCleared?.(detailId)
+    }
   }
 
   abortInFlightConversationRequests = (): void => {
@@ -155,11 +172,13 @@ export class StoreRequestManager {
     if (existing) return existing as Promise<T | undefined>
 
     onStart?.()
+    const detailId = parseConversationDetailKey(key)
     const epoch = this.sessionEpoch
     const reqEpoch = (this.requestEpochs.get(key) ?? 0) + 1
     this.requestEpochs.set(key, reqEpoch)
     const controller = new AbortController()
     this.inFlightControllers.set(key, controller)
+    if (detailId !== undefined) this.loadingDetailIds.add(detailId)
 
     const isStale = (): boolean =>
       this.sessionEpoch !== epoch ||
@@ -168,17 +187,29 @@ export class StoreRequestManager {
 
     let task!: Promise<T | undefined>
     const release = (): void => {
-      if (this.inFlightControllers.get(key) === controller) this.inFlightControllers.delete(key)
-      if (this.inFlight.get(key) === task) this.inFlight.delete(key)
+      const ownsController = this.inFlightControllers.get(key) === controller
+      const ownsTask = this.inFlight.get(key) === task
+      if (ownsController) this.inFlightControllers.delete(key)
+      if (ownsTask) this.inFlight.delete(key)
+      if (detailId !== undefined && (ownsTask || (ownsController && !this.inFlight.has(key)))) {
+        this.loadingDetailIds.delete(detailId)
+      }
     }
 
     task = (async (): Promise<T | undefined> => {
       try {
         const value = await exec({ signal: controller.signal, isStale, release })
+        const staleAfterExec = isStale()
         release()
-        return isStale() ? undefined : value
+        if (detailId !== undefined && staleAfterExec && !this.loadingDetailIds.has(detailId)) {
+          this.onDetailLoadCleared?.(detailId)
+        }
+        return staleAfterExec ? undefined : value
       } catch (error: unknown) {
         release()
+        if (detailId !== undefined && !this.loadingDetailIds.has(detailId)) {
+          this.onDetailLoadCleared?.(detailId)
+        }
         if (isAbortError(error) || isStale()) return undefined
         onError?.(error)
         return undefined
@@ -193,6 +224,7 @@ export class StoreRequestManager {
     this.sessionEpoch++
     this.abortInFlightConversationRequests()
     this.inFlight.clear()
+    this.loadingDetailIds.clear()
     this.failedDocs.clear()
   }
 
@@ -200,6 +232,7 @@ export class StoreRequestManager {
     this.sessionEpoch++
     this.abortAllInFlight()
     this.inFlight.clear()
+    this.loadingDetailIds.clear()
     this.failedDocs.clear()
     this.artifactsWatermarks.clear()
     this.artifactsInFlight.clear()
@@ -211,6 +244,7 @@ export class StoreRequestManager {
   dispose(): void {
     this.sessionEpoch++
     this.abortAllInFlight()
+    this.loadingDetailIds.clear()
     this.artifactsInFlight.clear()
     this.dirtyArtifacts.clear()
     for (const timer of this.timers) clearTimeout(timer)

@@ -23,11 +23,11 @@ import { strict as assert } from 'node:assert'
 import { withTimeout } from '@helmx/test-kit'
 import { after, before, describe, it } from 'node:test'
 import { join } from 'node:path'
-import { fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux'
-import type { HelmxEventFrame, MaybePromise } from '@helmx/protocol'
+import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
+import type { ConversationEntry, HelmxEventFrame, MaybePromise } from '@helmx/protocol'
 import { KernelRuntime } from '../src/runtime/index.js'
 import { EventHub } from '../src/runtime/events.js'
-import { cleanupDir, deferred, makeFauxModels, makeTempDir } from './helpers.js'
+import { cleanupDir, deferred, makeFauxModels, makeTempDir, waitFor } from './helpers.js'
 
 type FauxHandle = ReturnType<typeof makeFauxModels>['faux']
 
@@ -190,15 +190,16 @@ describe('host event single-delivery contract', { timeout: 60_000 }, () => {
   it('kernel-generated events (real commit): internal listener and SSE frames align 1-to-1, once each', { timeout: 60_000 }, async () => {
     const kernel = await openRuntime(join(root, 'auto-events-once'))
     try {
-      const internalIds: string[] = []
-      const sseIds: string[] = []
-      await registerEntryListener(kernel, (entryId) => {
-        internalIds.push(entryId)
+      const internalEntries: Array<{ id: string; kind: string }> = []
+      const sseEntries: Array<{ id: string; kind: string }> = []
+      const releaseInternal = kernel.onEvent('conversation.entry', (raw) => {
+        const entry = (raw as { entry?: ConversationEntry }).entry
+        if (entry?.id !== undefined) internalEntries.push({ id: entry.id, kind: entry.kind })
       })
       kernel.events.subscribe((frame) => {
         if (frame.event.type !== 'conversation.entry') return
-        const entry = (frame.event as { entry?: { id?: string } }).entry
-        if (entry?.id !== undefined) sseIds.push(entry.id)
+        const entry = (frame.event as { entry?: ConversationEntry }).entry
+        if (entry?.id !== undefined) sseEntries.push({ id: entry.id, kind: entry.kind })
       })
 
       kernel.__faux.setResponses([fauxAssistantMessage('answer one'), fauxAssistantMessage('answer two')])
@@ -206,16 +207,114 @@ describe('host event single-delivery contract', { timeout: 60_000 }, () => {
       await kernel.conversations.waitForIdle(1)
       await kernel.conversations.submitInput(1, 'second question')
       await kernel.conversations.waitForIdle(1)
-      // Observer path is fire-and-forget: wait for internal delivery to catch up.
-      await new Promise((resolve) => setTimeout(resolve, 200))
+      await waitFor(() => internalEntries.filter((e) => e.kind === 'pi.assistant').length >= 2)
+      releaseInternal()
 
-      assert.ok(internalIds.length >= 2, 'kernel conversation.entry events delivered to internal listener')
-      assert.deepEqual(
-        [...internalIds].sort(),
-        [...sseIds].sort(),
-        'internal listener entries and SSE frames match 1-to-1 (delivered once, never duplicated)',
+      assert.ok(internalEntries.length >= 2, 'kernel conversation.entry events delivered to internal listener')
+      assert.equal(
+        sseEntries.some((e) => e.kind === 'pi.system'),
+        false,
+        'SSE conversation.entry must exclude internal pi.system entries',
       )
-      assert.equal(new Set(internalIds).size, internalIds.length, 'no entry delivered twice')
+      const internalVisibleIds = internalEntries.filter((e) => e.kind !== 'pi.system').map((e) => e.id)
+      const sseIds = sseEntries.map((e) => e.id)
+      assert.deepEqual(
+        [...internalVisibleIds].sort(),
+        [...sseIds].sort(),
+        'internal non-system entries and SSE frames match 1-to-1 (delivered once, never duplicated)',
+      )
+      assert.equal(new Set(internalEntries.map((e) => e.id)).size, internalEntries.length, 'no entry delivered twice')
+      if (internalEntries.some((e) => e.kind === 'pi.system')) {
+        assert.ok(
+          internalEntries.length > sseEntries.length,
+          'internal listeners still observe pi.system entries omitted from SSE',
+        )
+      }
+    } finally {
+      await kernel.close()
+    }
+  })
+
+  it('SSE conversation.entry projects signatures & oversized toolResult while internal listeners receive raw entries', { timeout: 60_000 }, async () => {
+    const kernel = await openRuntime(join(root, 'sse-entry-projection'))
+    try {
+      const internalEntries: ConversationEntry[] = []
+      const sseEntries: ConversationEntry[] = []
+      const releaseInternal = kernel.onEvent('conversation.entry', (raw) => {
+        const entry = (raw as { entry?: ConversationEntry }).entry
+        if (entry !== undefined) internalEntries.push(entry)
+      })
+      kernel.events.subscribe((frame) => {
+        if (frame.event.type !== 'conversation.entry') return
+        const entry = (frame.event as { entry?: ConversationEntry }).entry
+        if (entry !== undefined) sseEntries.push(entry)
+      })
+
+      const markerOutput = 'X'.repeat(2200)
+      kernel.__faux.setResponses([
+        fauxAssistantMessage(
+          [
+            { type: 'thinking', thinking: 'planning', thinkingSignature: 'sig-thinking-1' } as never,
+            { type: 'text', text: 'running tool', textSignature: 'sig-text-1' } as never,
+            {
+              ...fauxToolCall('bash', {
+                command: `node -e "process.stdout.write('${markerOutput}')"`,
+              }),
+              thoughtSignature: 'sig-thought-1',
+            } as never,
+          ],
+          { stopReason: 'toolUse' },
+        ),
+        fauxAssistantMessage('done'),
+      ])
+      await kernel.conversations.submitInput(1, 'run projection test')
+      await kernel.conversations.waitForIdle(1)
+      await waitFor(
+        () =>
+          internalEntries.some((e) => e.kind === 'pi.tool-result') &&
+          sseEntries.some((e) => e.kind === 'pi.tool-result') &&
+          sseEntries.filter((e) => e.kind === 'pi.assistant').length >= 2,
+      )
+      releaseInternal()
+
+      assert.equal(sseEntries.some((e) => e.kind === 'pi.system'), false, 'SSE must omit pi.system')
+
+      const internalAssistant = internalEntries.find(
+        (e) => e.kind === 'pi.assistant' && Array.isArray((e.model?.[0] as { content?: unknown[] } | undefined)?.content) &&
+          ((e.model![0] as { content: Array<{ type?: string }> }).content.some((b) => b.type === 'thinking')),
+      )
+      assert.ok(internalAssistant, 'internal listener must receive assistant entry with thinking block')
+      const sseAssistant = sseEntries.find((e) => e.id === internalAssistant.id)
+      assert.ok(sseAssistant, 'SSE must receive matching assistant entry')
+
+      const internalBlocks = (internalAssistant.model![0] as { content: Array<Record<string, unknown>> }).content
+      const sseBlocks = (sseAssistant.model![0] as { content: Array<Record<string, unknown>> }).content
+      assert.equal(internalBlocks[0]?.['thinkingSignature'], 'sig-thinking-1')
+      assert.equal(internalBlocks[1]?.['textSignature'], 'sig-text-1')
+      assert.equal(internalBlocks[2]?.['thoughtSignature'], 'sig-thought-1')
+      assert.equal('thinkingSignature' in (sseBlocks[0] ?? {}), false, 'SSE must strip thinkingSignature')
+      assert.equal('textSignature' in (sseBlocks[1] ?? {}), false, 'SSE must strip textSignature')
+      assert.equal('thoughtSignature' in (sseBlocks[2] ?? {}), false, 'SSE must strip thoughtSignature')
+
+      const internalToolResult = internalEntries.find((e) => e.kind === 'pi.tool-result')
+      const sseToolResult = sseEntries.find((e) => e.id === internalToolResult?.id)
+      assert.ok(internalToolResult && sseToolResult, 'both internal and SSE must observe pi.tool-result')
+
+      const internalMsg = internalToolResult.model![0] as { content: Array<{ text?: string }>; truncated?: boolean }
+      const sseMsg = sseToolResult.model![0] as {
+        content: Array<{ text?: string }>
+        truncated?: boolean
+        totalChars?: number
+        totalLines?: number
+      }
+      const internalText = internalMsg.content.map((c) => c.text ?? '').join('')
+      const sseText = sseMsg.content.map((c) => c.text ?? '').join('')
+      assert.equal(internalMsg.truncated, undefined, 'internal listener keeps untruncated toolResult')
+      assert.ok(internalText.includes(markerOutput), 'internal listener keeps full tool output')
+      assert.equal(sseMsg.truncated, true, 'SSE toolResult must be projected with truncated: true')
+      assert.ok((sseMsg.totalChars ?? 0) >= 2200)
+      assert.ok((sseMsg.totalLines ?? 0) >= 1)
+      assert.ok(sseText.length < internalText.length, 'SSE toolResult text must be shorter than raw output')
     } finally {
       await kernel.close()
     }

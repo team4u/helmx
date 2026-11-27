@@ -1230,3 +1230,109 @@ describe('EventHub transient conversation.live.delta protocol', { timeout: 60_00
     hub.close()
   })
 })
+
+describe('EventHub internalPayload & dispatchInternalOnly', { timeout: 60_000 }, () => {
+  it('dispatchInternalOnly validates & redacts and invokes hostDispatcher without advancing seq, ring, or SSE subscribers', { timeout: 60_000 }, () => {
+    const { hub, persistedSeqs } = makeFixture({ initialSeq: 10, keepaliveMs: 0 })
+    hub.redactFn = (t) => t.replaceAll('SECRET_VAL', '[REDACTED]')
+    const sseFrames: HelmxEventFrame[] = []
+    const hostEvents: unknown[] = []
+    hub.subscribe((frame) => sseFrames.push(frame))
+    hub.setHostDispatcher((ev) => { hostEvents.push(ev) })
+
+    hub.dispatchInternalOnly('conversation.entry', {
+      conversationId: 3,
+      entry: { id: '99', kind: 'pi.system', data: { token: 'SECRET_VAL' } },
+    })
+
+    assert.equal(hub.seq, 10, 'dispatchInternalOnly must not advance seq')
+    assert.deepEqual(persistedSeqs, [], 'dispatchInternalOnly must not persist seq')
+    assert.equal(sseFrames.length, 0, 'dispatchInternalOnly must not broadcast to SSE subscribers')
+    assert.equal(hostEvents.length, 1)
+    assert.equal(JSON.stringify(hostEvents[0]).includes('SECRET_VAL'), false, 'must redact secrets')
+    assert.throws(
+      () => hub.dispatchInternalOnly('conversation.entry', { conversationId: 'bad', entry: { id: '1', kind: 'pi.system' } }),
+      /conversation\.entry requires/,
+    )
+    assert.equal(hub.seq, 10)
+    hub.close()
+  })
+
+  it('publish with internalPayload sends payload to SSE/ring and redacted internalPayload to hostDispatcher atomically', { timeout: 60_000 }, async () => {
+    const { hub, persistedSeqs } = makeFixture({ initialSeq: 5, keepaliveMs: 0 })
+    hub.redactFn = (t) => t.replaceAll('RAW_SECRET', '[REDACTED]')
+    const sseFrames: HelmxEventFrame[] = []
+    const hostEvents: unknown[] = []
+    hub.subscribe((frame) => sseFrames.push(frame))
+    hub.setHostDispatcher((ev) => { hostEvents.push(ev) })
+
+    const controller = new AbortController()
+    const response = hub.response(new Request('http://x/api/events', { signal: controller.signal }))
+    const receivedSse: Array<{ event: string; data: unknown }> = []
+    const reading = readAll(response, (text) => {
+      for (const f of parseSse(text)) receivedSse.push(f)
+    })
+    await waitFor(() => receivedSse.length >= 1)
+
+    hub.publish(
+      'conversation.entry',
+      { conversationId: 2, entry: { id: '12', kind: 'pi.tool-result', data: { preview: 'short RAW_SECRET' } } },
+      { internalPayload: { conversationId: 2, entry: { id: '12', kind: 'pi.tool-result', data: { full: 'full RAW_SECRET' } } } },
+    )
+    await waitFor(() => receivedSse.length >= 2)
+
+    assert.equal(hub.seq, 6)
+    assert.deepEqual(persistedSeqs, [6])
+    assert.equal(sseFrames.length, 1)
+    assert.deepEqual(
+      (sseFrames[0]?.event as { entry?: { data?: unknown } }).entry?.data,
+      { preview: 'short [REDACTED]' },
+    )
+    assert.deepEqual(
+      ((receivedSse[1]?.data as HelmxEventFrame).event as { entry?: { data?: unknown } }).entry?.data,
+      { preview: 'short [REDACTED]' },
+    )
+    assert.equal(hostEvents.length, 1)
+    assert.deepEqual(
+      (hostEvents[0] as { entry?: { data?: unknown } }).entry?.data,
+      { full: 'full [REDACTED]' },
+    )
+
+    // Invalid internalPayload must fail BEFORE persisting or advancing seq or broadcasting SSE.
+    assert.throws(
+      () =>
+        hub.publish(
+          'conversation.entry',
+          { conversationId: 2, entry: { id: '13', kind: 'pi.tool-result' } },
+          { internalPayload: { conversationId: 'invalid', entry: { id: '13', kind: 'pi.tool-result' } } },
+        ),
+      /conversation\.entry requires/,
+    )
+    assert.equal(hub.seq, 6, 'atomic validation failure on internalPayload must not advance seq')
+    assert.deepEqual(persistedSeqs, [6], 'atomic validation failure must not persist seq')
+    assert.equal(sseFrames.length, 1, 'atomic validation failure must not broadcast SSE')
+    assert.equal(hostEvents.length, 1)
+
+    // Replay ring serves projected SSE payload on resume.
+    controller.abort()
+    await reading
+    const resumeController = new AbortController()
+    const resumeResp = hub.response(
+      new Request(`http://x/api/events?afterSeq=5&bootId=${encodeURIComponent(hub.bootId)}`, {
+        signal: resumeController.signal,
+      }),
+    )
+    const replayed: Array<{ event: string; data: unknown }> = []
+    const readingResume = readAll(resumeResp, (text) => {
+      for (const f of parseSse(text)) replayed.push(f)
+    })
+    await waitFor(() => replayed.length >= 2)
+    assert.deepEqual(
+      ((replayed[1]?.data as HelmxEventFrame).event as { entry?: { data?: unknown } }).entry?.data,
+      { preview: 'short [REDACTED]' },
+    )
+    resumeController.abort()
+    await readingResume
+    hub.close()
+  })
+})

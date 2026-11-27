@@ -366,10 +366,16 @@ function upsertEntryStable(entries: ConversationEntry[], entry: ConversationEntr
 
 /**
  * 单条目写入（SSE conversation.entry 事件与截断全文回填共用语义）：
- * 详情已加载则原位并入其 entries；否则落入 pendingEntries 等详情首载合并。
+ * 详情已加载则原位并入其 entries；未加载时仅在显式允许暂存（详情 HTTP 请求在途）
+ * 时落入 pendingEntries，避免未打开会话在常驻标签页中无界累积。
  * 不触碰 nextCursor，分页游标语义不变。
  */
-export function applyConversationEntry(state: LiveState, conversationId: number, entry: ConversationEntry): LiveState {
+export function applyConversationEntry(
+  state: LiveState,
+  conversationId: number,
+  entry: ConversationEntry,
+  opts?: { bufferIfMissing?: boolean },
+): LiveState {
   const detail = state.conversationDetails[conversationId]
   if (detail) {
     const entries = upsertEntryStable(detail.entries, entry)
@@ -382,6 +388,7 @@ export function applyConversationEntry(state: LiveState, conversationId: number,
       },
     }
   }
+  if (opts?.bufferIfMissing !== true) return state
   const existingPending = state.pendingEntries[conversationId]
   if (existingPending !== undefined) {
     const pending = upsertEntryStable(existingPending, entry)
@@ -389,6 +396,42 @@ export function applyConversationEntry(state: LiveState, conversationId: number,
     return { ...state, pendingEntries: { ...state.pendingEntries, [conversationId]: pending } }
   }
   return { ...state, pendingEntries: { ...state.pendingEntries, [conversationId]: [entry] } }
+}
+
+/** 清理单个会话在途加载期间暂存的 pendingEntries（请求中止/失败/过期时调用）。 */
+export function clearPendingEntries(state: LiveState, conversationId: number): LiveState {
+  if (!Object.hasOwn(state.pendingEntries, conversationId)) return state
+  return { ...state, pendingEntries: omit(state.pendingEntries, String(conversationId)) }
+}
+
+/** 批量逐出指定会话的已缓存详情与暂存条目（命中为空时原引用返回）。 */
+export function evictConversationDetails(state: LiveState, conversationIds: Iterable<number>): LiveState {
+  const evictIds = new Set<number>()
+  for (const id of conversationIds) {
+    if (Object.hasOwn(state.conversationDetails, id) || Object.hasOwn(state.pendingEntries, id)) {
+      evictIds.add(id)
+    }
+  }
+  if (evictIds.size === 0) return state
+  const nextDetails: Record<number, ConversationDetail> = {}
+  let detailsChanged = false
+  for (const [key, value] of Object.entries(state.conversationDetails)) {
+    const numId = Number(key)
+    if (evictIds.has(numId)) detailsChanged = true
+    else nextDetails[numId] = value
+  }
+  const nextPending: Record<number, ConversationEntry[]> = {}
+  let pendingChanged = false
+  for (const [key, value] of Object.entries(state.pendingEntries)) {
+    const numId = Number(key)
+    if (evictIds.has(numId)) pendingChanged = true
+    else nextPending[numId] = value
+  }
+  return {
+    ...state,
+    ...(detailsChanged ? { conversationDetails: nextDetails } : {}),
+    ...(pendingChanged ? { pendingEntries: nextPending } : {}),
+  }
 }
 
 /**
@@ -452,8 +495,13 @@ export function applyResumedFrame(state: LiveState, frame: HelmxResumedFrame): L
   return { ...state, conversationLives }
 }
 
+export interface ApplyEventOptions {
+  /** 仅对当前详情 HTTP 请求在途的会话暂存 SSE conversation.entry，避免未打开会话无界累积。 */
+  readonly pendingDetailIds?: ReadonlySet<number>
+}
+
 /** 任何序号缺口都重连取快照，不能继续显示缺帧的“最新状态”。 */
-export function applyEventFrame(state: LiveState, frame: HelmxEventFrame): LiveState {
+export function applyEventFrame(state: LiveState, frame: HelmxEventFrame, opts?: ApplyEventOptions): LiveState {
   if (!Number.isSafeInteger(frame.seq) || !frame.event || typeof frame.event.type !== 'string') throw new Error('Invalid live event format')
   if (frame.seq <= state.seq) return state
   if (state.seq < 0 || frame.seq !== state.seq + 1) throw new Error('Live event sequence gap; re-syncing')
@@ -498,7 +546,11 @@ export function applyEventFrame(state: LiveState, frame: HelmxEventFrame): LiveS
       }
       break
     case 'conversation.entry':
-      if ('entry' in event) return applyConversationEntry(next, event.conversationId, event.entry)
+      if ('entry' in event) {
+        return applyConversationEntry(next, event.conversationId, event.entry, {
+          bufferIfMissing: opts?.pendingDetailIds?.has(event.conversationId) === true,
+        })
+      }
       break
     case 'ask.upsert':
       if ('ask' in event) next.pendingAsks = event.ask.status === 'pending' ? upsert(state.pendingAsks, event.ask) : state.pendingAsks.filter((ask) => ask.id !== event.ask.id)

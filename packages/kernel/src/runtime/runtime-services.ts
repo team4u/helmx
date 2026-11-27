@@ -31,6 +31,7 @@ import {
 import { createEnvFabric, tokenAuthenticator, type EnvFabric } from '../env/index.js'
 import { AskService } from './asks.js'
 import { ConversationTracker } from './conversations.js'
+import { projectDetailEntry } from './entry-projection.js'
 import { EventHub, SessionDocEventHub } from './events.js'
 import type { HelmxStore } from './store.js'
 import type { HelmxToolDeps } from './tool-deps.js'
@@ -286,7 +287,20 @@ export function assembleRuntimeServices(
         options.store.indexFts(conversationId, `entry:${entryId}`, options.store.getConv(conversationId)?.title ?? '', text)
       },
       onEntryCommitted: (conversationId, entry) => {
-        events.publish('conversation.entry', { conversationId, entry })
+        const projected = projectDetailEntry(entry)
+        if (projected === undefined) {
+          events.dispatchInternalOnly('conversation.entry', { conversationId, entry })
+          return
+        }
+        if (projected === entry) {
+          events.publish('conversation.entry', { conversationId, entry })
+          return
+        }
+        events.publish(
+          'conversation.entry',
+          { conversationId, entry: projected },
+          { internalPayload: { conversationId, entry } },
+        )
       },
       onLiveChanged: (live) => {
         events.publishTransientLive(live)

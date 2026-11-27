@@ -7,6 +7,7 @@ import type { Root } from 'react-dom/client'
 import type { ConversationEntry, ConversationSummary } from '@helmx/protocol'
 import { hangingEventStream, type SseFrameSender } from './helpers/sse-stream.js'
 import { typeIntoControl } from './helpers/dom-harness.js'
+import type { HelmxExternalStore } from '../src/lib/helmx-store.js'
 import type { ResolvedTarget } from '../src/lib/types.js'
 
 /**
@@ -25,7 +26,7 @@ const { createRoot } = await import('react-dom/client')
 const { ConversationPane } = await import('../src/conversation/ConversationPane.js')
 const { ConversationWindowStage } = await import('../src/conversation/ConversationWindowStage.js')
 const { HelmxStoreProvider } = await import('../src/lib/HelmxStoreProvider.js')
-const { useHelmxStore } = await import('../src/lib/store-context.js')
+const { HelmxExternalStoreContext, useHelmxStore } = await import('../src/lib/store-context.js')
 const { composerDirty } = await import('../src/conversation/composer-dirty.js')
 const { App: HelmxApp } = await import('../src/App.js')
 const e = React.createElement
@@ -35,6 +36,7 @@ let root: Root | undefined
 let host: HTMLElement | undefined
 let sendEvent: SseFrameSender | undefined
 let navigateTo: ((target: ResolvedTarget, opts?: { split?: boolean }) => void) | undefined
+let storeRef: HelmxExternalStore | undefined
 const detailFetchLog: number[] = []
 let detailEntriesOverride: Record<number, ConversationEntry[]> = {}
 
@@ -100,6 +102,7 @@ function installFetch(): void {
 
 function Harness({ limit }: { limit?: number }) {
   const store = useHelmxStore()
+  storeRef = React.useContext(HelmxExternalStoreContext) ?? undefined
   navigateTo = (target, opts) => store.openTarget(target, opts)
   const activeConversationId = store.primaryTarget.kind === 'conversation' ? store.primaryTarget.conversationId : null
   return e(React.Fragment, null,
@@ -218,6 +221,7 @@ function reset(): void {
   globalThis.fetch = originalFetch
   sendEvent = undefined
   navigateTo = undefined
+  storeRef = undefined
   detailEntriesOverride = {}
 }
 
@@ -572,5 +576,137 @@ describe("conversation-window-keepalive", () => {
     })
     await settle()
     assert.equal(composerDirty(), true, '后台发送失败回滚草稿后，仍应保持脏保护不丢失草稿')
+  })
+
+  test('window eviction prunes store details & artifacts while split protection preserves until closed', { timeout: 60_000 }, async () => {
+    await mount('#/c/1', { limit: 2 })
+    assert.ok(storeRef)
+    assert.ok(storeRef!.getConversationDetail(1) !== undefined)
+    assert.ok(storeRef!.getConversationArtifacts(1) !== undefined)
+
+    await openConversation(2)
+    await openConversation(3)
+    assert.equal(windowCount(), 2)
+    assert.equal(storeRef!.getConversationDetail(1), undefined, '被窗口池 LRU 淘汰的会话 detail 应同步回收')
+    assert.equal(storeRef!.getConversationArtifacts(1), undefined, '被窗口池 LRU 淘汰的会话 artifacts 应同步回收')
+    assert.ok(storeRef!.getConversationDetail(2) !== undefined && storeRef!.getConversationDetail(3) !== undefined)
+
+    // Reopen #1 in split before switching primary #3 -> #4 so #2 is evicted from primary pool while #1 stays split-protected;
+    // then switch #4 -> #2 -> #3 so #1 drops from primary pool while remaining open in split.
+    await openConversation(1)
+    assert.ok(navigateTo)
+    await act(async () => {
+      navigateTo!({ kind: 'conversation', conversationId: 1 }, { split: true })
+    })
+    await settle()
+    await openConversation(2)
+    await openConversation(3)
+    assert.equal(windowCount(), 2, 'primary 窗口池已淘汰 #1')
+    assert.ok(storeRef!.getConversationDetail(1) !== undefined, '分屏中的 #1 即使离开 primary 窗口池也必须受保护保留')
+    assert.ok(storeRef!.getConversationArtifacts(1) !== undefined)
+
+    await act(async () => {
+      storeRef!.actions.closeSplit()
+    })
+    await settle()
+    assert.equal(storeRef!.getConversationDetail(1), undefined, '关闭分屏后不受保护的 #1 detail 应立即回收')
+    assert.equal(storeRef!.getConversationArtifacts(1), undefined, '关闭分屏后不受保护的 #1 artifacts 应立即回收')
+  })
+
+  test('pendingEntries ignores unloaded idle conversations and clears on detail abort or HTTP failure', { timeout: 60_000 }, async () => {
+    await mount('#/c/1', { limit: 2 })
+    assert.ok(storeRef && sendEvent)
+
+    // 1. Unloaded background conversation #4 must not accumulate pendingEntries.
+    await act(async () => {
+      sendEvent!(eventFrame(2, {
+        type: 'conversation.entry',
+        conversationId: 4,
+        entry: { id: '401', kind: 'pi.assistant' },
+      }))
+    })
+    await settle()
+    assert.equal(storeRef!.getLiveState().seq, 2)
+    assert.deepEqual(storeRef!.getLiveState().pendingEntries, {}, '未加载且未在途的会话不得堆积 pendingEntries')
+
+    // 2. While GET /api/conversations/4 is in flight, SSE entries buffer into pendingEntries and merge on resolve.
+    let resolveConv4!: (res: Response) => void
+    let conv3Mode: 'hang' | 'fail' = 'hang'
+    let rejectConv3!: (err: Error) => void
+    const baseFetch = globalThis.fetch
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (/^\/api\/conversations\/4(\?|$)/.test(url) && (init?.method ?? 'GET') === 'GET') {
+        return new Promise<Response>((resolve) => {
+          resolveConv4 = resolve
+        })
+      }
+      if (/^\/api\/conversations\/3(\?|$)/.test(url) && (init?.method ?? 'GET') === 'GET') {
+        if (conv3Mode === 'fail') {
+          return new Response(JSON.stringify({ error: { message: 'boom' } }), { status: 500 })
+        }
+        return new Promise<Response>((_resolve, reject) => {
+          rejectConv3 = reject
+          init?.signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true })
+        })
+      }
+      return baseFetch(input, init)
+    }) as typeof fetch
+
+    await act(async () => {
+      navigateTo!({ kind: 'conversation', conversationId: 4 })
+    })
+    await settle()
+    assert.equal(storeRef!.requests.loadingDetailIds.has(4), true)
+    await act(async () => {
+      sendEvent!(eventFrame(3, {
+        type: 'conversation.entry',
+        conversationId: 4,
+        entry: { id: '402', kind: 'pi.assistant' },
+      }))
+    })
+    await settle()
+    assert.deepEqual(storeRef!.getLiveState().pendingEntries[4]?.map((e) => e.id), ['402'])
+
+    await act(async () => {
+      resolveConv4(new Response(JSON.stringify({ ...summary(4), entries: [{ id: '401', kind: 'helmx.input' }] }), { status: 200 }))
+    })
+    await settle()
+    assert.deepEqual(storeRef!.getConversationDetail(4)?.entries.map((e) => e.id), ['401', '402'])
+    assert.equal(storeRef!.getLiveState().pendingEntries[4], undefined)
+
+    // 3. Aborting an in-flight detail load clears buffered pendingEntries.
+    await act(async () => {
+      navigateTo!({ kind: 'conversation', conversationId: 3 })
+    })
+    await settle()
+    await act(async () => {
+      sendEvent!(eventFrame(4, {
+        type: 'conversation.entry',
+        conversationId: 3,
+        entry: { id: '301', kind: 'pi.assistant' },
+      }))
+    })
+    await settle()
+    assert.deepEqual(storeRef!.getLiveState().pendingEntries[3]?.map((e) => e.id), ['301'])
+
+    await openConversation(2)
+    assert.equal(storeRef!.requests.loadingDetailIds.has(3), false)
+    assert.equal(storeRef!.getLiveState().pendingEntries[3], undefined, '中止详情请求必须清空 pendingEntries')
+    void rejectConv3
+
+    // 4. Failed detail load clears any buffered pendingEntries.
+    conv3Mode = 'fail'
+    await act(async () => {
+      const pending = storeRef!.actions.loadConversationDetail(3, true)
+      sendEvent!(eventFrame(5, {
+        type: 'conversation.entry',
+        conversationId: 3,
+        entry: { id: '302', kind: 'pi.assistant' },
+      }))
+      await pending
+    })
+    await settle()
+    assert.equal(storeRef!.getLiveState().pendingEntries[3], undefined, '失败详情请求不得残留 pendingEntries')
   })
 })

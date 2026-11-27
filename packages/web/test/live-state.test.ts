@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { isPluginSummaryActive as protocolIsPluginSummaryActive } from '@helmx/protocol/browser'
 import type { ConversationDetail, ConversationLive, ConversationSummary, HelmxSnapshot } from '@helmx/protocol'
-import { applyConversationEntry, applyEventFrame, applyResumedFrame, applySnapshot, applyTransientLiveDeltaFrame, applyTransientLiveFrame, emptyLiveState, entryMatchesReference, isPluginSummaryActive, mergeConversationDetail, omitPluginDocLoadErrors, reconcilePluginsState, sortNodes, sseClientTimings, SseParser } from '../src/lib/live-state.js'
+import { applyConversationEntry, applyEventFrame, applyResumedFrame, applySnapshot, applyTransientLiveDeltaFrame, applyTransientLiveFrame, clearPendingEntries, emptyLiveState, entryMatchesReference, evictConversationDetails, isPluginSummaryActive, mergeConversationDetail, omitPluginDocLoadErrors, reconcilePluginsState, sortNodes, sseClientTimings, SseParser } from '../src/lib/live-state.js'
 import { assetsApi, normalizeModelCatalogInfo } from '../src/lib/api.js'
 import type { NodeInfo } from '@helmx/protocol'
 
@@ -103,12 +103,28 @@ test('同一批到达的 ask.upsert/resolved 记录准确，插件停用清除�
   assert.deepEqual(state.pluginDocs, {})
 })
 
-test('SSE 消息先于首次 HTTP 详情返回时，补齐详情后仍保留新回复', { timeout: 60_000 }, () => {
+test('SSE 消息先于首次 HTTP 详情返回时，仅在途加载会话暂存并在补齐详情后保留新回复', { timeout: 60_000 }, () => {
   let state = applySnapshot(emptyLiveState(), snapshot)
-  state = applyEventFrame(state, { seq: 11, event: { type: 'conversation.entry', conversationId: 1, entry: { id: '5', kind: 'pi.assistant' } } })
+  state = applyEventFrame(
+    state,
+    { seq: 11, event: { type: 'conversation.entry', conversationId: 1, entry: { id: '5', kind: 'pi.assistant' } } },
+    { pendingDetailIds: new Set([1]) },
+  )
+  assert.deepEqual(state.pendingEntries[1]?.map((e) => e.id), ['5'])
   state = mergeConversationDetail(state, { ...conv, entries: [{ id: '4', kind: 'helmx.input' }] })
   assert.deepEqual(state.conversationDetails[1]?.entries.map((entry) => entry.id), ['4', '5'])
   assert.deepEqual(state.pendingEntries, {})
+})
+
+test('未加载且不在途拉取的会话收到 conversation.entry 时不写入 pendingEntries 且正常推进 seq', { timeout: 60_000 }, () => {
+  const initial = applySnapshot(emptyLiveState(), snapshot)
+  const next = applyEventFrame(initial, {
+    seq: 11,
+    event: { type: 'conversation.entry', conversationId: 99, entry: { id: '100', kind: 'pi.assistant' } },
+  })
+  assert.equal(next.seq, 11)
+  assert.deepEqual(next.pendingEntries, {})
+  assert.equal(next.conversationDetails, initial.conversationDetails)
 })
 
 test('列表摘要缺 contextUsage 时，HTTP 详情首读带回的用量补进列表与详情（内核首次填充静默不发 SSE 帧）', { timeout: 60_000 }, () => {
@@ -372,13 +388,33 @@ test('applyConversationEntry 同 id 原位替换保序，不动分页游标', { 
   assert.equal(applyConversationEntry(next, 1, full), next, '幂等：重复回填同一对象不产生新状态')
 })
 
-test('applyConversationEntry 详情未加载时落 pendingEntries，新 id 追加队尾', { timeout: 60_000 }, () => {
+test('applyConversationEntry 详情未加载时默认忽略；仅显式 bufferIfMissing 时落 pendingEntries 并追尾', { timeout: 60_000 }, () => {
   const state = emptyLiveState()
   const entry = { id: '7', kind: 'pi.assistant' }
-  const withPending = applyConversationEntry(state, 5, entry)
+  assert.equal(applyConversationEntry(state, 5, entry), state, '默认不写入 pendingEntries')
+  const withPending = applyConversationEntry(state, 5, entry, { bufferIfMissing: true })
   assert.deepEqual(withPending.pendingEntries[5], [entry])
-  const later = applyConversationEntry(withPending, 5, { id: '8', kind: 'pi.tool-result' })
+  const later = applyConversationEntry(withPending, 5, { id: '8', kind: 'pi.tool-result' }, { bufferIfMissing: true })
   assert.deepEqual(later.pendingEntries[5]!.map((item) => item.id), ['7', '8'])
+})
+
+test('clearPendingEntries 与 evictConversationDetails 精准清理并保持未命中时原引用', { timeout: 60_000 }, () => {
+  let state = emptyLiveState()
+  state = applyConversationEntry(state, 5, { id: '1', kind: 'pi.user' }, { bufferIfMissing: true })
+  state = applyConversationEntry(state, 6, { id: '2', kind: 'pi.user' }, { bufferIfMissing: true })
+  state = mergeConversationDetail(state, { ...conv, id: 1, entries: [{ id: '1', kind: 'helmx.input' }] })
+  state = mergeConversationDetail(state, { ...conv, id: 2, entries: [{ id: '2', kind: 'helmx.input' }] })
+
+  assert.equal(clearPendingEntries(state, 999), state)
+  const cleared = clearPendingEntries(state, 5)
+  assert.equal(cleared.pendingEntries[5], undefined)
+  assert.equal(cleared.pendingEntries[6]?.length, 1)
+
+  assert.equal(evictConversationDetails(cleared, [999]), cleared)
+  const evicted = evictConversationDetails(cleared, [1, 6])
+  assert.equal(evicted.conversationDetails[1], undefined)
+  assert.equal(evicted.conversationDetails[2]?.id, 2)
+  assert.equal(evicted.pendingEntries[6], undefined)
 })
 
 test('conversation.entry 事件复用回填语义：同 id 原位替换而非挪尾', { timeout: 60_000 }, () => {

@@ -1,10 +1,11 @@
 /**
  * HTTP detail boundary ConversationEntry projection (pure functions, mechanism layer).
  *
- * Consumers: only detail pagination (ConversationDetailService.getConversationDetail) and
- * single-entry endpoint (getConversationEntry signature stripping). SSE `conversation.entry` events,
- * SDK rewind/context/settlement, and waitForInput results never pass through this projection—preserving
- * existing semantics of toConversationEntry.
+ * Consumers: detail pagination (ConversationDetailService.getConversationDetail),
+ * single-entry endpoint (getConversationEntry signature stripping), and outbound SSE
+ * `conversation.entry` projection (in RuntimeServices `onEntryCommitted`). In-process
+ * `ctx.host.onEvent('conversation.entry')` listeners, SDK rewind/context/settlement, and
+ * waitForInput results continue to receive the unprojected original entries.
  *
  * Policy (see @helmx/protocol ConversationEntry projection docs for details):
  * - `pi.system`: model-side bookkeeping (system prompt / tool declarations), hidden on detail pages;

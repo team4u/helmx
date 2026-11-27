@@ -1,5 +1,5 @@
-import { Activity, useLayoutEffect, useRef, useState } from 'react'
-import { useConversations, useStoreActions } from '../lib/store-context.js'
+import { Activity, useContext, useLayoutEffect, useRef, useState } from 'react'
+import { HelmxExternalStoreContext, useConversations, useStoreActions } from '../lib/store-context.js'
 import { ConversationPane } from './ConversationPane.js'
 import {
   ConversationDirtySinkContext,
@@ -28,6 +28,7 @@ export function ConversationWindowStage({
   activeConversationId,
   limit = DEFAULT_CONVERSATION_WINDOW_LIMIT,
 }: ConversationWindowStageProps) {
+  const externalStore = useContext(HelmxExternalStoreContext)
   const conversations = useConversations()
   const [windows, setWindows] = useState<ReadonlyArray<ConversationWindowEntry>>([])
   // Catalog-loaded marker: an empty conversation list means "not yet loaded" during the boot
@@ -35,6 +36,18 @@ export function ConversationWindowStage({
   // arrives), but "cleared" once a non-empty catalog has been seen — logout resets live
   // state to empty and every kept-alive window (plus its dirty report) must go.
   const catalogLoadedRef = useRef(false)
+  const stageTokenRef = useRef<symbol | null>(null)
+
+  useLayoutEffect(() => {
+    if (!externalStore) return
+    const token = Symbol('conversation-window-stage')
+    stageTokenRef.current = token
+    externalStore.attachWindowStage(token)
+    return () => {
+      if (stageTokenRef.current === token) stageTokenRef.current = null
+      externalStore.detachWindowStage(token)
+    }
+  }, [externalStore])
 
   // Activation LRU runs before paint: a newly opened conversation must never flash an empty
   // pane, and eviction of the overflow happens in the same beat.
@@ -42,6 +55,15 @@ export function ConversationWindowStage({
     if (activeConversationId === null) return
     setWindows((current) => touchConversationWindows(current, activeConversationId, limit))
   }, [activeConversationId, limit])
+
+  useLayoutEffect(() => {
+    const token = stageTokenRef.current
+    if (!externalStore || token === null) return
+    externalStore.syncRetainedConversationWindows(
+      token,
+      windows.map((window) => window.conversationId),
+    )
+  }, [externalStore, windows])
 
   useLayoutEffect(() => {
     if (conversations.length > 0) {

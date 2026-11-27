@@ -438,7 +438,9 @@ function handleEventFrame(payload: unknown, ctx: FrameHandlerContext): void {
       pluginChangedEvent.plugin,
       pluginChangedEvent.ui,
     )
-  store.updateLive((state) => applyEventFrame(state, frame))
+  store.updateLive((state) =>
+    applyEventFrame(state, frame, { pendingDetailIds: store.requests.loadingDetailIds }),
+  )
   const nextSeq = store.getLiveState().seq
   const applied = store.sseCursor
   if (applied !== null && nextSeq > applied.seq) {
