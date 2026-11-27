@@ -14,13 +14,19 @@
  * CLI adds no server contract beyond the standard action mapping; responses are
  * boundary-validated here (external input) and failures surface verbatim.
  */
-import type { SkillSummary } from '@helmx/protocol'
+import { SKILL_CORE_OPERATIONS, type SkillSummary } from '@helmx/protocol'
 import { CliError } from '../errors.js'
 import { flagValue } from '../args.js'
 import type { HubClient } from '../hub-client.js'
+import { commandsFromOperations, schemaFlagsForOperation } from './from-operations.js'
 import type { CommandContext, CommandSpec } from './shared.js'
 import { assertNoExtraPositionals, printPlainText, printResult, requirePositional, resolveConversationTarget } from './shared.js'
 import { printText } from '../output.js'
+
+const SKILL_READ_SPEC = SKILL_CORE_OPERATIONS.find((op) => op.key === 'skills.read')!
+const SKILL_READ_SCHEMA_FLAGS = new Map(
+  schemaFlagsForOperation(SKILL_READ_SPEC).map((flag) => [flag.name, flag] as const),
+)
 
 /** Scoped skill access runs through builtin:profile plugin actions (no static server contract added by the CLI). */
 const SKILL_CATALOG_ACTION_PATH = `/api/actions/${encodeURIComponent('builtin:profile')}/skill_catalog`
@@ -136,73 +142,76 @@ function isSkillSummaryShape(value: unknown): value is SkillSummary {
 }
 
 export function skillsCommands(): CommandSpec[] {
-  const cmds: CommandSpec[] = []
+  return commandsFromOperations(SKILL_CORE_OPERATIONS, {
+    customHandlers: {
+      'skills list': {
+        description:
+          'List available skills: Hub global catalog (GET /api/skills); --current or --node [--cwd] scope to a node (and optional workspace) via the builtin:profile skill_catalog action',
+        flags: SKILL_SCOPE_FLAGS,
+        async run(ctx: CommandContext) {
+          assertNoExtraPositionals(ctx.positionals, 0)
+          const hub = await ctx.hub()
+          const scope = await resolveSkillScope(ctx.flags, ctx.env, hub)
+          if (scope === undefined) {
+            printResult(ctx, await hub.get<SkillSummary[]>('/api/skills'))
+            return
+          }
+          const input: Record<string, unknown> = { nodeId: scope.nodeId }
+          if (scope.cwd !== undefined) input['cwd'] = scope.cwd
+          const result = parseSkillCatalogResult(await hub.post(SKILL_CATALOG_ACTION_PATH, { input }))
+          if (ctx.json) {
+            printResult(ctx, result)
+            return
+          }
+          printText(ctx.io, result.cwd !== undefined ? `scope: node=${result.nodeId} cwd=${result.cwd}` : `scope: node=${result.nodeId}`)
+          printResult(ctx, result.skills)
+          if (result.shadowedNodeSkillIds.length > 0) {
+            printText(ctx.io, `node skills shadowed by same-name Hub/agents versions: ${result.shadowedNodeSkillIds.join(', ')}`)
+          }
+          if (result.nodeUnavailable !== undefined) {
+            printText(ctx.io, `node skill library unavailable: ${result.nodeUnavailable}`)
+          }
+        },
+      },
 
-  cmds.push({
-    path: ['skills', 'list'],
-    description: 'List available skills: Hub global catalog (GET /api/skills); --current or --node [--cwd] scope to a node (and optional workspace) via the builtin:profile skill_catalog action',
-    flags: SKILL_SCOPE_FLAGS,
-    async run(ctx: CommandContext) {
-      assertNoExtraPositionals(ctx.positionals, 0)
-      const hub = await ctx.hub()
-      const scope = await resolveSkillScope(ctx.flags, ctx.env, hub)
-      if (scope === undefined) {
-        printResult(ctx, await hub.get<SkillSummary[]>('/api/skills'))
-        return
-      }
-      const input: Record<string, unknown> = { nodeId: scope.nodeId }
-      if (scope.cwd !== undefined) input['cwd'] = scope.cwd
-      const result = parseSkillCatalogResult(await hub.post(SKILL_CATALOG_ACTION_PATH, { input }))
-      if (ctx.json) {
-        printResult(ctx, result)
-        return
-      }
-      printText(ctx.io, result.cwd !== undefined ? `scope: node=${result.nodeId} cwd=${result.cwd}` : `scope: node=${result.nodeId}`)
-      printResult(ctx, result.skills)
-      if (result.shadowedNodeSkillIds.length > 0) {
-        printText(ctx.io, `node skills shadowed by same-name Hub/agents versions: ${result.shadowedNodeSkillIds.join(', ')}`)
-      }
-      if (result.nodeUnavailable !== undefined) {
-        printText(ctx.io, `node skill library unavailable: ${result.nodeUnavailable}`)
-      }
+      'skills read': {
+        description:
+          'Read a skill document (GET /api/skills/:id[?path=]; defaults to SKILL.md); --current or --node [--cwd] read from a node (and optional workspace) via the builtin:profile skill_read action',
+        flags: [
+          {
+            ...(SKILL_READ_SCHEMA_FLAGS.get('path') ?? { name: 'path', type: 'string' as const }),
+            help: "relative path to a file within the skill directory, e.g. 'references/xxx.md'",
+          },
+          ...SKILL_SCOPE_FLAGS,
+        ],
+        positional: '<id>',
+        async run(ctx: CommandContext) {
+          const id = requirePositional(ctx.positionals, 0, 'id')
+          assertNoExtraPositionals(ctx.positionals, 1)
+          const p = flagValue<string>(ctx.flags, 'path')
+          const hub = await ctx.hub()
+          const scope = await resolveSkillScope(ctx.flags, ctx.env, hub)
+          if (scope === undefined) {
+            const query = p ? `?path=${encodeURIComponent(p)}` : ''
+            const res = await hub.get<{ text: string }>(`/api/skills/${encodeURIComponent(id)}${query}`)
+            if (typeof res?.text !== 'string') {
+              throw new CliError('Hub returned an invalid skills read response (expected { text })', 'invalid_response')
+            }
+            if (ctx.json) printResult(ctx, res)
+            else printPlainText(ctx, res.text)
+            return
+          }
+          const input: Record<string, unknown> = { nodeId: scope.nodeId, skillId: id }
+          if (scope.cwd !== undefined) input['cwd'] = scope.cwd
+          if (p !== undefined) input['path'] = p
+          const res = await hub.post<{ text: string }>(SKILL_READ_ACTION_PATH, { input })
+          if (typeof res?.text !== 'string') {
+            throw new CliError('skill_read action returned an invalid response (expected { text })', 'invalid_response')
+          }
+          if (ctx.json) printResult(ctx, res)
+          else printPlainText(ctx, res.text)
+        },
+      },
     },
   })
-
-  cmds.push({
-    path: ['skills', 'read'],
-    description: 'Read a skill document (GET /api/skills/:id[?path=]; defaults to SKILL.md); --current or --node [--cwd] read from a node (and optional workspace) via the builtin:profile skill_read action',
-    flags: [
-      { name: 'path', type: 'string', help: "relative path to a file within the skill directory, e.g. 'references/xxx.md'" },
-      ...SKILL_SCOPE_FLAGS,
-    ],
-    positional: '<id>',
-    async run(ctx: CommandContext) {
-      const id = requirePositional(ctx.positionals, 0, 'id')
-      assertNoExtraPositionals(ctx.positionals, 1)
-      const p = flagValue<string>(ctx.flags, 'path')
-      const hub = await ctx.hub()
-      const scope = await resolveSkillScope(ctx.flags, ctx.env, hub)
-      if (scope === undefined) {
-        const query = p ? `?path=${encodeURIComponent(p)}` : ''
-        const res = await hub.get<{ text: string }>(`/api/skills/${encodeURIComponent(id)}${query}`)
-        if (typeof res?.text !== 'string') {
-          throw new CliError('Hub returned an invalid skills read response (expected { text })', 'invalid_response')
-        }
-        if (ctx.json) printResult(ctx, res)
-        else printPlainText(ctx, res.text)
-        return
-      }
-      const input: Record<string, unknown> = { nodeId: scope.nodeId, skillId: id }
-      if (scope.cwd !== undefined) input['cwd'] = scope.cwd
-      if (p !== undefined) input['path'] = p
-      const res = await hub.post<{ text: string }>(SKILL_READ_ACTION_PATH, { input })
-      if (typeof res?.text !== 'string') {
-        throw new CliError('skill_read action returned an invalid response (expected { text })', 'invalid_response')
-      }
-      if (ctx.json) printResult(ctx, res)
-      else printPlainText(ctx, res.text)
-    },
-  })
-
-  return cmds
 }

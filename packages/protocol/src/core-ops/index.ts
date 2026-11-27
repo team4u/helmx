@@ -6,7 +6,9 @@ import { AUTH_CORE_OPERATIONS } from './auth.js'
 import { CONVERSATION_CORE_OPERATIONS } from './conversations.js'
 import { CREDENTIAL_CORE_OPERATIONS, MODEL_CORE_OPERATIONS, PROVIDER_CORE_OPERATIONS } from './models.js'
 import { NODE_CORE_OPERATIONS } from './nodes.js'
+import { PLUGIN_CORE_OPERATIONS } from './plugins.js'
 import { PROFILE_CORE_OPERATIONS } from './profiles.js'
+import { SKILL_CORE_OPERATIONS } from './skills.js'
 import type { CoreOperationSpec } from './types.js'
 
 export type {
@@ -58,6 +60,16 @@ export {
   type AuthCoreOperation,
   type AuthCoreOperationKey,
 } from './auth.js'
+export {
+  PLUGIN_CORE_OPERATIONS,
+  type PluginCoreOperation,
+  type PluginCoreOperationKey,
+} from './plugins.js'
+export {
+  SKILL_CORE_OPERATIONS,
+  type SkillCoreOperation,
+  type SkillCoreOperationKey,
+} from './skills.js'
 
 export const CORE_OPERATIONS = [
   ...NODE_CORE_OPERATIONS,
@@ -68,6 +80,8 @@ export const CORE_OPERATIONS = [
   ...PROVIDER_CORE_OPERATIONS,
   ...CREDENTIAL_CORE_OPERATIONS,
   ...AUTH_CORE_OPERATIONS,
+  ...PLUGIN_CORE_OPERATIONS,
+  ...SKILL_CORE_OPERATIONS,
 ] as const satisfies readonly CoreOperationSpec[]
 
 export type AnyCoreOperation = (typeof CORE_OPERATIONS)[number]

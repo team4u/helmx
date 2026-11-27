@@ -76,6 +76,34 @@ test('pluginsApi.disable：显式 force === false 时不携带请求体', { time
   }
 })
 
+test('pluginsApi.manifest / reload / rescan：URL 编码、请求方法与无请求体契约', { timeout: 60_000 }, async () => {
+  const { requests, restore } = installFetchCapture()
+  try {
+    const controller = new AbortController()
+    await pluginsApi.manifest('builtin:triggers', { signal: controller.signal })
+    await pluginsApi.reload('ext:my-plugin')
+    await pluginsApi.rescan()
+    assert.equal(requests.length, 3)
+    assert.deepEqual(requests[0], {
+      path: '/api/plugins/builtin%3Atriggers/manifest',
+      method: 'GET',
+      body: undefined,
+    })
+    assert.deepEqual(requests[1], {
+      path: '/api/plugins/ext%3Amy-plugin/reload',
+      method: 'POST',
+      body: undefined,
+    })
+    assert.deepEqual(requests[2], {
+      path: '/api/plugins/rescan',
+      method: 'POST',
+      body: undefined,
+    })
+  } finally {
+    restore()
+  }
+})
+
 test('独立 Bearer 二进制 fetch（uploadArtifact / fetchWorkspaceFileBlob / artifactsApi.fetchBlob）401 统一派发 helmx:unauthorized', { timeout: 60_000 }, async () => {
   const originalFetch = globalThis.fetch
   const events: string[] = []

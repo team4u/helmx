@@ -4,11 +4,12 @@
 import { randomUUID } from 'node:crypto'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
-import { isPlainObject } from '@helmx/protocol'
+import { isPlainObject, PLUGIN_CORE_OPERATIONS } from '@helmx/protocol'
 import { CliError } from '../errors.js'
 import type { HubClient } from '../hub-client.js'
 import { printValue } from '../output.js'
 import { watchJsonSse } from '../stream.js'
+import { schemaFlagsForOperation } from './from-operations.js'
 import type { CommandContext, CommandSpec } from './shared.js'
 import {
   assertNoExtraPositionals,
@@ -76,12 +77,20 @@ async function writeTextFileAtomic(targetPath: string, content: string): Promise
   }
 }
 
+const PLUGIN_DOC_SPEC = PLUGIN_CORE_OPERATIONS.find((op) => op.key === 'plugins.doc')!
+const DOC_SCHEMA_FLAGS = new Map(
+  schemaFlagsForOperation(PLUGIN_DOC_SPEC).map((flag) => [flag.name, flag] as const),
+)
+
 export const pluginsDocCommand: CommandSpec = {
   path: ['plugins', 'doc'],
   description:
     'Read a public plugin document (GET /api/plugins/:id/docs/:name; --conversation/--current reads a session doc; --watch subscribes to session doc SSE)',
   flags: [
-    { name: 'conversation', type: 'number', help: 'target conversation ID for session document (mutually exclusive with --current)' },
+    {
+      ...(DOC_SCHEMA_FLAGS.get('conversation') ?? { name: 'conversation', type: 'number' as const }),
+      help: 'target conversation ID for session document (mutually exclusive with --current)',
+    },
     { name: 'current', type: 'boolean', help: 'use HELMX_CONVERSATION_ID from environment (mutually exclusive with --conversation)' },
     { name: 'watch', type: 'boolean', help: 'subscribe to dedicated SSE for a session document (requires --conversation/--current; Ctrl-C to exit)' },
   ],

@@ -37,7 +37,10 @@ import type {
   PluginConfigFieldSource,
   PluginDoctorReport,
   PluginInstallResult,
+  PluginManifestProjection,
+  PluginReloadResult,
   PluginRemoveResult,
+  PluginRescanResult,
   PluginSummary,
   PluginUpdateResult,
   Profile,
@@ -667,6 +670,14 @@ export interface PluginConfigResponse {
 
 export const pluginsApi = {
   list: (opts?: { signal?: AbortSignal }) => apiRequest<PluginSummary[]>('GET', '/api/plugins', undefined, opts?.signal),
+  /** 只读插件扩展契约投影（GET /api/plugins/:id/manifest）。 */
+  manifest: (id: string, opts?: { signal?: AbortSignal }) =>
+    apiRequest<PluginManifestProjection>(
+      'GET',
+      `/api/plugins/${encodeURIComponent(id)}/manifest`,
+      undefined,
+      opts?.signal,
+    ),
   enable: (id: string) =>
     apiRequest<PluginSummary[]>('POST', `/api/plugins/${encodeURIComponent(id)}/enable`),
   /** 停用插件；force: true 用于在知情前提下越过 409 plugin_in_use 占用拦截。 */
@@ -676,6 +687,11 @@ export const pluginsApi = {
       `/api/plugins/${encodeURIComponent(id)}/disable`,
       opts?.force === true ? { force: true } : undefined,
     ),
+  /** 受控热重载外部插件（先执行 doctor 预检；POST /api/plugins/:id/reload）。 */
+  reload: (id: string) =>
+    apiRequest<PluginReloadResult>('POST', `/api/plugins/${encodeURIComponent(id)}/reload`),
+  /** 增量重扫外部插件目录（POST /api/plugins/rescan）。 */
+  rescan: () => apiRequest<PluginRescanResult>('POST', '/api/plugins/rescan'),
   getConfig: (id: string, opts?: { signal?: AbortSignal }) =>
     apiRequest<PluginConfigResponse>('GET', `/api/plugins/${encodeURIComponent(id)}/config`, undefined, opts?.signal),
   setConfig: (id: string, values: Record<string, unknown>) =>

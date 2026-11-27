@@ -3142,3 +3142,31 @@ test('profiles create/update --tags: accepts CSV and JSON arrays, preserves fiel
   assert.equal(parseCliError(badTags).code, 'invalid_flag_value')
   assert.equal(hub.recorded.hits.length, hitsBeforeBad, 'invalid --tags must reject before contacting Hub')
 })
+
+test('plugins enable & plugins config optional --input parity', { timeout: 60_000 }, async (t) => {
+  const dir = useTempDir(t, 'helmx-cli-plugin-enable-')
+  const hub = await startMockHub(
+    {
+      'POST /api/plugins/ext%3Ademo/enable': () => ({
+        body: [makePluginSummary({ id: 'ext:demo', name: 'Demo', enabled: true })],
+      }),
+      'GET /api/plugins/ext%3Ademo/config': () => ({
+        body: { values: { mode: 'fast' }, schema: {} },
+      }),
+    },
+    { autoRegisterCleanup: t },
+  )
+  const env = makeCliEnv(hub.url, dir)
+
+  const en = await runCliCaptured(['plugins', 'enable', 'ext:demo', '--json'], env)
+  assert.equal(en.code, 0, en.err)
+  assert.equal(hub.recorded.hits[0]?.method, 'POST')
+  assert.equal(hub.recorded.hits[0]?.path, '/api/plugins/ext%3Ademo/enable')
+  assert.equal(hub.recorded.hits[0]?.body, undefined)
+
+  // Shared `plugins config` read mode works without `--input`
+  const cfgRead = await runCliCaptured(['plugins', 'config', 'ext:demo', '--json'], env)
+  assert.equal(cfgRead.code, 0, cfgRead.err)
+  assert.deepEqual(JSON.parse(cfgRead.out), { values: { mode: 'fast' }, schema: {} })
+  assert.equal(hub.recorded.hits[1]?.method, 'GET')
+})
