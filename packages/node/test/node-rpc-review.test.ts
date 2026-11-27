@@ -9,7 +9,7 @@ import path from 'node:path';
 import net from 'node:net';
 import { PassThrough } from 'node:stream';
 import { exec as execCb } from 'node:child_process';
-import { sleep as delay } from '@helmx/test-kit';
+import { deferred, sleep as delay, withTimeout } from '@helmx/test-kit';
 import { makeTempDir as tempDir, waitFor as kitWaitFor } from '@helmx/test-kit/node';
 import {
   createNodeEnvRpcServer,
@@ -17,7 +17,7 @@ import {
 
 /** Poll until observable condition holds (instead of fixed sleeps), failing explicitly on timeout. */
 const waitFor = (condition: () => boolean | Promise<boolean>, timeoutMs: number, what: string): Promise<void> =>
-  kitWaitFor(condition, { timeoutMs, message: `wait timed out: ${what}` });
+  kitWaitFor(condition, { timeoutMs, intervalMs: 10, message: `wait timed out: ${what}` });
 
 // ---------------------------------------------------------------------------
 // 1. envFlushFile (required protocol primitive): real file / missing / post-dispose
@@ -263,13 +263,15 @@ test('onExecOutput callback throwing kills process tree immediately with callbac
   assert.ok(elapsed < 10_000, `callback failure should kill process tree immediately (actual ${elapsed}ms)`);
   assert.equal(server.getActiveExecCount(), 0, 'cancelled process must leave no active entry');
   // Orphan guard: exact `^sleep 55$` match (without `-f` self-matching pgrep command lines) after kill grace.
-  await delay(300);
-  const leftover = await new Promise<number>((resolve) => {
-    execCb('pgrep -f "^sleep 55$" | grep -cv pgrep || true', (error, stdout) => {
-      resolve(error ? -1 : Number.parseInt((stdout || '0').trim(), 10));
+  await delay(50);
+  const countLeftover = (): Promise<number> =>
+    new Promise<number>((resolve) => {
+      execCb('pgrep -f "^sleep 55$" | grep -cv pgrep || true', (error, stdout) => {
+        resolve(error ? -1 : Number.parseInt((stdout || '0').trim(), 10));
+      });
     });
-  });
-  assert.equal(leftover, 0, 'no orphan sleep process should remain after killTree');
+  await waitFor(async () => (await countLeftover()) === 0, 2_000, 'no orphan sleep process remains after killTree');
+  assert.equal(await countLeftover(), 0, 'no orphan sleep process should remain after killTree');
 });
 
 // ---------------------------------------------------------------------------
@@ -312,14 +314,18 @@ test('envWriteFile base64 strict validation rejects illegal characters explicitl
 
 test('envExec explicitly rejects duplicate in-flight execId', { timeout: 60_000 }, async (t) => {
   const dir = await tempDir('dup-');
-  const server = createNodeEnvRpcServer({ defaultCwd: dir });
+  const started = deferred<void>();
+  const server = createNodeEnvRpcServer({
+    defaultCwd: dir,
+    onExecOutput: (e) => { if (e.execId === 'dup' && e.text.includes('READY')) started.resolve(); },
+  });
   t.after(async () => {
     await server.dispose();
     await fs.rm(dir, { recursive: true, force: true });
   }, { timeout: 60_000 });
 
-  const slow = server.envExec({ execId: 'dup', command: 'sleep 5', timeout: 30 });
-  await delay(200);
+  const slow = server.envExec({ execId: 'dup', command: 'echo READY && sleep 5', timeout: 30 });
+  await withTimeout(started.promise, 5_000, 'dup exec did not start');
   const second = await server.envExec({ execId: 'dup', command: 'echo hi', timeout: 30 });
   assert.equal(second.ok, false);
   assert.equal(!second.ok && second.error.code, 'invalid');
@@ -334,7 +340,11 @@ test('envExec explicitly rejects duplicate in-flight execId', { timeout: 60_000 
 
 test('dispose tracks draining waiters per call so rejected duplicate execId never evicts live commands', { timeout: 60_000 }, async (t) => {
   const dir = await tempDir('drain-set-');
-  const server = createNodeEnvRpcServer({ defaultCwd: dir });
+  const started = deferred<void>();
+  const server = createNodeEnvRpcServer({
+    defaultCwd: dir,
+    onExecOutput: (e) => { if (e.execId === 'd' && e.text.includes('READY')) started.resolve(); },
+  });
   t.after(async () => {
     await server.dispose();
     await fs.rm(dir, { recursive: true, force: true });
@@ -342,8 +352,8 @@ test('dispose tracks draining waiters per call so rejected duplicate execId neve
 
   // Pre-fix bug: Map<execId, Promise> let rejected second call overwrite first promise and remove it
   // from dispose wait set upon early settlement. Switching to Set<Promise> tracks each call independently.
-  const slow = server.envExec({ execId: 'd', command: 'sleep 3', timeout: 60 });
-  await delay(200);
+  const slow = server.envExec({ execId: 'd', command: 'echo READY && sleep 3', timeout: 60 });
+  await withTimeout(started.promise, 5_000, 'drain-set exec did not start');
   const dup = await server.envExec({ execId: 'd', command: 'echo x', timeout: 60 });
   assert.equal(dup.ok, false, 'duplicate execId should be rejected');
 
@@ -360,14 +370,18 @@ test('dispose tracks draining waiters per call so rejected duplicate execId neve
 
 test('dispose waits for active exec calls to settle with zero active entries on return', { timeout: 60_000 }, async (t) => {
   const dir = await tempDir('drain-');
-  const server = createNodeEnvRpcServer({ defaultCwd: dir });
+  const started = deferred<void>();
+  const server = createNodeEnvRpcServer({
+    defaultCwd: dir,
+    onExecOutput: (e) => { if (e.execId === 'd1' && e.text.includes('READY')) started.resolve(); },
+  });
   t.after(async () => {
     await server.dispose();
     await fs.rm(dir, { recursive: true, force: true });
   }, { timeout: 60_000 });
 
-  const slow = server.envExec({ execId: 'd1', command: 'sleep 3', timeout: 60 });
-  await delay(250);
+  const slow = server.envExec({ execId: 'd1', command: 'echo READY && sleep 3', timeout: 60 });
+  await withTimeout(started.promise, 5_000, 'drain exec did not start');
   assert.equal(server.getActiveExecCount(), 1);
   await server.dispose();
   assert.equal(server.getActiveExecCount(), 0, 'in-flight exec must be settled and cleaned up before dispose returns');
@@ -513,15 +527,20 @@ test('envFor LRU eviction never orphans envs with active runners from envCleanup
   await fs.mkdir(otherA, { recursive: true });
   await fs.mkdir(otherB, { recursive: true });
 
-  const server = createNodeEnvRpcServer({ defaultCwd: dir, maxCachedEnvs: 2 });
+  const started = deferred<void>();
+  const server = createNodeEnvRpcServer({
+    defaultCwd: dir,
+    maxCachedEnvs: 2,
+    onExecOutput: (e) => { if (e.execId === 'lru-busy' && e.text.includes('READY')) started.resolve(); },
+  });
   t.after(async () => {
     await server.dispose().catch(() => undefined);
     await fs.rm(dir, { recursive: true, force: true });
   }, { timeout: 60_000 });
 
   // Start a long-running exec in `busyDir` and then touch two other cwds beyond maxCachedEnvs=2.
-  const slow = server.envExec({ execId: 'lru-busy', command: 'sleep 30', cwd: busyDir, timeout: 60 });
-  await delay(150);
+  const slow = server.envExec({ execId: 'lru-busy', command: 'echo READY && sleep 30', cwd: busyDir, timeout: 60 });
+  await withTimeout(started.promise, 5_000, 'lru-busy exec did not start');
   await server.envWriteFile({ path: 'x.txt', content: '1', cwd: otherA });
   await server.envWriteFile({ path: 'y.txt', content: '2', cwd: otherB });
 

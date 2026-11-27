@@ -43,7 +43,8 @@ import {
   type NodeDaemon,
   type NodeIdentity,
 } from '@helmx/node'
-import { cleanupDir, makeFauxModels, makeTempDir, sleep as delay } from './helpers.js'
+import { withTimeout } from '@helmx/test-kit'
+import { cleanupDir, deferred, makeFauxModels, makeTempDir, sleep as delay, waitFor } from './helpers.js'
 
 const bg = BACKGROUND_CONTEXT
 
@@ -107,11 +108,11 @@ let rootDir: string
 
 before(async () => {
   rootDir = await makeTempDir('helmx-envfabric-')
-})
+}, { timeout: 60_000 })
 
 after(async () => {
   await cleanupDir(rootDir)
-})
+}, { timeout: 60_000 })
 
 // ---------------------------------------------------------------------------
 // 1. EnvFabric core behavior
@@ -129,7 +130,7 @@ describe('EnvFabric node connectivity and remote execution', { timeout: 60_000 }
       await good.close()
 
       const bad = await startNode({ url: hub.baseUrl, nodeId: 'node-a', token: 'node-a:WRONG', dataDir: dir })
-      assert.equal(await bad.waitUntilRegistered(2_000), false, 'wrong token must not register')
+      assert.equal(await bad.waitUntilRegistered(500), false, 'wrong token must not register')
       assert.equal(hub.fabric.registry.get('node-a'), undefined)
       await bad.close()
     } finally {
@@ -141,7 +142,7 @@ describe('EnvFabric node connectivity and remote execution', { timeout: 60_000 }
     const hub2 = await startFabricHub()
     try {
       const daemon = await startNode({ url: hub2.baseUrl, nodeId: 'x', token: 'x:t', dataDir: dir2 })
-      assert.equal(await daemon.waitUntilRegistered(2_000), false, 'missing authenticate callback rejects all registrations')
+      assert.equal(await daemon.waitUntilRegistered(500), false, 'missing authenticate callback rejects all registrations')
       assert.equal(hub2.fabric.registry.get('x'), undefined)
       await daemon.close()
     } finally {
@@ -150,14 +151,13 @@ describe('EnvFabric node connectivity and remote execution', { timeout: 60_000 }
   })
 
   it('unregistered connection times out with 4001 and closes via gateway', { timeout: 60_000 }, async () => {
-    const hub = await startFabricHub(() => true, 300)
+    const hub = await startFabricHub(() => true, 80)
     try {
       const ws = new WebSocket(`${hub.baseUrl.replace(/^http/, 'ws')}/ws/node`)
-      const codes: number[] = []
+      const closeCode = new Promise<number>((resolve) => ws.once('close', (code) => resolve(code)))
       await new Promise<void>((resolve) => ws.once('open', () => resolve()))
-      ws.on('close', (code) => codes.push(code))
-      await delay(900)
-      assert.ok(codes.includes(4001), `unregistered socket should close with 4001 (got ${codes.join(',')})`)
+      const code = await withTimeout(closeCode, 5_000, 'unregistered socket did not close with 4001')
+      assert.equal(code, 4001, `unregistered socket should close with 4001 (got ${code})`)
     } finally {
       await hub.close()
     }
@@ -188,15 +188,20 @@ describe('EnvFabric node connectivity and remote execution', { timeout: 60_000 }
       assert.ok(exec.ok && exec.value.exitCode === 0)
       assert.equal(chunks.join(''), 'a\nb\nc')
 
-      // Abort propagation: abort -> envAbortExec -> node kills remote process tree.
+      // Abort propagation: abort -> envAbortExec -> node kills remote process tree before sleep finishes.
       const sentinel = join(workDir, 'cancel-sentinel.txt')
       const controller = new AbortController()
-      const running = env.exec(`sleep 30 && touch ${sentinel}`, undefined, withAbortSignal(controller.signal, bg))
-      await delay(400)
+      const started = deferred<void>()
+      const running = env.exec(
+        `echo STARTED && sleep 30 && touch ${sentinel}`,
+        { onOutput: (t) => { if (t.includes('STARTED')) started.resolve() } },
+        withAbortSignal(controller.signal, bg),
+      )
+      await withTimeout(started.promise, 5_000, 'remote exec did not emit STARTED')
       controller.abort()
       const aborted = await running
       assert.ok(!aborted.ok && aborted.error.code === 'aborted')
-      await delay(600)
+      await delay(150)
       assert.ok(!existsSync(sentinel), 'aborted remote process tree must not leave sentinel file')
       // Abort must not break subsequent commands (single-command process tree semantics).
       const after = await env.exec('echo alive', undefined, bg)
@@ -217,8 +222,13 @@ describe('EnvFabric node connectivity and remote execution', { timeout: 60_000 }
       assert.ok(await daemon.waitUntilRegistered())
       const env = hub.fabric.envFor('node-disc', workDir)
       const localMarker = join(rootDir, 'disc-local-marker.txt')
-      const longRun = env.exec('sleep 5; echo done', undefined, bg)
-      await delay(400)
+      const started = deferred<void>()
+      const longRun = env.exec(
+        'echo STARTED && sleep 5; echo done',
+        { onOutput: (t) => { if (t.includes('STARTED')) started.resolve() } },
+        bg,
+      )
+      await withTimeout(started.promise, 5_000, 'remote exec did not emit STARTED')
       await daemon.close()
       const result = await longRun
       assert.ok(!result.ok, 'command interrupted by disconnect must not succeed')
@@ -256,10 +266,15 @@ describe('EnvFabric node connectivity and remote execution', { timeout: 60_000 }
 
   it('revocation hard rule: delayed auth resolving true after disconnect never publishes stale connection', { timeout: 60_000 }, async () => {
     const TOKEN = 'node-rev:secret'
-    let authDelayMs = 150
+    const authEntered = deferred<void>()
+    const allowAuth = deferred<boolean>()
+    let gateAuth = true
     const hub = await startFabricHub(async (nodeId, token) => {
       if (nodeId === 'node-rev' && token === TOKEN) {
-        await delay(authDelayMs)
+        if (gateAuth) {
+          authEntered.resolve()
+          return await allowAuth.promise
+        }
         return true
       }
       return false
@@ -300,18 +315,18 @@ describe('EnvFabric node connectivity and remote execution', { timeout: 60_000 }
         hostname: 'revoke-probe',
         platform: process.platform,
       })
-      // While auth is in flight (authDelayMs=150), immediately revoke/disconnect (simulating removeNode/replacement).
-      await delay(50)
+      // Deterministic barrier: wait until auth is genuinely in flight, then revoke/disconnect and release auth=true.
+      await withTimeout(authEntered.promise, 5_000, 'auth callback did not start')
       hub.fabric.registry.disconnect('node-rev')
+      allowAuth.resolve(true)
       // Delayed auth resolves true afterwards: registration must be rejected (superseded), never marking node online.
       const outcome = await registerPromise
       assert.equal(outcome.ok, false, `delayed auth resolving true must not publish: ${JSON.stringify(outcome)}`)
       assert.match(outcome.reason ?? '', /superseded/)
-      await delay(100)
       assert.equal(hub.fabric.registry.get('node-rev'), undefined, 'registry remains offline')
       assert.equal(hub.fabric.isOnline('node-rev'), false)
       // Fresh registration after revocation completes succeeds cleanly (epoch bumped without stuck in-flight auth).
-      authDelayMs = 0
+      gateAuth = false
       const daemon2 = await startNode({
         url: hub.baseUrl,
         nodeId: 'node-rev',
@@ -331,6 +346,7 @@ describe('EnvFabric node connectivity and remote execution', { timeout: 60_000 }
         /* already closed */
       }
     } finally {
+      allowAuth.resolve(false)
       await hub.close()
     }
   })
@@ -391,17 +407,17 @@ describe('EnvFabric node connectivity and remote execution', { timeout: 60_000 }
       const env = hub.fabric.envFor('node-sink', workDir)
       const r1 = await env.exec('echo old-gen', undefined, bg)
       assert.ok(r1.ok)
-      await delay(200)
+      await waitFor(() => received.some((e) => e.text.includes('old-gen')), 5_000, 10)
       assert.ok(received.some((e) => e.text.includes('old-gen')), 'output routes normally while online')
       await daemon.close()
-      await delay(300)
+      await waitFor(() => !hub.fabric.isOnline('node-sink'), 5_000, 10)
       const countAfterDisconnect = received.length
       // Replacement connection continues routing to registered sink.
       const daemon2 = await startNode({ url: hub.baseUrl, nodeId: 'node-sink', token: TOKEN, dataDir: nodeData })
       assert.ok(await daemon2.waitUntilRegistered())
       const r2 = await env.exec('echo new-gen', undefined, bg)
       assert.ok(r2.ok)
-      await delay(300)
+      await waitFor(() => received.some((e) => e.text.includes('new-gen')), 5_000, 10)
       assert.ok(received.some((e) => e.text.includes('new-gen')), 'new generation output continues routing to sink')
       void countAfterDisconnect
       await daemon2.close()
@@ -538,7 +554,8 @@ describe('node management and env/exec HTTP routes', { timeout: 60_000 }, () => 
       const removed = await call(app, 'DELETE', `/api/nodes/${encodeURIComponent('http-node')}`)
       assert.equal(removed.status, 200)
       assert.deepEqual(removed.json, { ok: true })
-      await delay(300)
+      await waitFor(() => !daemon.isConnected(), 5_000, 10)
+      await delay(30)
       releaseEvents()
       const removals = nodeEvents.filter((e) => e.removed === true && e.node.id === 'http-node')
       assert.equal(

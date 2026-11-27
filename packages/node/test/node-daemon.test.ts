@@ -54,7 +54,7 @@ test('@helmx/node runtime dependencies stay minimal and explicit', { timeout: 60
 
 /** Poll until an observable condition holds (instead of fixed sleeps), failing explicitly on timeout. */
 const waitFor = (condition: () => boolean | Promise<boolean>, timeoutMs: number, what: string): Promise<void> =>
-  kitWaitFor(condition, { timeoutMs, message: `wait timed out: ${what}` });
+  kitWaitFor(condition, { timeoutMs, intervalMs: 10, message: `wait timed out: ${what}` });
 
 // ---------------------------------------------------------------------------
 // 1. NodeEnvRpcServer: files, directories, readers, exec, and dispose
@@ -190,8 +190,8 @@ test('envExec streams output and envAbortExec terminates child process tree imme
 
     // abort: long sleep command terminates immediately (structured aborted error much faster than timeout)
     const start = Date.now();
-    const slow = server.envExec({ execId: 'e2', command: 'sleep 30', timeout: 60 });
-    await delay(200); // Wait for child process to start
+    const slow = server.envExec({ execId: 'e2', command: 'echo READY_E2 && sleep 30', timeout: 60 });
+    await waitFor(() => chunks.some((c) => c.execId === 'e2' && c.text.includes('READY_E2')), 5_000, 'e2 child started');
     assert.equal(server.getActiveExecCount(), 1);
     await server.envAbortExec('e2');
     const result = await slow;
@@ -201,8 +201,8 @@ test('envExec streams output and envAbortExec terminates child process tree imme
     assert.ok(elapsed < 10_000, `abort should take effect immediately (actual ${elapsed}ms)`);
 
     // dispose kills in-flight processes
-    const long = server.envExec({ execId: 'e3', command: 'sleep 60', timeout: 120 });
-    await delay(300);
+    const long = server.envExec({ execId: 'e3', command: 'echo READY_E3 && sleep 60', timeout: 120 });
+    await waitFor(() => chunks.some((c) => c.execId === 'e3' && c.text.includes('READY_E3')), 5_000, 'e3 child started');
     assert.equal(server.getActiveExecCount(), 1);
     await server.dispose();
     const r3 = await long;
@@ -293,7 +293,7 @@ test('ipc fixture isolates in-flight write errors after peer disconnect', { time
     const timer = setInterval(() => {
       writes += 1;
       socket.write(`${JSON.stringify({ event: 'tick' })}\n`);
-    }, 10);
+    }, 5);
     socket.once('close', () => clearInterval(timer));
   });
   const client = net.connect(srv.path);
@@ -305,9 +305,9 @@ test('ipc fixture isolates in-flight write errors after peer disconnect', { time
     // Pause reading so subsequent ticks stay buffered, then destroy client so server writes hit closed socket;
     // without an error handler EPIPE becomes uncaught and crashes the whole suite.
     client.pause();
-    await delay(50);
+    await waitFor(() => writes >= 2, 5_000, 'fixture writes ticks while paused');
     client.destroy();
-    await delay(150);
+    await delay(30);
     assert.ok(writes > 0, 'fixture should indeed attempt writes after disconnect');
   } finally {
     client.destroy();
@@ -428,7 +428,7 @@ async function startHubFixture(options: {
               if (pendingSocket !== undefined && pendingSocket.readyState === WebSocket.OPEN) {
                 pendingSocket.close(4003, 'invalid token');
               }
-            }, 30);
+            }, 10);
             return { ok: false, heartbeatMs: 0, reason: 'invalid token' };
           }
           return { ok: true, heartbeatMs: options.heartbeatMs ?? 15_000 };
@@ -496,7 +496,7 @@ test('createNodeDaemon: register + heartbeat + reverse envExec/envReadTextFile/n
   const token = 'work-a:secret-a';
   const hub = await startHubFixture({
     expectedToken: token,
-    heartbeatMs: 120,
+    heartbeatMs: 40,
     execOutputs,
   });
 
@@ -556,8 +556,8 @@ test('createNodeDaemon: disconnect disposes old generation and reconnects cleanl
     hubUrl: hub.url,
     identity: { nodeId: 'work-b', token },
     dataDir: dir,
-    reconnectBaseDelayMs: 200,
-    reconnectMaxDelayMs: 1_000,
+    reconnectBaseDelayMs: 40,
+    reconnectMaxDelayMs: 200,
   });
   try {
     assert.equal(await daemon.waitUntilRegistered(10_000), true);
@@ -566,16 +566,17 @@ test('createNodeDaemon: disconnect disposes old generation and reconnects cleanl
 
     // Server-initiated disconnect: wait for daemon to notice close and schedule backoff retry.
     await hub.close();
-    await delay(300);
+    await waitFor(() => !daemon.isConnected(), 5_000, 'daemon observes disconnect');
     assert.equal(daemon.isConnected(), false, 'should report disconnected after drop');
 
     // Restart Hub on the same port: daemon should reconnect and re-register.
     const hub2 = await startHubFixture({ expectedToken: token, heartbeatMs: 15_000, execOutputs, port });
     try {
-      const deadline = Date.now() + 15_000;
-      while (Date.now() < deadline && hub2.registrations.length === 0) {
-        await delay(200);
-      }
+      await waitFor(
+        () => hub2.registrations.length === 1 && daemon.isConnected(),
+        15_000,
+        're-register after backoff reconnect',
+      );
       assert.equal(hub2.registrations.length, 1, 'should re-register after backoff reconnect');
       assert.equal(hub2.registrations[0]?.nodeId, 'work-b');
       assert.equal(daemon.isConnected(), true);
@@ -601,11 +602,11 @@ test('createNodeDaemon: auth rejection (4003) does not report connected', { time
     hubUrl: hub.url,
     identity: { nodeId: 'work-c', token: 'work-c:wrong' },
     dataDir: dir,
-    reconnectBaseDelayMs: 200,
-    reconnectMaxDelayMs: 1_000,
+    reconnectBaseDelayMs: 50,
+    reconnectMaxDelayMs: 200,
   });
   try {
-    assert.equal(await daemon.waitUntilRegistered(5_000), false, 'rejected registration must not report connected');
+    assert.equal(await daemon.waitUntilRegistered(1_000), false, 'rejected registration must not report connected');
     assert.equal(daemon.isConnected(), false);
     assert.ok(hub.registrations.length >= 1, 'register attempt should reach Hub');
   } finally {
@@ -896,9 +897,9 @@ test('runNodeCli start errors without identity and reports state=registered when
     assert.ok(payload.pid > 0);
     assert.equal(payload.state, 'registered');
     // Hub received registration
-    const deadline = Date.now() + 10_000;
-    while (Date.now() < deadline && hub.registrations.length === 0) await delay(200);
-    assert.equal(hub.registrations.length, 1);
+    const activeHub = hub;
+    await waitFor(() => activeHub.registrations.length === 1, 10_000, 'daemon registered with hub');
+    assert.equal(activeHub.registrations.length, 1);
     // PID file uses new contract record (pid + instanceId + endpoint)
     const pidRaw = JSON.parse(await fs.readFile(path.join(dir, 'node.pid'), 'utf8')) as {
       pid: number;

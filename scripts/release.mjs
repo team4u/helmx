@@ -151,6 +151,17 @@ export function bumpSemver(current, bumpType, preId = 'beta') {
   return `${cur.major}.${cur.minor}.${cur.patch + 1}-${preId}.1`;
 }
 
+/** 解析并严格校验目标版本（导出供单测覆盖完整 SemVer / prerelease 矩阵）。 */
+export function resolveTargetVersion(currentVersion, options = {}) {
+  parseSemverStrict(currentVersion);
+  const targetVersion = options.version || bumpSemver(currentVersion, options.bumpType ?? 'patch', options.preId);
+  parseSemverStrict(targetVersion);
+  if (targetVersion === currentVersion) {
+    throw new Error(`目标版本 ${targetVersion} 与当前版本相同，无需发版`);
+  }
+  return targetVersion;
+}
+
 /** 锁步更新全部 packages/<pkg>/package.json 的 version 字段，返回被更新的文件相对路径列表。 */
 function bumpWorkspaceVersions(targetVersion) {
   const updated = [];
@@ -178,14 +189,7 @@ function main() {
   const options = parseCliArgs();
   const payloadPkg = JSON.parse(readFileSync(path.join(rootDir, 'packages/payload/package.json'), 'utf-8'));
   const currentVersion = payloadPkg.version;
-  parseSemverStrict(currentVersion);
-
-  let targetVersion = options.version;
-  if (!targetVersion) targetVersion = bumpSemver(currentVersion, options.bumpType ?? 'patch', options.preId);
-  parseSemverStrict(targetVersion);
-  if (targetVersion === currentVersion) {
-    throw new Error(`目标版本 ${targetVersion} 与当前版本相同，无需发版`);
-  }
+  const targetVersion = resolveTargetVersion(currentVersion, options);
 
   console.log('=== helmx 本地发版编排（GitHub Release notes 由流水线生成） ===');
   console.log(`当前版本: ${currentVersion}（单一来源 packages/payload/package.json）`);

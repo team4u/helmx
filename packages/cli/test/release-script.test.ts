@@ -6,10 +6,11 @@
  * - the release commit subject survives intact (`shell: false`): cmd.exe used to split
  *   `-m "chore(release): v0.1.2"` on spaces/parens and git treated `v0.1.2)` as a pathspec.
  */
-import test from 'node:test'
+import test, { after } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { isStrictSemver } from '@helmx/protocol'
@@ -19,7 +20,12 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'
 const releaseScriptSrc = path.join(repoRoot, 'scripts', 'release.mjs')
 const releaseNotesSrc = path.join(repoRoot, 'scripts', 'lib', 'release-notes.mjs')
 // Windows 上绝对路径必须经 file:// URL 才能被 ESM loader 接受
-const { assertPnpmArgsShellSafe } = await import(pathToFileURL(releaseScriptSrc).href)
+const {
+  assertPnpmArgsShellSafe,
+  bumpSemver,
+  parseSemverStrict,
+  resolveTargetVersion,
+} = await import(pathToFileURL(releaseScriptSrc).href)
 const { assembleReleaseNotes } = await import(pathToFileURL(releaseNotesSrc).href)
 
 function gitIn(cwd: string, args: readonly string[], env: NodeJS.ProcessEnv): string {
@@ -30,7 +36,21 @@ function gitIn(cwd: string, args: readonly string[], env: NodeJS.ProcessEnv): st
   return res.stdout
 }
 
-function makeFixtureRepo(dir: string, initialVersion = '0.1.1', opts: { withChangelog?: boolean } = {}) {
+/** 复用初始化好的 Git 模板目录，避免每个用例重复 spawn 7 次 git init/config/add/commit。 */
+const fixtureTemplates = new Map<string, string>()
+
+after(() => {
+  for (const templateDir of fixtureTemplates.values()) {
+    rmSync(templateDir, { recursive: true, force: true })
+  }
+  fixtureTemplates.clear()
+}, { timeout: 60_000 })
+
+function getFixtureTemplate(initialVersion: string, withChangelog: boolean): string {
+  const key = `${initialVersion}:${withChangelog ? '1' : '0'}`
+  const existing = fixtureTemplates.get(key)
+  if (existing !== undefined) return existing
+  const dir = mkdtempSync(path.join(tmpdir(), 'helmx-release-tpl-'))
   const env: NodeJS.ProcessEnv = {
     ...sanitizedHostEnv(),
     GIT_CONFIG_NOSYSTEM: '1',
@@ -51,7 +71,7 @@ function makeFixtureRepo(dir: string, initialVersion = '0.1.1', opts: { withChan
     `${JSON.stringify({ name: '@helmx/cli', private: true, version: initialVersion }, null, 2)}\n`,
   )
   writeFileSync(path.join(dir, 'notes.txt'), 'initial\n')
-  if (opts.withChangelog) {
+  if (withChangelog) {
     writeFileSync(path.join(dir, 'CHANGELOG.md'), `# Changelog\n\n## v${initialVersion} (2026-01-01)\n\n- init\n`)
   }
   gitIn(dir, ['init', '-b', 'main'], env)
@@ -61,6 +81,18 @@ function makeFixtureRepo(dir: string, initialVersion = '0.1.1', opts: { withChan
   gitIn(dir, ['config', 'tag.gpgsign', 'false'], env)
   gitIn(dir, ['add', '.'], env)
   gitIn(dir, ['commit', '-m', 'feat(core): initial commit'], env)
+  fixtureTemplates.set(key, dir)
+  return dir
+}
+
+function makeFixtureRepo(dir: string, initialVersion = '0.1.1', opts: { withChangelog?: boolean } = {}) {
+  const templateDir = getFixtureTemplate(initialVersion, opts.withChangelog === true)
+  cpSync(templateDir, dir, { recursive: true })
+  const env: NodeJS.ProcessEnv = {
+    ...sanitizedHostEnv(),
+    GIT_CONFIG_NOSYSTEM: '1',
+    GIT_CONFIG_GLOBAL: path.join(dir, '.empty-gitconfig'),
+  }
   return {
     dir,
     env,
@@ -76,8 +108,7 @@ function makeFixtureRepo(dir: string, initialVersion = '0.1.1', opts: { withChan
 }
 
 test('release.mjs: enforces strict SemVer 2.0.0 without build metadata', { timeout: 60_000 }, (t) => {
-  const fixture = makeFixtureRepo(useTempDir(t, 'helmx-release-script-'), '0.1.1')
-
+  // Full 19-case SemVer + prerelease validation matrix executed directly in-process.
   const invalidVersions = [
     '01.2.3',
     '1.02.3',
@@ -94,23 +125,48 @@ test('release.mjs: enforces strict SemVer 2.0.0 without build metadata', { timeo
     '1.2.3-beta_1',
   ]
   for (const bad of invalidVersions) {
-    const res = fixture.runRelease([bad, '--dry-run', '--skip-verify'])
-    assert.notEqual(res.status, 0, `expected invalid version "${bad}" to fail`)
-    assert.match(res.stderr, /严格 SemVer/, `unexpected stderr for "${bad}": ${res.stderr}`)
+    assert.throws(
+      () => parseSemverStrict(bad),
+      /严格 SemVer/,
+      `expected invalid version "${bad}" to fail parseSemverStrict`,
+    )
+    assert.throws(
+      () => resolveTargetVersion('0.1.1', { version: bad }),
+      /严格 SemVer/,
+      `expected invalid version "${bad}" to fail resolveTargetVersion`,
+    )
   }
 
   // Invalid --prerelease preId also fails strict validation
-  const badPreId = fixture.runRelease(['--prerelease', '01', '--dry-run', '--skip-verify'])
-  assert.notEqual(badPreId.status, 0, 'leading-zero numeric preId must be rejected')
-  assert.match(badPreId.stderr, /严格 SemVer/)
+  assert.throws(
+    () => resolveTargetVersion('0.1.1', { bumpType: 'prerelease', preId: '01' }),
+    /严格 SemVer/,
+    'leading-zero numeric preId must be rejected',
+  )
 
-  // Valid strict SemVer versions pass dry-run and match @helmx/protocol isStrictSemver
+  // Valid strict SemVer versions pass validation and match @helmx/protocol isStrictSemver
   const validVersions = ['0.1.2', '1.2.3-beta.1', '1.2.3-0', '1.2.3-0alpha', '1.2.3-rc-1.0']
   for (const ok of validVersions) {
     assert.equal(isStrictSemver(ok), true, `sanity: ${ok} must be valid strict SemVer`)
-    const res = fixture.runRelease([ok, '--dry-run', '--skip-verify'])
-    assert.equal(res.status, 0, `expected valid version "${ok}" to succeed:\nstdout: ${res.stdout}\nstderr: ${res.stderr}`)
+    assert.doesNotThrow(() => parseSemverStrict(ok), `expected valid version "${ok}" to pass parseSemverStrict`)
+    assert.equal(resolveTargetVersion('0.1.1', { version: ok }), ok)
   }
+  assert.equal(bumpSemver('0.1.1', 'prerelease', 'rc'), '0.1.2-rc.1')
+  assert.equal(resolveTargetVersion('0.1.1', { bumpType: 'prerelease', preId: 'rc' }), '0.1.2-rc.1')
+
+  // End-to-end CLI wiring smoke checks (invalid explicit, invalid preId, valid explicit, valid preId).
+  const fixture = makeFixtureRepo(useTempDir(t, 'helmx-release-script-'), '0.1.1')
+
+  const badCli = fixture.runRelease(['1.2.3+build.1', '--dry-run', '--skip-verify'])
+  assert.notEqual(badCli.status, 0, 'expected invalid version with build metadata to fail via CLI')
+  assert.match(badCli.stderr, /严格 SemVer/)
+
+  const badPreId = fixture.runRelease(['--prerelease', '01', '--dry-run', '--skip-verify'])
+  assert.notEqual(badPreId.status, 0, 'leading-zero numeric preId must be rejected via CLI')
+  assert.match(badPreId.stderr, /严格 SemVer/)
+
+  const okCli = fixture.runRelease(['1.2.3-beta.1', '--dry-run', '--skip-verify'])
+  assert.equal(okCli.status, 0, `expected valid version to succeed:\nstdout: ${okCli.stdout}\nstderr: ${okCli.stderr}`)
 
   const validPreId = fixture.runRelease(['--prerelease', 'rc', '--dry-run', '--skip-verify'])
   assert.equal(validPreId.status, 0, `expected --prerelease rc to succeed:\n${validPreId.stderr}`)
