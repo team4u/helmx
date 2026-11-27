@@ -82,7 +82,7 @@
 
 ## Web 界面
 
-- **模型档位主视图**（`#/s/builtin:tiers/main`）：管理激活档位（支持在单模型与双相编排 `Planner -> Executor` 模式间逐行切换、分别绑定规划/执行模型及思考强度、设置最大执行步数 0–100，默认 30，0 表示不限步数；支持一键填充推荐 5 档草稿骨架）、查看实时可用性状态、保存与一键切换自定义模板。
+- **模型档位主视图**（`#/s/builtin:tiers/main`）：采用「顶栏常驻动作 + 一级主舞台卡片网格 + 右侧详情抽屉（`DetailDrawer`）」布局——顶栏常驻「新增档位 / 另存为模板」主按钮，工具栏提供「生效档位 / 编制模板」Tab 切换以及搜索与模式筛选（全部 / 单模型 / 双相编排）；空态提供推荐 5 档起步卡片，点击任一档位卡或新增按钮滑出右侧抽屉（底部固定保存/删除/取消操作栏，单条调用 `set` / `remove` 即时落盘），支持单模型与双相编排 `Planner -> Executor` 切换（最大执行步数 0–100，默认 30，0 表示不限步数）及「另存为模板」轻量弹窗与独立模板管理视图。
 - **插件详情设置面板**（`settingsPanel`）：展示当前激活档位数、模板数与生效模板名，提供快捷入口跳转主视图。
 - **Composer 集成**（`BorrowToolbarPill` + `useComposerModelPickerMode`）：
   - 在配置了双相编排档位的顶层人类会话中，空闲且未激活单轮借用时同样可在模型选择器顶部切换「仅下一轮」标签并渲染只读阶段胶囊（展示当前处于规划中/执行中、实时底层模型名及执行步数 `step/max`）；当预装或正在执行单轮借用时优先展示对应借用胶囊，当轮结束后自动恢复回编排阶段胶囊；
@@ -98,6 +98,6 @@
 | :--- | :--- |
 | 内核纯解引用原语与只读覆写投影 | `packages/kernel/src/runtime/model-registry.ts`、`conversation-profile.ts`、`conversation-service.ts`、`spawn-fork.ts`、`store/conversation-repo.ts` |
 | 插件后端、借用与编排状态机及校验 | `packages/plugins/src/tiers.ts`、`packages/plugins/src/tiers/contracts.ts`、`packages/plugins/src/tiers/orchestrator.ts`、`packages/plugins/src/tiers/borrow.ts`、`packages/plugins/src/tiers/validation.ts`、`packages/plugins/src/shared/read-only-shell/` |
-| 插件前端 UI | `packages/plugins/src/tiers/client/`（`manager.tsx`、`settings.tsx`、`BorrowToolbarPill.tsx`、`SwitchModelToolRow.tsx`、`OrchestratorToolRow.tsx`、`borrow-models.ts`、`orchestrator-models.ts`） |
+| 插件前端 UI | `packages/plugins/src/tiers/client/`（`manager.tsx`、`TierDetailDrawer.tsx`、`SaveTemplateDialog.tsx`、`settings.tsx`、`BorrowToolbarPill.tsx`、`SwitchModelToolRow.tsx`、`OrchestratorToolRow.tsx`、`borrow-models.ts`、`orchestrator-models.ts`） |
 | 共享选择器扩展 | `packages/plugin-client/src/ui/ModelPicker.tsx`、`model-picker-model.ts` |
 | 集成与契约测试 | `packages/plugins/test/tiers-plugin.test.ts`、`packages/plugins/test/tiers-orchestrator.integration.test.ts`、`packages/web/test/tiers-client-interactions.test.tsx`、`packages/plugin-client/test/model-picker.test.ts`、`packages/kernel/test/runtime-thinking-config.test.ts` |

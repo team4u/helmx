@@ -9,19 +9,44 @@ export const TIERS_COPY = {
   templatesSection: { en: 'Saved preset templates', 'zh-CN': '已保存编制模板' },
   loading: { en: 'Loading model tiers…', 'zh-CN': '正在加载模型档位…' },
   addRow: { en: 'Add tier', 'zh-CN': '新增档位' },
-  fillStarter: { en: 'Fill 5-tier starter draft', 'zh-CN': '填入推荐 5 档草稿' },
   saveAll: { en: 'Save tiers', 'zh-CN': '保存档位' },
   saving: { en: 'Saving…', 'zh-CN': '正在保存…' },
   discard: { en: 'Discard changes', 'zh-CN': '放弃更改' },
-  unsavedBadge: { en: 'Unsaved edits', 'zh-CN': '有未保存更改' },
   savedNotice: { en: 'Model tiers saved and synced to kernel.', 'zh-CN': '模型档位已保存并同步至内核。' },
   emptyTitle: { en: 'No model tiers configured yet', 'zh-CN': '尚未配置模型档位' },
   emptyHint: {
-    en: 'Add tiers manually or start from the 5-tier draft (scout / coder / senior / architect / reviewer), then bind your concrete models and save.',
-    'zh-CN': '可手动新增档位，或一键填入 5 档推荐草稿（scout / coder / senior / architect / reviewer），绑定具体模型后保存即可生效。',
+    en: 'Add a tier manually or click one of the 5 starter tiers below (scout / coder / senior / architect / reviewer) to bind a model.',
+    'zh-CN': '可点击右上角新增档位，或直接点选下方推荐 5 档（scout / coder / senior / architect / reviewer）快速绑定模型。',
   },
+  tabTiers: { en: 'Active tiers', 'zh-CN': '生效档位' },
+  tabTemplates: { en: 'Preset templates', 'zh-CN': '编制模板' },
+  filterAll: { en: 'All', 'zh-CN': '全部' },
+  filterSingle: { en: 'Single', 'zh-CN': '单模型' },
+  filterOrchestrator: { en: 'Dual-phase', 'zh-CN': '双相编排' },
+  searchPlaceholder: { en: 'Search tier ID, model, or guidance…', 'zh-CN': '搜索档位 ID、模型或定位说明…' },
+  filterEmptyTitle: { en: 'No matching tiers', 'zh-CN': '未找到匹配的档位' },
+  resetFilters: { en: 'Reset filters', 'zh-CN': '重置筛选' },
+  starterSectionTitle: { en: 'Quick-start with recommended 5 tiers', 'zh-CN': '推荐 5 档快速起步' },
+  starterCardCta: { en: 'Click to bind model', 'zh-CN': '点击绑定模型' },
+  starterPresetsLabel: { en: 'Quick-fill preset', 'zh-CN': '快捷套用推荐定位' },
+  drawerCreateTitle: { en: 'New model tier', 'zh-CN': '新建模型档位' },
+  drawerEditTitle: { en: 'Edit model tier', 'zh-CN': '编辑模型档位' },
+  drawerNotFoundTitle: { en: 'Model tier not found', 'zh-CN': '未找到该模型档位' },
+  drawerNotFoundBody: { en: 'This tier no longer exists or was removed.', 'zh-CN': '该模型档位不存在或已被移除。' },
+  createTier: { en: 'Create tier', 'zh-CN': '创建档位' },
+  saveTier: { en: 'Save changes', 'zh-CN': '保存更改' },
+  deleteTier: { en: 'Delete tier', 'zh-CN': '删除档位' },
+  tierDeleteConfirmTitle: { en: 'Delete model tier', 'zh-CN': '确认删除模型档位' },
   fieldId: { en: 'Tier ID', 'zh-CN': '档位 ID' },
   fieldIdPlaceholder: { en: 'e.g. coder', 'zh-CN': '例如 coder' },
+  fieldIdHint: {
+    en: "Lowercase letters, digits, '-' or '_' (referenced as tier/<id>).",
+    'zh-CN': '小写字母、数字、连字符或下划线（引用格式为 tier/<id>）。',
+  },
+  fieldIdLockedHint: {
+    en: 'Tier ID cannot be changed after creation to keep existing bindings valid.',
+    'zh-CN': '创建后档位 ID 保持固定，避免破坏已有 Profile 或全局默认引用。',
+  },
   fieldModel: { en: 'Target model & thinking level', 'zh-CN': '目标模型与思考档位' },
   pickModel: { en: 'Select model & thinking level', 'zh-CN': '选择模型与思考档位' },
   clearModel: { en: 'Clear model & level', 'zh-CN': '清空模型绑定' },
@@ -31,7 +56,7 @@ export const TIERS_COPY = {
   statusAvailable: { en: 'Available', 'zh-CN': '可用' },
   statusDisabled: { en: 'Model disabled', 'zh-CN': '模型已禁用' },
   statusUnavailable: { en: 'Unavailable', 'zh-CN': '不可用' },
-  statusDraft: { en: 'Draft', 'zh-CN': '草稿' },
+  saveAsTemplate: { en: 'Save as template', 'zh-CN': '另存为模板' },
   templateSaveTitle: { en: 'Save current active tiers as a reusable template', 'zh-CN': '将当前生效档位另存为可复用模板' },
   templateIdLabel: { en: 'Template ID', 'zh-CN': '模板 ID' },
   templateIdPlaceholder: { en: 'e.g. flagship-5', 'zh-CN': '例如 flagship-5' },
@@ -40,16 +65,14 @@ export const TIERS_COPY = {
   templateDescLabel: { en: 'Notes (optional)', 'zh-CN': '备注（可选）' },
   templateDescPlaceholder: { en: 'When to activate this preset', 'zh-CN': '说明何时切换这套模板' },
   templateSaveBtn: { en: 'Save template', 'zh-CN': '保存模板' },
-  templateEmpty: { en: 'No preset templates saved yet. Save your active tiers above to switch rosters in one click.', 'zh-CN': '尚未保存编制模板。可在上方将当前生效档位存为模板，日后一键切换。' },
+  templateEmptyTitle: { en: 'No preset templates saved', 'zh-CN': '尚未保存编制模板' },
+  templateEmpty: { en: 'Save your active tiers as a preset template to switch rosters in one click.', 'zh-CN': '可将当前生效档位另存为编制模板，日后一键整体切换。' },
   templateActiveBadge: { en: 'Active', 'zh-CN': '当前生效' },
   templateApply: { en: 'Apply', 'zh-CN': '一键应用' },
   templateDelete: { en: 'Delete', 'zh-CN': '删除' },
   cancel: { en: 'Cancel', 'zh-CN': '取消' },
+  close: { en: 'Close', 'zh-CN': '关闭' },
   templateDeleteConfirmTitle: { en: 'Delete preset template', 'zh-CN': '确认删除编制模板' },
-  colTemplate: { en: 'Template', 'zh-CN': '模板' },
-  colRoster: { en: 'Tiers', 'zh-CN': '档位映射' },
-  colUpdated: { en: 'Updated', 'zh-CN': '更新时间' },
-  colActions: { en: 'Actions', 'zh-CN': '操作' },
   settingsKvActive: { en: 'Active tiers', 'zh-CN': '生效档位数' },
   settingsKvTemplates: { en: 'Saved templates', 'zh-CN': '已存模板数' },
   settingsKvTemplate: { en: 'Active template', 'zh-CN': '当前模板' },
@@ -57,9 +80,13 @@ export const TIERS_COPY = {
   settingsOpen: { en: 'Open Model Tiers', 'zh-CN': '打开模型档位管理' },
   settingsHint: { en: 'Manage semantic model tiers (tier/<id>), descriptions, and switchable preset templates.', 'zh-CN': '管理语义模型档位（tier/<id>）、路由职责边界与可一键切换的编制模板。' },
   errIdRequired: { en: 'Every tier must have a non-empty lowercase slug ID (e.g. scout, coder).', 'zh-CN': '每个档位都必须填写非空的小写标识 ID（如 scout、coder）。' },
-  errDuplicateId: { en: 'Duplicate tier ID found; each tier ID must be unique.', 'zh-CN': '存在重复的档位 ID，请保持每个档位 ID 唯一。' },
+  errDuplicateId: { en: 'A tier with this ID already exists; choose a different ID.', 'zh-CN': '该档位 ID 已存在，请更换其他标识 ID。' },
   errModelRequired: { en: 'Every tier must bind a concrete target model before saving.', 'zh-CN': '保存前请为每个档位绑定一个具体目标模型。' },
   errTemplateFields: { en: 'Template ID and name are both required.', 'zh-CN': '请填写模板 ID 与模板名称。' },
+  errTemplateIdInvalid: {
+    en: "Template ID must use lowercase letters, digits, '-' or '_'.",
+    'zh-CN': '模板 ID 仅支持小写字母、数字、连字符或下划线。',
+  },
   oneTurnTabLabel: { en: 'Next turn', 'zh-CN': '仅下一轮' },
   oneTurnModeHint: {
     en: 'Applies only to your next message, then restores automatically',
@@ -104,8 +131,28 @@ export const TIERS_COPY = {
 export const tiersTemplateDeleteConfirmBody = (name: string, id: string, locale: HelmxLocale): string =>
   locale === 'zh-CN' ? `确定删除编制模板「${name}」（${id}）吗？此操作无法撤销。` : `Delete preset template "${name}" (${id})? This action cannot be undone.`
 
+export const tiersTierDeleteConfirmBody = (id: string, model: string, locale: HelmxLocale): string =>
+  locale === 'zh-CN' ? `确定删除模型档位「tier/${id}」（${model}）吗？此操作无法撤销。` : `Delete model tier "tier/${id}" (${model})? This action cannot be undone.`
+
 export const tiersPickModelWithHint = (level: string, locale: HelmxLocale): string =>
   locale === 'zh-CN' ? `选择模型与思考档位（建议 ${level}）` : `Select model & level (suggested: ${level})`
+
+export const tiersSuggestedLevelBadge = (level: string, locale: HelmxLocale): string =>
+  locale === 'zh-CN' ? `建议 ${level}` : `suggested ${level}`
+
+export const tiersOrchestratorStepsBadge = (steps: number, locale: HelmxLocale): string => {
+  if (steps === 0) return locale === 'zh-CN' ? '双相 · 不限' : 'Dual · Unlimited'
+  return locale === 'zh-CN' ? `双相 · ${steps} 步` : `Dual · ${steps} steps`
+}
+
+export const tiersTierSavedNotice = (id: string, locale: HelmxLocale): string =>
+  locale === 'zh-CN' ? `已保存档位「tier/${id}」并同步至内核。` : `Saved tier "tier/${id}" and synced to kernel.`
+
+export const tiersTierDeletedNotice = (id: string, locale: HelmxLocale): string =>
+  locale === 'zh-CN' ? `已删除档位「tier/${id}」。` : `Deleted tier "tier/${id}".`
+
+export const tiersTemplateCountSummary = (count: number, locale: HelmxLocale): string =>
+  locale === 'zh-CN' ? `基于当前 ${count} 个生效档位创建可一键切换的编制模板。` : `Snapshot your ${count} active tier(s) as a reusable preset template.`
 
 export const tiersTemplateAppliedNotice = (name: string, locale: HelmxLocale): string =>
   locale === 'zh-CN' ? `已切换到模板「${name}」。` : `Applied template "${name}".`
