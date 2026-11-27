@@ -66,6 +66,7 @@ import { CloseSplitButton, SplitToggleButton } from '../ui/SplitControls.js'
 import { usePaneSplitToggle } from '../ui/use-pane-split-toggle.js'
 import { ConversationRowActionsMenu } from '../ui/ConversationRowActionsMenu.js'
 import { ConversationStatusDot } from '../shell/SidebarPrimitives.js'
+import { hasConversationStatusLight } from '../shell/background-activity-model.js'
 import {
   buildNewTopicCandidates,
   isConversationBulkSelectable,
@@ -110,10 +111,11 @@ type BucketFilterValue = OverviewBucketFilter
 type SourceFilterValue = OverviewSourceFilter
 
 /** 单卡：根会话树聚合卡（只读）；卡面/芯片直进主屏会话。
- * 可访问性结构：外层 div 仅承载鼠标整卡点击便利（不挂交互 ARIA 角色，
- * 避免交互嵌套），真正的语义入口是标题簇真按钮（含状态灯可读标签，
- * 键盘 Enter/Space 可达）；菜单/勾选框/芯片/展开开关均为独立兄弟控件，
- * 绝不嵌套进按钮。批量模式下按钮与整卡点击变为勾选切换（aria-pressed）。 */
+ * 可访问性结构：外层 article 仅承载鼠标整卡点击便利（不挂交互 ARIA 角色，
+ * 避免交互嵌套），真正的语义入口是标题簇真按钮（#id + 标题，
+ * 键盘 Enter/Space 可达）；右侧状态灯与 `...` 菜单同构于侧栏工作集，
+ * 菜单/勾选框/芯片/展开开关均为独立兄弟控件，绝不嵌套进按钮。
+ * 批量模式下按钮与整卡点击变为勾选切换（aria-pressed）。 */
 const OverviewCardView = memo(function OverviewCardView({
   card,
   onOpenConversation,
@@ -221,9 +223,16 @@ const OverviewCardView = memo(function OverviewCardView({
   const openLabel = t('shell.attention.openConversation', { id: card.targetConversationId })
   const cardTitleText = card.root.title || t('shell.conversationFallback', { id: card.root.id })
   // 批量模式按钮语义切换为勾选（aria-pressed 表态，名称如实描述切换动作）；
-  // 普通模式不覆写 aria-label——可访问名称直接由内容组成（状态灯可读标签 +
-  // 标题 + #id），异常/等待人类事实原样进入读屏。
+  // 普通模式不覆写 aria-label——可访问名称直接由内容组成（#id + 标题），
+  // 异常/等待人类事实经 aria-describedby 关联读屏。
   const buttonLabel = batchMode ? `${cardTitleText} · ${t('shell.overview.batchToggleCard')}` : openLabel
+  const showDone = card.root.unread && !viewedConversationIds.has(card.root.id)
+  const backgroundActivity = { active: card.backgroundActive, summary: card.backgroundSummary }
+  const hasStatusLight = hasConversationStatusLight({
+    conv: card.root,
+    background: backgroundActivity,
+    showDone,
+  })
   const descendantItems = card.directDescendants
   const collapseDescendantsByDefault = card.bucket === 'quiet' || card.bucket === 'archived'
   const shownDescendants = expanded
@@ -259,8 +268,7 @@ const OverviewCardView = memo(function OverviewCardView({
             />
           </span>
         )}
-        {/* 语义主入口：真按钮包住标题簇（灯 + 标题 + #id）。按钮内容即
-            标题提供可访问名称，需处理原因通过 aria-describedby 关联。 */}
+        {/* 语义主入口：真按钮包住 #id + 标题；右侧状态灯与行尾菜单与侧栏工作集完全同构。 */}
         <button
           type="button"
           className="overview-card-open"
@@ -274,55 +282,50 @@ const OverviewCardView = memo(function OverviewCardView({
             activateCard()
           }}
         >
-          <span className="nav-status-slot">
-            {/* 灯位与侧栏会话行完全同构（通用统一口径）：根会话自身状态 +
-                树级后台在途聚合，经同一 resolveStatusLight 单灯裁决——根 idle
-                且树内有后台在途时同样渲染空心蓝环；子代理等后代状态由后代
-                芯片各自的灯与诚实摘要承载，不在卡面灯位混入代表位语义。 */}
-            <ConversationStatusDot
-              conv={card.root}
-              background={{ active: card.backgroundActive, summary: card.backgroundSummary }}
-              showDone={card.root.unread && !viewedConversationIds.has(card.root.id)}
-            />
-          </span>
+          <span className="overview-card-id mono tabular-nums">#{card.root.id}</span>
           <span className="overview-card-title">
             {cardTitleText}
           </span>
-          <span className="overview-card-id tabular-nums">#{card.root.id}</span>
         </button>
-        {!batchMode && (
-          <span className="overview-card-actions" onClick={(e) => e.stopPropagation()}>
-            <Tooltip content={t('shell.overview.drawerPeek')} side="top">
-              <IconButton
-                variant="ghost"
-                size="xs"
-                className="overview-card-peek-btn"
-                icon={<HelmxIcon name="panel-right" size={13} />}
-                aria-label={t('shell.overview.drawerPeek')}
-                onClick={(e) => {
-                  e.stopPropagation()
-                  onDrawerPeek(card.targetConversationId)
-                }}
-              />
-            </Tooltip>
-            <ConversationRowActionsMenu
-              conversation={card.root}
-              enableDelete
-              prependItems={[
-                {
-                  key: 'drawer-peek',
-                  icon: 'panel-right',
-                  label: t('shell.overview.drawerPeek'),
-                  onSelect: () => onDrawerPeek(card.targetConversationId),
-                },
-                {
-                  key: 'open-split',
-                  icon: 'columns',
-                  label: t('shell.sidebar.openInRightSplit'),
-                  onSelect: () => onOpenSplit(card.targetConversationId),
-                },
-              ]}
-            />
+        {(hasStatusLight || !batchMode) && (
+          <span
+            className={`overview-card-head-meta${!hasStatusLight ? ' overview-card-head-meta-actions-only' : ''}`}
+          >
+            {hasStatusLight && (
+              <span className="overview-card-status-slot">
+                {/* 灯位与侧栏会话行完全同构（通用统一口径）：根会话自身状态 +
+                    树级后台在途聚合，经同一 resolveStatusLight 单灯裁决——根 idle
+                    且树内有后台在途时同样渲染空心蓝环；子代理等后代状态由后代
+                    芯片各自的灯与诚实摘要承载，不在卡面灯位混入代表位语义。 */}
+                <ConversationStatusDot
+                  conv={card.root}
+                  background={backgroundActivity}
+                  showDone={showDone}
+                />
+              </span>
+            )}
+            {!batchMode && (
+              <span className="overview-card-actions" onClick={(e) => e.stopPropagation()}>
+                <ConversationRowActionsMenu
+                  conversation={card.root}
+                  enableDelete
+                  prependItems={[
+                    {
+                      key: 'drawer-peek',
+                      icon: 'panel-right',
+                      label: t('shell.overview.drawerPeek'),
+                      onSelect: () => onDrawerPeek(card.targetConversationId),
+                    },
+                    {
+                      key: 'open-split',
+                      icon: 'columns',
+                      label: t('shell.sidebar.openInRightSplit'),
+                      onSelect: () => onOpenSplit(card.targetConversationId),
+                    },
+                  ]}
+                />
+              </span>
+            )}
           </span>
         )}
       </div>

@@ -516,8 +516,12 @@ test('ConversationOverview card light matches the sidebar row verdict: idle root
     const card = container.querySelector<HTMLElement>('.overview-card')
     assert.ok(card !== null, 'the tree card renders')
     assert.ok(
-      card.querySelector('.overview-card-head .status-dot-background') !== null,
-      'idle root + tree background in-flight renders the hollow ring (row-consistent)',
+      card.querySelector('.overview-card-head-meta .overview-card-status-slot .status-dot-background') !== null,
+      'idle root + tree background in-flight renders the hollow ring in trailing status slot (row-consistent)',
+    )
+    assert.ok(
+      card.querySelector('.overview-card-open .status-dot') === null,
+      'status light stays out of the leading .overview-card-open button',
     )
     assert.ok(
       card.querySelector('.overview-card-head .status-dot-working') === null,
@@ -1670,23 +1674,44 @@ test('ConversationOverview +N more is a real entry: expanding reveals the remain
   }
 })
 
-test('ConversationOverview card semantics: the open action is a real button with readable status label; keyboard Enter opens; batch mode carries aria-pressed', { timeout: 60_000 }, async () => {
+test('ConversationOverview card semantics: #id sits left of title, status light trails like sidebar rows, keyboard focus works, and batch mode preserves status slot', { timeout: 60_000 }, async () => {
   const store = overviewScenarioStore()
   const mount = await mountOverview(store)
   try {
     const cards = mount.container.querySelectorAll('.overview-card')
     assert.ok(cards.length === 3)
-    const card = [...cards].find((el) => el.textContent?.includes('在跑的调研'))
-    assert.ok(card !== undefined, 'the working-root card renders')
-    const open = card.querySelector<HTMLButtonElement>('.overview-card-open')
+    const workingCard = [...cards].find((el) => el.textContent?.includes('在跑的调研'))
+    const idleCard = [...cards].find((el) => el.textContent?.includes('安静会话'))
+    assert.ok(workingCard !== undefined, 'the working-root card renders')
+    assert.ok(idleCard !== undefined, 'the idle-root card renders')
+
+    const open = workingCard.querySelector<HTMLButtonElement>('.overview-card-open')
     assert.ok(open !== null, 'the title cluster renders as a real semantic button')
     assert.equal(open.tagName, 'BUTTON')
-    assert.equal(card.querySelectorAll('button button').length, 0, 'no interactive control is ever nested inside another button')
-    // 可访问名称来自按钮内容：状态灯的 aria-label（真实运行事实）与标题。
-    const light = open.querySelector('.nav-status-slot [aria-label]')
-    assert.ok(light !== null, 'the status light carries a readable label inside the semantic entry')
-    assert.ok((light.getAttribute('aria-label') ?? '').length > 0)
-    assert.ok(open.textContent?.includes('在跑的调研'))
+    assert.equal(workingCard.querySelectorAll('button button').length, 0, 'no interactive control is ever nested inside another button')
+
+    // #id 在左侧、标题在其右，且前置按钮内无状态灯。
+    assert.ok(open.querySelector('.nav-status-slot, .status-dot') === null, 'leading button contains no status light')
+    assert.equal(open.children.length, 2)
+    assert.equal(open.children[0]?.classList.contains('overview-card-id'), true, '#id sits on the left side of the title')
+    assert.equal(open.children[0]?.textContent, '#2')
+    assert.equal(open.children[1]?.classList.contains('overview-card-title'), true)
+    assert.equal(open.children[1]?.textContent, '在跑的调研')
+
+    // 状态灯位于标题行右侧 .overview-card-head-meta .overview-card-status-slot，空闲卡省略指示槽。
+    const workingMeta = workingCard.querySelector('.overview-card-head-meta')
+    const workingSlot = workingMeta?.querySelector('.overview-card-status-slot')
+    const workingLight = workingSlot?.querySelector('.status-dot-working[role="status"][aria-label]')
+    assert.ok(workingLight !== null && workingLight !== undefined, 'working card renders trailing status light with readable label')
+    assert.ok((workingLight.getAttribute('aria-label') ?? '').length > 0)
+    assert.equal(workingMeta?.classList.contains('overview-card-head-meta-actions-only'), false)
+    assert.ok(workingCard.querySelector('.overview-card-peek-btn') === null, 'standalone peek button is removed in favor of the menu')
+
+    const idleMeta = idleCard.querySelector('.overview-card-head-meta')
+    assert.ok(idleMeta !== null, 'normal-mode idle card keeps actions meta wrapper')
+    assert.ok(idleMeta.querySelector('.overview-card-status-slot') === null, 'idle card omits trailing status slot')
+    assert.equal(idleMeta.classList.contains('overview-card-head-meta-actions-only'), true, 'idle card marks head meta as actions-only')
+
     assert.equal(open.getAttribute('aria-pressed'), null, 'normal mode never fakes a pressed state')
     // 原生按钮 = 键盘契约本体（Tab 可达、Enter/Space 由浏览器激活）；
     // happy-dom 不合成按键激活，这里断言可聚焦与默认 Tab 序，点击语义另行验证。
@@ -1701,11 +1726,21 @@ test('ConversationOverview card semantics: the open action is a real button with
       { kind: 'conversation', conversationId: 2 },
       'the semantic button navigates exactly like a whole-card click',
     )
-    // 批量模式：同一按钮承载勾选语义（aria-pressed），整卡点击仍是勾选。
+
+    // 批量模式：隐藏 `...` 菜单，运行卡保留右侧状态灯，空闲卡省略整块 head-meta；按钮承载 aria-pressed。
     const toggle = mount.container.querySelector<HTMLButtonElement>('.overview-batch-toggle')
     await act(async () => {
       toggle?.click()
     })
+    const batchWorkingCard = cardById(mount.container, 2)
+    const batchIdleCard = cardById(mount.container, 3)
+    assert.ok(batchWorkingCard?.querySelector('.overview-card-actions') === null, 'batch mode hides card actions menu')
+    assert.ok(
+      batchWorkingCard?.querySelector('.overview-card-head-meta .overview-card-status-slot .status-dot-working') !== null,
+      'batch mode preserves trailing status slot on active cards',
+    )
+    assert.ok(batchIdleCard?.querySelector('.overview-card-head-meta') === null, 'batch mode omits empty head meta on idle cards')
+
     const batchOpen = mount.container.querySelector<HTMLButtonElement>('.overview-card-open')
     assert.equal(batchOpen?.getAttribute('aria-pressed'), 'false', 'batch mode exposes the toggle state')
     await act(async () => {
@@ -2611,7 +2646,7 @@ test('buildSidebarWorkingSet and buildNewTopicCandidates exclude automated helmx
   )
 })
 
-test('ConversationOverview archived tab & quick drawer-peek button: archived tab appears conditionally and direct peek opens drawer', { timeout: 60_000 }, async () => {
+test('ConversationOverview archived tab & unified card menu: archived tab appears conditionally, no standalone peek button, and menu peek opens drawer', { timeout: 60_000 }, async () => {
   // 1) No archived conversations: Archived segment does not render
   const noArchivedStore = overviewStore({
     conversations: [
@@ -2629,11 +2664,21 @@ test('ConversationOverview archived tab & quick drawer-peek button: archived tab
     })
     assert.ok(!container.textContent?.includes('Archived'), 'Archived segment stays absent when zero archived conversations exist')
 
-    // Quick drawer peek icon button on card directly pushes conversation drawer without navigating primaryTarget
-    const peekBtn = container.querySelector<HTMLButtonElement>('.overview-card-peek-btn')
-    assert.ok(peekBtn !== null, 'card renders direct drawer-peek icon button')
+    // Standalone drawer peek button is folded into the unified "..." menu (matching sidebar rows)
+    assert.ok(container.querySelector('.overview-card-peek-btn') === null, 'no standalone drawer-peek button renders outside the menu')
+    const actionButtons = container.querySelectorAll('.overview-card-actions button')
+    assert.equal(actionButtons.length, 1, 'card actions expose only the unified "..." menu button')
+    const menuTrigger = container.querySelector<HTMLButtonElement>('.overview-card-actions button[aria-haspopup="menu"]')
+    assert.ok(menuTrigger !== null, 'the unified "..." menu trigger renders')
     await act(async () => {
-      peekBtn.click()
+      menuTrigger.dispatchEvent(new PointerEvent('pointerdown', { button: 0, bubbles: true, cancelable: true }))
+    })
+    const peekItem = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find((el) =>
+      el.textContent?.includes('Peek in drawer'),
+    )
+    assert.ok(peekItem !== undefined, 'drawer peek lives inside the unified menu')
+    await act(async () => {
+      peekItem.click()
     })
     assert.equal(noArchivedStore.getPrimaryTarget().kind, 'overview', 'drawer peek keeps user on overview')
     assert.deepEqual(noArchivedStore.getDrawerStack(), [{ kind: 'conversation', conversationId: 1 }])

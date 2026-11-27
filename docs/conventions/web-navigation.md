@@ -24,7 +24,7 @@
 | :--- | :--- |
 | `#/c/<id>` | 会话 |
 | `#/a/<profileId>` | 智能体待命页 |
-| `#/overview` | 会话总览（对话空间的一级全量看板与治理大盘：分层态势分组舞台、已归档治理 `sp.bucket=archived`、卡片/后代芯片直进主屏、快捷抽屉速览与菜单右分屏、顶栏新话题；筛选与分组状态经 `sp.*` 路由参数持久化） |
+| `#/overview` | 会话总览（对话空间的一级全量看板与治理大盘：分层态势分组舞台、已归档治理 `sp.bucket=archived`、卡片/后代芯片直进主屏、菜单抽屉速览与右分屏、顶栏新话题；筛选与分组状态经 `sp.*` 路由参数持久化） |
 | `#/views/<pluginId>/<screenId>` | 插件全屏视图 |
 | `#/settings/profiles[/<profileId>]` | 角色中心 |
 | `#/settings/models[/<providerId> \| /defaults \| /<providerId>/defaults]` | 模型中心（`defaults` 保留段 = 全局默认 Tab） |
