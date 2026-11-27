@@ -89,15 +89,15 @@ export class ConversationTracker {
     this.summary = new TrackerSummary(this.core)
     this.compaction = new TrackerCompaction(this.core)
     this.settlement = new TrackerSettlement(this.core, this.activity, this.inputs, this.live, this.summary)
-    this.observer = new TrackerObserver(
-      this.core,
-      this.inputs,
-      this.live,
-      this.activity,
-      this.summary,
-      this.compaction,
-      this.settlement,
-    )
+    this.observer = new TrackerObserver({
+      core: this.core,
+      inputs: this.inputs,
+      live: this.live,
+      activity: this.activity,
+      summary: this.summary,
+      compaction: this.compaction,
+      settlement: this.settlement,
+    })
   }
 
   /** Attach or replace the diagnostic sink (wired during KernelRuntime construction). */

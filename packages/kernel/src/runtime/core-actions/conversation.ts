@@ -2,7 +2,15 @@
  * `core:conversations`: conversation search / read / create and the seven guarded mutations.
  * Ownership and self-mutation invariants are summarized in `./index.ts`.
  */
-import { REQUEST_SCHEMAS, type ConversationOwnership, type ConversationStatus } from '@helmx/protocol'
+import {
+  REQUEST_SCHEMAS,
+  type ConversationOwnership,
+  type ConversationStatus,
+  type JsonSchema,
+  type MaybePromise,
+  type PluginActionCliSpec,
+  type PluginActionContext,
+} from '@helmx/protocol'
 import {
   parseConversationCompactBody,
   parseConversationForkBody,
@@ -17,10 +25,12 @@ import {
   resolveConversationMutationAccess,
   resolveCreateConversationOwnership,
   resolveForkConversationOwnership,
+  type ConversationMutationAccess,
 } from '../guards/index.js'
 import type { CoreActionsRuntimeHost } from '../runtime-types.js'
 import {
   ARRAY_OF_OBJECTS_OUTPUT_SCHEMA,
+  EMPTY_INPUT_SCHEMA,
   NON_EMPTY_STRING,
   OBJECT_OUTPUT_SCHEMA,
   OK_OUTPUT_SCHEMA,
@@ -32,8 +42,93 @@ import {
   type CoreActionRegistrar,
 } from './shared.js'
 
+const CONVERSATION_ACTIONS_OWNER = 'core:conversations'
+
+/**
+ * Compose a mutation request schema: the required target id, the action's own control fields, the optional CAS
+ * watermark, then the optional domain body.
+ */
+function conversationMutationInputSchema(
+  body: unknown = EMPTY_INPUT_SCHEMA,
+  controls: Record<string, JsonSchema> = {},
+): JsonSchema {
+  return extendRequestSchema(
+    body,
+    { conversationId: SAFE_POSITIVE_INT, ...controls, expectedStateSeq: SAFE_NON_NEGATIVE_INT },
+    ['conversationId'],
+  )
+}
+
+/** Request target shared by every conversation mutation: the conversation plus its optional CAS watermark. */
+interface ConversationMutationInput {
+  conversationId: number
+  expectedStateSeq?: number
+}
+
+/** `send` may additionally wait for the reply (the input body itself is parsed by `parseInputBody`). */
+interface SendMutationInput extends ConversationMutationInput {
+  wait?: boolean
+}
+
+/** `withdraw` additionally addresses the queued submission. */
+interface WithdrawMutationInput extends ConversationMutationInput {
+  submissionId: number
+}
+
+/**
+ * Register one conversation mutation. Every mutation targets a required `conversationId` with an optional
+ * `expectedStateSeq` CAS watermark, stays out of the prompt (`run_action` discovery only), and resolves mutation
+ * access before the domain body runs: destructive actions first refuse self-mutation, then
+ * `resolveConversationMutationAccess` enforces the ownership red line and decides guarded-vs-direct execution.
+ */
+function registerConversationMutation<TIn extends ConversationMutationInput = ConversationMutationInput>(
+  runtime: CoreActionsRuntimeHost,
+  pluginHost: CoreActionRegistrar,
+  spec: {
+    id: string
+    description: string
+    cli: PluginActionCliSpec
+    inputSchema: JsonSchema
+    /** Defaults to `OBJECT_OUTPUT_SCHEMA`. */
+    outputSchema?: JsonSchema
+    /** Destructive actions refuse self-mutation (`409 self_mutation_forbidden`) before access resolution. */
+    forbidSelfMutation?: boolean
+    /** `delete` also refuses cascading across `human`-owned descendants. */
+    checkSubtree?: boolean
+    /** `rest` is the request without the target fields; `context` is the caller's action context. */
+    mutate: (
+      target: {
+        conversationId: number
+        rest: Omit<TIn, keyof ConversationMutationInput>
+        context: PluginActionContext
+      },
+      access: ConversationMutationAccess,
+    ) => MaybePromise<unknown>
+  },
+): void {
+  pluginHost.registerCoreAction<TIn, unknown>(CONVERSATION_ACTIONS_OWNER, {
+    id: spec.id,
+    description: spec.description,
+    exposeToPrompt: false,
+    cli: spec.cli,
+    inputSchema: spec.inputSchema,
+    outputSchema: spec.outputSchema ?? OBJECT_OUTPUT_SCHEMA,
+    handler: async (input, context) => {
+      if (spec.forbidSelfMutation === true) {
+        assertNotSelfConversationMutation(context, input.conversationId, spec.id)
+      }
+      const { conversationId, expectedStateSeq, ...rest } = input
+      const access = resolveConversationMutationAccess(runtime, context, conversationId, {
+        expectedStateSeq,
+        ...(spec.checkSubtree === true ? { checkSubtree: true } : {}),
+      })
+      return spec.mutate({ conversationId, rest, context }, access)
+    },
+  })
+}
+
 export function registerConversationCoreActions(runtime: CoreActionsRuntimeHost, pluginHost: CoreActionRegistrar): void {
-  const owner = 'core:conversations'
+  const owner = CONVERSATION_ACTIONS_OWNER
 
   pluginHost.registerCoreAction(owner, {
     id: 'search',
@@ -154,28 +249,12 @@ export function registerConversationCoreActions(runtime: CoreActionsRuntimeHost,
     },
   })
 
-  pluginHost.registerCoreAction(owner, {
+  registerConversationMutation(runtime, pluginHost, {
     id: 'update',
     description: 'Partially update conversation metadata, profile, model, thinking level, node, or cwd',
-    exposeToPrompt: false,
     cli: { command: ['conversations', 'update'] },
-    inputSchema: extendRequestSchema(
-      REQUEST_SCHEMAS.conversationPatch,
-      {
-        conversationId: SAFE_POSITIVE_INT,
-        expectedStateSeq: SAFE_NON_NEGATIVE_INT,
-      },
-      ['conversationId'],
-    ),
-    outputSchema: OBJECT_OUTPUT_SCHEMA,
-    handler: async (
-      input: Record<string, unknown> & { conversationId: number; expectedStateSeq?: number },
-      context,
-    ) => {
-      const { conversationId, expectedStateSeq, ...rest } = input
-      const access = resolveConversationMutationAccess(runtime, context, conversationId, {
-        expectedStateSeq,
-      })
+    inputSchema: conversationMutationInputSchema(REQUEST_SCHEMAS.conversationPatch),
+    mutate: ({ conversationId, rest }, access) => {
       const patch = parseConversationPatch(rest)
       return access.guarded
         ? runtime.conversations.updateConversationGuarded(conversationId, patch, access.guard)
@@ -183,38 +262,21 @@ export function registerConversationCoreActions(runtime: CoreActionsRuntimeHost,
     },
   })
 
-  pluginHost.registerCoreAction(owner, {
+  registerConversationMutation<SendMutationInput>(runtime, pluginHost, {
     id: 'send',
     description: 'Submit input to a conversation (optionally waiting for the reply); forces origin="agent" in session context and uses guarded CAS submission for automated callers',
-    exposeToPrompt: false,
     cli: { command: ['send'] },
-    inputSchema: extendRequestSchema(
-      REQUEST_SCHEMAS.conversationInput,
-      {
-        conversationId: SAFE_POSITIVE_INT,
-        wait: { type: 'boolean' },
-        expectedStateSeq: SAFE_NON_NEGATIVE_INT,
-      },
-      ['conversationId'],
-    ),
+    inputSchema: conversationMutationInputSchema(REQUEST_SCHEMAS.conversationInput, {
+      wait: { type: 'boolean' },
+    }),
     outputSchema: {
       type: 'object',
       properties: { submissionId: { type: 'string' } },
       required: ['submissionId'],
     },
-    handler: async (
-      input: Record<string, unknown> & {
-        conversationId: number
-        wait?: boolean
-        expectedStateSeq?: number
-      },
-      context,
-    ) => {
-      const { conversationId, wait, expectedStateSeq, ...rest } = input
-      const access = resolveConversationMutationAccess(runtime, context, conversationId, {
-        expectedStateSeq,
-      })
-      const parsed = parseInputBody(rest)
+    mutate: async ({ conversationId, rest, context }, access) => {
+      const { wait, ...body } = rest
+      const parsed = parseInputBody(body)
       // Honest origin invariant: any session-scoped send is agent-originated and cannot spoof human/trigger.
       const effectiveOrigin = context.conversationId !== undefined ? 'agent' : parsed.origin
       const submitOpts = {
@@ -235,91 +297,47 @@ export function registerConversationCoreActions(runtime: CoreActionsRuntimeHost,
     },
   })
 
-  pluginHost.registerCoreAction(owner, {
+  registerConversationMutation<WithdrawMutationInput>(runtime, pluginHost, {
     id: 'withdraw',
     description: 'Withdraw a queued input submission from a conversation',
-    exposeToPrompt: false,
     cli: { command: ['conversations', 'withdraw'] },
-    inputSchema: extendRequestSchema(
-      REQUEST_SCHEMAS.conversationWithdraw,
-      {
-        conversationId: SAFE_POSITIVE_INT,
-        expectedStateSeq: SAFE_NON_NEGATIVE_INT,
-      },
-      ['conversationId'],
-    ),
-    outputSchema: OBJECT_OUTPUT_SCHEMA,
-    handler: async (
-      input: { conversationId: number; submissionId: number; expectedStateSeq?: number },
-      context,
-    ) => {
-      const access = resolveConversationMutationAccess(runtime, context, input.conversationId, {
-        expectedStateSeq: input.expectedStateSeq,
-      })
-      return access.guarded
+    inputSchema: conversationMutationInputSchema(REQUEST_SCHEMAS.conversationWithdraw),
+    mutate: ({ conversationId, rest }, access) =>
+      access.guarded
         ? runtime.conversations.withdrawQueuedInputGuarded(
-            input.conversationId,
-            { submissionId: input.submissionId },
+            conversationId,
+            { submissionId: rest.submissionId },
             access.guard,
           )
-        : runtime.conversations.withdrawQueuedInput(input.conversationId, {
-            submissionId: input.submissionId,
-          })
-    },
+        : runtime.conversations.withdrawQueuedInput(conversationId, {
+            submissionId: rest.submissionId,
+          }),
   })
 
-  pluginHost.registerCoreAction(owner, {
+  registerConversationMutation(runtime, pluginHost, {
     id: 'abort',
     description: 'Abort the currently running turn of another conversation (self-abort forbidden; uses guarded CAS abort for automated callers)',
-    exposeToPrompt: false,
     cli: { command: ['abort'] },
-    inputSchema: {
-      type: 'object',
-      properties: {
-        conversationId: SAFE_POSITIVE_INT,
-        expectedStateSeq: SAFE_NON_NEGATIVE_INT,
-      },
-      required: ['conversationId'],
-      additionalProperties: false,
-    },
+    inputSchema: conversationMutationInputSchema(),
     outputSchema: OK_OUTPUT_SCHEMA,
-    handler: async (input: { conversationId: number; expectedStateSeq?: number }, context) => {
-      assertNotSelfConversationMutation(context, input.conversationId, 'abort')
-      const access = resolveConversationMutationAccess(runtime, context, input.conversationId, {
-        expectedStateSeq: input.expectedStateSeq,
-      })
+    forbidSelfMutation: true,
+    mutate: async ({ conversationId }, access) => {
       if (access.guarded) {
-        await runtime.conversations.abortConversationGuarded(input.conversationId, access.guard)
+        await runtime.conversations.abortConversationGuarded(conversationId, access.guard)
       } else {
-        await runtime.conversations.abortConversation(input.conversationId)
+        await runtime.conversations.abortConversation(conversationId)
       }
       return { ok: true }
     },
   })
 
-  pluginHost.registerCoreAction(owner, {
+  registerConversationMutation(runtime, pluginHost, {
     id: 'reset',
     description: 'Reset context of another conversation with optional handoff text (self-reset forbidden)',
-    exposeToPrompt: false,
     cli: { command: ['conversations', 'reset'] },
-    inputSchema: extendRequestSchema(
-      REQUEST_SCHEMAS.conversationReset,
-      {
-        conversationId: SAFE_POSITIVE_INT,
-        expectedStateSeq: SAFE_NON_NEGATIVE_INT,
-      },
-      ['conversationId'],
-    ),
-    outputSchema: OBJECT_OUTPUT_SCHEMA,
-    handler: async (
-      input: Record<string, unknown> & { conversationId: number; expectedStateSeq?: number },
-      context,
-    ) => {
-      assertNotSelfConversationMutation(context, input.conversationId, 'reset')
-      const { conversationId, expectedStateSeq, ...rest } = input
-      const access = resolveConversationMutationAccess(runtime, context, conversationId, {
-        expectedStateSeq,
-      })
+    inputSchema: conversationMutationInputSchema(REQUEST_SCHEMAS.conversationReset),
+    forbidSelfMutation: true,
+    mutate: ({ conversationId, rest }, access) => {
       const parsed = parseConversationResetBody(rest)
       return access.guarded
         ? runtime.conversations.resetConversationGuarded(conversationId, parsed, access.guard)
@@ -327,28 +345,12 @@ export function registerConversationCoreActions(runtime: CoreActionsRuntimeHost,
     },
   })
 
-  pluginHost.registerCoreAction(owner, {
+  registerConversationMutation(runtime, pluginHost, {
     id: 'compact',
     description: 'Enqueue manual context compaction for a conversation with optional instructions',
-    exposeToPrompt: false,
     cli: { command: ['conversations', 'compact'] },
-    inputSchema: extendRequestSchema(
-      REQUEST_SCHEMAS.conversationCompact,
-      {
-        conversationId: SAFE_POSITIVE_INT,
-        expectedStateSeq: SAFE_NON_NEGATIVE_INT,
-      },
-      ['conversationId'],
-    ),
-    outputSchema: OBJECT_OUTPUT_SCHEMA,
-    handler: async (
-      input: Record<string, unknown> & { conversationId: number; expectedStateSeq?: number },
-      context,
-    ) => {
-      const { conversationId, expectedStateSeq, ...rest } = input
-      const access = resolveConversationMutationAccess(runtime, context, conversationId, {
-        expectedStateSeq,
-      })
+    inputSchema: conversationMutationInputSchema(REQUEST_SCHEMAS.conversationCompact),
+    mutate: ({ conversationId, rest }, access) => {
       const parsed = parseConversationCompactBody(rest)
       return access.guarded
         ? runtime.conversations.compactConversationGuarded(conversationId, parsed, access.guard)
@@ -385,31 +387,19 @@ export function registerConversationCoreActions(runtime: CoreActionsRuntimeHost,
     },
   })
 
-  pluginHost.registerCoreAction(owner, {
+  registerConversationMutation(runtime, pluginHost, {
     id: 'delete',
     description: 'Delete another conversation and its derived child subtree (self-delete forbidden)',
-    exposeToPrompt: false,
     cli: { command: ['conversations', 'delete'] },
-    inputSchema: {
-      type: 'object',
-      properties: {
-        conversationId: SAFE_POSITIVE_INT,
-        expectedStateSeq: SAFE_NON_NEGATIVE_INT,
-      },
-      required: ['conversationId'],
-      additionalProperties: false,
-    },
+    inputSchema: conversationMutationInputSchema(),
     outputSchema: OK_OUTPUT_SCHEMA,
-    handler: async (input: { conversationId: number; expectedStateSeq?: number }, context) => {
-      assertNotSelfConversationMutation(context, input.conversationId, 'delete')
-      const access = resolveConversationMutationAccess(runtime, context, input.conversationId, {
-        checkSubtree: true,
-        expectedStateSeq: input.expectedStateSeq,
-      })
+    forbidSelfMutation: true,
+    checkSubtree: true,
+    mutate: async ({ conversationId }, access) => {
       if (access.guarded) {
-        await runtime.conversations.deleteConversationGuarded(input.conversationId, access.guard)
+        await runtime.conversations.deleteConversationGuarded(conversationId, access.guard)
       } else {
-        await runtime.conversations.deleteConversation(input.conversationId)
+        await runtime.conversations.deleteConversation(conversationId)
       }
       return { ok: true }
     },

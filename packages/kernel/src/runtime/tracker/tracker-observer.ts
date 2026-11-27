@@ -64,16 +64,35 @@ export function isContinuedRun(prev: RunIdentityShape, next: RunIdentityShape | 
   return prev.inputs.length > 0 && prev.inputs.every((id) => next.inputs.includes(id))
 }
 
+/** Tracker collaborators the observer drives while adopting snapshots and tearing down observations (all owned by the tracker facade). */
+export interface TrackerObserverDeps {
+  readonly core: TrackerCore
+  readonly inputs: TrackerInputs
+  readonly live: TrackerLive
+  readonly activity: TrackerActivity
+  readonly summary: TrackerSummary
+  readonly compaction: TrackerCompaction
+  readonly settlement: TrackerSettlement
+}
+
 export class TrackerObserver {
-  constructor(
-    private readonly core: TrackerCore,
-    private readonly inputs: TrackerInputs,
-    private readonly live: TrackerLive,
-    private readonly activity: TrackerActivity,
-    private readonly summary: TrackerSummary,
-    private readonly compaction: TrackerCompaction,
-    private readonly settlement: TrackerSettlement,
-  ) {}
+  private readonly core: TrackerCore
+  private readonly inputs: TrackerInputs
+  private readonly live: TrackerLive
+  private readonly activity: TrackerActivity
+  private readonly summary: TrackerSummary
+  private readonly compaction: TrackerCompaction
+  private readonly settlement: TrackerSettlement
+
+  constructor(deps: TrackerObserverDeps) {
+    this.core = deps.core
+    this.inputs = deps.inputs
+    this.live = deps.live
+    this.activity = deps.activity
+    this.summary = deps.summary
+    this.compaction = deps.compaction
+    this.settlement = deps.settlement
+  }
 
   /** Attach a synchronous observer to the conversation; backfills authoritative input metadata for active runs before returning. */
   async observe(id: number): Promise<void> {
