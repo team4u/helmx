@@ -1089,6 +1089,90 @@ export function CleanView({ kind, prefix, mode }: { kind: string; prefix: string
   assert.deepEqual(report.violations, [])
 })
 
+test('ui-hygiene: reports legacy container/modal/tab/kbd classes on intrinsic tags while allowing React components, hyphenated classes, and prefixed/suffixed templates', { timeout: 60_000 }, () => {
+  const bad = analyzeUiSource(
+    ts,
+    'legacy-bad.tsx',
+    `import { Card, ModalDialog, TabsList, TabsTrigger } from '@helmx/plugin-client'
+export function LegacyBad({ active }: { active: boolean }) {
+  return (
+    <div className="section-flat">
+      <div className="form-grid" />
+      <div className="kv-list trace-kv" />
+      <div className="tabs-bar">
+        <button type="button" className={\`tab-btn\${active ? ' tab-btn-active' : ''}\`}>Tab</button>
+      </div>
+      <div className="modal-header custom-header" />
+      <div className="modal-footer" />
+      <div className="dropdown-panel" />
+      <kbd className="kbd-hint">Esc</kbd>
+      <div className="card jr-accordion" />
+      <div className={\`card\${active ? ' is-selected' : ''}\`} />
+      <div className={\`\${active ? 'card ' : ''}extra\`} />
+      <Card className="card">Allowed on React component</Card>
+      <TabsList className="tabs-bar">
+        <TabsTrigger value="a" className="tab-btn">Allowed</TabsTrigger>
+      </TabsList>
+      <ModalDialog open={false} onClose={() => {}} title="Ok" className="modal-header">Body</ModalDialog>
+    </div>
+  )
+}
+`,
+  )
+
+  assert.deepEqual(
+    bad.violations.map((v) => ({ line: v.line, rule: v.rule })),
+    [
+      { line: 4, rule: 'no-raw-control-class' },
+      { line: 5, rule: 'no-raw-control-class' },
+      { line: 6, rule: 'no-raw-control-class' },
+      { line: 7, rule: 'no-raw-control-class' },
+      { line: 8, rule: 'no-raw-control-class' },
+      { line: 10, rule: 'no-raw-control-class' },
+      { line: 11, rule: 'no-raw-control-class' },
+      { line: 12, rule: 'no-raw-control-class' },
+      { line: 13, rule: 'no-raw-control-class' },
+      { line: 14, rule: 'no-raw-control-class' },
+      { line: 15, rule: 'no-raw-control-class' },
+      { line: 16, rule: 'no-raw-control-class' },
+    ],
+  )
+
+  const clean = analyzeUiSource(
+    ts,
+    'legacy-clean.tsx',
+    `import { Card, Kbd, ModalDialog, Tabs, TabsList, TabsTrigger } from '@helmx/plugin-client'
+export function LegacyClean({ active, variant, suffix }: { active: boolean; variant: string; suffix: string }) {
+  return (
+    <div className="overview-card">
+      <div className="plan-draft-card hub-update-card" />
+      <div className="section-flat-title form-grid-value" />
+      <div className="mermaid-modal-header custom-modal-footer" />
+      <div className="popover-kbd-hint my-dropdown-panel my-tabs-bar my-kv-list" />
+      <button type="button" className="my-tab-btn tab-btn-active">Scoped</button>
+      <div className={\`overview-\${active ? 'card' : 'row'}\`} />
+      <div className={\`\${active ? 'card' : 'row'}-item\`} />
+      <div className={\`card-\${variant}\`} />
+      <div className={\`card\${suffix}\`} />
+      <div className={variant === 'card' ? 'domain-row' : 'other-row'} />
+      <Card className="card">SDK Card</Card>
+      <Tabs value="a" variant="underline">
+        <TabsList className="tabs-bar">
+          <TabsTrigger value="a" className="tab-btn">Tab</TabsTrigger>
+        </TabsList>
+      </Tabs>
+      <ModalDialog open={false} onClose={() => {}} title="Title" className="modal-header">
+        <Kbd className="kbd-hint">Esc</Kbd>
+      </ModalDialog>
+    </div>
+  )
+}
+`,
+  )
+
+  assert.deepEqual(clean.violations, [])
+})
+
 test('ui-hygiene: collectSourceUiFiles returns only packages/web/src/**/*.tsx and packages/plugins/src/*/client/**/*.tsx, sorted', { timeout: 60_000 }, () => {
   const root = mkdtempSync(path.join(tmpdir(), 'helmx-ui-hygiene-'))
   try {

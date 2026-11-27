@@ -5,12 +5,17 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import * as ts from 'typescript';
 import { createPluginBuildProvider } from '@helmx/plugin-build';
 import { cleanupDir, makeTempDir } from '@helmx/test-kit/node';
+import { analyzeUiSource, collectSourceUiFiles } from '../../../scripts/lib/ui-hygiene.mjs';
 import { doctorPluginDir } from '../src/plugins/plugin-doctor.js';
 import { scanPluginCssUiHygiene, scanPluginTsxUiHygiene } from '../src/plugins/plugin-ui-hygiene.js';
+
+const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 
 interface UiHygieneDetails {
   pluginId: string;
@@ -218,6 +223,34 @@ test('doctorPluginDir: each UI/CSS hygiene violation fails the client check with
       expectedRule: 'no-raw-control-class',
     },
     {
+      id: 'ext-bad-legacy-modal',
+      tsx: `export function MainScreen() {
+  return (
+    <div className="modal-header custom-header">
+      <span>Title</span>
+    </div>
+  )
+}
+`,
+      expectedLocation: 'client/index.tsx:3:no-raw-control-class',
+      expectedRule: 'no-raw-control-class',
+    },
+    {
+      id: 'ext-bad-legacy-card-kbd',
+      tsx: `export function MainScreen() {
+  return (
+    <div className="section-flat">
+      <div className="card">
+        <kbd className="kbd-hint">Esc</kbd>
+      </div>
+    </div>
+  )
+}
+`,
+      expectedLocation: 'client/index.tsx:3:no-raw-control-class',
+      expectedRule: 'no-raw-control-class',
+    },
+    {
       id: 'ext-bad-css-hover',
       tsx: `import './styles.css'
 export function MainScreen() {
@@ -307,4 +340,57 @@ export function Nested({ active, prefix, variant }: { active: boolean; prefix: s
       { line: 5, rule: 'hover-media-gate' },
     ],
   );
+});
+
+test('plugin-ui-hygiene TSX scanner matches AST ui-hygiene.mjs across legacy container/modal/tab/kbd edge cases and all repo UI files', { timeout: 60_000 }, () => {
+  const edgeCorpus = `import { Card, Kbd, Tabs, TabsList, TabsTrigger } from '@helmx/plugin-client'
+export function EdgeCorpus({ active, variant, suffix }: { active: boolean; variant: string; suffix: string }) {
+  return (
+    <div className="section-flat">
+      <div className="form-grid" />
+      <div className="kv-list trace-kv" />
+      <div className="tabs-bar">
+        <button type="button" className={\`tab-btn\${active ? ' tab-btn-active' : ''}\`}>Tab</button>
+      </div>
+      <div className="modal-header custom-header" />
+      <div className="modal-footer" />
+      <div className="dropdown-panel" />
+      <kbd className="kbd-hint">Esc</kbd>
+      <div className="card" />
+      <div className={\`card\${active ? ' is-selected' : ''}\`} />
+      <div className={\`\${active ? 'card ' : ''}extra\`} />
+      <div className="overview-card plan-draft-card form-grid-value section-flat-title mermaid-modal-header popover-kbd-hint" />
+      <div className={\`overview-\${active ? 'card' : 'row'}\`} />
+      <div className={\`\${active ? 'card' : 'row'}-item\`} />
+      <div className={\`card-\${variant}\`} />
+      <div className={\`card\${suffix}\`} />
+      <Card className="card">SDK</Card>
+      <Tabs value="a" variant="underline">
+        <TabsList className="tabs-bar">
+          <TabsTrigger value="a" className="tab-btn">Ok</TabsTrigger>
+        </TabsList>
+      </Tabs>
+      <Kbd className="kbd-hint">K</Kbd>
+    </div>
+  )
+}
+`;
+
+  const zeroDepEdge = scanPluginTsxUiHygiene('client/edge.tsx', edgeCorpus);
+  const astEdge = analyzeUiSource(ts, 'client/edge.tsx', edgeCorpus).violations;
+  assert.deepEqual(zeroDepEdge, astEdge, 'zero-dep scanner must match AST scanner exactly on legacy edge corpus');
+  assert.equal(zeroDepEdge.length, 12, `expected 12 intrinsic legacy violations, got ${zeroDepEdge.length}`);
+
+  const repoFiles = collectSourceUiFiles(repoRoot);
+  assert.ok(repoFiles.length > 0, 'expected repo UI files for cross-validation');
+  const mismatches: string[] = [];
+  for (const rel of repoFiles) {
+    const source = readFileSync(join(repoRoot, rel), 'utf8');
+    const astViolations = analyzeUiSource(ts, rel, source).violations;
+    const zeroDepViolations = scanPluginTsxUiHygiene(rel, source);
+    if (JSON.stringify(zeroDepViolations) !== JSON.stringify(astViolations)) {
+      mismatches.push(`${rel}\n  AST: ${JSON.stringify(astViolations)}\n  ZeroDep: ${JSON.stringify(zeroDepViolations)}`);
+    }
+  }
+  assert.deepEqual(mismatches, [], `zero-dep scanner drifted from AST scanner:\n${mismatches.join('\n')}`);
 });

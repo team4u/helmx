@@ -6,10 +6,12 @@
  *   no-native-select       native `<select>` is forbidden (use `@helmx/plugin-client` `<Select>` / `<MultiSelect>`);
  *   no-search-input        `<input type="search">` is forbidden (use `<SearchBox>` or `<Input type="text">`);
  *   no-ui-emoji            UI Emoji in JSX text or string/template literals (excluding comments & imports) is forbidden;
- *   no-raw-control-class   raw `.btn` / `.btn-*` / `.input` / `.input-sm` class tokens bypassing SDK are forbidden
- *                          strictly on intrinsic lowercase JSX elements (`<button>`, `<input>`, `<a>`, `<div>`, `<span>`, ...),
- *                          avoiding false positives on SDK/component wrappers (`<CopyButton>`) and hyphenated domain classes
- *                          (e.g. `chg-compact-slot-btn`, `sidebar-search-input`).
+ *   no-raw-control-class   raw `.btn` / `.btn-*` / `.input` / `.input-sm` and retired legacy container/modal/tab/kbd
+ *                          class tokens (`section-flat`, `form-grid`, `kv-list`, `tabs-bar`, `tab-btn`, `modal-header`,
+ *                          `modal-footer`, `dropdown-panel`, `kbd-hint`, `card`) bypassing SDK are forbidden strictly on
+ *                          intrinsic lowercase JSX elements (`<button>`, `<input>`, `<a>`, `<div>`, `<span>`, `<kbd>`, ...),
+ *                          avoiding false positives on SDK/component wrappers (`<CopyButton>`, `<Card>`, `<TabsList>`)
+ *                          and hyphenated domain classes (e.g. `chg-compact-slot-btn`, `sidebar-search-input`, `overview-card`).
  *
  * @typedef {'no-native-select' | 'no-search-input' | 'no-ui-emoji' | 'no-raw-control-class'} UiHygieneRule
  * @typedef {{ file: string, line: number, rule: UiHygieneRule, message: string }} UiHygieneViolation
@@ -25,8 +27,12 @@ import path from 'node:path';
 export const UI_EMOJI_PATTERN =
   /(?:\p{Emoji_Presentation}|\p{Extended_Pictographic}\uFE0F|[\u{1F1E6}-\u{1F1FF}]{2}|[0-9#*]\uFE0F?\u20E3|[\u{1F000}-\u{1FAFF}\u{2600}-\u{26FF}\u{2764}])/u;
 
-/** Standalone host control class tokens that must come from `@helmx/plugin-client` primitives rather than raw HTML tags. */
-const RAW_CONTROL_CLASS_TOKEN_RE = /^(?:btn(?:-[a-z0-9_-]+)?|input(?:-sm)?)$/;
+/**
+ * Standalone host control and retired legacy container/modal/tab/kbd class tokens that must
+ * come from `@helmx/plugin-client` primitives rather than raw HTML tags.
+ */
+const RAW_CONTROL_CLASS_TOKEN_RE =
+  /^(?:btn(?:-[a-z0-9_-]+)?|input(?:-sm)?|section-flat|form-grid|kv-list|tabs-bar|tab-btn|modal-header|modal-footer|dropdown-panel|kbd-hint|card)$/;
 
 const CLASS_HELPER_NAMES = new Set(['clsx', 'cx', 'cn', 'joinClass', 'joinClasses', 'classNames']);
 
@@ -67,10 +73,37 @@ function collectStringValues(ts, expr, out) {
   }
 
   if (ts.isTemplateExpression(cur)) {
-    let synthetic = cur.head.text;
+    const headText = cur.head.text;
+    let synthetic = headText;
+    let prevEndsAttached = headText.length > 0 && !/\s$/.test(headText);
     for (const span of cur.templateSpans) {
-      synthetic += TEMPLATE_EXPR_PLACEHOLDER + span.literal.text;
-      collectStringValues(ts, span.expression, out);
+      const spanValues = [];
+      collectStringValues(ts, span.expression, spanValues);
+      const literalText = span.literal.text;
+      const nextStartsAttached = literalText.length > 0 && !/^\s/.test(literalText);
+      const startsWithBoundary =
+        spanValues.length > 0 && spanValues.every((v) => v.text === '' || /^\s/.test(v.text));
+      const endsWithBoundary =
+        spanValues.length > 0 && spanValues.every((v) => v.text === '' || /\s$/.test(v.text));
+
+      for (const v of spanValues) {
+        let text = v.text;
+        if (prevEndsAttached && text !== '' && !/^\s/.test(text)) {
+          text = TEMPLATE_EXPR_PLACEHOLDER + text;
+        }
+        if (nextStartsAttached && text !== '' && !/\s$/.test(text)) {
+          text = text + TEMPLATE_EXPR_PLACEHOLDER;
+        }
+        out.push({ text, node: v.node });
+      }
+
+      synthetic +=
+        (startsWithBoundary ? ' ' : '') +
+        TEMPLATE_EXPR_PLACEHOLDER +
+        (endsWithBoundary ? ' ' : '') +
+        literalText;
+
+      prevEndsAttached = literalText.length > 0 ? !/\s$/.test(literalText) : !endsWithBoundary;
     }
     out.push({ text: synthetic, node: cur });
     return;
@@ -223,7 +256,7 @@ export function analyzeUiSource(ts, filePath, source, existingSourceFile = undef
         }
       }
 
-      // Rule 4: Raw .btn / .btn-* / .input / .input-sm class tokens bypassing SDK on intrinsic lowercase HTML elements.
+      // Rule 4: Raw control and retired legacy container/modal/tab/kbd class tokens bypassing SDK on intrinsic lowercase HTML elements.
       if (tag !== null && /^[a-z]/.test(tag)) {
         for (const attr of node.attributes.properties) {
           if (!ts.isJsxAttribute(attr) || !ts.isIdentifier(attr.name) || attr.name.text !== 'className') continue;
@@ -233,7 +266,8 @@ export function analyzeUiSource(ts, filePath, source, existingSourceFile = undef
           for (const value of values) {
             const found = findRawControlTokens(value.text);
             if (found.length > 0) {
-              if (badTokens.size === 0) firstLine = lineOf(value.node);
+              const valueLine = lineOf(value.node);
+              if (badTokens.size === 0 || valueLine < firstLine) firstLine = valueLine;
               for (const token of found) badTokens.add(token);
             }
           }
@@ -242,7 +276,7 @@ export function analyzeUiSource(ts, filePath, source, existingSourceFile = undef
               file: filePath,
               line: firstLine,
               rule: 'no-raw-control-class',
-              message: `raw control class token(s) [${[...badTokens].join(', ')}] on intrinsic <${tag}> bypass @helmx/plugin-client primitives (use <Button>, <IconButton>, or <Input>)`,
+              message: `raw/legacy UI class token(s) [${[...badTokens].join(', ')}] on intrinsic <${tag}> bypass @helmx/plugin-client primitives (use <Button>, <IconButton>, <Input>, <Card>, <Field>, <KvGrid>, <Tabs>, <ModalDialog>, <DropdownMenu>, or <Kbd>)`,
             });
           }
         }
