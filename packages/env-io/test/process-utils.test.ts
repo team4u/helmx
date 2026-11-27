@@ -3,6 +3,7 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
 import { test } from 'node:test';
+import { deferred, sleep } from '@helmx/test-kit';
 import { useTempDir } from '@helmx/test-kit/node';
 import {
   isProcessAlive,
@@ -172,6 +173,97 @@ test('withCrossProcessFileLock stale-lock recovery preserves mutual exclusion un
   assert.equal(completed, 10);
   assert.equal(maxActive, 1, 'concurrent stale-lock breakers must never enter critical section simultaneously');
   assert.equal(await fsp.stat(lockPath).then(() => true, () => false), false, 'lock removed cleanly after all waiters finish');
+});
+
+test('withCrossProcessFileLock holder displaced by a stalled stale breaker waits it out, never enters, and re-acquires', { timeout: 60_000 }, async (t) => {
+  const dir = useTempDir(t, 'helmx-env-io-lock-stalled-breaker-');
+  const lockPath = path.join(dir, 'stalled.lock');
+  const deadOwner = '424242 dead-owner\n';
+  await fsp.writeFile(lockPath, deadOwner, 'utf8');
+
+  const breakerConfirmedDead = deferred();
+  const releaseBreaker = deferred();
+  const holderSawLiveMarker = deferred();
+  const entered = { breaker: 0, holder: 0 };
+  let active = 0;
+  let maxActive = 0;
+  const criticalSection = async (who: 'breaker' | 'holder'): Promise<void> => {
+    entered[who] += 1;
+    active += 1;
+    maxActive = Math.max(maxActive, active);
+    await sleep(15);
+    active -= 1;
+  };
+
+  // Breaker: confirms the dead owner under its break marker, then stalls before the removal.
+  const breaker = withCrossProcessFileLock(lockPath, () => criticalSection('breaker'), {
+    waitMs: 5_000,
+    pollMs: 5,
+    isAlive: (pid) => pid !== 424242,
+    beforeStaleRemoval: async () => {
+      breakerConfirmedDead.resolve();
+      await releaseBreaker.promise;
+    },
+  });
+  t.after(() => releaseBreaker.resolve(), { timeout: 60_000 });
+  await breakerConfirmedDead.promise;
+  assert.equal(await fsp.readFile(lockPath, 'utf8'), deadOwner, 'dead lock stays untouched while the breaker is stalled');
+  const markers = (await fsp.readdir(dir)).filter((name) => name.endsWith('.stale'));
+  assert.equal(markers.length, 1, 'breaker holds its break marker before touching the lock');
+  assert.deepEqual(entered, { breaker: 0, holder: 0 });
+
+  // Another breaker already cleared the dead file; a fresh holder publishes behind the stalled one.
+  await fsp.rm(lockPath);
+  const holder = withCrossProcessFileLock(lockPath, () => criticalSection('holder'), {
+    waitMs: 5_000,
+    pollMs: 5,
+    // Only the break-marker liveness scan can call this: the lock path was empty when the holder published.
+    isAlive: (pid) => {
+      holderSawLiveMarker.resolve();
+      return pid === process.pid;
+    },
+  });
+  await holderSawLiveMarker.promise;
+  assert.deepEqual(entered, { breaker: 0, holder: 0 }, 'holder must not enter while the stalled breaker can still delete its lock');
+
+  releaseBreaker.resolve();
+  await Promise.all([breaker, holder]);
+  assert.deepEqual(entered, { breaker: 1, holder: 1 }, 'both eventually acquire exactly once (order is not asserted)');
+  assert.equal(maxActive, 1, 'stalled breaker and displaced holder never overlap in the critical section');
+  assert.equal(await fsp.stat(lockPath).then(() => true, () => false), false, 'lock removed after completion');
+  assert.deepEqual((await fsp.readdir(dir)).filter((name) => name.includes('stalled.lock')), [], 'no lock, marker or temp leftovers');
+});
+
+test('withCrossProcessFileLock ignores dead-PID break markers forever and bounds waiting on live ones by settleGraceMs when waitMs is 0', { timeout: 60_000 }, async (t) => {
+  const dir = useTempDir(t, 'helmx-env-io-lock-markers-');
+  const lockPath = path.join(dir, 'markers.lock');
+  const deadMarker = `${lockPath}.424242.dead-uuid.stale`;
+  const liveMarker = `${lockPath}.${process.pid}.live-uuid.stale`;
+  const isAlive = (pid: number): boolean => pid === process.pid;
+
+  // 1. A marker left by a crashed breaker is neither a blocker nor garbage: its owner cannot act anymore.
+  await fsp.writeFile(deadMarker, '424242 gone\n', 'utf8');
+  const ran = await withCrossProcessFileLock(lockPath, async () => 'ok', { waitMs: 0, pollMs: 5, settleGraceMs: 80, isAlive });
+  assert.equal(ran, 'ok', 'a dead-PID marker must not consume the settle window');
+  assert.equal(await fsp.readFile(deadMarker, 'utf8'), '424242 gone\n', 'dead-PID marker is preserved, never deleted');
+  await fsp.rm(deadMarker);
+
+  // 2. A live marker blocks entry for at most settleGraceMs (there is no wait budget when waitMs is 0),
+  //    then fails explicitly, releases our own lock, and leaves the foreign marker alone.
+  await fsp.writeFile(liveMarker, `${process.pid} busy\n`, 'utf8');
+  const startedAt = Date.now();
+  await assert.rejects(
+    withCrossProcessFileLock(lockPath, async () => 'never', { waitMs: 0, pollMs: 5, settleGraceMs: 80, isAlive }),
+    (error: unknown) => {
+      assert.ok(error instanceof Error, 'busy verdict must be an Error');
+      assert.match(error.message, /stale-lock recovery is in progress \(/);
+      assert.ok(error.message.includes(path.basename(liveMarker)), `verdict names the blocking marker: ${error.message}`);
+      return true;
+    },
+  );
+  assert.ok(Date.now() - startedAt >= 70, 'must wait out the settle window before declaring stale recovery stuck');
+  assert.equal(await fsp.stat(lockPath).then(() => true, () => false), false, 'own lock is released when acquisition fails');
+  assert.equal(await fsp.readFile(liveMarker, 'utf8'), `${process.pid} busy\n`, 'foreign live marker is never deleted');
 });
 
 test('withCrossProcessFileLock waits out the settle window for a fresh unowned lock before surfacing it as corrupt', { timeout: 60_000 }, async (t) => {

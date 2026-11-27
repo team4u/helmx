@@ -7,7 +7,8 @@
  *   (single source of truth for Linux PID-reuse identity proofs);
  * - `readLogTailBounded` / `readLogFrom`: UTF-8-safe bounded log tailing and incremental byte-offset reading;
  * - `withCrossProcessFileLock`: atomic cross-process file lock (`temp + fsync + fs.link`, `wx` fallback)
- *   with dead-PID stale recovery, settle grace window, and CAS owner-checked release.
+ *   with marker-guarded dead-PID stale recovery, post-publish ownership confirmation, settle grace
+ *   window, and CAS owner-checked release.
  */
 import { randomUUID } from 'node:crypto';
 import fsp from 'node:fs/promises';
@@ -20,6 +21,8 @@ const DEFAULT_EXIT_POLL_MS = 100;
 const DEFAULT_LOG_TAIL_MAX_BYTES = 64 * 1024;
 const DEFAULT_LOG_READ_MAX_BYTES = 1_000_000;
 const MAX_STALE_BREAK_ATTEMPTS = 8;
+const MAX_OWNERSHIP_RETRIES = 8;
+const BREAK_MARKER_SUFFIX = '.stale';
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -224,6 +227,11 @@ export interface CrossProcessFileLockOptions {
   onCorrupt?: (lockPath: string) => Error;
   /** Custom error on unexpected create/read I/O failures (file is preserved). */
   onError?: (lockPath: string, error: unknown, phase: 'create' | 'read') => Error;
+  /**
+   * Tests: awaited while the stale-lock break marker is held, after the dead owner has been
+   * re-confirmed and before the lock file is removed; lets a test interleave concurrent acquirers.
+   */
+  beforeStaleRemoval?: (lockPath: string, stalePid: number) => Promise<void>;
 }
 
 /** Normalized options plus the per-acquisition state shared by the lock steps below. */
@@ -237,10 +245,12 @@ interface LockAttempt {
   readonly staleRecovery: boolean;
   readonly isAlive: (pid: number) => boolean;
   readonly hooks: CrossProcessFileLockOptions;
-  /** Wall-clock instant after which waiting for a live holder fails. */
+  /** Wall-clock instant after which waiting for a live holder or for break markers fails (`waitMs > 0` only). */
   readonly deadline: number;
-  /** Confirmed-dead locks broken so far; bounded so a pathological loop fails loudly. */
+  /** Confirmed-dead lock breaks attempted so far; bounded so a pathological loop fails loudly. */
   staleBreaks: number;
+  /** Publishes displaced by a concurrent stale recovery so far; bounded so a pathological loop fails loudly. */
+  ownershipRetries: number;
 }
 
 /** What to do after our publish lost to an existing lock file: retry at once (it vanished or was broken) or wait first. */
@@ -319,13 +329,96 @@ async function tryPublishLock(attempt: LockAttempt): Promise<boolean> {
   }
 }
 
-/** Publish-and-inspect loop: returns once this process owns the lock, throws when it cannot get it. */
+/**
+ * Publish-and-confirm loop: returns once this process owns the lock and no in-flight stale recovery can
+ * still delete it; throws when it cannot get it. A publish displaced by a concurrent stale recovery
+ * re-contends (bounded). Every failure after a successful publish releases the lock first so a lock file
+ * carrying this live PID is never orphaned.
+ */
 async function acquireLock(attempt: LockAttempt): Promise<void> {
   for (;;) {
-    if (await tryPublishLock(attempt)) return;
+    if (await tryPublishLock(attempt)) {
+      try {
+        if (await confirmLockOwnership(attempt)) return;
+      } catch (error) {
+        await releaseLock(attempt);
+        throw error;
+      }
+      attempt.ownershipRetries += 1;
+      if (attempt.ownershipRetries > MAX_OWNERSHIP_RETRIES) {
+        throw lockIoError(
+          attempt,
+          new Error(`lock ownership was displaced ${MAX_OWNERSHIP_RETRIES} times by concurrent stale recovery`),
+          'create',
+          `unable to confirm lock ownership (${attempt.lockPath}): repeatedly displaced by concurrent stale recovery`,
+        );
+      }
+      await sleep(attempt.pollMs);
+      continue;
+    }
     const decision = await inspectHeldLock(attempt);
     if (decision.kind === 'wait') await sleep(decision.delayMs);
   }
+}
+
+/**
+ * Ownership confirmation after a successful publish: once no live break marker remains, the lock path
+ * must still carry our owner token. Anything else means a stale recovery removed the file we just
+ * published inside its own window, so we must not enter and re-contend instead.
+ *
+ * Why this is sufficient: a lock file is only ever deleted by (a) its live owner's token-checked
+ * release or (b) a breaker between creating and removing its break marker. A holder can publish only
+ * after the dead file is gone, i.e. after some marker was created; so every breaker able to delete the
+ * holder's file owns a marker created before the holder's marker scan and removed only after its
+ * deletion. Hence either the scan sees that marker (holder waits) or the deletion already happened
+ * (token re-read fails). Once confirmed, no pending deletion can exist, so the lock path is stable
+ * until release and the release CAS race is eliminated by construction.
+ */
+async function confirmLockOwnership(attempt: LockAttempt): Promise<boolean> {
+  await waitForBreakMarkersToClear(attempt);
+  const raw = await readLockFile(attempt);
+  return raw !== undefined && raw.trim() === attempt.owner;
+}
+
+/**
+ * Wait until no live break marker for this lock remains. A holder that just published owes an in-flight
+ * stale recovery its settle window even without a wait budget (`waitMs === 0`), because that recovery
+ * may be about to delete the freshly published file; past the window the holder fails explicitly.
+ */
+async function waitForBreakMarkersToClear(attempt: LockAttempt): Promise<void> {
+  const until = attempt.waitMs > 0 ? attempt.deadline : Date.now() + attempt.settleGraceMs;
+  for (;;) {
+    const blockers = await listLiveBreakMarkers(attempt);
+    if (blockers.length === 0) return;
+    if (Date.now() >= until) {
+      throw lockBusyError(attempt, undefined, `stale-lock recovery is in progress (${blockers.join(', ')})`);
+    }
+    await sleep(attempt.pollMs);
+  }
+}
+
+/**
+ * Break markers (`<lock>.<pid>.<uuid>.stale`) in the lock directory whose breaker PID is still alive.
+ * Markers of dead breakers are ignored and never deleted: their owner can no longer act, and removing
+ * them would race a live breaker's own marker cleanup.
+ */
+async function listLiveBreakMarkers(attempt: LockAttempt): Promise<string[]> {
+  const dir = path.dirname(attempt.lockPath);
+  const prefix = `${path.basename(attempt.lockPath)}.`;
+  let names: string[];
+  try {
+    names = await fsp.readdir(dir);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []; // Directory gone: nothing to protect; the token re-read that follows is the verdict.
+    throw lockIoError(attempt, error, 'read', `failed to list the lock directory (${dir}): ${describeError(error)}`);
+  }
+  const live: string[] = [];
+  for (const name of names) {
+    if (!name.startsWith(prefix) || !name.endsWith(BREAK_MARKER_SUFFIX)) continue;
+    const pid = Number(name.slice(prefix.length, -BREAK_MARKER_SUFFIX.length).split('.')[0]);
+    if (Number.isSafeInteger(pid) && pid > 0 && attempt.isAlive(pid)) live.push(path.join(dir, name));
+  }
+  return live;
 }
 
 /**
@@ -343,7 +436,7 @@ async function inspectHeldLock(attempt: LockAttempt): Promise<LockDecision> {
   const head = raw.trim().split(/\s+/)[0] ?? '';
   if (!/^\d+$/.test(head)) return await inspectUnownedLock(attempt);
   const pid = Number(head);
-  if (Number.isSafeInteger(pid) && pid > 0 && !attempt.isAlive(pid)) return await breakStaleLock(attempt, raw, pid);
+  if (Number.isSafeInteger(pid) && pid > 0 && !attempt.isAlive(pid)) return await breakStaleLock(attempt, pid);
   if (Date.now() >= attempt.deadline) {
     throw lockBusyError(attempt, pid, `lock file is held by pid ${pid} (${attempt.lockPath})`);
   }
@@ -384,12 +477,19 @@ async function statLockFile(attempt: LockAttempt): Promise<number | undefined> {
   }
 }
 
+/** Break marker name for this process: `<lock>.<pid>.<uuid>.stale`, unique per break so concurrent breakers never collide. */
+function breakMarkerPath(lockPath: string): string {
+  return `${lockPath}.${process.pid}.${randomUUID()}${BREAK_MARKER_SUFFIX}`;
+}
+
 /**
- * Break a lock whose recorded PID is confirmed dead. The file is quarantined by rename before it is
- * inspected and deleted, so concurrent stale-lock breakers cannot delete a fresh live lock created
- * right after an unlink; a quarantined file that turned out to be newer/live is restored in place.
+ * Break a lock whose recorded PID was observed dead. A read-then-delete can never be atomic, so instead
+ * of quarantining by rename (which used to carry away a fresh live lock) the breaker holds a break
+ * marker from before the re-examining read until after the deletion: concurrent holders see the marker
+ * and refuse to enter on a lock published meanwhile (see `confirmLockOwnership`). Under the marker the
+ * file is re-read: gone -> retry now; live or not provably dead -> leave it alone and wait.
  */
-async function breakStaleLock(attempt: LockAttempt, observedRaw: string, pid: number): Promise<LockDecision> {
+async function breakStaleLock(attempt: LockAttempt, pid: number): Promise<LockDecision> {
   attempt.staleBreaks += 1;
   if (attempt.staleBreaks > MAX_STALE_BREAK_ATTEMPTS) {
     throw lockIoError(
@@ -399,38 +499,37 @@ async function breakStaleLock(attempt: LockAttempt, observedRaw: string, pid: nu
       `unable to clear stale lock file (${attempt.lockPath}) held by dead pid ${pid}`,
     );
   }
-  const quarantine = `${attempt.lockPath}.${process.pid}.${randomUUID()}.stale`;
+  const marker = breakMarkerPath(attempt.lockPath);
   try {
-    await fsp.rename(attempt.lockPath, quarantine);
+    await fsp.writeFile(marker, `${attempt.owner}\n`, { flag: 'wx', mode: 0o600 });
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return RETRY_NOW;
-    throw lockIoError(attempt, error, 'create', `failed to clear stale lock (${attempt.lockPath}): ${describeError(error)}`);
+    throw lockIoError(attempt, error, 'create', `failed to create stale-lock break marker (${marker}): ${describeError(error)}`);
   }
   try {
-    await restoreIfNotStale(attempt, quarantine, observedRaw);
+    const raw = await readLockFile(attempt);
+    if (raw === undefined) return RETRY_NOW;
+    const head = raw.trim().split(/\s+/)[0] ?? '';
+    const currentPid = /^\d+$/.test(head) ? Number(head) : NaN;
+    if (!(Number.isSafeInteger(currentPid) && currentPid > 0 && !attempt.isAlive(currentPid))) {
+      return { kind: 'wait', delayMs: attempt.pollMs };
+    }
+    await attempt.hooks.beforeStaleRemoval?.(attempt.lockPath, currentPid);
+    try {
+      await fsp.rm(attempt.lockPath, { force: true });
+    } catch (error) {
+      throw lockIoError(attempt, error, 'create', `failed to clear stale lock (${attempt.lockPath}): ${describeError(error)}`);
+    }
   } finally {
-    await fsp.rm(quarantine, { force: true }).catch(() => undefined);
+    await fsp.rm(marker, { force: true }).catch(() => undefined);
   }
   return RETRY_NOW;
 }
 
-/** Put the quarantined lock back when it is no longer the dead-owner content we set out to break. */
-async function restoreIfNotStale(attempt: LockAttempt, quarantine: string, observedRaw: string): Promise<void> {
-  const movedRaw = await fsp.readFile(quarantine, 'utf8');
-  if (movedRaw === observedRaw) return;
-  const movedHead = movedRaw.trim().split(/\s+/)[0] ?? '';
-  const movedPid = /^\d+$/.test(movedHead) ? Number(movedHead) : NaN;
-  const movedIsDead = Number.isSafeInteger(movedPid) && movedPid > 0 && !attempt.isAlive(movedPid);
-  if (movedIsDead) return;
-  // Restore newer live/unproven lock without overwriting any concurrent replacement.
-  try {
-    await fsp.link(quarantine, attempt.lockPath);
-  } catch {
-    await fsp.writeFile(attempt.lockPath, movedRaw, { flag: 'wx', mode: 0o600 }).catch(() => undefined);
-  }
-}
-
-/** Owner-checked release: remove the lock file only while it still carries our owner token. */
+/**
+ * Owner-checked release: remove the lock file only while it still carries our owner token. After
+ * ownership confirmation no other process can delete or replace it while this PID lives (see
+ * `confirmLockOwnership`), so the read/compare/remove sequence has no concurrent deleter.
+ */
 async function releaseLock(attempt: LockAttempt): Promise<void> {
   try {
     const current = await fsp.readFile(attempt.lockPath, 'utf8');
@@ -442,11 +541,17 @@ async function releaseLock(attempt: LockAttempt): Promise<void> {
 
 /**
  * Exclusive cross-process file lock with atomic publish (`temp + fsync + fs.link`, falling back to
- * `wx` when hard links are unsupported), confirmed-dead PID stale recovery, and owner-checked CAS release.
+ * `wx` when hard links are unsupported), marker-guarded confirmed-dead PID stale recovery, post-publish
+ * ownership confirmation, and owner-checked release.
  *
  * Honesty invariants:
- * - Never deletes a lock file whose owner PID is still alive;
+ * - Never deletes a lock file whose owner PID is still alive (a breaker re-confirms the dead PID under
+ *   its break marker right before deleting);
+ * - Never enters a critical section while a stale recovery that may still delete the just-published lock
+ *   file is in flight (post-publish break-marker scan + owner-token re-read, see `confirmLockOwnership`);
+ * - Never leaves a lock file carrying this live PID behind when acquisition fails after publishing;
  * - Never silently deletes an empty/corrupt lock file (preserves it and surfaces `onCorrupt` / `onBusy`);
+ * - Never deletes another process's break marker (dead-PID markers are ignored, not removed);
  * - Never ignores non-`ENOENT` read errors such as `EACCES`.
  */
 export async function withCrossProcessFileLock<T>(
@@ -466,6 +571,7 @@ export async function withCrossProcessFileLock<T>(
     hooks: options,
     deadline: Date.now() + waitMs,
     staleBreaks: 0,
+    ownershipRetries: 0,
   };
 
   await fsp.mkdir(path.dirname(lockPath), { recursive: true });
