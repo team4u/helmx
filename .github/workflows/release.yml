@@ -78,6 +78,9 @@ jobs:
         uses: actions/setup-node@v5
         with:
           node-version: 24.12.0
+          # Why: v5 auto-enables pnpm caching from the root packageManager field and runs `pnpm store path`,
+          # but this job never installs pnpm (no pnpm/action-setup step), so that would fail.
+          package-manager-cache: false
 
       # Only validate the tag shape and assembler existence; npm publish decisions always defer to
       # the build-artifact manifests (packages/payload/dist/package.json,
@@ -581,6 +584,9 @@ jobs:
         uses: actions/setup-node@v5
         with:
           node-version: 24.12.0
+          # Why: v5 auto-enables pnpm caching from the root packageManager field and runs `pnpm store path`,
+          # but this job never installs pnpm (no pnpm/action-setup step), so that would fail.
+          package-manager-cache: false
 
       - name: Assemble release notes
         env:
