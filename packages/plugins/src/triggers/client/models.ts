@@ -6,7 +6,6 @@
  * contracts; run history is projected directly from live store conversations
  * tagged `cron:<id>` / `webhook:<id>` (zero double-writing in plugin docs).
  */
-import type { KeyboardEvent } from 'react'
 import type { ConversationSummary } from '@helmx/protocol/browser'
 import { DEFAULT_HELMX_LOCALE, resolveLocalizedText, type HelmxLocale } from '@helmx/plugin-client'
 import {
@@ -154,28 +153,31 @@ export function asAlertingRunStatus(status: TriggerRunHealth['status']): Alertin
   return status === 'error' || status === 'blocked' || status === 'working' ? status : undefined
 }
 
-/** 可选中表格行的属性（点击 / Enter / Space 选中；`key` 由调用方显式设置）。 */
-export function selectableRowProps(
-  id: string,
-  selectedId: string | undefined,
-  onSelect: (id: string) => void,
-): {
-  className: string
-  tabIndex: 0
-  onClick: () => void
-  onKeyDown: (event: KeyboardEvent<HTMLElement>) => void
-} {
-  return {
-    className: selectedId === id ? 'tg-row is-selected' : 'tg-row',
-    tabIndex: 0,
-    onClick: () => onSelect(id),
-    onKeyDown: (event) => {
-      if (event.key === 'Enter' || event.key === ' ') {
-        event.preventDefault()
-        onSelect(id)
-      }
-    },
-  }
+export type TriggersManagerTab = 'cron' | 'webhook'
+
+/** Filter cron jobs by id, schedule, command text, description, or last error. */
+export function filterCronJobs(jobs: ReadonlyArray<CronJobRow>, query: string): CronJobRow[] {
+  const q = query.trim().toLowerCase()
+  if (q === '') return jobs.slice()
+  return jobs.filter(
+    (job) =>
+      job.id.toLowerCase().includes(q) ||
+      job.schedule.toLowerCase().includes(q) ||
+      job.text.toLowerCase().includes(q) ||
+      (job.description?.toLowerCase().includes(q) ?? false) ||
+      (job.lastError?.toLowerCase().includes(q) ?? false),
+  )
+}
+
+/** Filter webhooks by id or description. */
+export function filterWebhooks(hooks: ReadonlyArray<WebhookRow>, query: string): WebhookRow[] {
+  const q = query.trim().toLowerCase()
+  if (q === '') return hooks.slice()
+  return hooks.filter(
+    (hook) =>
+      hook.id.toLowerCase().includes(q) ||
+      (hook.description?.toLowerCase().includes(q) ?? false),
+  )
 }
 
 /** Localized accessible label for a conversation status light. */

@@ -30,11 +30,15 @@ export const TRIGGERS_COL_ACTIONS: LocalizedText = { en: 'Actions', 'zh-CN': '�
 export const TRIGGERS_COL_DESCRIPTION: LocalizedText = { en: 'Description', 'zh-CN': '描述' }
 export const TRIGGERS_COL_CREATED: LocalizedText = { en: 'Created', 'zh-CN': '创建时间' }
 
-/** Loading and empty states. */
+/** Loading, search, and empty states. */
 export const TRIGGERS_CRON_LOADING: LocalizedText = { en: 'Loading cron jobs…', 'zh-CN': 'Cron 任务读取中...' }
 export const TRIGGERS_WEBHOOK_LOADING: LocalizedText = { en: 'Loading webhooks…', 'zh-CN': 'Webhook 端点读取中...' }
 export const TRIGGERS_SETTINGS_LOADING: LocalizedText = { en: 'Loading trigger state…', 'zh-CN': '触发器状态读取中...' }
-export const TRIGGERS_TABLE_EMPTY: LocalizedText = { en: 'No data', 'zh-CN': '暂无数据' }
+export const TRIGGERS_CRON_EMPTY: LocalizedText = { en: 'No cron jobs yet', 'zh-CN': '暂无 Cron 定时任务' }
+export const TRIGGERS_WEBHOOK_EMPTY: LocalizedText = { en: 'No webhook endpoints yet', 'zh-CN': '暂无 Webhook 端点' }
+export const TRIGGERS_SEARCH_PLACEHOLDER: LocalizedText = { en: 'Filter triggers…', 'zh-CN': '筛选触发器...' }
+export const TRIGGERS_FILTER_EMPTY: LocalizedText = { en: 'No matching triggers', 'zh-CN': '没有匹配的触发器' }
+export const TRIGGERS_RESET_FILTERS: LocalizedText = { en: 'Reset filters', 'zh-CN': '重置筛选' }
 
 /** Enabled / disabled badges and catch-up switch values. */
 export const TRIGGERS_ENABLED: LocalizedText = { en: 'Enabled', 'zh-CN': '启用' }

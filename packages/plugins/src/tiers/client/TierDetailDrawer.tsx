@@ -209,22 +209,19 @@ export function TierDetailDrawer({
             {mode === 'create' ? (
               <div className="tiers-form-head-row">
                 <Field label={t(C.fieldId)} required className="tiers-head-id-field">
-                  <div className="tiers-id-wrap">
-                    <span className="mono tiers-id-prefix">tier/</span>
-                    <Input
-                      type="text"
-                      mono
-                      className="tiers-id-input"
-                      value={draft.id}
-                      disabled={busy}
-                      placeholder={t(C.fieldIdPlaceholder)}
-                      onChange={(e) => onChange({ id: e.target.value })}
-                    />
-                  </div>
+                  <Input
+                    type="text"
+                    prefix="tier/"
+                    mono
+                    value={draft.id}
+                    disabled={busy}
+                    placeholder={t(C.fieldIdPlaceholder)}
+                    onChange={(e) => onChange({ id: e.target.value })}
+                  />
                 </Field>
                 <Field label={t(C.tierKindAria)} htmlFor={false} className="tiers-head-mode-field">
                   <SegmentedControl
-                    size="sm"
+                    size="md"
                     aria-label={`${t(C.tierKindAria)}${draft.id.trim() ? ` · tier/${draft.id.trim()}` : ''}`}
                     value={draft.kind}
                     disabled={busy}
@@ -258,8 +255,10 @@ export function TierDetailDrawer({
             )}
 
             {!isOrch ? (
-              <Field label={t(C.fieldModel)} htmlFor={false} required>
+              <Field label={t(C.fieldModel)} required>
                 <ModelPickerControl
+                  variant="field"
+                  size="md"
                   buttonAriaLabel={`${t(C.fieldModel)}${draft.id.trim() ? ` · tier/${draft.id.trim()}` : ''}`}
                   effectiveModel={draft.model || undefined}
                   activeThinkingLevel={displayThinkingLevel}
@@ -267,7 +266,6 @@ export function TierDetailDrawer({
                   buttonTitle={buttonTitle}
                   resetLabel={t(C.clearModel)}
                   resetTitle={t(C.clearModel)}
-                  popoverSide="bottom"
                   enableShortcut={false}
                   allowTiers={false}
                   disabled={busy}
@@ -279,8 +277,10 @@ export function TierDetailDrawer({
               </Field>
             ) : (
               <div className="tiers-orchestrator-fields">
-                <Field label={t(C.fieldPlannerModel)} htmlFor={false} required>
+                <Field label={t(C.fieldPlannerModel)} required>
                   <ModelPickerControl
+                    variant="field"
+                    size="md"
                     buttonAriaLabel={`${t(C.fieldPlannerModel)}${draft.id.trim() ? ` · tier/${draft.id.trim()}` : ''}`}
                     effectiveModel={draft.model || undefined}
                     activeThinkingLevel={displayThinkingLevel}
@@ -288,7 +288,6 @@ export function TierDetailDrawer({
                     buttonTitle={buttonTitle}
                     resetLabel={t(C.clearModel)}
                     resetTitle={t(C.clearModel)}
-                    popoverSide="bottom"
                     enableShortcut={false}
                     allowTiers={false}
                     disabled={busy}
@@ -301,8 +300,10 @@ export function TierDetailDrawer({
                 <div className="tiers-orch-connector" aria-hidden="true">
                   <HelmxIcon name="arrow-down" size={12} />
                 </div>
-                <Field label={t(C.fieldExecutorModel)} htmlFor={false} required>
+                <Field label={t(C.fieldExecutorModel)} required>
                   <ModelPickerControl
+                    variant="field"
+                    size="md"
                     buttonAriaLabel={`${t(C.fieldExecutorModel)}${draft.id.trim() ? ` · tier/${draft.id.trim()}` : ''}`}
                     effectiveModel={draft.executorModel || undefined}
                     activeThinkingLevel={displayExecThinkingLevel}
@@ -310,7 +311,6 @@ export function TierDetailDrawer({
                     buttonTitle={execButtonTitle}
                     resetLabel={t(C.clearModel)}
                     resetTitle={t(C.clearModel)}
-                    popoverSide="bottom"
                     enableShortcut={false}
                     allowTiers={false}
                     disabled={busy}

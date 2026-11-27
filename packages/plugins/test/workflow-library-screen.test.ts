@@ -148,7 +148,7 @@ function setControlledValue(input: HTMLInputElement, value: string): void {
   })
 }
 
-test('工作流库 Screen：CardGrid + SelectCard 渲染元数据诊断；点击回写 wf；深链 q 恢复搜索', { timeout: 60_000 }, async () => {
+test('工作流库 Screen：List + ListRow 渲染元数据诊断；点击回写 wf；深链 q 恢复搜索', { timeout: 60_000 }, async () => {
   const h = createWorkflowHostHarness({
     conversationId: 1,
     conversations: [],
@@ -159,10 +159,11 @@ test('工作流库 Screen：CardGrid + SelectCard 渲染元数据诊断；点击
   const ui = h.mountNode(e(WorkflowLibraryScreen, props))
   try {
     await act(async () => {})
-    const cards = [...ui.container.querySelectorAll('article.helmx-select-card')] as HTMLElement[]
-    const triggers = [...ui.container.querySelectorAll('button.helmx-select-card-trigger')] as HTMLButtonElement[]
-    assert.equal(cards.length, 3, '所有卡片复用 SelectCard 容器')
-    assert.equal(triggers.length, 3, '每张卡片具备独立原生 button 主触发器')
+    const rows = [...ui.container.querySelectorAll('.helmx-list-row[data-workflow-name]')] as HTMLElement[]
+    const triggers = [...ui.container.querySelectorAll('button.helmx-list-row-trigger')] as HTMLButtonElement[]
+    assert.equal(rows.length, 3, '所有条目复用 ListRow 容器')
+    assert.equal(triggers.length, 3, '每行具备独立原生 button 主触发器')
+    assert.ok(ui.container.querySelector('.screen-toolbar-bar .search-box-toolbar.search-box-sm') !== null, '使用统一 28px 工具栏搜索框')
     assert.match(ui.container.textContent!, /Workflow Library/)
     assert.match(ui.container.textContent!, /发布流程/)
     assert.match(ui.container.textContent!, /Metadata error: meta\.name is required/)
@@ -176,25 +177,25 @@ test('工作流库 Screen：CardGrid + SelectCard 渲染元数据诊断；点击
       '从列表点选工作流必须传 { push: true }，使移动端后退可关抽屉',
     )
 
-    // 悬空失效 wf 参数（列表已加载但无该条目）：再点真实卡片仍应走 push
+    // 悬空失效 wf 参数（列表已加载但无该条目）：再点真实条目仍应走 push
     const staleProps = makeScreenProps({ wf: 'deleted-wf' })
     ui.rerender(e(WorkflowLibraryScreen, staleProps))
     await act(async () => {})
-    const staleTriggers = [...ui.container.querySelectorAll('button.helmx-select-card-trigger')] as HTMLButtonElement[]
+    const staleTriggers = [...ui.container.querySelectorAll('button.helmx-list-row-trigger')] as HTMLButtonElement[]
     await act(async () => { staleTriggers[0]!.click() })
     assert.deepEqual(
       staleProps.setParamsRecords.at(-1),
       { patch: { wf: 'release' }, options: { push: true } },
     )
 
-    // 深链 q 参数恢复搜索框并过滤卡片
+    // 深链 q 参数恢复搜索框并过滤列表行
     const qProps = makeScreenProps({ q: 'audit' })
     ui.rerender(e(WorkflowLibraryScreen, qProps))
     await act(async () => {})
     const search = ui.container.querySelector('input[aria-label="Search workflow library"]') as HTMLInputElement | null
     assert.ok(search !== null)
     assert.equal(search.value, 'audit')
-    assert.equal(ui.container.querySelectorAll('article.helmx-select-card').length, 1)
+    assert.equal(ui.container.querySelectorAll('.helmx-list-row[data-workflow-name]').length, 1)
   } finally {
     ui.unmount()
   }

@@ -13,6 +13,8 @@ import {
   Callout,
   EmptyState,
   HelmxIcon,
+  List,
+  ListRow,
   LoadingState,
   Stack,
   resolveLocalizedText,
@@ -162,7 +164,7 @@ export function ChangesWorkbenchPanel(props: Partial<WorkbenchPanelProps>): Reac
         <Callout tone="err">
           <Stack gap="xs" align="start">
             <div className="break-word">{error}</div>
-            <Button size="xs" icon="rotate-cw" onClick={() => setRefreshSeq((n) => n + 1)}>
+            <Button variant="secondary" size="xs" icon="rotate-cw" onClick={() => setRefreshSeq((n) => n + 1)}>
               {t(CHG_COPY.retry)}
             </Button>
           </Stack>
@@ -197,6 +199,7 @@ export function ChangesWorkbenchPanel(props: Partial<WorkbenchPanelProps>): Reac
               action={
                 workspace.commits.length > 0 ? (
                   <Button
+                    variant="secondary"
                     size="xs"
                     icon="git-commit"
                     onClick={() =>
@@ -267,24 +270,30 @@ export function ChangesWorkbenchPanel(props: Partial<WorkbenchPanelProps>): Reac
             <span className="chg-wb-title">{t(CHG_COPY.workbenchWorktreesTitle)}</span>
             <Badge tone="neutral" className="tabular-nums">{worktrees.length}</Badge>
           </div>
-          <div className="chg-wb-worktrees">
+          <List density="compact" label={t(CHG_COPY.workbenchWorktreesTitle)}>
             {worktrees.map((wt) => (
-              <div key={wt.id} className="chg-wb-wt-row">
-                <div className="chg-wb-wt-meta">
-                  <span className="mono chg-wb-wt-branch" title={`${wt.branch} · ${wt.path}`}>{wt.branch}</span>
-                  <Badge tone="neutral" className="mono">{wt.nodeId}</Badge>
-                </div>
-                <Button
-                  size="xs"
-                  variant="secondary"
-                  icon="file-diff"
-                  onClick={() => ctx.openSplitScreen(buildChangesScreenTarget({ wt: wt.id }))}
-                >
-                  {t(CHG_COPY.viewChanges)}
-                </Button>
-              </div>
+              <ListRow
+                key={wt.id}
+                interactive={false}
+                title={
+                  <span className="mono" title={`${wt.branch} · ${wt.path}`}>
+                    {wt.branch}
+                  </span>
+                }
+                meta={<Badge tone="neutral" className="mono">{wt.nodeId}</Badge>}
+                trailing={
+                  <Button
+                    size="xs"
+                    variant="secondary"
+                    icon="file-diff"
+                    onClick={() => ctx.openSplitScreen(buildChangesScreenTarget({ wt: wt.id }))}
+                  >
+                    {t(CHG_COPY.viewChanges)}
+                  </Button>
+                }
+              />
             ))}
-          </div>
+          </List>
         </div>
       ) : null}
     </div>

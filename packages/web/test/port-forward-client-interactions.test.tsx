@@ -339,13 +339,13 @@ describe('port-forward-client-interactions', () => {
       assert.match(text, /EADDRINUSE: already in use/)
       assert.match(text, /2 active/)
 
-      const cards = host.querySelectorAll('.helmx-select-card')
-      assert.equal(cards.length, 5)
+      const rows = host.querySelectorAll('.helmx-list-row[data-rule-id]')
+      assert.equal(rows.length, 5)
 
       const tones = [...host.querySelectorAll('.helmx-status-light')].map((el) => el.getAttribute('data-tone'))
       assert.deepEqual(tones, ['working', 'done', 'blocked', 'failed', 'idle'])
 
-      // Pill tabs with inline counts
+      // Pill tabs with inline TabCount
       const tabs = [...host.querySelectorAll<HTMLButtonElement>('[role="tab"]')]
       assert.equal(tabs.length, 4)
       assert.deepEqual(
@@ -358,9 +358,9 @@ describe('port-forward-client-interactions', () => {
       await act(async () => {
         errorTab.click()
       })
-      const filteredCards = host.querySelectorAll('.helmx-select-card')
-      assert.equal(filteredCards.length, 1)
-      assert.match(filteredCards[0]?.textContent ?? '', /broken-port/)
+      const filteredRows = host.querySelectorAll('.helmx-list-row[data-rule-id]')
+      assert.equal(filteredRows.length, 1)
+      assert.match(filteredRows[0]?.textContent ?? '', /broken-port/)
 
       // Back to All + SearchBox query + unmatched Reset filters
       const allTab = tabs.find((tab) => tab.textContent?.includes('All'))
@@ -368,12 +368,12 @@ describe('port-forward-client-interactions', () => {
       await act(async () => {
         allTab.click()
       })
-      const searchInput = host.querySelector<HTMLInputElement>('.search-box input')
+      const searchInput = host.querySelector<HTMLInputElement>('.search-box-toolbar input')
       assert.ok(searchInput !== null)
       await act(async () => {
         setInputValue(searchInput, 'zzz-no-match')
       })
-      assert.equal(host.querySelectorAll('.helmx-select-card').length, 0)
+      assert.equal(host.querySelectorAll('.helmx-list-row[data-rule-id]').length, 0)
       const resetBtn = [...host.querySelectorAll('button')].find((b) =>
         b.textContent?.includes('Reset filters'),
       )
@@ -381,16 +381,16 @@ describe('port-forward-client-interactions', () => {
       await act(async () => {
         resetBtn.click()
       })
-      assert.equal(host.querySelectorAll('.helmx-select-card').length, 5)
+      assert.equal(host.querySelectorAll('.helmx-list-row[data-rule-id]').length, 5)
 
       await act(async () => {
         setInputValue(searchInput, '18000')
       })
-      assert.equal(host.querySelectorAll('.helmx-select-card').length, 1)
-      assert.match(host.querySelector('.helmx-select-card')?.textContent ?? '', /vllm-api/)
+      assert.equal(host.querySelectorAll('.helmx-list-row[data-rule-id]').length, 1)
+      assert.match(host.querySelector('.helmx-list-row[data-rule-id]')?.textContent ?? '', /vllm-api/)
 
       // Switch toggle calls stop action without opening drawer
-      const switchBtn = host.querySelector<HTMLButtonElement>('.helmx-select-card [role="switch"]')
+      const switchBtn = host.querySelector<HTMLButtonElement>('.helmx-list-row [role="switch"]')
       assert.ok(switchBtn !== null)
       await act(async () => {
         switchBtn.click()
@@ -422,11 +422,11 @@ describe('port-forward-client-interactions', () => {
       })
       assert.deepEqual(spy.actionCalls[1], { actionId: 'pause_runtime', input: {} })
 
-      // Clicking card primary trigger requests edit drawer via useScreenDrawer ({ push: true } from closed)
-      const cardTrigger = host.querySelector<HTMLButtonElement>('.helmx-select-card-trigger')
-      assert.ok(cardTrigger !== null)
+      // Clicking row primary trigger requests edit drawer via useScreenDrawer ({ push: true } from closed)
+      const rowTrigger = host.querySelector<HTMLButtonElement>('.helmx-list-row-trigger')
+      assert.ok(rowTrigger !== null)
       await act(async () => {
-        cardTrigger.click()
+        rowTrigger.click()
       })
       assert.deepEqual(paramPatches.at(-1), { patch: { edit: 'r-working', create: undefined }, options: { push: true } })
       await renderPF()

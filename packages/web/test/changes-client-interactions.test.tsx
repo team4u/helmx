@@ -482,9 +482,10 @@ describe('changes-client-interactions', { timeout: 60_000 }, () => {
         assert.equal(text.includes(forbidden), false, `Must omit write action UI: ${forbidden}`)
       }
 
-      // `<Screen actions>` provides Refresh button and triggers manual reload
+      // `<Screen actions>` provides Refresh button and `<Screen toolbar>` mounts unified ScreenToolbar
       const refreshBtn = ui.container.querySelector('.screen-header button[aria-label="Refresh"]') as HTMLButtonElement | null
       assert.ok(refreshBtn !== null, 'Refresh action must mount inside Screen header actions')
+      assert.ok(ui.container.querySelector('.screen-toolbar-bar .chg-toolbar') !== null, 'Toolbar must mount via unified <Screen toolbar>')
       const beforeRefreshCount = summaryRefreshCount
       await act(async () => { refreshBtn.click() })
       await act(async () => { await flushMacrotask(0) })
@@ -651,7 +652,8 @@ describe('changes-client-interactions', { timeout: 60_000 }, () => {
       assert.match(h.logs.splitScreens[1]!, /conv=1/)
       assert.match(h.logs.splitScreens[1]!, /file=src%2Fapp\.ts/)
 
-      // Click worktree `View changes` row button -> omits parent param
+      // Click worktree `View changes` row button inside SDK compact List -> omits parent param
+      assert.ok(wb.container.querySelector('.helmx-list-compact .helmx-list-row') !== null, 'Worktrees render inside SDK compact List')
       await act(async () => { buttonByText(wb.container, 'View changes').click() })
       assert.equal(h.logs.splitScreens.length, 3)
       assert.equal(h.logs.splitScreens[2], 'screen:builtin:changes/inspector?wt=local%3A%2Frepo%2F.helmx-worktrees%2Fwt-1')

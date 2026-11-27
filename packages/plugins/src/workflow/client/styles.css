@@ -559,66 +559,19 @@
 }
 
 /* ---- Workflow Library screen & drawer ---- */
-.wf-lib-title {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.wf-lib-grid {
-  margin-top: var(--space-3);
-}
-
-.wf-lib-card-head {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-  max-width: 100%;
-}
-
-.wf-lib-card-name {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 14px;
-}
-
-.wf-lib-card-desc {
-  font-size: 13px;
-  color: var(--fg-secondary);
-  line-height: 1.45;
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-
-.wf-lib-card-desc-empty {
-  color: var(--fg-muted);
-  font-style: italic;
-}
-
-.wf-lib-card-warn-text {
+.wf-lib-count {
   font-size: 12px;
+  white-space: nowrap;
+}
+
+.wf-lib-row-warn {
   color: var(--warn);
-  min-width: 0;
-  overflow-wrap: anywhere;
 }
 
-.wf-lib-card-phases {
-  font-size: 12px;
+.wf-lib-row-facts {
+  font-size: 11.5px;
   color: var(--fg-muted);
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.wf-lib-card-facts {
-  font-size: 12px;
-  color: var(--fg-muted);
-  min-width: 0;
-  overflow-wrap: anywhere;
 }
 
 .wf-drawer-section {

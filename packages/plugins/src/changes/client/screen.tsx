@@ -15,6 +15,7 @@ import {
   EmptyState,
   LoadingState,
   Screen,
+  ScreenToolbar,
   SearchBox,
   SegmentedControl,
   Select,
@@ -576,7 +577,7 @@ export function ChangesInspectorScreen(props: ChangesInspectorScreenProps): Reac
   const refreshAction = (
     <Button
       size="sm"
-      variant="ghost"
+      variant="secondary"
       icon="rotate-cw"
       pending={summaryLoading}
       title={t(CHG_COPY.refresh)}
@@ -587,15 +588,78 @@ export function ChangesInspectorScreen(props: ChangesInspectorScreenProps): Reac
     </Button>
   )
 
+  const hasStatusBadges =
+    (currentWorktree !== undefined && currentWorktree.exists) ||
+    (currentWorkspace !== undefined && currentWorkspace.isGitRepo)
+
   return (
     <Screen
       layout="full-bleed"
       className={screenClass}
       title={t(CHG_COPY.screenTitle)}
       actions={refreshAction}
-    >
-      <div className="chg-topbar">
-        <div className="chg-topbar-left">
+      toolbar={
+        <ScreenToolbar
+          className={hasStageContent && isNarrowDiff ? 'chg-toolbar chg-toolbar-narrow-diff' : 'chg-toolbar'}
+          label={t(CHG_COPY.screenTitle)}
+          actions={
+            hasStatusBadges ? (
+              <>
+                {currentWorktree !== undefined && currentWorktree.exists ? (
+                  <>
+                    <Badge tone="neutral" icon="git-branch" className="mono">
+                      {currentWorktree.currentBranch ?? currentWorktree.record.branch}
+                    </Badge>
+                    {currentWorktree.branchChanged === true ? (
+                      <Badge tone="warn">{t(CHG_COPY.branchMismatch)}</Badge>
+                    ) : null}
+                    {currentWorktree.commitsAhead !== undefined && currentWorktree.commitsAhead > 0 ? (
+                      <Badge tone="accent">{chgCommitsAheadBadge(currentWorktree.commitsAhead, locale)}</Badge>
+                    ) : null}
+                    {currentWorktree.unmergedCommits !== undefined && currentWorktree.unmergedCommits > 0 ? (
+                      <Badge tone="warn">{chgUnmergedBadge(currentWorktree.unmergedCommits, locale)}</Badge>
+                    ) : null}
+                    {currentWorktree.record.hold !== undefined ? (
+                      <Badge tone="neutral" icon="lock" title={currentWorktree.record.hold.label}>
+                        {t(CHG_COPY.heldBadge)}
+                      </Badge>
+                    ) : null}
+                    <Badge tone="neutral" className="mono tabular-nums">
+                      {chgSummaryText(
+                        currentWorktree.summary.totalFiles,
+                        currentWorktree.summary.additions,
+                        currentWorktree.summary.deletions,
+                        locale,
+                      )}
+                    </Badge>
+                  </>
+                ) : null}
+
+                {currentWorkspace !== undefined && currentWorkspace.isGitRepo ? (
+                  <>
+                    <Badge tone="neutral" icon="git-branch" className="mono">
+                      {currentWorkspace.currentBranch}
+                    </Badge>
+                    {currentWorkspace.commitsAheadOfUpstream !== undefined && currentWorkspace.commitsAheadOfUpstream > 0 ? (
+                      <Badge tone="accent">{chgUnpushedBadge(currentWorkspace.commitsAheadOfUpstream, locale)}</Badge>
+                    ) : null}
+                    <Badge tone="neutral" className="mono tabular-nums">
+                      {chgSummaryText(
+                        currentWorkspace.summary.totalFiles,
+                        currentWorkspace.summary.additions,
+                        currentWorkspace.summary.deletions,
+                        locale,
+                      )}
+                    </Badge>
+                    {currentWorkspace.summary.untrackedCount > 0 ? (
+                      <Badge tone="neutral">{chgUntrackedBadge(currentWorkspace.summary.untrackedCount, locale)}</Badge>
+                    ) : null}
+                  </>
+                ) : null}
+              </>
+            ) : undefined
+          }
+        >
           <div className="chg-target-select-wrap">
             <Select
               size="sm"
@@ -676,63 +740,9 @@ export function ChangesInspectorScreen(props: ChangesInspectorScreenProps): Reac
               />
             </div>
           ) : null}
-        </div>
-
-        <div className="chg-topbar-right">
-          {currentWorktree !== undefined && currentWorktree.exists ? (
-            <>
-              <Badge tone="neutral" icon="git-branch" className="mono">
-                {currentWorktree.currentBranch ?? currentWorktree.record.branch}
-              </Badge>
-              {currentWorktree.branchChanged === true ? (
-                <Badge tone="warn">{t(CHG_COPY.branchMismatch)}</Badge>
-              ) : null}
-              {currentWorktree.commitsAhead !== undefined && currentWorktree.commitsAhead > 0 ? (
-                <Badge tone="accent">{chgCommitsAheadBadge(currentWorktree.commitsAhead, locale)}</Badge>
-              ) : null}
-              {currentWorktree.unmergedCommits !== undefined && currentWorktree.unmergedCommits > 0 ? (
-                <Badge tone="warn">{chgUnmergedBadge(currentWorktree.unmergedCommits, locale)}</Badge>
-              ) : null}
-              {currentWorktree.record.hold !== undefined ? (
-                <Badge tone="neutral" icon="lock" title={currentWorktree.record.hold.label}>
-                  {t(CHG_COPY.heldBadge)}
-                </Badge>
-              ) : null}
-              <Badge tone="neutral" className="mono tabular-nums">
-                {chgSummaryText(
-                  currentWorktree.summary.totalFiles,
-                  currentWorktree.summary.additions,
-                  currentWorktree.summary.deletions,
-                  locale,
-                )}
-              </Badge>
-            </>
-          ) : null}
-
-          {currentWorkspace !== undefined && currentWorkspace.isGitRepo ? (
-            <>
-              <Badge tone="neutral" icon="git-branch" className="mono">
-                {currentWorkspace.currentBranch}
-              </Badge>
-              {currentWorkspace.commitsAheadOfUpstream !== undefined && currentWorkspace.commitsAheadOfUpstream > 0 ? (
-                <Badge tone="accent">{chgUnpushedBadge(currentWorkspace.commitsAheadOfUpstream, locale)}</Badge>
-              ) : null}
-              <Badge tone="neutral" className="mono tabular-nums">
-                {chgSummaryText(
-                  currentWorkspace.summary.totalFiles,
-                  currentWorkspace.summary.additions,
-                  currentWorkspace.summary.deletions,
-                  locale,
-                )}
-              </Badge>
-              {currentWorkspace.summary.untrackedCount > 0 ? (
-                <Badge tone="neutral">{chgUntrackedBadge(currentWorkspace.summary.untrackedCount, locale)}</Badge>
-              ) : null}
-            </>
-          ) : null}
-        </div>
-      </div>
-
+        </ScreenToolbar>
+      }
+    >
       {activeSelection === undefined ? (
         <div className="chg-stage-state">
           <EmptyState icon="file-diff" title={t(CHG_COPY.noTargetTitle)} hint={t(CHG_COPY.noTargetHint)} />
@@ -746,7 +756,7 @@ export function ChangesInspectorScreen(props: ChangesInspectorScreenProps): Reac
           <Callout tone="err">
             <Stack gap="xs" align="start">
               <div className="break-word">{summaryError}</div>
-              <Button size="xs" icon="rotate-cw" onClick={triggerManualRefresh}>
+              <Button variant="secondary" size="xs" icon="rotate-cw" onClick={triggerManualRefresh}>
                 {t(CHG_COPY.retry)}
               </Button>
             </Stack>
@@ -785,6 +795,7 @@ export function ChangesInspectorScreen(props: ChangesInspectorScreenProps): Reac
             {showSearch ? (
               <div className="chg-sidebar-search">
                 <SearchBox
+                  size="sm"
                   value={searchQuery}
                   onChange={setSearchQuery}
                   placeholder={t(CHG_COPY.searchFiles)}

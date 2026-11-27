@@ -325,7 +325,8 @@ function WorkflowRunCard(props: WorkflowRunCardProps): ReactNode {
                       }}
                     />
                     <Button
-                      size="xs"
+                      variant="primary"
+                      size="sm"
                       icon="play"
                       pending={actionCtl.pendingKey === `replay:${displayRun.id}`}
                       disabled={actionCtl.pending}

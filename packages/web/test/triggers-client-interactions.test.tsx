@@ -1,8 +1,9 @@
 /**
  * builtin:triggers 插件 client 组件测试（真实编译产物 + 共享宿主 SDK + DOM 事件）。
  *
- * 覆盖：manager screen（cron / webhook 管理表、行动作 trigger/delete、空态与
- * 加载态、secret 提示文案）与 settingsPanel（计数、CLI 引导、管理入口导航）。
+ * 覆盖：manager screen（单栏 segmented 工具栏 + 搜索筛选 + cron / webhook Hairline Roster List、
+ * 行动作 trigger/delete、空态与加载态、secret 提示文案、右侧 DetailDrawer + 实时运行记录）
+ * 与 settingsPanel（计数、CLI 引导、管理入口导航）。
  */
 import './helpers/register-happy-dom.js'
 import assert from 'node:assert/strict'
@@ -23,9 +24,23 @@ interface Components {
   TriggersSettingsPanel: () => React.ReactElement
 }
 
+function setInputValue(input: HTMLInputElement, value: string): void {
+  const proto = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')
+  proto?.set?.call(input, value)
+  input.dispatchEvent(new Event('input', { bubbles: true }))
+  input.dispatchEvent(new Event('change', { bubbles: true }))
+}
+
+function findTab(container: HTMLElement, text: string): HTMLButtonElement {
+  const tab = Array.from(container.querySelectorAll<HTMLButtonElement>('[role="tab"]')).find((el) =>
+    (el.textContent ?? '').includes(text),
+  )
+  assert.ok(tab !== undefined, `expected tab containing "${text}"`)
+  return tab
+}
+
 let components: Components
 describe("triggers-client-interactions", () => {
-
 
   before(async () => {
     mountSharedPluginNamespaces()
@@ -159,27 +174,45 @@ describe("triggers-client-interactions", () => {
     setBuiltinClientStub({ docs: { crons: CRONS_DOC, webhooks: WEBHOOKS_DOC }, conversations: SAMPLE_RUNS })
   })
 
-  test('manager screen：cron 表渲染行、状态徽章与错误列', { timeout: 60_000 }, async () => {
+  test('manager screen：单栏工具栏（SegmentedControl + TabCount + SearchBox）与 Cron 名册行渲染', { timeout: 60_000 }, async () => {
     const spy = makeSpyCtx()
     const { host, unmount } = await mount(
       spy,
       e(components.TriggersManagerScreen, { pluginId: 'builtin:triggers', screenId: 'manager', isSplit: false, params: {}, setParams: () => {} }),
     )
     try {
+      assert.ok(host.querySelector('.screen-toolbar-bar .screen-toolbar') !== null, '渲染统一单栏工具栏')
+      assert.ok(host.querySelector('.helmx-table') === null, '淘汰旧 8 列 / 4 列大表')
       assert.match(host.textContent ?? '', /Triggers/, '标题')
-      assert.match(host.textContent ?? '', /Cron jobs/, 'cron 区块')
+      assert.match(host.textContent ?? '', /Cron jobs/, 'cron tab')
+      assert.match(host.textContent ?? '', /Webhook endpoints/, 'webhook tab')
+      const tabCounts = Array.from(host.querySelectorAll('.helmx-tab-count')).map((el) => el.textContent?.trim())
+      assert.deepEqual(tabCounts, ['2', '1'], 'TabCount 展示实时条数')
+      assert.equal(host.querySelectorAll('.helmx-list-row[data-trigger-kind="cron"]').length, 2)
       assert.match(host.textContent ?? '', /daily-report/, 'cron 行 id')
       assert.match(host.textContent ?? '', /生成日报/, 'cron 指令')
       assert.match(host.textContent ?? '', /Enabled/, '启用徽章')
       assert.match(host.textContent ?? '', /Disabled/, '停用徽章')
       assert.match(host.textContent ?? '', /投递失败：目标会话不存在/, '最近错误')
-      assert.match(host.textContent ?? '', /Cron 2 · Webhook 1/, '统计')
+
+      // 搜索框筛选
+      const searchInput = host.querySelector<HTMLInputElement>('.search-box-toolbar input')
+      assert.ok(searchInput !== null)
+      await act(async () => {
+        setInputValue(searchInput, 'broken')
+      })
+      assert.equal(host.querySelectorAll('.helmx-list-row[data-trigger-kind="cron"]').length, 1)
+      assert.ok(host.querySelector('[data-trigger-id="broken"]') !== null)
+      await act(async () => {
+        setInputValue(searchInput, '')
+      })
+      assert.equal(host.querySelectorAll('.helmx-list-row[data-trigger-kind="cron"]').length, 2)
     } finally {
       unmount()
     }
   })
 
-  test('manager screen：cron 行动作立即触发 / 删除；在途时统一禁用全部行按钮', { timeout: 60_000 }, async () => {
+  test('manager screen：cron / webhook 行动作立即触发与删除；在途时统一禁用全部行按钮', { timeout: 60_000 }, async () => {
     const spy = makeSpyCtx()
     let release: (() => void) | undefined
     spy.callAction = async (actionId, input) => {
@@ -194,37 +227,36 @@ describe("triggers-client-interactions", () => {
       e(components.TriggersManagerScreen, { pluginId: 'builtin:triggers', screenId: 'manager', isSplit: false, params: {}, setParams: () => {} }),
     )
     try {
-      const trigger = [...host.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent?.includes('Trigger now'))
-      assert.ok(trigger, '立即触发按钮')
+      const trigger = host.querySelector<HTMLButtonElement>('[data-trigger-id="daily-report"] .helmx-list-row-trailing button')
+      assert.ok(trigger !== null && trigger.textContent?.includes('Trigger now'), '立即触发按钮')
       await act(async () => {
-        trigger!.click()
+        trigger.click()
       })
       assert.deepEqual(spy.actionCalls[0], { actionId: 'cron_trigger', input: { id: 'daily-report' } }, '触发 cron_trigger')
-      // 在途期间：同一守卫的全部行按钮统一 disabled，且仅当前触发按钮带 aria-busy="true"
-      const allRowButtons = [...host.querySelectorAll<HTMLButtonElement>('button')].filter(
-        (b) => b.textContent?.includes('Trigger now') || b.textContent?.includes('Delete'),
+      const cronRowButtons = Array.from(
+        host.querySelectorAll<HTMLButtonElement>('.helmx-list-row .helmx-list-row-trailing button, .helmx-list-row .helmx-list-row-actions button'),
       )
-      assert.equal(allRowButtons.length, 5, 'cron 2行×2 + webhook 1行×1 = 5 个行按钮')
-      assert.equal(trigger!.getAttribute('aria-busy'), 'true', '发起动作的按钮应标记 aria-busy="true"')
-      for (const b of allRowButtons) {
-        assert.equal(b.disabled, true, `在途时行按钮统一禁用：${b.textContent}`)
+      assert.equal(cronRowButtons.length, 4, 'cron 2 行 × (Trigger now + Delete) = 4 个行按钮')
+      assert.equal(trigger.getAttribute('aria-busy'), 'true', '发起动作的按钮应标记 aria-busy="true"')
+      for (const b of cronRowButtons) {
+        assert.equal(b.disabled, true, `在途时行按钮统一禁用：${b.getAttribute('aria-label') || b.textContent}`)
         if (b !== trigger) {
-          assert.equal(b.getAttribute('aria-busy'), null, `其余行按钮不得误标 aria-busy：${b.textContent}`)
+          assert.equal(b.getAttribute('aria-busy'), null, '其余行按钮不得误标 aria-busy')
         }
       }
-      // 恢复后重新可点且移除 aria-busy
       await act(async () => {
         release?.()
       })
       assert.deepEqual(spy.notifications[0], { message: 'Triggered cron job "daily-report".', tone: 'info' })
-      assert.equal(trigger!.getAttribute('aria-busy'), null, '完成后移除 aria-busy')
-      for (const b of allRowButtons) {
-        assert.equal(b.disabled, false, `完成后恢复可点：${b.textContent}`)
+      assert.equal(trigger.getAttribute('aria-busy'), null, '完成后移除 aria-busy')
+      for (const b of cronRowButtons) {
+        assert.equal(b.disabled, false, '完成后恢复可点')
       }
-      const del = [...host.querySelectorAll<HTMLButtonElement>('button')].filter((b) => b.textContent?.includes('Delete'))
-      // First click opens ConfirmDialog without calling cron_delete immediately; Cancel aborts cleanly
+
+      const dailyDeleteBtn = host.querySelector<HTMLButtonElement>('[data-trigger-id="daily-report"] .tg-row-delete-btn')
+      assert.ok(dailyDeleteBtn !== null)
       await act(async () => {
-        del[0]!.click()
+        dailyDeleteBtn.click()
       })
       assert.equal(spy.actionCalls.length, 1, 'clicking Delete must open confirmation dialog before calling cron_delete')
       let confirmDialog = document.body.querySelector('[role="alertdialog"]')
@@ -240,47 +272,40 @@ describe("triggers-client-interactions", () => {
 
       // Confirm cron delete
       await act(async () => {
-        del[0]!.click()
+        dailyDeleteBtn.click()
       })
       confirmDialog = document.body.querySelector('[role="alertdialog"]')
       assert.ok(confirmDialog !== null)
-      const confirmCronBtn = [...confirmDialog.querySelectorAll<HTMLButtonElement>('button')].find((b) =>
-        b.className.includes('btn-danger'),
-      )
-      assert.ok(confirmCronBtn !== undefined)
+      const confirmCronBtn = confirmDialog.querySelector<HTMLButtonElement>('button.btn-danger')
+      assert.ok(confirmCronBtn !== null)
       await act(async () => {
         confirmCronBtn.click()
       })
       assert.deepEqual(spy.actionCalls[1], { actionId: 'cron_delete', input: { id: 'daily-report' } }, '触发 cron_delete')
-      assert.equal(del[0]!.getAttribute('aria-busy'), 'true', 'cron_delete 在途时仅目标删除按钮带 aria-busy="true"')
-      for (const b of allRowButtons) {
-        assert.equal(b.disabled, true)
-        if (b !== del[0]) assert.equal(b.getAttribute('aria-busy'), null, `其余行按钮不得带 aria-busy：${b.textContent}`)
-      }
+      assert.equal(dailyDeleteBtn.getAttribute('aria-busy'), 'true', 'cron_delete 在途时仅目标删除按钮带 aria-busy="true"')
       await act(async () => {
         release?.()
       })
       assert.deepEqual(spy.notifications[1], { message: 'Deleted cron job "daily-report".', tone: 'info' })
 
-      // Confirm webhook delete
+      // Switch to Webhook tab and confirm webhook delete
       await act(async () => {
-        del[2]!.click()
+        findTab(host, 'Webhook').click()
+      })
+      const whDeleteBtn = host.querySelector<HTMLButtonElement>('[data-trigger-id="ci"] .tg-row-delete-btn')
+      assert.ok(whDeleteBtn !== null)
+      await act(async () => {
+        whDeleteBtn.click()
       })
       confirmDialog = document.body.querySelector('[role="alertdialog"]')
       assert.ok(confirmDialog !== null, 'webhook Delete opens AlertDialog confirmation')
-      const confirmWhBtn = [...confirmDialog.querySelectorAll<HTMLButtonElement>('button')].find((b) =>
-        b.className.includes('btn-danger'),
-      )
-      assert.ok(confirmWhBtn !== undefined)
+      const confirmWhBtn = confirmDialog.querySelector<HTMLButtonElement>('button.btn-danger')
+      assert.ok(confirmWhBtn !== null)
       await act(async () => {
         confirmWhBtn.click()
       })
       assert.deepEqual(spy.actionCalls[2], { actionId: 'webhook_delete', input: { id: 'ci' } }, '触发 webhook_delete')
-      assert.equal(del[2]!.getAttribute('aria-busy'), 'true', 'webhook_delete 在途时仅目标删除按钮带 aria-busy="true"')
-      for (const b of allRowButtons) {
-        assert.equal(b.disabled, true)
-        if (b !== del[2]) assert.equal(b.getAttribute('aria-busy'), null, `其余行按钮不得带 aria-busy：${b.textContent}`)
-      }
+      assert.equal(whDeleteBtn.getAttribute('aria-busy'), 'true', 'webhook_delete 在途时仅目标删除按钮带 aria-busy="true"')
       await act(async () => {
         release?.()
       })
@@ -290,14 +315,17 @@ describe("triggers-client-interactions", () => {
     }
   })
 
-  test('manager screen：webhook 表渲染与 secret 边界提示', { timeout: 60_000 }, async () => {
+  test('manager screen：切换 Webhook 标签渲染名册与 secret 边界提示', { timeout: 60_000 }, async () => {
     const spy = makeSpyCtx()
     const { host, unmount } = await mount(
       spy,
       e(components.TriggersManagerScreen, { pluginId: 'builtin:triggers', screenId: 'manager', isSplit: false, params: {}, setParams: () => {} }),
     )
     try {
-      assert.match(host.textContent ?? '', /Webhook endpoints/, 'webhook 区块')
+      await act(async () => {
+        findTab(host, 'Webhook').click()
+      })
+      assert.equal(host.querySelectorAll('.helmx-list-row[data-trigger-kind="webhook"]').length, 1)
       assert.match(host.textContent ?? '', /ci/, 'webhook id')
       assert.match(host.textContent ?? '', /CI 构建/, '描述')
       assert.match(host.textContent ?? '', /Secrets are never shown in docs/, 'secret 边界提示')
@@ -307,7 +335,7 @@ describe("triggers-client-interactions", () => {
     }
   })
 
-  test('manager screen：doc 未到达展示加载态、空 doc 展示空表', { timeout: 60_000 }, async () => {
+  test('manager screen：doc 未到达展示加载态、空 doc 展示空状态', { timeout: 60_000 }, async () => {
     setBuiltinClientStub({ docs: { crons: undefined, webhooks: undefined } })
     try {
       const spy = makeSpyCtx()
@@ -317,6 +345,9 @@ describe("triggers-client-interactions", () => {
       )
       try {
         assert.match(host.textContent ?? '', /Loading cron jobs…/, 'cron 加载态')
+        await act(async () => {
+          findTab(host, 'Webhook').click()
+        })
         assert.match(host.textContent ?? '', /Loading webhooks…/, 'webhook 加载态')
       } finally {
         unmount()
@@ -327,7 +358,7 @@ describe("triggers-client-interactions", () => {
         e(components.TriggersManagerScreen, { pluginId: 'builtin:triggers', screenId: 'manager', isSplit: false, params: {}, setParams: () => {} }),
       )
       try {
-        assert.match(host2.textContent ?? '', /No data/, '空表如实展示')
+        assert.match(host2.textContent ?? '', /No cron jobs yet/, '空态如实展示')
         assert.doesNotMatch(host2.textContent ?? '', /Loading/, '空 doc 不残留加载态')
       } finally {
         unmount2()
@@ -347,9 +378,10 @@ describe("triggers-client-interactions", () => {
       e(components.TriggersManagerScreen, { pluginId: 'builtin:triggers', screenId: 'manager', isSplit: false, params: {}, setParams: () => {} }),
     )
     try {
-      const trigger = [...host.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent?.includes('Trigger now'))
+      const trigger = host.querySelector<HTMLButtonElement>('[data-trigger-id="daily-report"] .helmx-list-row-trailing button')
+      assert.ok(trigger !== null)
       await act(async () => {
-        trigger!.click()
+        trigger.click()
       })
       await act(async () => {})
       assert.match(host.textContent ?? '', /cron_trigger failed: 目标会话不存在/, '错误显式展示')
@@ -416,7 +448,7 @@ describe("triggers-client-interactions", () => {
     }
   }
 
-  test('manager screen：Screen .screen-heading 排版，点击 Cron / Webhook 行打开右侧详情抽屉', { timeout: 60_000 }, async () => {
+  test('manager screen：Screen .screen-heading 排版，点击 Cron / Webhook 名册行打开右侧详情抽屉', { timeout: 60_000 }, async () => {
     const spy = makeSpyCtx()
     const mounted = await mountHostedScreen(spy)
     const { host, unmount } = mounted
@@ -424,12 +456,10 @@ describe("triggers-client-interactions", () => {
       const heading = host.querySelector('.screen-header .screen-heading')
       assert.ok(heading, 'Screen 页头必须使用 .screen-heading 紧致组排')
 
-      const brokenRow = Array.from(host.querySelectorAll('tbody tr')).find((tr) =>
-        tr.textContent?.includes('broken'),
-      )
-      assert.ok(brokenRow, '应存在 broken cron 行')
+      const brokenTrigger = host.querySelector<HTMLButtonElement>('[data-trigger-id="broken"] .helmx-list-row-trigger')
+      assert.ok(brokenTrigger !== null, '应存在 broken cron 行')
       await act(async () => {
-        brokenRow.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+        brokenTrigger.click()
       })
       await act(async () => {})
 
@@ -439,16 +469,16 @@ describe("triggers-client-interactions", () => {
       })
 
       const dialog = host.querySelector('[role="dialog"].primary-drawer-content')
-      assert.ok(dialog, '点击行应展开右侧 540px 详情抽屉')
+      assert.ok(dialog, '点击行应展开右侧详情抽屉')
       assert.match(dialog.textContent ?? '', /broken/)
       assert.match(dialog.textContent ?? '', /0 \* \* \* \*/)
       assert.match(dialog.textContent ?? '', /失败任务/)
       assert.ok(dialog.querySelector('.callout.callout-error'), '抽屉内最近错误应使用 .callout-error')
 
-      const closeBtn = dialog.querySelector('button.tg-drawer-close.btn-icon-sm')
-      assert.ok(closeBtn, '抽屉右上角关闭按钮应具备 .tg-drawer-close.btn-icon-sm')
+      const closeBtn = dialog.querySelector<HTMLButtonElement>('button[aria-label="Close"]')
+      assert.ok(closeBtn !== null, '抽屉右上角应渲染关闭按钮')
       await act(async () => {
-        closeBtn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+        closeBtn.click()
       })
       await act(async () => {})
       assert.deepEqual(mounted.paramCalls.at(-1), {
@@ -457,12 +487,14 @@ describe("triggers-client-interactions", () => {
       })
       assert.ok(host.querySelector('[role="dialog"].primary-drawer-content') === null, '关闭按钮应收起抽屉')
 
-      const webhookRow = Array.from(host.querySelectorAll('tbody tr')).find((tr) =>
-        tr.textContent?.includes('CI 构建'),
-      )
-      assert.ok(webhookRow)
+      // 切换至 Webhook 标签并打开详情抽屉
       await act(async () => {
-        webhookRow.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+        findTab(host, 'Webhook').click()
+      })
+      const webhookTrigger = host.querySelector<HTMLButtonElement>('[data-trigger-id="ci"] .helmx-list-row-trigger')
+      assert.ok(webhookTrigger !== null)
+      await act(async () => {
+        webhookTrigger.click()
       })
       await act(async () => {})
       assert.deepEqual(mounted.paramCalls.at(-1), {
@@ -490,28 +522,28 @@ describe("triggers-client-interactions", () => {
         confirmDeleteBtn.click()
       })
       await act(async () => {})
-      assert.deepEqual(mounted.getParams(), {}, '删除当前打开的触发器后必须清理 URL trigger 参数')
+      assert.equal(mounted.getParams()['trigger'], undefined, '删除当前打开的触发器后必须清理 URL trigger 参数')
     } finally {
       unmount()
     }
   })
 
-  test('manager screen：实时运行记录从 conversations 投影，支持抽屉速览与整页打开', { timeout: 60_000 }, async () => {
+  test('manager screen：实时运行记录从 conversations 投影至 SDK List，支持抽屉速览与整页打开', { timeout: 60_000 }, async () => {
     const spy = makeSpyCtx()
     const mounted = await mountHostedScreen(spy)
     const { host, unmount } = mounted
     try {
-      const dailyRow = Array.from(host.querySelectorAll('tbody tr')).find((tr) =>
-        tr.textContent?.includes('daily-report'),
-      )
-      assert.ok(dailyRow, 'daily-report row renders')
+      const dailyRow = host.querySelector<HTMLElement>('[data-trigger-id="daily-report"]')
+      assert.ok(dailyRow !== null, 'daily-report row renders')
       assert.ok(
         dailyRow.querySelector('.helmx-status-light[data-tone="failed"]') !== null,
         'failed run surfaces error status light on cron row',
       )
 
+      const dailyTrigger = dailyRow.querySelector<HTMLButtonElement>('.helmx-list-row-trigger')
+      assert.ok(dailyTrigger !== null)
       await act(async () => {
-        dailyRow.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+        dailyTrigger.click()
       })
       await act(async () => {})
 
@@ -521,15 +553,15 @@ describe("triggers-client-interactions", () => {
       assert.match(dialog.textContent ?? '', /#901/, 'live run conversation id renders')
       assert.match(dialog.textContent ?? '', /upstream 502/, 'run error surfaces')
 
-      const runMain = dialog.querySelector<HTMLButtonElement>('.tg-run-main')
-      assert.ok(runMain)
+      const runTrigger = dialog.querySelector<HTMLButtonElement>('[data-run-id="901"] .helmx-list-row-trigger')
+      assert.ok(runTrigger !== null)
       await act(async () => {
-        runMain.click()
+        runTrigger.click()
       })
       assert.deepEqual(spy.drawerCalls, [901], 'clicking run row peeks conversation in drawer')
 
       const openBtn = dialog.querySelector<HTMLButtonElement>('.tg-run-open-btn')
-      assert.ok(openBtn)
+      assert.ok(openBtn !== null)
       await act(async () => {
         openBtn.click()
       })
