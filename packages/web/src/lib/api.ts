@@ -22,6 +22,7 @@ import type {
   CredentialSummary,
   InputOrigin,
   HostModelEntry,
+  HubAccessInfo,
   ModelCatalogEntry,
   ModelProviderSummary,
   ModelProvidersRefreshResult,
@@ -393,8 +394,14 @@ export const artifactsApi = {
 
 export const nodesApi = {
   list: (opts?: { signal?: AbortSignal }) => apiRequest<NodeInfo[]>('GET', '/api/nodes', undefined, opts?.signal),
-  issueToken: (nodeId: string) =>
-    apiRequest<NodeIssuedToken>('POST', '/api/nodes/issue', { nodeId }),
+  endpoints: (opts?: { signal?: AbortSignal }) =>
+    apiRequest<HubAccessInfo>('GET', '/api/nodes/endpoints', undefined, opts?.signal),
+  issueToken: (nodeId: string, hubUrl?: string) =>
+    apiRequest<NodeIssuedToken>(
+      'POST',
+      '/api/nodes/issue',
+      hubUrl !== undefined ? { nodeId, hubUrl } : { nodeId },
+    ),
   remove: (nodeId: string) =>
     apiRequest<{ ok: boolean }>('DELETE', `/api/nodes/${encodeURIComponent(nodeId)}`),
   checkUpgrade: (nodeId: string, registryUrl?: string) => {

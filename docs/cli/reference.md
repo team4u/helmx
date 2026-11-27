@@ -145,7 +145,9 @@ PUT 为整体替换契约：update 走语义化标志时 CLI 先 GET 完整 Prof
 
 **`helmx nodes list`** — 节点列表（id/kind/online/version/hostname/platform/health 紧凑摘要）。
 
-**`helmx nodes issue <nodeId>`** — 签发接入令牌，明文 `<nodeId>:<secret>` 仅返回一次，并输出可直接复制的 `helmx-node start -d --hub ... --token ...` 命令（若 Hub 地址为回环地址则显式警告）。
+**`helmx nodes endpoints`** — 查看 Hub 监听摘要及全部可达接入地址（url/kind/interface/host 表格，`--json` 返回 `HubAccessInfo`）。
+
+**`helmx nodes issue <nodeId> [--hub <url>]`** — 签发接入令牌，明文 `<nodeId>:<secret>` 仅返回一次，并由服务端生成可直接复制的 `helmx-node start -d --hub ... --token ...` 命令（省略 `--hub` 时按非回环地址优先自动选取；若最终 Hub 地址为回环地址则显式警告）。
 
 **`helmx nodes remove <nodeId>`** — 注销节点并断开连接。
 

@@ -150,6 +150,8 @@ export interface NodeUpgradeResult {
   pid?: number
 }
 
+import type { NodeConnectGuide } from './node-connect.js'
+
 /** `POST /api/nodes/issue` issuance response (the plaintext token is returned exactly once; the server stores only its sha256). */
 export interface NodeIssuedToken {
   nodeId: string
@@ -158,6 +160,8 @@ export interface NodeIssuedToken {
   createdAt: number
   /** Reachable Hub access summary when known by the server. */
   hubAccess?: HubAccessInfo
+  /** Server-generated copy-pasteable enrollment command guide for the managed machine. */
+  connectGuide?: NodeConnectGuide
 }
 
 /** `helmx-node connect` input. */

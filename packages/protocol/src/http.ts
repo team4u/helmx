@@ -163,6 +163,7 @@ export const CORE_CLI_COMMAND_PATHS = [
   'credentials set',
   'credentials delete',
   'nodes list',
+  'nodes endpoints',
   'nodes issue',
   'nodes remove',
   'nodes upgrade',

@@ -2,26 +2,145 @@
  * Node domain routes: /api/nodes (list/issue/remove/upgrade/port-forwarding) and
  * POST /api/env/exec (cross-node command execution, NDJSON streaming or single JSON response).
  */
-import { HelmxError, isStrictSemver, isValidNodeId, REQUEST_SCHEMAS, stripSemverVPrefix } from '@helmx/protocol'
-import type { EnvExecStreamFrame } from '@helmx/protocol'
+import { HelmxError, NODE_CORE_OPERATIONS, isStrictSemver, isValidNodeId, REQUEST_SCHEMAS, stripSemverVPrefix, type EnvExecStreamFrame, type NodeIssuedToken } from '@helmx/protocol'
 import type { SecretStash } from '../services/index.js'
 import type { NodeManager } from '../runtime/node-manager.js'
 import type { NodeForwardService } from '../env/forward.js'
 import { redactJsonValue } from '../redact.js'
 import { isAbsoluteTargetPath } from '@helmx/protocol'
 import { jsonOk, errorResponse, readJsonBody, type JsonRedactor } from './http-utils.js'
+import { createCoreOperationRouter } from './core-operation-router.js'
 import { decodeSegment } from './route-match.js'
 import { assertBodySchema, requireHttpUrl, requireUtf16LengthAtMost, ValidationError } from './validate.js'
 import type { RouteContext } from './route-context.js'
 import { parseOptionalJsonObjectBody } from './route-context.js'
 
 export interface NodeRoutesTarget {
-  readonly nodes: Pick<NodeManager, 'listNodes' | 'issueNodeToken' | 'removeNode' | 'execEnv'> &
-    Partial<Pick<NodeManager, 'checkNodeUpgrade' | 'upgradeNode'>>
+  readonly nodes: Pick<NodeManager, 'listNodes' | 'removeNode' | 'execEnv'> & {
+    issueNodeToken(nodeId: string, opts?: { hubUrl?: string }): Promise<NodeIssuedToken>
+  } & Partial<Pick<NodeManager, 'getHubAccess' | 'checkNodeUpgrade' | 'upgradeNode'>>
   readonly nodeForward?: Partial<
     Pick<NodeForwardService, 'start' | 'stop' | 'get' | 'list' | 'onEvent' | 'onStopped' | 'acquireLease'>
   >
   readonly stash?: Pick<SecretStash, 'redact'> & Partial<Pick<SecretStash, 'createStreamingRedactor'>>
+}
+
+function dispatchNodeJsonRoutes(
+  kernel: Pick<NodeRoutesTarget, 'nodes' | 'nodeForward'>,
+): (ctx: RouteContext, redactor: JsonRedactor | undefined) => Promise<Response | undefined> {
+  return createCoreOperationRouter(NODE_CORE_OPERATIONS, {
+    'nodes.list': () => kernel.nodes.listNodes(),
+
+    'nodes.endpoints': () => {
+      if (kernel.nodes.getHubAccess === undefined) {
+        throw new HelmxError('not_implemented', 'current runtime does not support hub access endpoint listing', 501)
+      }
+      return kernel.nodes.getHubAccess()
+    },
+
+    'nodes.issue': {
+      validate: (input) => {
+        if (input.hubUrl !== undefined) {
+          requireHttpUrl(input.hubUrl, 'hubUrl')
+        }
+      },
+      handle: async (input) => {
+        const opts = input.hubUrl !== undefined ? { hubUrl: input.hubUrl as string } : undefined
+        const issued = await kernel.nodes.issueNodeToken(input.nodeId as string, opts)
+        return {
+          nodeId: issued.nodeId,
+          token: issued.token,
+          createdAt: issued.createdAt,
+          ...(issued.hubAccess !== undefined ? { hubAccess: issued.hubAccess } : {}),
+          ...(issued.connectGuide !== undefined ? { connectGuide: issued.connectGuide } : {}),
+        }
+      },
+    },
+
+    'nodes.remove': async (input) => {
+      await kernel.nodes.removeNode(input.id as string)
+      return { ok: true }
+    },
+
+    'nodes.upgrade_check': {
+      validate: (input) => ({
+        id: input.id,
+        ...(input.registryUrl !== undefined
+          ? { registryUrl: requireHttpUrl(input.registryUrl, 'registryUrl') }
+          : {}),
+      }),
+      handle: (input) => {
+        if (kernel.nodes.checkNodeUpgrade === undefined) {
+          throw new HelmxError('not_implemented', 'current runtime does not support node upgrade check', 501)
+        }
+        const query = input.registryUrl !== undefined ? { registryUrl: input.registryUrl as string } : {}
+        return kernel.nodes.checkNodeUpgrade(input.id as string, query)
+      },
+    },
+
+    'nodes.upgrade': {
+      validate: (input) => {
+        const out: { id: string; targetVersion?: string; registryUrl?: string; force?: boolean } = {
+          id: input.id as string,
+        }
+        if (input.targetVersion !== undefined) {
+          const target = input.targetVersion as string
+          if (target.trim() === '') {
+            throw new ValidationError('targetVersion must be a non-empty version (omit to upgrade to latest)')
+          }
+          out.targetVersion = requireVersionField(target)
+        }
+        if (input.registryUrl !== undefined) {
+          out.registryUrl = requireHttpUrl(input.registryUrl, 'registryUrl')
+        }
+        if (input.force !== undefined) {
+          out.force = input.force as boolean
+        }
+        return out
+      },
+      handle: (input) => {
+        if (kernel.nodes.upgradeNode === undefined) {
+          throw new HelmxError('not_implemented', 'current runtime does not support node upgrade', 501)
+        }
+        const opts: { targetVersion?: string; registryUrl?: string; force?: boolean } = {}
+        if (input.targetVersion !== undefined) opts.targetVersion = input.targetVersion as string
+        if (input.registryUrl !== undefined) opts.registryUrl = input.registryUrl as string
+        if (input.force !== undefined) opts.force = input.force as boolean
+        return kernel.nodes.upgradeNode(input.id as string, opts)
+      },
+    },
+
+    'nodes.forwards': () => {
+      if (kernel.nodeForward?.list === undefined) {
+        throw new HelmxError('not_implemented', 'current runtime does not support node port forwarding', 501)
+      }
+      return kernel.nodeForward.list()
+    },
+
+    'nodes.forward_inspect': (input, { redactor }) => {
+      if (kernel.nodeForward?.get === undefined) {
+        throw new HelmxError('not_implemented', 'current runtime does not support node port forwarding', 501)
+      }
+      const session = kernel.nodeForward.get(input.id as string)
+      if (session === undefined) {
+        return errorResponse(redactor, 404, 'not_found', 'forwarding session not found or already stopped')
+      }
+      return session
+    },
+
+    'nodes.forward_stop': async (input, { redactor }) => {
+      if (kernel.nodeForward?.stop === undefined) {
+        throw new HelmxError('not_implemented', 'current runtime does not support node port forwarding', 501)
+      }
+      const forwardId = input.id as string
+      // Idempotency expressed via 404: stopping an absent forward returns 404 (prevents duplicate exit errors).
+      if (kernel.nodeForward.get !== undefined && kernel.nodeForward.get(forwardId) === undefined) {
+        return errorResponse(redactor, 404, 'not_found', 'forwarding session not found or already stopped')
+      }
+      await kernel.nodeForward.stop(forwardId)
+      return { ok: true }
+    },
+  })
 }
 
 export async function handleNodeDomain(
@@ -35,54 +154,7 @@ export async function handleNodeDomain(
   const fourth = segments[3]
   const fifth = segments[4]
 
-  if (second === undefined && method === 'GET') {
-    return jsonOk(redactor, await kernel.nodes.listNodes())
-  }
-  if (second === 'issue' && method === 'POST' && third === undefined) {
-    const body = await readJsonBody(ctx.request)
-    assertBodySchema(REQUEST_SCHEMAS.nodeIssue, body, 'nodes issue body')
-    const issued = await kernel.nodes.issueNodeToken(body.nodeId as string)
-    // Plaintext token is returned once in this response (afterward no JSON output ever exposes
-    // it again because the token is registered for outbound redaction). Bypass the standard redactor here
-    // and serialize only the contract fields manually so it isn't masked as [REDACTED].
-    return new Response(
-      JSON.stringify({
-        nodeId: issued.nodeId,
-        token: issued.token,
-        createdAt: issued.createdAt,
-        ...(issued.hubAccess !== undefined ? { hubAccess: issued.hubAccess } : {}),
-      }),
-      {
-        status: 201,
-        headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' },
-      },
-    )
-  }
-  if (second !== undefined && third === undefined && method === 'DELETE') {
-    const nodeId = requireNodeSegment(second)
-    await kernel.nodes.removeNode(nodeId)
-    return jsonOk(redactor, { ok: true })
-  }
-  // ---- Node upgrade: GET /:id/upgrade/check, POST /:id/upgrade -----------------
-  if (second !== undefined && third === 'upgrade') {
-    const nodeId = requireNodeSegment(second)
-    if (fourth === 'check' && method === 'GET') {
-      if (fifth !== undefined) return errorResponse(redactor, 404, 'not_found', 'route not found')
-      if (kernel.nodes.checkNodeUpgrade === undefined) {
-        throw new HelmxError('not_implemented', 'current runtime does not support node upgrade check', 501)
-      }
-      return jsonOk(redactor, await kernel.nodes.checkNodeUpgrade(nodeId, parseNodeUpgradeCheckQuery(ctx.url)))
-    }
-    if (fourth === undefined && method === 'POST') {
-      if (kernel.nodes.upgradeNode === undefined) {
-        throw new HelmxError('not_implemented', 'current runtime does not support node upgrade', 501)
-      }
-      const body = await parseOptionalJsonObjectBody(ctx.request, parseNodeUpgradeBody)
-      return jsonOk(redactor, await kernel.nodes.upgradeNode(nodeId, body))
-    }
-    return errorResponse(redactor, 404, 'not_found', 'route not found')
-  }
-  // ---- Foreground port forwarding: POST /:id/forward, forward list/detail/events/stop ----------
+  // Foreground port forwarding: POST /:id/forward and NDJSON event stream GET /forward/:id/events
   if (second !== undefined && third === 'forward' && fourth === undefined && method === 'POST') {
     if (kernel.nodeForward?.start === undefined) {
       throw new HelmxError('not_implemented', 'current runtime does not support node port forwarding', 501)
@@ -91,56 +163,13 @@ export async function handleNodeDomain(
     const body = await parseOptionalJsonObjectBody(ctx.request, parseNodeForwardBody)
     return jsonOk(redactor, await kernel.nodeForward.start(nodeId, body), { status: 201 })
   }
-  if (second === 'forward') {
-    return handleForwardSubtree(ctx, kernel, redactor)
+  if (second === 'forward' && third !== undefined && fourth === 'events' && fifth === undefined && method === 'GET') {
+    return getNodeForwardEvents(ctx, kernel, requireForwardSegment(third))
   }
-  return errorResponse(redactor, 404, 'not_found', 'route not found')
-}
 
-/** GET /api/nodes/forward list / :id detail / :id/events stream / DELETE :id stop. */
-async function handleForwardSubtree(
-  ctx: RouteContext,
-  kernel: Pick<NodeRoutesTarget, 'nodeForward'>,
-  redactor: JsonRedactor | undefined,
-): Promise<Response> {
-  const { method, segments } = ctx
-  const third = segments[2]
-  const fourth = segments[3]
-  const fifth = segments[4]
-  // GET /api/nodes/forward: active forwarding sessions.
-  if (third === undefined && method === 'GET') {
-    if (kernel.nodeForward?.list === undefined) {
-      throw new HelmxError('not_implemented', 'current runtime does not support node port forwarding', 501)
-    }
-    return jsonOk(redactor, kernel.nodeForward.list())
-  }
-  const forwardId = third
-  if (forwardId !== undefined && fourth === undefined && method === 'GET') {
-    if (kernel.nodeForward?.get === undefined) {
-      throw new HelmxError('not_implemented', 'current runtime does not support node port forwarding', 501)
-    }
-    const session = kernel.nodeForward.get(requireForwardSegment(forwardId))
-    if (session === undefined) {
-      return errorResponse(redactor, 404, 'not_found', 'forwarding session not found or already stopped')
-    }
-    return jsonOk(redactor, session)
-  }
-  // GET /api/nodes/forward/:id/events: NDJSON event stream (monitoring only; disconnect does not auto-stop).
-  if (forwardId !== undefined && fourth === 'events' && fifth === undefined && method === 'GET') {
-    return getNodeForwardEvents(ctx, kernel, requireForwardSegment(forwardId))
-  }
-  // DELETE /api/nodes/forward/:id: stop forwarding (closes Hub listener and all tunnels).
-  if (forwardId !== undefined && fourth === undefined && method === 'DELETE') {
-    if (kernel.nodeForward?.stop === undefined) {
-      throw new HelmxError('not_implemented', 'current runtime does not support node port forwarding', 501)
-    }
-    // Idempotency expressed via 404: stopping an absent forward returns 404 (prevents duplicate exit errors).
-    if (kernel.nodeForward.get !== undefined && kernel.nodeForward.get(requireForwardSegment(forwardId)) === undefined) {
-      return errorResponse(redactor, 404, 'not_found', 'forwarding session not found or already stopped')
-    }
-    await kernel.nodeForward.stop(requireForwardSegment(forwardId))
-    return jsonOk(redactor, { ok: true })
-  }
+  const matched = await dispatchNodeJsonRoutes(kernel)(ctx, redactor)
+  if (matched !== undefined) return matched
+
   return errorResponse(redactor, 404, 'not_found', 'route not found')
 }
 
@@ -164,34 +193,6 @@ function requireVersionField(raw: string): string {
     throw new ValidationError('targetVersion must be strict SemVer (optional single v prefix, e.g. 1.2.3 or v1.2.3)')
   }
   return raw
-}
-
-/** GET /api/nodes/:id/upgrade/check query params: only registryUrl. */
-function parseNodeUpgradeCheckQuery(url: URL): { registryUrl?: string } {
-  const raw = url.searchParams.get('registryUrl')
-  return raw === null ? {} : { registryUrl: requireHttpUrl(raw, 'registryUrl') }
-}
-
-/**
- * POST /api/nodes/:id/upgrade body: optional targetVersion / registryUrl / force;
- * strictly rejects unknown fields (`attemptId` is server-internal and never caller-controlled);
- * explicit `null` differs from omitted—validated and rejected with 400 rather than silently ignored.
- */
-function parseNodeUpgradeBody(body: Record<string, unknown>): { targetVersion?: string; registryUrl?: string; force?: boolean } {
-  assertBodySchema(REQUEST_SCHEMAS.nodeUpgrade, body, 'node upgrade body')
-  const out: { targetVersion?: string; registryUrl?: string; force?: boolean } = {}
-  if (body.targetVersion !== undefined) {
-    const target = body.targetVersion as string
-    if (target.trim() === '') throw new ValidationError('targetVersion must be a non-empty version (omit to upgrade to latest)')
-    out.targetVersion = requireVersionField(target)
-  }
-  if (body.registryUrl !== undefined) {
-    out.registryUrl = requireHttpUrl(body.registryUrl, 'registryUrl')
-  }
-  if (body.force !== undefined) {
-    out.force = body.force as boolean
-  }
-  return out
 }
 
 /**

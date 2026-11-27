@@ -193,11 +193,11 @@ function makeKernel(calls: CallLog = newCallLog()): CoreRoutesTarget {
     },
     nodes: {
       listNodes: async () => [],
-      issueNodeToken: async (nodeId: string) => {
+      issueNodeToken: async (nodeId: string, opts?: { hubUrl?: string }) => {
         if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(nodeId)) {
           throw new HelmxError('validation_error', 'nodeId must match node ID format', 400, { nodeId })
         }
-        calls.issueNodeToken!.push(nodeId)
+        calls.issueNodeToken!.push(opts !== undefined ? [nodeId, opts] : nodeId)
         return { nodeId, token: 'node-token', createdAt: 0 } as never
       },
       removeNode: async () => {},
@@ -652,16 +652,33 @@ test('plugins config PUT: values map scalars; arrays, nested objects, and unknow
 // Node bodies (issue / upgrade / forward / env exec)
 // ---------------------------------------------------------------------------
 
-test('nodes issue: non-empty nodeId required; unknown fields rejected at HTTP boundary (pattern check falls back to service)', { timeout: 60_000 }, async () => {
+test('nodes issue: non-empty nodeId required; optional hubUrl validated; unknown fields rejected at HTTP boundary', { timeout: 60_000 }, async () => {
   const calls = newCallLog()
   const kernel = makeKernel(calls)
   const ok = await call(kernel, 'POST', '/api/nodes/issue', { nodeId: 'node.a-1' })
   assert.equal(ok.status, 201)
   assert.equal(calls.issueNodeToken![0], 'node.a-1')
+  const withHub = await call(kernel, 'POST', '/api/nodes/issue', { nodeId: 'node.a-2', hubUrl: 'https://hub.example.com:3202' })
+  assert.equal(withHub.status, 201)
+  assert.deepEqual(calls.issueNodeToken![1], ['node.a-2', { hubUrl: 'https://hub.example.com:3202' }])
   await expect400(kernel, 'POST', '/api/nodes/issue', {})
   await expect400(kernel, 'POST', '/api/nodes/issue', { nodeId: '' })
   await expect400(kernel, 'POST', '/api/nodes/issue', { nodeId: 1 })
+  await expect400(kernel, 'POST', '/api/nodes/issue', { nodeId: 'node.a-1', hubUrl: 'not-a-url' })
+  await expect400(kernel, 'POST', '/api/nodes/issue', { nodeId: 'node.a-1', hubUrl: 'ftp://hub.example.com' })
+  await expect400(kernel, 'POST', '/api/nodes/issue', { nodeId: 'node.a-1', hubUrl: 123 })
   await expect400(kernel, 'POST', '/api/nodes/issue', { nodeId: 'x', extra: 1 })
+})
+
+test('nodes endpoints: returns 501 not_implemented when stub omits getHubAccess and 404 on wrong methods', { timeout: 60_000 }, async () => {
+  const kernel = makeKernel()
+  const res = await call(kernel, 'GET', '/api/nodes/endpoints')
+  assert.equal(res.status, 501)
+  assert.equal(res.code, 'not_implemented')
+  const postEndpoints = await call(kernel, 'POST', '/api/nodes/endpoints')
+  assert.equal(postEndpoints.status, 404)
+  const delIssue = await call(kernel, 'DELETE', '/api/nodes/issue')
+  assert.equal(delIssue.status, 404)
 })
 
 test('nodes upgrade: attemptId disallowed; targetVersion preserves leading/trailing whitespace passthrough; strict SemVer and URL checks', { timeout: 60_000 }, async () => {

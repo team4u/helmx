@@ -2886,6 +2886,7 @@ const SCHEMA_CLI_MAPPINGS: Readonly<Record<string, SchemaCliMapping>> = {
   },
   nodeIssue: {
     command: ['nodes', 'issue'],
+    aliases: { hubUrl: 'hub' },
     positionals: { nodeId: '<nodeId>' },
   },
   nodeUpgrade: {

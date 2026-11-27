@@ -26,7 +26,12 @@ import {
 import { NodeCard } from '../src/nodes/NodeCard.js'
 import { NodeDetailDrawer } from '../src/nodes/NodeDetailDrawer.js'
 import { NodeCenter } from '../src/nodes/NodeCenter.js'
-import { resolveHubEndpointOptions } from '../src/modals/nodes-modal-model.js'
+import {
+  buildNodeConnectGuide,
+  formatHubListenSummary,
+  isLoopbackHubUrl,
+  resolveHubEndpointOptions,
+} from '../src/modals/nodes-modal-model.js'
 import { nodesApi } from '../src/lib/api.js'
 import { createWebTranslator } from '../src/i18n/catalog.js'
 import { makeTestStore } from './helpers/store.js'
@@ -692,10 +697,47 @@ test('NodeDetailDrawer: binds one-time token to nodeId, clears on switch/close/i
     )
 
   try {
-    // 1. Issue token for nodeA -> visible in nodeA, cleared immediately on switch to nodeB
-    nodesApi.issueToken = async (nodeId: string) => ({ nodeId, token: `tok-for-${nodeId}`, createdAt: 1000 })
+    // 1. Issue token for nodeA -> passes valid non-placeholder hubUrl, consumes server connectGuide, clears on switch to nodeB
+    const issueCalls: Array<{ nodeId: string; hubUrl?: string }> = []
+    nodesApi.issueToken = async (nodeId: string, hubUrl?: string) => {
+      issueCalls.push({ nodeId, ...(hubUrl !== undefined ? { hubUrl } : {}) })
+      return {
+        nodeId,
+        token: `tok-for-${nodeId}`,
+        createdAt: 1000,
+        ...(hubUrl !== undefined
+          ? {
+              connectGuide: buildNodeConnectGuide(hubUrl, {
+                nodeId,
+                token: `tok-for-${nodeId}`,
+              }),
+            }
+          : {}),
+      }
+    }
+    const localWithAccess: HubAccessInfo = {
+      listenHost: '0.0.0.0',
+      listenPort: 3202,
+      wildcard: true,
+      loopbackOnly: false,
+      endpoints: [{ url: 'http://192.168.1.42:3202', host: '192.168.1.42', kind: 'lan', interface: 'eth0' }],
+    }
     await act(async () => {
-      root.render(renderDrawer({ node: nodeA, open: true }))
+      root.render(
+        e(
+          HostStoreProviders,
+          { value: store },
+          e(NodeDetailDrawer, {
+            node: nodeA,
+            open: true,
+            isNew: false,
+            inline: true,
+            hubAccess: localWithAccess,
+            onClose: () => {},
+            onTokenIssued: (tok: string) => issuedCallbacks.push(tok),
+          }),
+        ),
+      )
     })
     const findIssueBtn = () =>
       Array.from(container.querySelectorAll('button')).find((b) =>
@@ -707,6 +749,7 @@ test('NodeDetailDrawer: binds one-time token to nodeId, clears on switch/close/i
     })
     assert.ok(container.textContent?.includes('tok-for-node-alpha'), 'token appears for nodeA')
     assert.deepEqual(issuedCallbacks, ['tok-for-node-alpha'])
+    assert.deepEqual(issueCalls[0], { nodeId: 'node-alpha', hubUrl: 'http://192.168.1.42:3202' })
 
     // Switch to nodeB -> nodeA token must NOT leak into nodeB or its connect command
     await act(async () => {
@@ -714,6 +757,13 @@ test('NodeDetailDrawer: binds one-time token to nodeId, clears on switch/close/i
     })
     assert.equal(container.textContent?.includes('tok-for-node-alpha'), false, 'nodeA token must clear on switch to nodeB')
     assert.ok(container.textContent?.includes('<TOKEN>'), 'nodeB guide falls back to placeholder token')
+
+    // Issuing without any concrete endpoint (<HUB_URL> placeholder) must omit hubUrl rather than sending placeholder
+    await act(async () => {
+      findIssueBtn()!.click()
+    })
+    assert.deepEqual(issueCalls.at(-1), { nodeId: 'node-beta' })
+    assert.ok(container.textContent?.includes('tok-for-node-beta'))
 
     // Close and reopen nodeA -> previously issued one-time token stays cleared
     await act(async () => {
@@ -766,7 +816,11 @@ test('NodeDetailDrawer: binds one-time token to nodeId, clears on switch/close/i
     })
     assert.equal(container.textContent?.includes('late-secret-alpha'), false, 'late token from nodeA must be discarded')
     assert.equal(container.textContent?.includes('9.9.9'), false, 'late health check from nodeA must be discarded')
-    assert.deepEqual(issuedCallbacks, ['tok-for-node-alpha'], 'onTokenIssued must not fire for discarded late token')
+    assert.deepEqual(
+      issuedCallbacks,
+      ['tok-for-node-alpha', 'tok-for-node-beta'],
+      'onTokenIssued must not fire for discarded late token',
+    )
 
     // 3. In isNew mode, editing newNodeId clears previously issued token
     nodesApi.issueToken = async (nodeId: string) => ({ nodeId, token: `new-tok-${nodeId}`, createdAt: 3000 })
@@ -1153,5 +1207,34 @@ test('NodeDetailDrawer: delete confirms via ConfirmDialog, surfaces failures cle
       root.unmount()
     })
     container.remove()
+  }
+})
+
+test('nodesApi.endpoints and nodes-modal-model re-exports: GET /api/nodes/endpoints and protocol connect helpers', { timeout: 60_000 }, async () => {
+  assert.equal(isLoopbackHubUrl('http://127.0.0.1:3202'), true)
+  assert.equal(
+    formatHubListenSummary({ listenHost: '::', listenPort: 3202, wildcard: true, loopbackOnly: false, endpoints: [] }),
+    '[::]:3202',
+  )
+  const originalFetch = globalThis.fetch
+  const calls: Array<{ url: string; method?: string; body?: string }> = []
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    calls.push({
+      url: String(input),
+      ...(init?.method !== undefined ? { method: init.method } : {}),
+      ...(typeof init?.body === 'string' ? { body: init.body } : {}),
+    })
+    return new Response(
+      JSON.stringify({ listenHost: '0.0.0.0', listenPort: 3202, wildcard: true, loopbackOnly: false, endpoints: [] }),
+      { status: 200, headers: { 'content-type': 'application/json' } },
+    )
+  }) as typeof fetch
+  try {
+    const info = await nodesApi.endpoints()
+    assert.equal(info.listenPort, 3202)
+    assert.equal(calls[0]?.url, '/api/nodes/endpoints')
+    assert.equal(calls[0]?.method, 'GET')
+  } finally {
+    globalThis.fetch = originalFetch
   }
 })

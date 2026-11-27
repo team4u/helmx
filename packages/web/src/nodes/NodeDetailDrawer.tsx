@@ -34,7 +34,7 @@ import {
   isNodeOnline,
   type NodeInfo,
 } from './node-center-model.js'
-import { NODE_DETAIL_SECTION_SLOT, type HubAccessInfo, type NodeUpgradeCheckResult } from '@helmx/protocol/browser'
+import { NODE_DETAIL_SECTION_SLOT, type HubAccessInfo, type NodeConnectGuide, type NodeUpgradeCheckResult } from '@helmx/protocol/browser'
 import { CopyableCommandRow, MonoValue, NodeSectionTitle } from './node-detail/NodeDetailPrimitives.js'
 
 export interface NodeDetailDrawerProps {
@@ -83,7 +83,11 @@ export function NodeDetailDrawer({
 }: NodeDetailDrawerProps): React.JSX.Element {
   const { t } = useWebLocale()
   const storeNodes = useOptionalNodes()
-  const [issuedTokenState, setIssuedTokenState] = useState<{ nodeId: string; token: string } | null>(null)
+  const [issuedTokenState, setIssuedTokenState] = useState<{
+    nodeId: string
+    token: string
+    connectGuide?: NodeConnectGuide
+  } | null>(null)
   const [issuedHubAccess, setIssuedHubAccess] = useState<HubAccessInfo | null>(null)
   const [newNodeId, setNewNodeId] = useState('')
   const [tokenError, setTokenError] = useState<string | null>(null)
@@ -147,6 +151,20 @@ export function NodeDetailDrawer({
     ? customHubUrl.trim() || resolvedEndpoints.defaultUrl
     : activeEndpointUrl
 
+  const issueHubUrl = useMemo(() => {
+    const trimmed = effectiveHubUrl.trim()
+    if (trimmed === '' || trimmed === '<HUB_URL>') return undefined
+    try {
+      const parsed = new URL(trimmed)
+      if ((parsed.protocol === 'http:' || parsed.protocol === 'https:') && parsed.hostname !== '') {
+        return trimmed.replace(/\/+$/, '')
+      }
+      return undefined
+    } catch {
+      return undefined
+    }
+  }, [effectiveHubUrl])
+
   const isLoopbackEffective =
     effectiveHubUrl !== '<HUB_URL>' && isLoopbackHubUrl(effectiveHubUrl)
 
@@ -206,8 +224,20 @@ export function NodeDetailDrawer({
     }
   }, [open, isNew, node?.id])
 
+  const serverConnectGuide =
+    open &&
+    targetNodeId !== '' &&
+    issuedTokenState !== null &&
+    issuedTokenState.nodeId === targetNodeId &&
+    issuedTokenState.connectGuide !== undefined &&
+    (issueHubUrl === undefined ||
+      issuedTokenState.connectGuide.hubUrl.replace(/\/+$/, '').toLowerCase() === issueHubUrl.toLowerCase())
+      ? issuedTokenState.connectGuide
+      : null
+
   const guide = targetNodeId
-    ? buildNodeConnectGuide(effectiveHubUrl, {
+    ? serverConnectGuide ??
+      buildNodeConnectGuide(effectiveHubUrl, {
         nodeId: targetNodeId,
         token: issuedToken || '<TOKEN>',
       })
@@ -233,9 +263,13 @@ export function NodeDetailDrawer({
     setTokenError(null)
 
     try {
-      const res = await nodesApi.issueToken(requestedNodeId)
+      const res = await nodesApi.issueToken(requestedNodeId, issueHubUrl)
       if (!mountedRef.current || tokenGenerationRef.current !== generation) return
-      setIssuedTokenState({ nodeId: requestedNodeId, token: res.token })
+      setIssuedTokenState({
+        nodeId: requestedNodeId,
+        token: res.token,
+        ...(res.connectGuide !== undefined ? { connectGuide: res.connectGuide } : {}),
+      })
       if (res.hubAccess !== undefined) {
         setIssuedHubAccess(res.hubAccess)
       }

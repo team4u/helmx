@@ -101,6 +101,10 @@ test('@helmx/protocol/browser: export declarations aligned with the root entry\'
     'assertJsonSafe',
     'resolveConversationTiming',
     'compareCodeUnit',
+    'isLoopbackHubUrl',
+    'formatHubListenSummary',
+    'resolveDefaultHubUrl',
+    'buildNodeConnectGuide',
   ] as const
 
   /** Server-only contract validators and TypeBox UI/request schemas that must NOT bloat `@helmx/protocol/browser`. */
@@ -114,6 +118,7 @@ test('@helmx/protocol/browser: export declarations aligned with the root entry\'
     'validateOrThrow',
     'validatePluginConfigFieldSchema',
     'validatePluginConfigFieldValue',
+    'NODE_CORE_OPERATIONS',
   ] as const
 
   const browserRecord = browserExports as Record<string, unknown>

@@ -196,7 +196,11 @@ describe('Core actions (core:*) parity, discovery, and security invariants', { t
       assert.ok(listedIds.has('core:conversations.search'))
       assert.ok(listedIds.has('core:profiles.list'))
       assert.ok(listedIds.has('core:plugins.config_get'))
+      assert.ok(listedIds.has('core:nodes.endpoints'), 'core:nodes.endpoints should be discoverable and idempotent')
       assert.ok(listedIds.has('core:nodes.remove'), 'top-level human session should see host-governance mutations')
+      const endpointsMeta = items.find((i) => i.actionId === 'core:nodes.endpoints')!
+      assert.equal(endpointsMeta.cli, 'helmx nodes endpoints')
+      assert.equal(endpointsMeta.idempotent, true)
       assert.equal(listedIds.has('core:asks.answer'), false, 'core:asks.answer must be hidden in any session')
       assert.equal(listedIds.has('core:skills.list'), false, 'core:skills.list must be hidden in any session')
       assert.equal(listedIds.has('core:skills.read'), false, 'core:skills.read must be hidden in any session')

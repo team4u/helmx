@@ -21,7 +21,6 @@ import {
   isCoreNamespace,
   stripBuiltinNamespace,
   type ActionManifest,
-  type JsonSchema,
   type PluginActionCliPositionalSpec,
 } from '@helmx/protocol'
 import path from 'node:path'
@@ -30,160 +29,19 @@ import type { HubClient } from './hub-client.js'
 import type { CommandSpec } from './commands/index.js'
 import { resolveConversationTarget } from './commands/index.js'
 import { printValue } from './output.js'
-import type { FlagSpec } from './args.js'
+import {
+  RESERVED_FLAG_NAMES,
+  coercePositionalValue,
+  flagsFromSchema,
+  kebabCase,
+  schemaPropertiesOf,
+  schemaPropertyNames,
+} from './schema-flags.js'
 
-const RESERVED_FLAG_NAMES = new Set(['json', 'help', 'input', 'current', 'h'])
+export { flagsFromSchema }
 
 function manifestLabel(manifest: ActionManifest): string {
   return `${manifest.pluginId}.${manifest.id}`
-}
-
-function primitiveFlagType(value: unknown): 'string' | 'number' | 'boolean' | undefined {
-  if (typeof value === 'number') return 'number'
-  if (typeof value === 'boolean') return 'boolean'
-  if (typeof value === 'string') return 'string'
-  return undefined
-}
-
-/** Coerce a simple JSON Schema property type to a flag type; object/array/untyped schemas use json (or whole --input). */
-function flagTypeOf(schema: unknown): FlagSpec['type'] | undefined {
-  if (schema === null || typeof schema !== 'object' || Array.isArray(schema)) return undefined
-  const s = schema as { type?: unknown; enum?: unknown; const?: unknown }
-  if (s.type === 'number' || s.type === 'integer') return 'number'
-  if (s.type === 'boolean') return 'boolean'
-  if (s.type === 'string') return 'string'
-  if (s.type === 'object' || s.type === 'array') return 'json'
-  if ('const' in s) return primitiveFlagType(s.const) ?? 'json'
-  if (Array.isArray(s.enum) && s.enum.length > 0) {
-    const first = primitiveFlagType(s.enum[0])
-    if (first !== undefined && s.enum.every((v) => primitiveFlagType(v) === first)) return first
-    return 'json'
-  }
-  // Untyped loose schemas (including $ref / combinators / any JSON value such as workflow args)
-  // are parsed as JSON (with server-side schema validation as fallback), preserving fidelity over plain strings.
-  return 'json'
-}
-
-/**
- * Coerce a positional argument string per its schema property type (matching flag coercion):
- * number/integer -> Number; boolean -> strict true/false; object/array/untyped loose schemas -> JSON.parse
- * (explicit local error on invalid JSON); string -> verbatim.
- * readFileInto file contents always write directly to a string target (verified by manifest validation).
- */
-function coercePositionalValue(raw: string, field: string, schema: unknown): unknown {
-  const type = flagTypeOf(schema)
-  if (type === 'number') {
-    const n = Number(raw)
-    if (!Number.isFinite(n)) {
-      throw new CliError(`positional argument <${field}> requires a number (schema type number/integer), got "${raw}"`, 'invalid_flag_value')
-    }
-    return n
-  }
-  if (type === 'boolean') {
-    if (raw === 'true') return true
-    if (raw === 'false') return false
-    throw new CliError(`positional argument <${field}> requires true/false (schema type boolean), got "${raw}"`, 'invalid_flag_value')
-  }
-  if (type === 'json') {
-    try {
-      return JSON.parse(raw)
-    } catch (err) {
-      throw new CliError(
-        `positional argument <${field}> requires valid JSON (schema type ${type === 'json' ? 'object/array/untyped' : type}): ${err instanceof Error ? err.message : String(err)}`,
-        'invalid_flag_value',
-      )
-    }
-  }
-  return raw
-}
-
-function kebabCase(name: string): string {
-  return name.replace(/([a-z0-9])([A-Z])/g, '$1-$2').toLowerCase()
-}
-
-/** Convert schema properties + required into a flag spec list; skipped holds property names unsuitable for standalone flags. */
-export function flagsFromSchema(schema: JsonSchema): { flags: FlagSpec[]; skipped: string[] } {
-  if (schema === null || typeof schema !== 'object' || Array.isArray(schema)) return { flags: [], skipped: [] }
-  const properties = (schema as { properties?: unknown }).properties
-  if (properties === undefined) return { flags: [], skipped: [] }
-  if (properties === null || typeof properties !== 'object' || Array.isArray(properties)) {
-    throw new CliError(`invalid action inputSchema.properties: must be an object`, 'invalid_action_manifest')
-  }
-  const required = (schema as { required?: unknown }).required
-  const requiredNames = new Set(
-    Array.isArray(required) && required.every((r) => typeof r === 'string') ? (required as string[]) : [],
-  )
-  // Two passes: first count how many properties map to each kebab flag name —
-  // when multiple properties (e.g. fooBar and foo-bar) collide on the same flag name, skip standalone flags for both (never silently last-wins),
-  // requiring whole --input JSON instead (validated on the server).
-  const rawNames = Object.keys(properties as Record<string, unknown>)
-  const kebabCounts = new Map<string, number>()
-  for (const rawName of rawNames) {
-    const key = kebabCase(rawName)
-    kebabCounts.set(key, (kebabCounts.get(key) ?? 0) + 1)
-  }
-  const flags: FlagSpec[] = []
-  const skipped: string[] = []
-  for (const rawName of rawNames) {
-    const name = kebabCase(rawName)
-    // Reserved names (--json/--help/--input/--current/-h) cannot become standalone flags either
-    if (RESERVED_FLAG_NAMES.has(name) || (kebabCounts.get(name) ?? 0) > 1) {
-      skipped.push(rawName)
-      continue
-    }
-    const propSchema = (properties as Record<string, unknown>)[rawName]
-    const type = flagTypeOf(propSchema)
-    if (type === undefined) {
-      skipped.push(rawName)
-      continue // unmappable properties must be passed via whole --input (validated on the server)
-    }
-    const helpParts: string[] = []
-    if (propSchema !== null && typeof propSchema === 'object' && !Array.isArray(propSchema)) {
-      const ps = propSchema as { description?: unknown; enum?: unknown }
-      if (typeof ps.description === 'string' && ps.description.trim() !== '') {
-        helpParts.push(ps.description.trim())
-      }
-      if (
-        Array.isArray(ps.enum) &&
-        ps.enum.length > 0 &&
-        ps.enum.every((v) => typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean')
-      ) {
-        helpParts.push(`(${ps.enum.map(String).join('|')})`)
-      }
-    }
-    flags.push({
-      name,
-      type,
-      required: requiredNames.has(rawName),
-      ...(helpParts.length > 0 ? { help: helpParts.join(' ') } : {}),
-    })
-  }
-  return { flags, skipped }
-}
-
-/**
- * Reverse map from kebab flag names back to camelCase/original schema property names.
- * When multiple properties map to the same flag (e.g. fooBar and foo-bar), stores undefined (ambiguous)
- * so callers must use whole --input rather than silently picking the last one.
- */
-function schemaPropertyNames(schema: JsonSchema): Map<string, string | undefined> {
-  const map = new Map<string, string | undefined>()
-  if (schema === null || typeof schema !== 'object' || Array.isArray(schema)) return map
-  const properties = (schema as { properties?: unknown }).properties
-  if (properties === null || typeof properties !== 'object' || Array.isArray(properties)) return map
-  for (const rawName of Object.keys(properties as Record<string, unknown>)) {
-    const key = kebabCase(rawName)
-    map.set(key, map.has(key) ? undefined : rawName)
-  }
-  return map
-}
-
-/** Safely read schema.properties: returns undefined when absent or non-object (further validated elsewhere). */
-function schemaPropertiesOf(schema: JsonSchema): Record<string, unknown> | undefined {
-  if (schema === null || typeof schema !== 'object' || Array.isArray(schema)) return undefined
-  const properties = (schema as { properties?: unknown }).properties
-  if (properties === null || typeof properties !== 'object' || Array.isArray(properties)) return undefined
-  return properties as Record<string, unknown>
 }
 
 /**
