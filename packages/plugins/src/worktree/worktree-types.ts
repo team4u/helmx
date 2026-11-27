@@ -1,7 +1,7 @@
 /**
  * 受管 worktree 分配器与清理状态机共享契约类型（独立叶模块，断开双向类型依赖）。
  */
-import type { FileError, Result } from '@earendil-works/pi-durable/env'
+import type { ExecutionEnv, FileError, Result } from '@earendil-works/pi-durable/env'
 import type { NodePathUsage } from '@helmx/protocol'
 import type { WorktreeExecOptions, WorktreeExecResult } from './worktree-git.js'
 import type { WorktreeKvHandles, WorktreeStore } from './worktree-store.js'
@@ -15,6 +15,7 @@ export interface WorktreeAllocatorDeps {
   ) => Promise<WorktreeExecResult>
   nodeExists: (nodeId: string, path: string) => Promise<Result<boolean, FileError>>
   nodeCanonicalPath: (nodeId: string, path: string) => Promise<Result<string, FileError>>
+  executionEnv?: (nodeId: string, cwd: string) => ExecutionEnv
   /** 持久 KV 句柄（仅在未传 `store` 时用于构造默认 `WorktreeStore`）。 */
   kv?: WorktreeKvHandles
   /** 可选注入统一存储实例（WorktreeIsolation 共享同一存储，免循环引用）。 */

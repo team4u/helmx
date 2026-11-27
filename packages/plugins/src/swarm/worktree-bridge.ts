@@ -24,18 +24,12 @@ export const isUsageUnverifiableWorktreeError = (err: unknown): boolean =>
 export function extractChangedFilesPreview(inspected: WorktreeInspectResult, maxItems = 20): string[] {
   const seen = new Set<string>()
   const out: string[] = []
-  const push = (file: string): void => {
-    const clean = file.trim()
+  for (const file of inspected.files) {
+    const clean = file.path.trim()
     if (clean && !seen.has(clean)) {
       seen.add(clean)
-      if (out.length < maxItems) out.push(clean)
-    }
-  }
-  for (const rawLine of inspected.dirtyFiles) push(rawLine.length > 3 ? rawLine.slice(3) : rawLine)
-  if (typeof inspected.diffStat === 'string') {
-    for (const line of inspected.diffStat.split('\n')) {
-      const pipeIdx = line.indexOf(' | ')
-      if (pipeIdx > 0) push(line.slice(0, pipeIdx))
+      out.push(clean)
+      if (out.length >= maxItems) break
     }
   }
   return out
@@ -49,7 +43,7 @@ export async function inspectManagedWorktree(
   return (await ctx.host.invokeAction(
     WORKTREE_PLUGIN_ID,
     'inspect_worktree',
-    { worktreeId, diff: false },
+    { worktreeId },
     signal ? { signal } : undefined,
   )) as WorktreeInspectResult
 }
@@ -58,7 +52,9 @@ export const toWorktreeHandoffSnapshot = (worktreeId: string, inspected: Worktre
   worktreeId,
   ...(inspected.currentBranch !== undefined ? { branch: inspected.currentBranch } : {}),
   ...(inspected.commitsAhead !== undefined ? { commitsAhead: inspected.commitsAhead } : {}),
-  dirtyCount: inspected.dirtyFileCount,
+  dirtyCount: inspected.summary.dirtyFileCount,
+  additions: inspected.summary.additions,
+  deletions: inspected.summary.deletions,
   changedFilesPreview: extractChangedFilesPreview(inspected),
 })
 
@@ -85,7 +81,7 @@ export async function checkMemberWorktree(
   if (member.worktreeId === undefined) return undefined
   const inspected = await inspectManagedWorktree(ctx, member.worktreeId, signal)
   const unmergedCommits = inspected.exists ? (inspected.unmergedCommits ?? inspected.commitsAhead ?? 0) : 0
-  return { member, worktreeId: member.worktreeId, inspected, unmergedCommits, isDirty: inspected.exists && inspected.dirtyFileCount > 0 }
+  return { member, worktreeId: member.worktreeId, inspected, unmergedCommits, isDirty: inspected.exists && inspected.summary.dirtyFileCount > 0 }
 }
 
 export async function releaseWorktreeHoldById(

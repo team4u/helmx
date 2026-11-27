@@ -9,6 +9,7 @@ export { createProfilePlugin } from './profile.js';
 export { createMemoryPlugin, MEMORY_PLUGIN_ID } from './memory.js';
 export { createWorkflowPlugin, WORKFLOW_PLUGIN_ID } from './workflow.js';
 export { createWorktreePlugin, WORKTREE_PLUGIN_ID } from './worktree.js';
+export { createChangesPlugin, CHANGES_PLUGIN_ID, CHANGES_SCREEN_ID, CHANGES_PANEL_ID } from './changes.js';
 export { WORKFLOW_SKILL_ID } from './contracts.js';
 export { createSwarmPlugin, SWARM_PLUGIN_ID } from './swarm.js';
 export { createTriggersPlugin, TRIGGERS_PLUGIN_ID, TRIGGERS_SKILL_ID } from './triggers.js';

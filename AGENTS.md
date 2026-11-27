@@ -35,7 +35,7 @@ pnpm build && pnpm typecheck && pnpm lint && pnpm check:hygiene && pnpm test:all
 5. **扩展面契约（零 `if/else` 插件 ID 特判）**：
    - **后端 4 Hook**（`continue | transform | handled | block`，`block` 仅 `input`）：`input`、`before_turn`、`agent_spawn`（支持 `next` around）、`turn_settled`（`completed | failed | aborted`）；
    - **前端 10 `ctx.ui`**（`client.tsx` React 单轨）：`sidebarItem`、`screen`、`timelineRenderer`、`markdownCodeBlock`、`toolView`、`composerCompleter`、`workbenchPanel`、`command`、`settingsPanel`、`slot`。
-6. **13 个内置插件**（`@helmx/plugins`，`@helmx/hub` 注册，全默认启用；详情见 `docs/plugins/overview.md`）：`profile`（`locked`）、`workflow`、`worktree`（与 workflow 零静态依赖）、`swarm`、`memory`、`json-render`、`mermaid`、`triggers`、`magpie`、`token-speed`、`tiers`、`title`、`plan`。
+6. **15 个内置插件**（`@helmx/plugins`，`@helmx/hub` 注册，全默认启用；详情见 `docs/plugins/overview.md`）：`profile`（`locked`）、`workflow`、`worktree`（与 workflow 零静态依赖）、`changes`、`swarm`、`memory`、`json-render`、`mermaid`、`triggers`、`magpie`、`token-speed`、`tiers`、`title`、`plan`、`port-forward`。
    - **插件铁律**：① 停用后工具、动作、CLI、受管技能与 UI 贡献**即时消失，不留幻影提示词**；② 高频会话态用 `ctx.sessionDoc` 按需订阅，禁塞全局 `ctx.doc`（单文档上限 2 MiB，超限 `413`）；③ 启动先按依赖拓扑全体 `prepare()` 再 `start()`，随后按依赖与 `reconcileAfter` 软序 `reconcile()`；④ 停用/重载在途任务经 `liveTasks` 硬阻断（`409 plugin_has_live_tasks`，不可 force），持久占用或被依赖报 `409 plugin_in_use`（可 `--force`）。
 7. **明确不做**：服务端 TUI 兼容层；独立 `Space` CRUD 表（直用 `(nodeId, cwd)`）；内嵌 Python SSH 桥接（走 `EnvFabric`）；混装 `helmx` 与 `helmx-node`；第二套微应用子宿主（全栈微应用即带 `ctx.ui.screen` 的受管插件）；Web 端 Worktree Diff 合入状态机；在 `Conversation`/`ModelProvider` 底层伪装终端 CLI Agent。
 
@@ -105,6 +105,6 @@ pnpm build && pnpm typecheck && pnpm lint && pnpm check:hygiene && pnpm test:all
 - **总览与入门**：`docs/README.md` · `docs/getting-started/`（index / installation / first-workflow / orchestration-guide）· `docs/cli/reference.md` · `docs/releasing.md`
 - **架构机制**：`docs/architecture/overview.md` · `extension-points.md` · `envfabric.md` · `pi-durable.md`
 - **编排引擎**：`docs/workflows/dsl-guide.md` · `worktree-and-gate.md` · `journaling-recovery.md`
-- **插件生态**：`docs/plugins/overview.md` · `plugin-development.md` 及 13 插件同名文档：`profile / workflow / worktree / swarm / memory / triggers / magpie / json-render / mermaid / token-speed / tiers / title / plan`
+- **插件生态**：`docs/plugins/overview.md` · `plugin-development.md` 及 15 插件同名文档：`profile / workflow / worktree / changes / swarm / memory / triggers / magpie / json-render / mermaid / token-speed / tiers / title / plan / port-forward`
 - **Web 约定**：`docs/conventions/web-frontend.md` · `docs/conventions/web-navigation.md`
 - **工程排障**：`.helmx/skills/helmx-troubleshooting/SKILL.md`（长测试后台跑法、合并后 `HEAD^{tree}` 免重跑、happy-dom / Radix / TS 踩坑、fork `spawn_error` 恢复）——若当前环境未自动加载 `.helmx/skills/`，请按需主动读取

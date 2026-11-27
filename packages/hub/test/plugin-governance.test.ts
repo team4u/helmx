@@ -434,12 +434,12 @@ test('插件配置分层：磁盘不固化 default、sources 三态溯源、null
   await rejectsCode(store.set('ext:req', { token: 42 }, reqSchema), 'validation_error', 400)
 })
 
-test('createHelmx 全部 14 个内置插件的只读契约投影完整暴露 presentationMetaSchema', { timeout: 60_000 }, async (t) => {
+test('createHelmx 全部 15 个内置插件的只读契约投影完整暴露 presentationMetaSchema', { timeout: 60_000 }, async (t) => {
   const dataDir = useTempDir(t, 'helmx-hub-manifests-')
   const { app, kernel } = await createHubTestApp({ dataDir, cwd: dataDir })
   try {
     const initial = kernel.plugins.listManifests()
-    assert.equal(initial.length, 14)
+    assert.equal(initial.length, 15)
     assert.ok(initial.every((m) => m.id.startsWith('builtin:') && m.status === 'active'))
 
     const wfManifest = kernel.plugins.getManifest('builtin:workflow')
@@ -494,6 +494,14 @@ test('createHelmx 全部 14 个内置插件的只读契约投影完整暴露 pre
       pfManifest.ui.find((u) => u.surface === 'plugin.slot')?.spec.target,
       'builtin:node/detail-section',
     )
+
+    const changesManifest = kernel.plugins.getManifest('builtin:changes')
+    assert.equal(changesManifest.ui.find((u) => u.surface === 'sidebar.item')?.spec.id, 'changes-inspector')
+    assert.equal(changesManifest.ui.find((u) => u.surface === 'screen')?.spec.id, 'inspector')
+    assert.equal(changesManifest.ui.find((u) => u.surface === 'workbench.panel')?.spec.id, 'changes')
+    assert.equal(changesManifest.ui.filter((u) => u.surface === 'plugin.slot').length, 3)
+    assert.equal(changesManifest.actions.find((a) => a.id === 'inspect_workspace')?.idempotent, true)
+    assert.equal(changesManifest.actions.find((a) => a.id === 'inspect_workspace_file')?.idempotent, true)
   } finally {
     await app.close()
   }

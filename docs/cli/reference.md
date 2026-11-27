@@ -224,7 +224,8 @@ PUT 为整体替换契约：update 走语义化标志时 CLI 先 GET 完整 Prof
 | `helmx workflows save [fileOrScript]` / `delete <name>` | builtin:workflow | 保存 / 删除工作流定义（位置参数为本地脚本文件时自动读入，缺省名取 `meta.name`；重复默认 409，`--overwrite` 覆盖） |
 | `helmx workflows steer <runId> --text "<指导>"` | builtin:workflow | 向运行中的后台子代理插话纠偏；按归属与 CAS 水位经内核 guarded 提交；插话成功不代表指导已执行 |
 | `helmx workflows resume-failed [--conversation-id <id> \| --current \| --all]` | builtin:workflow | 续跑失败的工作流和后台子代理。可指定会话或用 `--all` 查全局，跳过的运行列在 `skipped`。 |
-| `helmx worktrees list / inspect / cleanup` | builtin:worktree | 受管 Git 工作树登记、只读检视（含有上限 diff 预览）与清理（选择器三选一互斥，`--delete-branch` / `--force` / `--allow-unverified-usage`） |
+| `helmx worktrees list / inspect / file / cleanup` | builtin:worktree | 受管 Git 工作树登记、两段式只读检视（`inspect` 概览 + `file` 单文件按需差异）与清理（选择器三选一互斥，`--delete-branch` / `--force` / `--allow-unverified-usage`） |
+| `helmx changes inspect / file` | builtin:changes | 普通会话工作区 Git 改动结构化概览（`working` / `unpushed` / `commit` / `since`）与单文件按需差异 |
 | `helmx swarm create-group / update-group / dispatch-worker` | builtin:swarm | 建立或修改协作组、派工。派工时可指定目标节点（`--node-id`）、工作目录（`--cwd`）、工作树隔离、分叉来源和模型。 |
 | `helmx swarm board-post / board-read / board-status` | builtin:swarm | 发看板消息、分页读消息、查看组和成员状态。发消息时用 `to` 指定收件人，用 `wake` 决定是否唤醒。 |
 | `helmx swarm abort-worker / switch-model / inspect-worker / archive-worker / close-group` | builtin:swarm | 中止成员当前回合、给闲置成员换模型、查看或归档成员、结单。用 `--keep-worktree` 保留有改动或未合入的工作树；非 Linux 节点自动删干净目录需显式传 `--allow-unverified-usage`。 |

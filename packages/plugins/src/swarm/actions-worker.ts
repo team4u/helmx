@@ -421,9 +421,9 @@ export function createWorkerHandlers(
           const branch = wt.inspected.currentBranch ?? wt.inspected.record.branch
           throw swarmError(
             'swarm_worktree_unmerged',
-            `成员 @${freshMember.name} 的工作树 ${wt.worktreeId} (branch: ${branch}) 存在未提交改动(${wt.inspected.dirtyFileCount})或未合入提交(${wt.unmergedCommits})；请先合入或传 keepWorktree: true / force: true`,
+            `成员 @${freshMember.name} 的工作树 ${wt.worktreeId} (branch: ${branch}) 存在未提交改动(${wt.inspected.summary.dirtyFileCount})或未合入提交(${wt.unmergedCommits})；请先合入或传 keepWorktree: true / force: true`,
             409,
-            { groupId: group.id, memberName: freshMember.name, worktreeId: wt.worktreeId, branch, path: wt.inspected.record.path, dirtyCount: wt.inspected.dirtyFileCount, commitsAhead: wt.unmergedCommits },
+            { groupId: group.id, memberName: freshMember.name, worktreeId: wt.worktreeId, branch, path: wt.inspected.record.path, dirtyCount: wt.inspected.summary.dirtyFileCount, commitsAhead: wt.unmergedCommits },
           )
         }
         const settled = await settleMemberWorktree(ctx, group.id, wt, {

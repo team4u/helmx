@@ -1,20 +1,29 @@
 /**
  * 受管 worktree 只读检视与 resume 续接校验：
- * - `inspectWorktree`：登记元数据 + 目标节点真实只读 git 状态/统计/受限 diff 预览（固定 `--no-ext-diff --no-textconv` 且全量脱敏）；
+ * - `inspectWorktree`：登记元数据 + 目标节点两段式轻量结构化 git 探测（`status -z` / `--numstat -z` /
+ *   `--name-status -z` / 有界 `git log` + 未合入提交数，绝不跑全量 `git diff`）；
+ * - `inspectWorktreeFile`：单文件按需 diff / 未跟踪文件有界安全预览；
  * - `verifyWorktreeForResume`：续接前经节点真实 fs + git 探测校验工作树仍在（探测失败与目录缺失显式区分）；
  * - `ownerMismatchError`：归属校验拒绝错误构造（`force` 不可越过）。
  */
 import { HelmxError } from '@helmx/protocol'
-import type { WorktreeInspectResult } from '../contracts.js'
+import type {
+  GitDiffFileResult,
+  WorktreeDiffScope,
+  WorktreeInspectResult,
+} from '../contracts.js'
+import {
+  probeGitFileDiff,
+  probeGitSummary,
+  type GitDiffNodePorts,
+} from '../git-diff/git-diff-probe.js'
+import { validateGitCommitSha } from '../git-diff/git-diff-parser.js'
 import {
   countUnmergedCommits,
   dirExistsOnNode,
   gitExec,
-  parseInspectPorcelainV2Lines,
   resolveMergeReferenceHead,
   resolveRepoAuthority,
-  type GitCapture,
-  type GitOkResult,
   type WorktreeNodePorts,
 } from './worktree-git.js'
 import type { ManagedWorktreeRecord, WorktreeStore } from './worktree-store.js'
@@ -26,15 +35,55 @@ export interface WorktreeInspectInput {
   conversationId?: number
   path?: string
   nodeId?: string
-  diff?: boolean
+  scope?: WorktreeDiffScope
+  commit?: string
   signal?: AbortSignal
 }
 
-const INSPECT_DIRTY_FILES_LIMIT = 200
-const INSPECT_DIFF_PREVIEW_LIMIT = 16_384
-const INSPECT_DIFF_STAT_LIMIT = 4_096
-const INSPECT_PROBE_LIMIT = 4_096
-const INSPECT_ERROR_DIAGNOSTIC_LIMIT = 2_000
+export interface WorktreeInspectFileInput extends WorktreeInspectInput {
+  filePath: string
+  oldPath?: string
+  contextLines?: number
+}
+
+const VALID_WORKTREE_SCOPES = new Set<WorktreeDiffScope>(['all', 'committed', 'uncommitted'])
+
+function normalizeWorktreeScope(raw: unknown): WorktreeDiffScope {
+  if (raw === undefined) return 'all'
+  if (typeof raw !== 'string' || !VALID_WORKTREE_SCOPES.has(raw as WorktreeDiffScope)) {
+    throw new HelmxError(
+      'validation_error',
+      `scope must be one of all | committed | uncommitted (received ${String(raw)})`,
+      400,
+    )
+  }
+  return raw as WorktreeDiffScope
+}
+
+function toGitDiffPorts(ports: WorktreeNodePorts, redact: (text: string) => string): GitDiffNodePorts {
+  return {
+    exec: (nodeId, cwd, args, options) => ports.exec(nodeId, cwd, args, options),
+    executionEnv: (nodeId, cwd) => {
+      if (ports.executionEnv === undefined) {
+        throw new HelmxError('unsupported', 'executionEnv port is required to read untracked worktree files', 501)
+      }
+      return ports.executionEnv(nodeId, cwd)
+    },
+    redact,
+  }
+}
+
+function rethrowAsWorktreeCheckError(record: ManagedWorktreeRecord, err: unknown): never {
+  if (err instanceof HelmxError && err.code === 'changes_probe_failed') {
+    throw new HelmxError(
+      'worktree_check_failed',
+      err.message,
+      err.status,
+      { worktreeId: record.id, ...(err.details ?? {}) },
+    )
+  }
+  throw err
+}
 
 export async function inspectWorktree(
   ports: WorktreeNodePorts,
@@ -43,71 +92,64 @@ export async function inspectWorktree(
   input: WorktreeInspectInput,
   signal?: AbortSignal,
 ): Promise<WorktreeInspectResult> {
+  const scope = normalizeWorktreeScope(input.scope)
+  const commit = input.commit !== undefined ? validateGitCommitSha(input.commit, 'commit') : undefined
   const record = store.resolveRecord(input, 'inspect')
-  const diffBase: WorktreeInspectResult['diffBase'] = record.baseCommit !== '' ? 'baseCommit' : 'HEAD'
-  const metadata: Pick<WorktreeInspectResult, 'record' | 'diffBase'> = { record, diffBase }
+  const fallbackDiffBase: WorktreeInspectResult['diffBase'] =
+    commit !== undefined ? 'commit' : record.baseCommit !== '' && scope !== 'uncommitted' ? 'baseCommit' : 'HEAD'
+
+  const emptySummary = {
+    totalFiles: 0,
+    additions: 0,
+    deletions: 0,
+    untrackedCount: 0,
+    dirtyFileCount: 0,
+  }
+
   if (record.status === 'removed') {
     return {
-      ...metadata,
+      record,
       exists: false,
       unavailableReason: 'removed',
-      dirtyFiles: [],
-      dirtyFileCount: 0,
-      dirtyFilesTruncated: false,
-      diffTruncated: false,
+      diffBase: fallbackDiffBase,
+      scope,
+      ...(commit !== undefined ? { selectedCommit: commit } : {}),
+      commits: [],
+      commitsTruncated: false,
+      summary: emptySummary,
+      files: [],
+      filesTruncated: false,
     }
   }
   if (!(await dirExistsOnNode(ports, record.nodeId, record.path))) {
     return {
-      ...metadata,
+      record,
       exists: false,
       unavailableReason: 'directory_missing',
-      dirtyFiles: [],
-      dirtyFileCount: 0,
-      dirtyFilesTruncated: false,
-      diffTruncated: false,
+      diffBase: fallbackDiffBase,
+      scope,
+      ...(commit !== undefined ? { selectedCommit: commit } : {}),
+      commits: [],
+      commitsTruncated: false,
+      summary: emptySummary,
+      files: [],
+      filesTruncated: false,
     }
-  }
-
-  const run = async (args: readonly string[], capture?: GitCapture): Promise<GitOkResult> => {
-    const result = await gitExec(ports, record.nodeId, record.path, ['-C', record.path, ...args], signal, capture)
-    if (!result.ok) {
-      const diagnostic = result.output.trim().slice(0, INSPECT_ERROR_DIAGNOSTIC_LIMIT)
-      const cut =
-        result.output.trim().length > INSPECT_ERROR_DIAGNOSTIC_LIMIT || result.truncated
-          ? '…（诊断已截断）'
-          : ''
-      throw new HelmxError(
-        'worktree_check_failed',
-        `无法在节点 ${record.nodeId} 只读检视 worktree '${record.path}'（git ${args[0]} 失败，检视中止）：\n${diagnostic}${cut}`,
-        502,
-        { worktreeId: record.id, path: record.path, nodeId: record.nodeId, output: result.output.slice(0, INSPECT_ERROR_DIAGNOSTIC_LIMIT) },
-      )
-    }
-    return result
-  }
-
-  const probe = async (args: readonly string[]): Promise<string> => {
-    const result = await run(args, { kind: 'chars', limit: INSPECT_PROBE_LIMIT })
-    if (result.truncated) {
-      throw new HelmxError(
-        'worktree_check_failed',
-        `检视探测命令 git ${args.join(' ')} 输出超出采集上限（${INSPECT_PROBE_LIMIT} 字符），结果不可信，检视中止`,
-        502,
-        { worktreeId: record.id, path: record.path, nodeId: record.nodeId },
-      )
-    }
-    return result.output.trim()
   }
 
   const repoProbeDir = record.repoRoot !== '' ? record.repoRoot : record.path
-  const diffRef = record.baseCommit !== '' ? record.baseCommit : 'HEAD'
+  const diffPorts = toGitDiffPorts(ports, redact)
 
-  const [statusResult, repoRef, statResult, diffResult] = await Promise.all([
-    run(['status', '--porcelain=v2', '--branch', '--untracked-files=all'], {
-      kind: 'lines',
-      maxLines: INSPECT_DIRTY_FILES_LIMIT + 16,
-    }),
+  const [summaryRes, repoRef] = await Promise.all([
+    probeGitSummary(diffPorts, {
+      mode: 'worktree',
+      nodeId: record.nodeId,
+      repoRoot: record.path,
+      scope,
+      baseCommit: record.baseCommit,
+      ...(commit !== undefined ? { commit } : {}),
+      signal,
+    }).catch((err) => rethrowAsWorktreeCheckError(record, err)),
     (async () => {
       const authority = await resolveRepoAuthority(ports, record.nodeId, repoProbeDir, signal)
       const referenceHead = await resolveMergeReferenceHead(ports, {
@@ -120,90 +162,83 @@ export async function inspectWorktree(
       })
       return { authority, referenceHead }
     })(),
-    run(['diff', '--no-ext-diff', '--no-textconv', '--stat', diffRef], {
-      kind: 'chars',
-      limit: INSPECT_DIFF_STAT_LIMIT,
-    }),
-    input.diff !== false
-      ? run(['diff', '--no-ext-diff', '--no-textconv', diffRef], {
-          kind: 'chars',
-          limit: INSPECT_DIFF_PREVIEW_LIMIT,
-        })
-      : Promise.resolve(undefined),
   ])
 
-  const parsedStatus = parseInspectPorcelainV2Lines(
-    statusResult.lines,
-    statusResult.totalNonEmptyLines,
-    INSPECT_DIRTY_FILES_LIMIT,
-  )
-  const branch = parsedStatus.branch
-  const head = parsedStatus.oid
-  if (!/^[0-9a-f]{7,64}$/i.test(head)) {
+  const targetRef =
+    summaryRes.currentBranch !== '' && summaryRes.currentBranch !== 'HEAD'
+      ? summaryRes.currentBranch
+      : summaryRes.currentHead
+  const unmergedCommits =
+    targetRef !== undefined && targetRef !== ''
+      ? await countUnmergedCommits(
+          ports,
+          record.nodeId,
+          repoRef.authority.mainPath,
+          repoRef.referenceHead,
+          targetRef,
+          signal,
+        )
+      : undefined
+
+  return {
+    record,
+    exists: true,
+    currentBranch: summaryRes.currentBranch,
+    ...(summaryRes.currentHead !== undefined ? { currentHead: summaryRes.currentHead } : {}),
+    ...(summaryRes.currentBranch !== record.branch ? { branchChanged: true } : {}),
+    ...(summaryRes.commitsAhead !== undefined ? { commitsAhead: summaryRes.commitsAhead } : {}),
+    ...(unmergedCommits !== undefined ? { unmergedCommits } : {}),
+    diffBase: summaryRes.diffBase,
+    scope,
+    ...(summaryRes.selectedCommit !== undefined ? { selectedCommit: summaryRes.selectedCommit } : {}),
+    commits: summaryRes.commits,
+    commitsTruncated: summaryRes.commitsTruncated,
+    summary: summaryRes.summary,
+    files: summaryRes.files,
+    filesTruncated: summaryRes.filesTruncated,
+  }
+}
+
+export async function inspectWorktreeFile(
+  ports: WorktreeNodePorts,
+  store: WorktreeStore,
+  redact: (text: string) => string,
+  input: WorktreeInspectFileInput,
+  signal?: AbortSignal,
+): Promise<GitDiffFileResult> {
+  const scope = normalizeWorktreeScope(input.scope)
+  const commit = input.commit !== undefined ? validateGitCommitSha(input.commit, 'commit') : undefined
+  const record = store.resolveRecord(input, 'inspect')
+  if (record.status === 'removed') {
     throw new HelmxError(
-      'worktree_check_failed',
-      `检视无法解析当前 HEAD 提交（git status --porcelain=v2 --branch 输出 oid=${JSON.stringify(redact(head))}，检视中止）`,
-      502,
+      'worktree_missing',
+      `受管 worktree '${record.path}'（节点 ${record.nodeId}）已被清理，无法检视文件差异`,
+      409,
+      { worktreeId: record.id, path: record.path, nodeId: record.nodeId },
+    )
+  }
+  if (!(await dirExistsOnNode(ports, record.nodeId, record.path))) {
+    throw new HelmxError(
+      'worktree_missing',
+      `受管 worktree '${record.path}'（节点 ${record.nodeId}）目录不存在，无法检视文件差异`,
+      409,
       { worktreeId: record.id, path: record.path, nodeId: record.nodeId },
     )
   }
 
-  const targetRef = branch !== '' && branch !== 'HEAD' ? branch : head
-  const [aheadOutcome, unmergedOutcome] = await Promise.allSettled([
-    record.baseCommit !== ''
-      ? probe(['rev-list', '--count', `${record.baseCommit}..${head}`]).then((aheadRaw) => {
-          const ahead = Number.parseInt(aheadRaw, 10)
-          if (!Number.isFinite(ahead)) {
-            throw new HelmxError(
-              'worktree_check_failed',
-              `检视无法解析领先提交数（git rev-list --count 输出 ${JSON.stringify(redact(aheadRaw))}，检视中止）`,
-              502,
-              { worktreeId: record.id, path: record.path, nodeId: record.nodeId },
-            )
-          }
-          return ahead
-        })
-      : Promise.resolve(undefined),
-    countUnmergedCommits(
-      ports,
-      record.nodeId,
-      repoRef.authority.mainPath,
-      repoRef.referenceHead,
-      targetRef,
-      signal,
-    ),
-  ])
-  if (aheadOutcome.status === 'rejected') throw aheadOutcome.reason
-  if (unmergedOutcome.status === 'rejected') throw unmergedOutcome.reason
-  const commitsAhead = aheadOutcome.value
-  const unmergedCommits = unmergedOutcome.value
-
-  let diffStat: string | undefined
-  const statText = statResult.output.trim()
-  if (statText !== '') {
-    diffStat =
-      redact(statText) +
-      (statResult.truncated ? `\n…（diff 统计超出检视上限 ${INSPECT_DIFF_STAT_LIMIT} 字符已截断，非完整统计）` : '')
-  }
-
-  const diffTruncated = diffResult?.truncated ?? false
-  const diffPreview = diffResult !== undefined && diffResult.output !== '' ? redact(diffResult.output) : undefined
-
-  return {
-    ...metadata,
-    exists: true,
-    currentBranch: redact(branch),
-    currentHead: redact(head),
-    ...(branch !== record.branch ? { branchChanged: true } : {}),
-    dirtyFiles: parsedStatus.dirtyFiles.map((line) => redact(line)),
-    dirtyFileCount: parsedStatus.dirtyFileCount,
-    dirtyFilesTruncated: parsedStatus.dirtyFilesTruncated,
-    ...(commitsAhead !== undefined ? { commitsAhead } : {}),
-    unmergedCommits,
-    ...(diffStat !== undefined ? { diffStat } : {}),
-    ...(diffPreview !== undefined ? { diffPreview } : {}),
-    diffTruncated,
-  }
+  const diffPorts = toGitDiffPorts(ports, redact)
+  return probeGitFileDiff(diffPorts, {
+    mode: 'worktree',
+    nodeId: record.nodeId,
+    repoRoot: record.path,
+    filePath: input.filePath,
+    ...(input.oldPath !== undefined ? { oldPath: input.oldPath } : {}),
+    scope,
+    baseCommit: record.baseCommit,
+    ...(commit !== undefined ? { commit } : {}),
+    ...(input.contextLines !== undefined ? { contextLines: input.contextLines } : {}),
+    signal,
+  }).catch((err) => rethrowAsWorktreeCheckError(record, err))
 }
 
 export async function verifyWorktreeForResume(

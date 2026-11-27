@@ -4,6 +4,11 @@
  * of server-only SDK/TypeBox declarations).
  */
 import type { AgentGateResult } from '@helmx/protocol/browser'
+export * from './git-diff/git-diff-types.js'
+
+export const CHANGES_PLUGIN_ID = 'builtin:changes' as const
+export const CHANGES_SCREEN_ID = 'inspector' as const
+export const CHANGES_PANEL_ID = 'changes' as const
 
 export type WorkflowRunStatus = 'running' | 'completed' | 'failed' | 'aborted'
 

@@ -328,6 +328,21 @@ export function SubagentToolView(props: ToolViewProps): ReactNode {
       right={
         <>
           <ElapsedClock active={isActive} startedAt={liveStartAt} settledMs={settledMs} className="trace-duration" />
+          {execMeta?.worktree !== undefined ? (
+            <PluginSlot
+              name="worktree-trace-inspect"
+              inline
+              slotProps={{
+                worktree: {
+                  path: execMeta.worktree.path,
+                  branch: execMeta.worktree.branch,
+                  ...(execMeta.worktree.id !== undefined ? { id: execMeta.worktree.id } : {}),
+                },
+                ...(cleanupNodeId !== undefined ? { nodeId: cleanupNodeId } : {}),
+                parentConversationId: viewerConversationId,
+              }}
+            />
+          ) : null}
           {showSyncWorktreeCleanup && execMeta?.worktree !== undefined ? (
             <PluginSlot
               name="worktree-cleanup"

@@ -12,7 +12,12 @@
  */
 import type { PluginDefinition } from '@helmx/protocol'
 import { loadManagedSkillAsset, resolvePluginClientAssets } from './asset-paths.js'
-import { WORKFLOW_PLUGIN_ID, WORKTREE_PLUGIN_ID } from './contracts.js'
+import {
+  CHANGES_PLUGIN_ID,
+  SWARM_PLUGIN_ID,
+  WORKFLOW_PLUGIN_ID,
+  WORKTREE_PLUGIN_ID,
+} from './contracts.js'
 import { asDeletedConversationId } from './shared-helpers.js'
 import { WorktreeIsolation } from './worktree/isolation.js'
 import { registerWorktreeActions } from './worktree/actions.js'
@@ -134,14 +139,20 @@ export function createWorktreePlugin(): PluginDefinition {
       registerWorktreeActions(ctx, { isolation })
 
       ctx.ui.slot({
-        id: 'worktree-inspect',
-        target: `${WORKFLOW_PLUGIN_ID}/worktree-inspect`,
-        priority: 100,
-        client: { module: 'slots.tsx', export: 'WorktreeInspectSlot' },
-      })
-      ctx.ui.slot({
         id: 'worktree-cleanup',
         target: `${WORKFLOW_PLUGIN_ID}/worktree-cleanup`,
+        priority: 100,
+        client: { module: 'slots.tsx', export: 'WorktreeCleanupSlot' },
+      })
+      ctx.ui.slot({
+        id: 'swarm-worktree-cleanup',
+        target: `${SWARM_PLUGIN_ID}/worktree-cleanup`,
+        priority: 100,
+        client: { module: 'slots.tsx', export: 'WorktreeCleanupSlot' },
+      })
+      ctx.ui.slot({
+        id: 'changes-worktree-cleanup',
+        target: `${CHANGES_PLUGIN_ID}/worktree-cleanup`,
         priority: 100,
         client: { module: 'slots.tsx', export: 'WorktreeCleanupSlot' },
       })

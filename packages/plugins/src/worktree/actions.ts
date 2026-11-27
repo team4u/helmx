@@ -10,6 +10,13 @@
  *   完全取自宿主盖章注入、不可伪造的 `context.callerPluginId`。
  */
 import { HelmxError, NODE_ID_PATTERN, type HelmxPluginContext, type JsonSchema, type PluginActionContext } from '@helmx/protocol'
+import type { WorktreeDiffScope } from '../contracts.js'
+import {
+  GIT_DIFF_COMMIT_ENTRY_SCHEMA,
+  GIT_DIFF_FILE_ENTRY_SCHEMA,
+  GIT_DIFF_FILE_RESULT_SCHEMA,
+  GIT_DIFF_SUMMARY_SCHEMA,
+} from '../git-diff/git-diff-schemas.js'
 import type { CleanupResult } from './worktree.js'
 import type { WorktreeIsolation } from './isolation.js'
 
@@ -199,7 +206,7 @@ export function registerWorktreeActions(ctx: HelmxPluginContext, deps: WorktreeA
 
   ctx.action({
     id: 'inspect_worktree',
-    description: 'Read-only inspection of one managed Git worktree: registration metadata plus a real read-only git probe on the target node (status/stats/capped diff preview); only registered records can be inspected',
+    description: 'Read-only structured inspection of one managed Git worktree: registration metadata plus lightweight git file summary and commit list on the target node (never runs full-repo diff)',
     exposeToPrompt: false,
     idempotent: true,
     inputSchema: {
@@ -209,7 +216,12 @@ export function registerWorktreeActions(ctx: HelmxPluginContext, deps: WorktreeA
         conversationId: { type: 'number', minimum: 1, description: 'Sub-conversation ID (mutually exclusive with worktreeId/path)' },
         path: { type: 'string', description: 'Worktree absolute path (mutually exclusive with conversationId; same-name paths across nodes need nodeId)' },
         nodeId: { type: 'string', description: 'Target node ID (only combinable with path, disambiguating same-name paths across nodes)' },
-        diff: { type: 'boolean', description: 'Whether to include a diff preview (included by default; registration metadata and stats are always returned)' },
+        scope: {
+          type: 'string',
+          enum: ['all', 'committed', 'uncommitted'],
+          description: 'Inspection scope (all changes vs baseCommit, committed commits only, or uncommitted working tree only)',
+        },
+        commit: { type: 'string', description: 'Optional 7-64 char commit SHA within the branch to inspect a single commit' },
       },
       additionalProperties: false,
     },
@@ -222,22 +234,23 @@ export function registerWorktreeActions(ctx: HelmxPluginContext, deps: WorktreeA
         currentBranch: { type: 'string' },
         currentHead: { type: 'string' },
         branchChanged: { type: 'boolean' },
-        dirtyFiles: { type: 'array', items: { type: 'string' } },
-        dirtyFileCount: { type: 'number' },
-        dirtyFilesTruncated: { type: 'boolean' },
         commitsAhead: { type: 'number' },
         unmergedCommits: { type: 'number' },
-        diffStat: { type: 'string' },
-        diffPreview: { type: 'string' },
-        diffTruncated: { type: 'boolean' },
-        diffBase: { type: 'string', enum: ['baseCommit', 'HEAD'] },
+        diffBase: { type: 'string', enum: ['baseCommit', 'HEAD', 'upstream', 'commit'] },
+        scope: { type: 'string', enum: ['all', 'committed', 'uncommitted'] },
+        selectedCommit: { type: 'string' },
+        commits: { type: 'array', items: GIT_DIFF_COMMIT_ENTRY_SCHEMA },
+        commitsTruncated: { type: 'boolean' },
+        summary: GIT_DIFF_SUMMARY_SCHEMA,
+        files: { type: 'array', items: GIT_DIFF_FILE_ENTRY_SCHEMA },
+        filesTruncated: { type: 'boolean' },
       },
-      required: ['record', 'exists', 'dirtyFiles', 'dirtyFileCount', 'dirtyFilesTruncated', 'diffTruncated', 'diffBase'],
+      required: ['record', 'exists', 'diffBase', 'scope', 'commits', 'commitsTruncated', 'summary', 'files', 'filesTruncated'],
       additionalProperties: false,
     },
     cli: {
       command: ['worktrees', 'inspect'],
-      description: 'Read-only inspection of a managed Git worktree (registration metadata + status/stats/diff preview)',
+      description: 'Read-only structured inspection of a managed Git worktree (metadata + changed file stats + commits)',
       positional: [{ field: 'worktreeId', required: true }],
     },
     async handler(input, context) {
@@ -248,7 +261,58 @@ export function registerWorktreeActions(ctx: HelmxPluginContext, deps: WorktreeA
           ...(a['conversationId'] !== undefined ? { conversationId: Number(a['conversationId']) } : {}),
           ...(a['path'] !== undefined ? { path: String(a['path']) } : {}),
           ...(a['nodeId'] !== undefined ? { nodeId: String(a['nodeId']) } : {}),
-          ...(a['diff'] !== undefined ? { diff: a['diff'] === true } : {}),
+          ...(a['scope'] !== undefined ? { scope: a['scope'] as WorktreeDiffScope } : {}),
+          ...(a['commit'] !== undefined ? { commit: String(a['commit']) } : {}),
+        },
+        context.signal,
+      )
+    },
+  })
+
+  ctx.action({
+    id: 'inspect_worktree_file',
+    description: 'Read-only single-file diff or bounded untracked file preview for one managed Git worktree',
+    exposeToPrompt: false,
+    idempotent: true,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        worktreeId: { type: 'string', description: 'Managed worktree registration ID (node:path; mutually exclusive with conversationId/path)' },
+        conversationId: { type: 'number', minimum: 1, description: 'Sub-conversation ID (mutually exclusive with worktreeId/path)' },
+        path: { type: 'string', description: 'Worktree absolute path (mutually exclusive with conversationId; same-name paths across nodes need nodeId)' },
+        nodeId: { type: 'string', description: 'Target node ID (only combinable with path, disambiguating same-name paths across nodes)' },
+        filePath: { type: 'string', minLength: 1, description: 'Repo-relative POSIX path of the changed or untracked file to inspect' },
+        oldPath: { type: 'string', description: 'Optional original repo-relative path for renamed or copied files' },
+        scope: {
+          type: 'string',
+          enum: ['all', 'committed', 'uncommitted'],
+          description: 'Inspection scope matching the summary query',
+        },
+        commit: { type: 'string', description: 'Optional 7-64 char commit SHA when inspecting a single commit' },
+        contextLines: { type: 'integer', minimum: 0, maximum: 20, description: 'Unified diff context lines (0-20; defaults to 3)' },
+      },
+      required: ['filePath'],
+      additionalProperties: false,
+    },
+    outputSchema: GIT_DIFF_FILE_RESULT_SCHEMA,
+    cli: {
+      command: ['worktrees', 'file'],
+      description: 'Read-only single-file diff or bounded untracked preview inside a managed Git worktree',
+      positional: [{ field: 'worktreeId', required: true }],
+    },
+    async handler(input, context) {
+      const a = input as Record<string, unknown>
+      return isolation.allocator.inspectFile(
+        {
+          ...(a['worktreeId'] !== undefined ? { worktreeId: String(a['worktreeId']) } : {}),
+          ...(a['conversationId'] !== undefined ? { conversationId: Number(a['conversationId']) } : {}),
+          ...(a['path'] !== undefined ? { path: String(a['path']) } : {}),
+          ...(a['nodeId'] !== undefined ? { nodeId: String(a['nodeId']) } : {}),
+          filePath: String(a['filePath'] ?? ''),
+          ...(a['oldPath'] !== undefined ? { oldPath: String(a['oldPath']) } : {}),
+          ...(a['scope'] !== undefined ? { scope: a['scope'] as WorktreeDiffScope } : {}),
+          ...(a['commit'] !== undefined ? { commit: String(a['commit']) } : {}),
+          ...(a['contextLines'] !== undefined ? { contextLines: Number(a['contextLines']) } : {}),
         },
         context.signal,
       )

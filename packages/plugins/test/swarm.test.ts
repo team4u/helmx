@@ -1776,7 +1776,13 @@ test('swarm-unit14: RetainedWorktreeInfo.nodeId strict contract across validator
           const isA = wtId.startsWith('remote-a:')
           return {
             exists: true,
-            dirtyFileCount: 0,
+            diffBase: 'baseCommit',
+            scope: 'all',
+            commits: [],
+            commitsTruncated: false,
+            summary: { totalFiles: 0, additions: 0, deletions: 0, untrackedCount: 0, dirtyFileCount: 0 },
+            files: [],
+            filesTruncated: false,
             unmergedCommits: isA ? 2 : 3,
             currentBranch: isA ? 'helmx/a' : 'helmx/b',
             record: {

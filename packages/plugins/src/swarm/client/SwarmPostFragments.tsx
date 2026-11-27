@@ -5,7 +5,7 @@
  */
 import type { ReactNode } from 'react'
 import type { HelmxLocale } from '@helmx/protocol/browser'
-import { Badge, HelmxIcon, resolveLocalizedText } from '@helmx/plugin-client'
+import { Badge, HelmxIcon, PluginSlot, resolveLocalizedText } from '@helmx/plugin-client'
 import { resolveNonDefaultWakeBadge, type BoardPost } from './board-model.ts'
 import * as C from './copy.ts'
 
@@ -63,6 +63,17 @@ export function PostWorktreeLine({ snapshot, locale }: PostWorktreeLineProps): R
     <div className="sw-panel-post-worktree">
       <HelmxIcon name="git-branch" size={11} />
       <span>{C.panelWorktreeSummary(snapshot, locale)}</span>
+      <span className="sw-panel-post-worktree-actions">
+        <PluginSlot
+          name="worktree-actions"
+          inline
+          slotProps={{
+            worktreeId: snapshot.worktreeId,
+            ...(snapshot.branch !== undefined ? { branch: snapshot.branch } : {}),
+            mode: 'snapshot',
+          }}
+        />
+      </span>
     </div>
   )
 }

@@ -4,13 +4,14 @@
 
 ## 当前状态
 
-插件系统是 Helmx 的核心生产能力：内核（`@helmx/kernel`）只保留持久会话、跨节点执行底座、Model/Auth 与插件宿主四块通用机制，其余一切业务能力由插件承载。官方插件实现与资产位于 `packages/plugins`，由产品组合根 `packages/hub/src/app.ts` 的 `createHelmx` 注册，共 13 个内置插件（全部默认启用）：
+插件系统是 Helmx 的核心生产能力：内核（`@helmx/kernel`）只保留持久会话、跨节点执行底座、Model/Auth 与插件宿主四块通用机制，其余一切业务能力由插件承载。官方插件实现与资产位于 `packages/plugins`，由产品组合根 `packages/hub/src/app.ts` 的 `createHelmx` 注册，共 15 个内置插件（全部默认启用）：
 
 | 插件 ID | 名称 | 职责一句话 | 默认状态 | locked |
 | :--- | :--- | :--- | :--- | :--- |
 | `builtin:profile` | 角色与技能底座 | 按会话 Profile 注入 SYSTEM.md / AGENTS.md 与技能目录，补写默认 `assistant` 托管声明并提供 `load_skill` 工具（内核核心技能由 `core:*` 直接自举） | 启用 | 是（常驻不可停用） |
 | `builtin:workflow` | 工作流与子代理编排 | `subagent` / `SubagentWorkflow` 工具、DSL 引擎与账本恢复 | 启用 | 否 |
-| `builtin:worktree` | 受管工作树 | 受管 Git Worktree 分配、持久租约与持有锁、`cleanup_worktree` 工具与 `worktrees` CLI | 启用 | 否 |
+| `builtin:worktree` | 受管工作树 | 受管 Git Worktree 分配、持久租约与持有锁、两段式结构化探测、`cleanup_worktree` 工具与 `worktrees` CLI | 启用 | 否 |
+| `builtin:changes` | 通用改动检视 | 跨普通会话工作区与受管工作树的只读 Git 差异检视台、工作台 `Changes` 面板与跨插件检视插槽 | 启用 | 否 |
 | `builtin:swarm` | Swarm 对等协同看板 | 扁平对等序号黑板、正交唤醒、`turn_settled` 纯事件防掉棒自愈与自适应协同看板 | 启用 | 否 |
 | `builtin:memory` | 长期记忆 | 按 Profile 管理 MEMORY.md 注入与启停，提供 `update_memory` 工具与每日 Dream 自动整理（`dream` / `dream_status` / `dream_configure`） | 启用 | 否 |
 | `builtin:json-render` | JSON 卡片渲染 | 接管 ```ui 代码围栏渲染声明式 JSON Spec 卡片，自举 `generative-ui` 技能 | 启用 | 否 |
@@ -125,7 +126,7 @@
 
 ## 相关文档
 
-- 各内置插件深度文档：[workflow](workflow.md) · [worktree](worktree.md) · [swarm](swarm.md) · [profile](profile.md) · [memory](memory.md) · [triggers](triggers.md) · [magpie](magpie.md) · [json-render](json-render.md) · [mermaid](mermaid.md) · [token-speed](token-speed.md) · [tiers](tiers.md) · [title](title.md) · [plan](plan.md)
+- 各内置插件深度文档：[workflow](workflow.md) · [worktree](worktree.md) · [changes](changes.md) · [swarm](swarm.md) · [profile](profile.md) · [memory](memory.md) · [triggers](triggers.md) · [magpie](magpie.md) · [json-render](json-render.md) · [mermaid](mermaid.md) · [token-speed](token-speed.md) · [tiers](tiers.md) · [title](title.md) · [plan](plan.md)
 - [插件开发实战](plugin-development.md)：从 `helmx plugins init` 到 doctor / rescan / enable / reload 的完整闭环
 - [生命周期 Hook 与全界面扩展点](../architecture/extension-points.md)：4 个 Hook 与 10 个 UI surface 的逐项契约
 - [微内核架构总览](../architecture/overview.md)：内核四块机制与包依赖方向

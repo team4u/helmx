@@ -448,14 +448,20 @@ describe('inspect 只读检视：成功输出脱敏与 diff 驱动隔离（真�
 
       const result = await allocator.inspect({ worktreeId: record.id })
       assert.equal(result.exists, true)
-      assert.ok(result.diffPreview !== undefined && result.diffPreview.includes('[REDACTED]'), 'diff 中秘密值必须脱敏')
-      assert.ok(!result.diffPreview!.includes(secret), 'diff 预览不得含原始秘密')
-      assert.ok(!result.diffStat!.includes(secret), 'diff 统计不得含原始秘密')
+      assert.ok(result.commits.some((c) => c.subject.includes('add creds')), 'commits 应包含新提交')
       assert.ok(
-        result.dirtyFiles.some((l) => l.includes('[REDACTED]')),
-        `文件名含秘密的状态行必须脱敏（实得 ${JSON.stringify(result.dirtyFiles)}）`,
+        result.files.some((f) => f.path.includes('[REDACTED]') && f.untracked),
+        `文件名含秘密的文件条目必须脱敏（实得 ${JSON.stringify(result.files)}）`,
       )
-      assert.ok(result.dirtyFiles.every((l) => !l.includes(secret)), '状态行不得原样回显秘密')
+      assert.ok(result.files.every((f) => !f.path.includes(secret)), '文件列表不得原样回显秘密')
+
+      const fileDiff = await allocator.inspectFile({ worktreeId: record.id, filePath: 'creds.txt' })
+      assert.equal(fileDiff.kind, 'diff')
+      if (fileDiff.kind === 'diff') {
+        const allText = fileDiff.hunks.flatMap((h) => h.rows.map((r) => r.text)).join('\n')
+        assert.ok(allText.includes('[REDACTED]'), '单文件 diff 中秘密值必须脱敏')
+        assert.ok(!allText.includes(secret), '单文件 diff 不得含原始秘密')
+      }
       release()
     } finally {
       rmSync(dir, { recursive: true, force: true })
@@ -488,12 +494,19 @@ describe('inspect 只读检视：成功输出脱敏与 diff 驱动隔离（真�
       const record = await allocator.allocate({ nodeId: 'local', sourceCwd: repo, parentConversationId: 1 })
       writeFileSync(join(record.path, 'note.txt'), 'note-v2\n')
       writeFileSync(join(record.path, 'data.bin'), 'BINNEW-PAYLOAD-XYZ\n')
-      const result = await allocator.inspect({ worktreeId: record.id })
+      const summary = await allocator.inspect({ worktreeId: record.id })
+      assert.equal(summary.exists, true)
+      assert.ok(summary.files.some((f) => f.path === 'data.bin'))
+      const fileDiff = await allocator.inspectFile({ worktreeId: record.id, filePath: 'data.bin' })
+      assert.equal(fileDiff.kind, 'diff')
       assert.ok(!existsSync(driverMarker), '外部 diff 驱动不得被触发（--no-ext-diff）')
       assert.ok(!existsSync(textconvMarker), 'textconv 过滤器不得被触发（--no-textconv）')
-      assert.ok(!result.diffPreview!.includes('DRIVER-RAN'), 'diff 应为真实内部 diff，而非驱动输出')
-      assert.ok(!result.diffPreview!.includes('TEXCONV-RAN'), 'diff 不得经 textconv 过滤')
-      assert.ok(result.diffPreview!.includes('+BINNEW-PAYLOAD-XYZ'), '应显示真实内容行')
+      if (fileDiff.kind === 'diff') {
+        const allText = fileDiff.hunks.flatMap((h) => h.rows.map((r) => r.text)).join('\n')
+        assert.ok(!allText.includes('DRIVER-RAN'), 'diff 应为真实内部 diff，而非驱动输出')
+        assert.ok(!allText.includes('TEXCONV-RAN'), 'diff 不得经 textconv 过滤')
+        assert.ok(allText.includes('BINNEW-PAYLOAD-XYZ'), '应显示真实内容行')
+      }
       // 对照组：不带防护参数的裸 git diff 必须触发驱动（证明配置生效、测试非空转）。
       execFileSync('git', ['diff', record.baseCommit], { cwd: record.path, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] })
       assert.ok(existsSync(driverMarker), '对照组：裸 git diff 应触发外部驱动')
@@ -534,31 +547,68 @@ describe('inspect 只读检视：成功输出脱敏与 diff 驱动隔离（真�
   })
 })
 
-describe('inspect 受限采集上限（受控 exec 分块注入）', { timeout: 60_000 }, () => {
-  it('diff 超 16KiB 先到先截且为真实前缀；状态行流式计数保留真实总数；diff argv 含 --no-ext-diff --no-textconv', {
+describe('inspect 受限采集与按需单文件预算（受控 exec 分块注入）', { timeout: 60_000 }, () => {
+  it('inspect 仅跑 -z 元数据（绝不跑全量 diff），超过 500 文件保留真实总数并显式截断；inspectFile 拦截超大行数并携带防护参数', {
     timeout: 60_000,
   }, async () => {
     const base = 'a1b2c3d4'.repeat(5)
     const head = 'e5f6a7b8'.repeat(5)
-    const statusLines = [
+    const statusTokens = [
       `# branch.oid ${head}`,
       '# branch.head stub-branch',
-      ...Array.from({ length: 250 }, (_, i) => `? file-${String(i).padStart(3, '0')}.txt`),
+      '1 .M N... 100644 100644 100644 aaaaaaaa bbbbbbbb big.ts',
+      ...Array.from({ length: 550 }, (_, i) => `? file-${String(i).padStart(3, '0')}.txt`),
     ]
-    const diffBody = Array.from({ length: 400 }, (_, i) => `+diff line ${String(i).padStart(3, '0')} ${'z'.repeat(48)}`).join('\n')
-    const statBody = Array.from({ length: 200 }, (_, i) => ` path-${String(i).padStart(3, '0')}.txt | 2 +-\n`).join('')
+    const patchBig = [
+      'diff --git a/big.ts b/big.ts',
+      '--- a/big.ts',
+      '+++ b/big.ts',
+      '@@ -1,1 +1,2 @@',
+      ' line1',
+      '+line2',
+      '',
+    ].join('\n')
     const stub = stubChunkedExec((args) => {
       const key = args.join(' ')
-      if (key === 'status --porcelain=v2 --branch --untracked-files=all') return { output: `${statusLines.join('\n')}\n` }
+      if (key === 'status --porcelain=v2 --branch --untracked-files=all -z') {
+        return { output: `${statusTokens.join('\0')}\0` }
+      }
+      if (key === 'status --porcelain=v2 --branch --untracked-files=all -z -- huge.ts') {
+        return { output: `# branch.oid ${head}\0# branch.head stub-branch\0` }
+      }
+      if (key === 'status --porcelain=v2 --branch --untracked-files=all -z -- big.ts') {
+        return { output: [`# branch.oid ${head}`, '# branch.head stub-branch', '1 .M N... 100644 100644 100644 aaaaaaaa bbbbbbbb big.ts', ''].join('\0') }
+      }
       if (key === `rev-list --count ${base}..${head}`) return { output: '3\n' }
       if (key === 'rev-parse --path-format=absolute --git-common-dir') return { output: '/repo/.git\n' }
       if (key === 'worktree list --porcelain -z') return { output: `worktree /repo\0HEAD ${base}\0branch refs/heads/main\0\0` }
       if (key === `rev-list --count ${base}..stub-branch`) return { output: '3\n' }
-      if (key === `diff --no-ext-diff --no-textconv --stat ${base}`) return { output: statBody }
-      if (key === `diff --no-ext-diff --no-textconv ${base}`) return { output: diffBody }
+      if (key === `diff --no-ext-diff --no-textconv --find-renames ${base} --numstat -z`) {
+        return { output: '2\t1\tbig.ts\0' }
+      }
+      if (key === `diff --no-ext-diff --no-textconv --find-renames ${base} --name-status -z`) {
+        return { output: 'M\0big.ts\0' }
+      }
+      if (key.startsWith(`log --no-show-signature -z --max-count=51`)) {
+        return { output: `${head}\x1f${head.slice(0, 7)}\x1ffeat: stub commit\x1fTester\x1f1700000000\0` }
+      }
+      if (key === `diff --no-ext-diff --no-textconv --find-renames ${base} --numstat -z -- huge.ts`) {
+        return { output: '5000\t10\thuge.ts\0' }
+      }
+      if (key === `diff --no-ext-diff --no-textconv --find-renames ${base} --name-status -z -- huge.ts`) {
+        return { output: 'M\0huge.ts\0' }
+      }
+      if (key === `diff --no-ext-diff --no-textconv --find-renames ${base} --numstat -z -- big.ts`) {
+        return { output: '1\t0\tbig.ts\0' }
+      }
+      if (key === `diff --no-ext-diff --no-textconv --find-renames ${base} --name-status -z -- big.ts`) {
+        return { output: 'M\0big.ts\0' }
+      }
+      if (key === `diff --no-ext-diff --no-textconv --find-renames ${base} -U3 -- big.ts`) {
+        return { output: patchBig }
+      }
       return { output: '', exitCode: 1 }
     })
-    // 块边界刻意切在行中间：验证 lines 模式流式按行结算不受分块影响。
     stub.setChunkSize(7)
     const docs = new MemoryKvStore()
     docs.setParsed('builtin:worktree', WORKTREES_KV_NAMESPACE, 'local:/wt', {
@@ -578,7 +628,6 @@ describe('inspect 受限采集上限（受控 exec 分块注入）', { timeout: 
       exec: stub.exec as never,
       nodeExists: async () => ({ ok: true, value: true }) as never,
       nodeCanonicalPath: async () => ({ ok: true, value: '/wt' }) as never,
-      // inspect 只读面不触发进程扫描；如被误调即显式拒绝（不伪造）。
       inspectPathUsage: async () => {
         throw new HelmxError('unsupported', 'inspect 用例不扫描进程占用', 501)
       },
@@ -586,24 +635,37 @@ describe('inspect 受限采集上限（受控 exec 分块注入）', { timeout: 
     })
 
     const result = await allocator.inspect({ worktreeId: 'local:/wt' })
-    // diff 预览：采集阶段先到先截，恰好上限字符数且为真实输出的前缀。
-    assert.equal(result.diffTruncated, true)
-    assert.equal(result.diffPreview!.length, 16_384)
-    assert.equal(result.diffPreview, diffBody.slice(0, 16_384))
-    assert.ok(diffBody.length > 16_384, '测试前提：脚本 diff 超过预览上限')
-    // 统计超上限：末尾附文字说明，不假装完整。
-    assert.ok(result.diffStat !== undefined && result.diffStat.includes('截断'), `统计截断必须文字说明（实得 ${result.diffStat}）`)
-    // 状态清单：块内切行不影响流式结算——真实总数 250，仅保留前 200 条原行。
-    assert.equal(result.dirtyFileCount, 250)
-    assert.equal(result.dirtyFiles.length, 200)
-    assert.equal(result.dirtyFilesTruncated, true)
-    assert.equal(result.dirtyFiles[0], '?? file-000.txt')
+    assert.equal(result.summary.dirtyFileCount, 551)
+    assert.equal(result.summary.untrackedCount, 550)
+    assert.equal(result.summary.totalFiles, 551)
+    assert.equal(result.files.length, 500)
+    assert.equal(result.filesTruncated, true)
+    assert.equal(result.files[0]!.path, 'big.ts')
+    assert.equal(result.commits.length, 1)
     assert.equal(result.commitsAhead, 3)
     assert.equal(result.unmergedCommits, 3)
     assert.equal(result.branchChanged, undefined)
-    // argv 回归锁定：diff 命令必须携带防护参数。
+    // Summary never executes full-repo `git diff` without --numstat/--name-status.
+    const fullRepoDiffCalls = stub.seen.filter(
+      (a) => a.includes('diff') && !a.includes('--numstat') && !a.includes('--name-status'),
+    )
+    assert.equal(fullRepoDiffCalls.length, 0)
+
+    const huge = await allocator.inspectFile({ worktreeId: 'local:/wt', filePath: 'huge.ts' })
+    assert.equal(huge.kind, 'too_large')
+    if (huge.kind === 'too_large') {
+      assert.equal(huge.reason, 'line_budget_exceeded')
+      assert.equal(huge.additions, 5000)
+    }
+
+    const big = await allocator.inspectFile({ worktreeId: 'local:/wt', filePath: 'big.ts' })
+    assert.equal(big.kind, 'diff')
+    if (big.kind === 'diff') {
+      assert.equal(big.hunks.length, 1)
+    }
+
     const diffInvocations = stub.seen.filter((a) => a.includes('diff'))
-    assert.ok(diffInvocations.length >= 2, '应执行 --stat 与正文两条 diff 命令')
+    assert.ok(diffInvocations.length >= 4)
     for (const argv of diffInvocations) {
       assert.ok(argv.includes('--no-ext-diff') && argv.includes('--no-textconv'), `diff 命令必须含防护参数（实得 ${argv.join(' ')}）`)
     }
@@ -616,12 +678,14 @@ describe('inspect 受限采集上限（受控 exec 分块注入）', { timeout: 
     const head = 'e5f6a7b8'.repeat(5)
     const stub = stubChunkedExec((args) => {
       const key = args.join(' ')
-      if (key === 'status --porcelain=v2 --branch --untracked-files=all') {
-        return { output: `# branch.oid ${head}\n# branch.head stub-branch\n` }
+      if (key === 'status --porcelain=v2 --branch --untracked-files=all -z') {
+        return { output: `# branch.oid ${head}\0# branch.head stub-branch\0` }
       }
       if (key === 'rev-parse --path-format=absolute --git-common-dir') return { output: '/repo/.git\n' }
       if (key === 'worktree list --porcelain -z') return { output: `worktree /repo\0HEAD ${base}\0branch refs/heads/main\0\0` }
-      if (key.startsWith('rev-list')) return { output: `fatal: bad object ${base}\n${'x'.repeat(3000)}`, exitCode: 128 }
+      if (key.startsWith('rev-list') || key.startsWith('diff') || key.startsWith('log')) {
+        return { output: `fatal: bad object ${base}\n${'x'.repeat(3000)}`, exitCode: 128 }
+      }
       return { output: '' }
     })
     const docs = new MemoryKvStore()
@@ -654,10 +718,9 @@ describe('inspect 受限采集上限（受控 exec 分块注入）', { timeout: 
         assert.ok(err instanceof HelmxError)
         assert.equal(err.code, 'worktree_check_failed')
         assert.match(err.message, /bad object/)
-        assert.match(err.message, /诊断已截断/)
         assert.ok(err.message.length < 3000, '错误消息不得整段携带超长输出')
         const details = err.details as { output?: string }
-        assert.ok(details !== undefined && details.output !== undefined && details.output.length <= 2000)
+        assert.ok(details !== undefined && details.output !== undefined && details.output.length === 2000)
         return true
       },
     )

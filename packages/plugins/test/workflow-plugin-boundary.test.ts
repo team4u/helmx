@@ -759,26 +759,51 @@ test('工作流库动作注册：get/save/delete 三动作登记且 CLI 映射�
   await host.dispose()
 })
 
-test('builtin:worktree 注册工作树检视与清理 UI 插槽（指向 builtin:workflow）', { timeout: 60_000 }, async () => {
+test('builtin:worktree 注册工作树清理 UI 插槽，builtin:changes 注册通用差异 UI 与工作树检视插槽', { timeout: 60_000 }, async () => {
   const host = makeHost()
   const { createWorktreePlugin } = await import('../src/worktree.js')
+  const { createChangesPlugin } = await import('../src/changes.js')
   await host.register(createWorktreePlugin())
+  await host.register(createChangesPlugin())
   try {
     const wtActions = new Map(
       host.listActions().filter((m) => m.pluginId === 'builtin:worktree').map((m) => [m.id, m]),
     )
     assert.equal(wtActions.get('list_worktrees')?.idempotent, true, 'list_worktrees 必须声明 idempotent: true')
     assert.equal(wtActions.get('inspect_worktree')?.idempotent, true, 'inspect_worktree 必须声明 idempotent: true')
+    assert.equal(wtActions.get('inspect_worktree_file')?.idempotent, true, 'inspect_worktree_file 必须声明 idempotent: true')
     assert.notEqual(wtActions.get('cleanup_worktree')?.idempotent, true, 'cleanup_worktree 不得声明 idempotent: true')
-    const slots = host
+    const wtSlots = host
       .listUi()
       .filter((u) => u.pluginId === 'builtin:worktree' && u.surface === 'plugin.slot')
       .map((u) => u.spec as { id: string; target: string; client?: { module: string; export: string } })
     assert.deepEqual(
-      slots.map((s) => [s.id, s.target, s.client?.module, s.client?.export]),
+      wtSlots.map((s) => [s.id, s.target, s.client?.module, s.client?.export]),
       [
-        ['worktree-inspect', 'builtin:workflow/worktree-inspect', 'slots.tsx', 'WorktreeInspectSlot'],
         ['worktree-cleanup', 'builtin:workflow/worktree-cleanup', 'slots.tsx', 'WorktreeCleanupSlot'],
+        ['swarm-worktree-cleanup', 'builtin:swarm/worktree-cleanup', 'slots.tsx', 'WorktreeCleanupSlot'],
+        ['changes-worktree-cleanup', 'builtin:changes/worktree-cleanup', 'slots.tsx', 'WorktreeCleanupSlot'],
+      ],
+    )
+
+    const chgActions = new Map(
+      host.listActions().filter((m) => m.pluginId === 'builtin:changes').map((m) => [m.id, m]),
+    )
+    assert.equal(chgActions.get('inspect_workspace')?.idempotent, true)
+    assert.equal(chgActions.get('inspect_workspace_file')?.idempotent, true)
+    const chgUi = host.listUi().filter((u) => u.pluginId === 'builtin:changes')
+    assert.equal((chgUi.find((u) => u.surface === 'sidebar.item')?.spec as { id?: string } | undefined)?.id, 'changes-inspector')
+    assert.equal((chgUi.find((u) => u.surface === 'screen')?.spec as { id?: string } | undefined)?.id, 'inspector')
+    assert.equal((chgUi.find((u) => u.surface === 'workbench.panel')?.spec as { id?: string } | undefined)?.id, 'changes')
+    const chgSlots = chgUi
+      .filter((u) => u.surface === 'plugin.slot')
+      .map((u) => u.spec as { id: string; target: string; client?: { module: string; export: string } })
+    assert.deepEqual(
+      chgSlots.map((s) => [s.id, s.target, s.client?.module, s.client?.export]),
+      [
+        ['workflow-worktree-inspect', 'builtin:workflow/worktree-inspect', 'slots.tsx', 'WorkflowWorktreeInspectSlot'],
+        ['workflow-trace-inspect', 'builtin:workflow/worktree-trace-inspect', 'slots.tsx', 'WorktreeTraceInspectSlot'],
+        ['swarm-worktree-actions', 'builtin:swarm/worktree-actions', 'slots.tsx', 'SwarmWorktreeActionsSlot'],
       ],
     )
   } finally {

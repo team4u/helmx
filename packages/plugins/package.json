@@ -30,6 +30,10 @@
       "types": "./dist/worktree.d.ts",
       "import": "./dist/worktree.js"
     },
+    "./changes": {
+      "types": "./dist/changes.d.ts",
+      "import": "./dist/changes.js"
+    },
     "./swarm": {
       "types": "./dist/swarm.d.ts",
       "import": "./dist/swarm.js"

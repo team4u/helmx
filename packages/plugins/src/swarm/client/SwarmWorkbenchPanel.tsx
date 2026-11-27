@@ -115,7 +115,11 @@ export function SwarmWorkbenchPanel(props?: Partial<WorkbenchPanelProps>): React
       />
 
       {model.retainedWorktrees?.length ? (
-        <SwarmRetainedWorktreesSection locale={s.locale} items={model.retainedWorktrees} />
+        <SwarmRetainedWorktreesSection
+          locale={s.locale}
+          items={model.retainedWorktrees}
+          coordinatorConversationId={effectiveBoard.group.coordinatorConversationId}
+        />
       ) : null}
 
       <SwarmBoardPostsSection

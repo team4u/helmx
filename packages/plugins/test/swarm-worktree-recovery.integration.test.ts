@@ -160,7 +160,6 @@ describe('builtin:swarm worktree SIGKILL recovery & remote node worktrees', { co
       // Worktree stayed alive during recovery and cleanup runs cleanly on close_group.
       const inspectedBeforeClose = (await app.kernel.plugins.invokeAction('builtin:worktree', 'inspect_worktree', {
         worktreeId: preCoder.worktreeId,
-        diff: false,
       })) as { exists: boolean }
       assert.equal(inspectedBeforeClose.exists, true)
 
@@ -184,7 +183,6 @@ describe('builtin:swarm worktree SIGKILL recovery & remote node worktrees', { co
       await app.kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'close_group', { groupId: seeded.groupId })
       const inspectedAfterClose = (await app.kernel.plugins.invokeAction('builtin:worktree', 'inspect_worktree', {
         worktreeId: preCoder.worktreeId,
-        diff: false,
       })) as { exists: boolean }
       assert.equal(inspectedAfterClose.exists, false)
       assert.equal(app.kernel.conversations.getConversation(seeded.coordId).tags.includes(ARCHIVED_COORDINATOR_TAG), true)
@@ -340,7 +338,6 @@ describe('builtin:swarm worktree SIGKILL recovery & remote node worktrees', { co
       // inspect_worktree on builtin:worktree confirms remote allocation & 1 unmerged commit
       const inspectedA = (await kernel.plugins.invokeAction(WORKTREE_ID, 'inspect_worktree', {
         worktreeId: workerA.worktreeId,
-        diff: false,
       })) as { exists: boolean; commitsAhead?: number; record?: { nodeId: string } }
       assert.equal(inspectedA.exists, true)
       assert.equal(inspectedA.commitsAhead, 1)

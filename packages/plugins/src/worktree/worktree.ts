@@ -16,9 +16,12 @@ import {
   resolveRepoAuthority,
 } from './worktree-git.js'
 import { WorktreeStore, type ManagedWorktreeRecord, type WorktreeRecordSelector } from './worktree-store.js'
+import type { GitDiffFileResult } from '../contracts.js'
 import {
   inspectWorktree,
+  inspectWorktreeFile,
   verifyWorktreeForResume,
+  type WorktreeInspectFileInput,
   type WorktreeInspectInput,
   type WorktreeInspectResult,
 } from './worktree-inspect.js'
@@ -32,7 +35,7 @@ import type {
 
 /** 单条受管 worktree 记录与持久持有锁契约（登记形状与持久化见 worktree-store.ts）。 */
 export type { ManagedWorktreeHold, ManagedWorktreeRecord } from './worktree-store.js'
-export type { WorktreeInspectInput, WorktreeInspectResult } from './worktree-inspect.js'
+export type { WorktreeInspectFileInput, WorktreeInspectInput, WorktreeInspectResult } from './worktree-inspect.js'
 export type { CleanupInput, CleanupResult, WorktreeAllocatorDeps } from './worktree-types.js'
 
 export class WorktreeAllocator {
@@ -294,6 +297,10 @@ export class WorktreeAllocator {
 
   async inspect(input: WorktreeInspectInput, signal?: AbortSignal): Promise<WorktreeInspectResult> {
     return inspectWorktree(this.deps, this.store, this.redact, input, signal)
+  }
+
+  async inspectFile(input: WorktreeInspectFileInput, signal?: AbortSignal): Promise<GitDiffFileResult> {
+    return inspectWorktreeFile(this.deps, this.store, this.redact, input, signal)
   }
 
   async verifyForResume(

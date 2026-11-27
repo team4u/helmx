@@ -31,7 +31,7 @@ export interface GroupMemberState {
 }
 export interface RetainedWorktreeInfo { memberName: string; nodeId: string; worktreeId: string; branch: string; path: string; commitsAhead: number }
 export interface UncleanedWorktreeInfo { memberName: string; nodeId: string; worktreeId: string; branch: string; path: string; reason: 'usage_unverifiable' }
-export interface WorktreeHandoffSnapshot { worktreeId: string; branch?: string; commitsAhead?: number; dirtyCount: number; changedFilesPreview: string[] }
+export interface WorktreeHandoffSnapshot { worktreeId: string; branch?: string; commitsAhead?: number; dirtyCount: number; additions?: number; deletions?: number; changedFilesPreview: string[] }
 export interface BoardPost {
   seq: number; groupId: string; from: string; to: string[]; resolvedTargets: string[]; wake: boolean
   kind: BoardPostKind; refs: number[]; body: string; idempotencyKey?: string; worktreeSnapshot?: WorktreeHandoffSnapshot; createdAt: number

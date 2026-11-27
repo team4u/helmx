@@ -25,7 +25,7 @@ Use the dynamic `workflow_steer` model tool (exposed automatically while the cur
 
 ## Worktree inspection & cleanup
 
-List or inspect registered managed worktrees read-only via `run_action({ actionId: "builtin:worktree.list_worktrees", input: {} })` and `run_action({ actionId: "builtin:worktree.inspect_worktree", input: { worktreeId } })` (CLI: `helmx worktrees list --json`, `helmx worktrees inspect <worktreeId> --json`).
+List or inspect registered managed worktrees read-only via `run_action({ actionId: "builtin:worktree.list_worktrees", input: {} })`, `run_action({ actionId: "builtin:worktree.inspect_worktree", input: { worktreeId } })`, and single-file `run_action({ actionId: "builtin:worktree.inspect_worktree_file", input: { worktreeId, filePath } })` (CLI: `helmx worktrees list --json`, `helmx worktrees inspect <worktreeId> --json`, `helmx worktrees file <worktreeId> --file-path <relPath> --json`). For ordinary conversation workspaces, `builtin:changes.inspect_workspace` / `builtin:changes.inspect_workspace_file` (`helmx changes inspect` / `helmx changes file`) follow the same two-step read-only pattern.
 
 After inspecting or merging a child worktree, call the model tool `cleanup_worktree({ worktreeId: execution.worktree.id })` with the real execution metadata. This is a conversation tool (registered by `builtin:worktree`, active whenever managed worktrees exist), not a DSL function.
 

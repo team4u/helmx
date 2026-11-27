@@ -107,6 +107,8 @@ function formatAgentsMdFailure(
       return `工作区 ${escapeXml(agentsPath)} 在打开后不是普通文件（kind=${escapeXml(failure.fileKind)}），拒绝读取`
     case 'size_exceeded':
       return `工作区 ${escapeXml(agentsPath)} 为 ${failure.size} 字节，超过 ${failure.maxBytes} 字节读取上限，本回合未读取正文`
+    case 'binary_file':
+      return `工作区 ${escapeXml(agentsPath)} 为二进制文件（${failure.size} 字节），本回合不注入正文`
     case 'read_exceeded':
       return `工作区 ${escapeXml(agentsPath)} 读取到 ${failure.bytesRead} 字节，超过 ${failure.maxBytes} 字节读取上限，本回合不注入正文`
     case 'file_changed':

@@ -104,6 +104,7 @@ export function mountSharedPluginNamespaces(options: { realHooks?: boolean } = {
 }
 
 const CLIENT_ROOTS: Record<string, string> = {
+  'builtin:changes': fileURLToPath(new URL('../../../plugins/src/changes/client', import.meta.url)),
   'builtin:swarm': fileURLToPath(new URL('../../../plugins/src/swarm/client', import.meta.url)),
   'builtin:triggers': fileURLToPath(new URL('../../../plugins/src/triggers/client', import.meta.url)),
   'builtin:magpie': fileURLToPath(new URL('../../../plugins/src/magpie/client', import.meta.url)),

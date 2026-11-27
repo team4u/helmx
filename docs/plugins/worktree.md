@@ -18,7 +18,8 @@
 | :--- | :--- | :--- |
 | `cleanup_worktree` | `helmx worktrees cleanup` | 清理（选择器 `--worktree-id` / `--conversation-id` / `--path [--node-id]` 三选一互斥，`--delete-branch` / `--merged-into` / `--force` / `--allow-unverified-usage`） |
 | `list_worktrees` | `helmx worktrees list` | 全部登记（含已清理记录的元数据） |
-| `inspect_worktree` | `helmx worktrees inspect <worktreeId>` | 只读检视：登记元数据 + 目标节点真实 git 只读探测（状态/统计/有上限 diff 预览） |
+| `inspect_worktree` | `helmx worktrees inspect <worktreeId>` | 只读结构化检视：登记元数据 + 目标节点两段式 git 探测（文件清单/增删统计/提交列表/未合入数，不跑全量 diff） |
+| `inspect_worktree_file` | `helmx worktrees file <worktreeId> --file-path <path>` | 单文件按需结构化 diff 或未跟踪文件有界安全预览（超限/二进制/特殊文件诚实标示） |
 
 `cleanup_worktree` 动作对会话目标有显式冲突校验：输入 `conversationId` 与调用上下文同时存在且不一致时显式 `400 validation_error`。无任何显式选择器时以当前会话为选择器。
 
@@ -28,14 +29,15 @@
 
 ## 前端贡献
 
-本插件通过 `ctx.ui.slot` 向 `builtin:workflow` 贡献两处 UI 插槽（客户端源码位于 `packages/plugins/src/worktree/client/`）：
+本插件通过 `ctx.ui.slot` 向 `builtin:workflow`、`builtin:swarm` 与 `builtin:changes` 贡献受管工作树清理插槽（`WorktreeCleanupSlot`，客户端源码位于 `packages/plugins/src/worktree/client/`）：
 
-- **`worktree-inspect`**（目标 `builtin:workflow/worktree-inspect`）：可折叠工作树只读改动概览（调用 `inspect_worktree` 与「让主会话审阅并合入」请求生成）；
-- **`worktree-cleanup`**（目标 `builtin:workflow/worktree-cleanup`）：受管工作树清理按钮（调用 `cleanup_worktree`）。
+- **`worktree-cleanup`**（`builtin:workflow/worktree-cleanup`、`builtin:swarm/worktree-cleanup`、`builtin:changes/worktree-cleanup`）：受管工作树安全清理按钮（调用 `cleanup_worktree`）。
+
+改动检视界面（全屏/分屏检视台与快捷入口）由独立的 [`builtin:changes`](changes.md) 插件提供，与本插件零静态依赖。
 
 ## 停用语义
 
-- 停用后 `cleanup_worktree` 工具、`worktrees` CLI、受管技能 `worktree` 与上述前端工作树检视/清理插槽即时消失，不留幻影提示词或失效按钮。
+- 停用后 `cleanup_worktree` 工具、`worktrees` CLI、受管技能 `worktree` 与上述前端工作树清理插槽即时消失，不留幻影提示词或失效按钮；`builtin:changes` 对普通会话工作区的差异检视不受影响。
 - 仍有活跃 `ManagedWorktreeHold` 时停用被拒（`409 plugin_in_use`）；`--force` 可越过，磁盘登记保留。
 - 停用期间工作树登记与租约不清除，重新启用后 cleanup 仍可定位。此时请求 `isolation: 'worktree'` 在内核边界显式失败（`unsupported_runtime`），不静默降级；非隔离的 `subagent` 派生不受影响。
 

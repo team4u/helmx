@@ -140,7 +140,8 @@ pnpm helmx worktrees cleanup --path /repo/.helmx-worktrees/repo-ab12cd34 --node-
 pnpm helmx worktrees cleanup --conversation-id 42 --merged-into helmx/spawn-ab12cd34 --delete-branch
 
 pnpm helmx worktrees list                # 全部登记（含已清理记录的元数据）
-pnpm helmx worktrees inspect --conversation-id 42 --diff   # 只读检视 + 有上限 diff 预览
+pnpm helmx worktrees inspect --conversation-id 42 --json   # 只读结构化检视（文件统计 + 提交列表，不跑全量 diff）
+pnpm helmx worktrees file --conversation-id 42 --file-path src/app.ts --json   # 单文件按需 diff / 未跟踪预览
 ```
 
 同一能力暴露为模型工具 `cleanup_worktree`（参数同构：`worktreeId` / `conversationId` / `path` + `nodeId` / `deleteBranch` / `mergedInto` / `force` / `allowUnverifiedUsage`），子智能体可在任务收尾时自行清理。CLI 旗标由动作 Schema 动态派生（camelCase 入参映射为 kebab-case 旗标），与工具参数一一对应；动作 Schema 新增入参即自动出现对应旗标，无需改 CLI 实现。工具侧的 `--current` 语义：无任何显式选择器时以当前会话为选择器（即子会话自己的 worktree），显式选择器永不被上下文覆盖。清理前还有一道租约终检：存在重启中断或未确认停止的执行租约时以 `worktree_execution_unknown` 拒绝（见上文 fail-closed 红线）。

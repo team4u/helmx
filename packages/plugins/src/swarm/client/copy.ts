@@ -197,13 +197,16 @@ export function resolvePanelHeadlineText(view: BoardViewDoc, locale: HelmxLocale
 }
 
 export function panelWorktreeSummary(
-  snap: { branch?: string; commitsAhead?: number; dirtyCount: number },
+  snap: { branch?: string; commitsAhead?: number; dirtyCount: number; additions?: number; deletions?: number },
   locale: HelmxLocale = DEFAULT_HELMX_LOCALE,
 ): string {
   const parts: string[] = []
   if (snap.branch) parts.push(snap.branch)
   if (snap.commitsAhead !== undefined) parts.push(T(locale, `+${snap.commitsAhead} commits`, `领先 ${snap.commitsAhead} 提交`))
   parts.push(T(locale, `${snap.dirtyCount} uncommitted`, `未提交 ${snap.dirtyCount}`))
+  if (snap.additions !== undefined && snap.deletions !== undefined) {
+    parts.push(`+${snap.additions} −${snap.deletions}`)
+  }
   return parts.join(' · ')
 }
 

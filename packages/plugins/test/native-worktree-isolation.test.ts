@@ -332,14 +332,14 @@ describe('ManagedWorktreeHold 与隐藏内部动作 acquire_worktree / release_w
       assert.ok(!acquireManifest!.exposeAsTool, 'acquire_worktree 不得暴露为独立模型工具')
       assert.ok(!releaseManifest!.exposeAsTool, 'release_worktree_hold 不得暴露为独立模型工具')
       // 公开动作保持 visibility: 'public'；cleanup_worktree 通过 exposeAsTool 单点暴露工具，
-      // list_worktrees / inspect_worktree 经 Skill-First 隐藏出 <available_actions>（exposeToPrompt: false，仍可经 run_action/CLI 调用）。
+      // list_worktrees / inspect_worktree / inspect_worktree_file 经 Skill-First 隐藏出 <available_actions>（exposeToPrompt: false，仍可经 run_action/CLI 调用）。
       const publicActions = host.listActions().filter((a) => a.pluginId === 'builtin:worktree')
-      for (const id of ['cleanup_worktree', 'list_worktrees', 'inspect_worktree']) {
+      for (const id of ['cleanup_worktree', 'list_worktrees', 'inspect_worktree', 'inspect_worktree_file']) {
         const manifest = publicActions.find((a) => a.id === id)
         assert.ok(manifest !== undefined, `应注册 ${id} 动作`)
         assert.equal(manifest!.visibility, 'public', `${id} 是公开动作`)
       }
-      for (const id of ['list_worktrees', 'inspect_worktree']) {
+      for (const id of ['list_worktrees', 'inspect_worktree', 'inspect_worktree_file']) {
         const manifest = publicActions.find((a) => a.id === id)
         assert.equal(manifest!.exposeToPrompt, false, `${id} 经 Skill-First 不常驻 <available_actions>`)
       }
@@ -641,7 +641,7 @@ describe('ManagedWorktreeHold 与隐藏内部动作 acquire_worktree / release_w
     try {
       // 零静态依赖：worktree 独立注册即可用（workflow 未注册不影响动作面）。
       const ids = host.listActions().filter((a) => a.pluginId === 'builtin:worktree').map((a) => a.id).sort()
-      assert.deepEqual(ids, ['acquire_worktree', 'cleanup_worktree', 'inspect_worktree', 'list_worktrees', 'release_worktree_hold'])
+      assert.deepEqual(ids, ['acquire_worktree', 'cleanup_worktree', 'inspect_worktree', 'inspect_worktree_file', 'list_worktrees', 'release_worktree_hold'])
       assert.ok(host.listTools().some((t) => t.name === 'cleanup_worktree'), '独立注册即提供 cleanup_worktree 工具')
 
       const soloCaller = { surface: 'plugin' as const, callerPluginId: 'builtin:superagent' }
@@ -1554,6 +1554,7 @@ describe('WorktreeStore KV 持久化契约（单条隔离 / >1000 分页遍历 /
       assert.ok(wtSkillMd.includes('managedByPlugin: builtin:worktree'))
       assert.ok(wtSkillMd.includes('builtin:worktree.list_worktrees'))
       assert.ok(wtSkillMd.includes('builtin:worktree.inspect_worktree'))
+      assert.ok(wtSkillMd.includes('builtin:worktree.inspect_worktree_file'))
       assert.ok(wtSkillMd.includes('cleanup_worktree'))
       assert.ok(wtSkillMd.includes('rm -rf'))
 

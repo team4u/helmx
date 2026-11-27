@@ -471,12 +471,10 @@ describe('builtin:swarm crash replay & boot reconciliation', { concurrency: 2, t
       // 3) Orphaned builtin:swarm worktree hold was released and removed; builtin:workflow hold remained intact.
       const swarmWtInspect = (await app2.kernel.plugins.invokeAction('builtin:worktree', 'inspect_worktree', {
         worktreeId: swarmOrphanWtId,
-        diff: false,
       })) as { exists: boolean }
       assert.equal(swarmWtInspect.exists, false)
       const workflowWtInspect = (await app2.kernel.plugins.invokeAction('builtin:worktree', 'inspect_worktree', {
         worktreeId: workflowWtId,
-        diff: false,
       })) as { exists: boolean }
       assert.equal(workflowWtInspect.exists, true)
     } finally {
@@ -1202,7 +1200,6 @@ describe('builtin:swarm crash replay & boot reconciliation', { concurrency: 2, t
 
       const inspect = (await kernel.plugins.invokeAction('builtin:worktree', 'inspect_worktree', {
         worktreeId: orphanWtId,
-        diff: false,
       })) as { exists: boolean }
       assert.equal(inspect.exists, false, 'orphan swarm worktree hold must be reclaimed during swarm.reconcile() after worktree.reconcile()')
     } finally {

@@ -6,7 +6,7 @@
  * - 节点真实 fs 探测：`dirExistsOnNode` / `canonicalPathOnNode`（探测失败一律 fail-closed 抛 `worktree_check_failed`）。
  */
 
-import type { FileError, Result } from '@earendil-works/pi-durable/env'
+import type { ExecutionEnv, FileError, Result } from '@earendil-works/pi-durable/env'
 import { HelmxError, pathRulesForShape, targetPathShape } from '@helmx/protocol'
 
 export interface WorktreeExecOptions {
@@ -30,6 +30,7 @@ export interface WorktreeNodePorts {
   ) => Promise<WorktreeExecResult>
   nodeExists: (nodeId: string, path: string) => Promise<Result<boolean, FileError>>
   nodeCanonicalPath: (nodeId: string, path: string) => Promise<Result<string, FileError>>
+  executionEnv?: (nodeId: string, cwd: string) => ExecutionEnv
   redact?: (text: string) => string
 }
 
@@ -134,92 +135,6 @@ function parseWorktreeList(output: string): WorktreeEntry[] {
   }
   flush()
   return entries
-}
-
-function formatPorcelainV2DirtyLine(rawLine: string): string {
-  if (rawLine.startsWith('? ')) return `?? ${rawLine.slice(2)}`
-  if (rawLine.startsWith('! ')) return `!! ${rawLine.slice(2)}`
-  const takeFields = (line: string, count: number): { fields: string[]; rest: string } | undefined => {
-    const fields: string[] = []
-    let idx = 0
-    for (let i = 0; i < count; i += 1) {
-      const space = line.indexOf(' ', idx)
-      if (space < 0) return undefined
-      fields.push(line.slice(idx, space))
-      idx = space + 1
-    }
-    return { fields, rest: line.slice(idx) }
-  }
-  if (rawLine.startsWith('1 ')) {
-    const parsed = takeFields(rawLine, 8)
-    if (parsed !== undefined) {
-      const xy = parsed.fields[1]!.replaceAll('.', ' ')
-      return `${xy} ${parsed.rest}`
-    }
-  } else if (rawLine.startsWith('2 ')) {
-    const parsed = takeFields(rawLine, 9)
-    if (parsed !== undefined) {
-      const xy = parsed.fields[1]!.replaceAll('.', ' ')
-      const tab = parsed.rest.indexOf('\t')
-      if (tab >= 0) {
-        const newPath = parsed.rest.slice(0, tab)
-        const origPath = parsed.rest.slice(tab + 1)
-        return `${xy} ${origPath} -> ${newPath}`
-      }
-      return `${xy} ${parsed.rest}`
-    }
-  } else if (rawLine.startsWith('u ')) {
-    const parsed = takeFields(rawLine, 10)
-    if (parsed !== undefined) {
-      const xy = parsed.fields[1]!.replaceAll('.', ' ')
-      return `${xy} ${parsed.rest}`
-    }
-  }
-  return rawLine
-}
-
-/** 解析 `inspectWorktree` 单次 `git status --porcelain=v2 --branch --untracked-files=all` 受限采集行。 */
-export function parseInspectPorcelainV2Lines(
-  lines: readonly string[],
-  totalNonEmptyLines: number,
-  maxDirtyLines: number,
-): {
-  oid: string
-  branch: string
-  dirtyFiles: string[]
-  dirtyFileCount: number
-  dirtyFilesTruncated: boolean
-} {
-  let oid = ''
-  let branch = 'HEAD'
-  let headerLines = 0
-  const dirtyFiles: string[] = []
-  for (const rawLine of lines) {
-    const line = rawLine.endsWith('\r') ? rawLine.slice(0, -1) : rawLine
-    if (line === '') continue
-    if (line.startsWith('#')) {
-      headerLines += 1
-      if (line.startsWith('# branch.oid ')) {
-        const val = line.slice('# branch.oid '.length).trim()
-        if (val !== '' && val !== '(initial)') oid = val
-      } else if (line.startsWith('# branch.head ')) {
-        const val = line.slice('# branch.head '.length).trim()
-        branch = val === '' || val === '(detached)' ? 'HEAD' : val
-      }
-      continue
-    }
-    if (dirtyFiles.length < maxDirtyLines) {
-      dirtyFiles.push(formatPorcelainV2DirtyLine(line))
-    }
-  }
-  const dirtyFileCount = Math.max(dirtyFiles.length, totalNonEmptyLines - headerLines)
-  return {
-    oid,
-    branch,
-    dirtyFiles,
-    dirtyFileCount,
-    dirtyFilesTruncated: dirtyFileCount > maxDirtyLines,
-  }
 }
 
 /** 解析 `git status --porcelain=v2 --branch` 输出（提取 HEAD 提交、当前本地分支与脏工作区标记）。 */

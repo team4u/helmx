@@ -256,7 +256,7 @@ function assertNoUnmergedWorktrees(closing: GroupClosing, freshGroup: CollabGrou
       groupId: freshGroup.id,
       unmergedWorktrees: unmerged.map((i) => ({
         ...toRetainedWorktreeInfo(i.member.name, i.member.nodeId, i.worktreeId, i.inspected, i.unmergedCommits),
-        dirtyCount: i.inspected.dirtyFileCount,
+        dirtyCount: i.inspected.summary.dirtyFileCount,
       })),
     },
   )
@@ -282,7 +282,7 @@ async function inspectRetainedWorktree(closing: GroupClosing, prev: RetainedWork
     return undefined
   }
   const unmergedCommits = inspected.exists ? (inspected.unmergedCommits ?? inspected.commitsAhead ?? 0) : 0
-  if (inspected.exists && (inspected.dirtyFileCount > 0 || unmergedCommits > 0)) {
+  if (inspected.exists && (inspected.summary.dirtyFileCount > 0 || unmergedCommits > 0)) {
     return toRetainedWorktreeInfo(prev.memberName, prev.nodeId, prev.worktreeId, inspected, unmergedCommits)
   }
   return undefined

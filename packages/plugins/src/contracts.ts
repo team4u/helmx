@@ -26,22 +26,26 @@ import {
 } from '@helmx/protocol'
 import { isAbsoluteAgentPath } from '@helmx/protocol'
 import type {
-  WorkflowNodeState,
-  WorkflowNodeStatus,
-  WorkflowProgressEntry,
-  WorkflowRunStatus,
+  GitDiffCommitEntry,
+  GitDiffFileEntry,
+  GitDiffSummary,
   WorkflowRunSummary,
+  WorktreeDiffScope,
   WorktreeExecutionDescriptor,
 } from './contracts-types.js'
 
-export type {
-  WorkflowNodeState,
-  WorkflowNodeStatus,
-  WorkflowProgressEntry,
-  WorkflowRunStatus,
-  WorkflowRunSummary,
-  WorktreeExecutionDescriptor,
-}
+export * from './git-diff/git-diff-types.js'
+export {
+  CHANGES_PANEL_ID,
+  CHANGES_PLUGIN_ID,
+  CHANGES_SCREEN_ID,
+  type WorkflowNodeState,
+  type WorkflowNodeStatus,
+  type WorkflowProgressEntry,
+  type WorkflowRunStatus,
+  type WorkflowRunSummary,
+  type WorktreeExecutionDescriptor,
+} from './contracts-types.js'
 
 // ---------------------------------------------------------------------------
 // workflow 运行 / 定义 / 投影契约（迁自 @helmx/protocol workflow.ts）
@@ -177,6 +181,7 @@ export const WORKFLOW_META_NAMESPACE = WORKFLOW_PLUGIN_ID
  */
 export const WORKTREE_PLUGIN_ID = 'builtin:worktree' as const
 export const WORKTREE_META_NAMESPACE = WORKTREE_PLUGIN_ID
+export const SWARM_PLUGIN_ID = 'builtin:swarm' as const
 
 /** spawn meta 业务形状（meta['builtin:workflow']；派生请求侧）。 */
 type WorkflowSpawnMeta = {
@@ -390,7 +395,7 @@ export interface ManagedWorktreeRecord {
   hold?: ManagedWorktreeHold
 }
 
-/** builtin:worktree inspect_worktree 只读检视结果契约。 */
+/** builtin:worktree inspect_worktree 只读检视结果契约（纯结构化概览，不跑全量 diff）。 */
 export interface WorktreeInspectResult {
   record: ManagedWorktreeRecord
   exists: boolean
@@ -398,16 +403,17 @@ export interface WorktreeInspectResult {
   currentBranch?: string
   currentHead?: string
   branchChanged?: boolean
-  dirtyFiles: string[]
-  dirtyFileCount: number
-  dirtyFilesTruncated: boolean
   commitsAhead?: number
   /** 相对目标合入参考提交（baseBranch 优先，回退主工作树 HEAD）仍未合入的提交数。 */
   unmergedCommits?: number
-  diffStat?: string
-  diffPreview?: string
-  diffTruncated: boolean
-  diffBase: 'baseCommit' | 'HEAD'
+  diffBase: 'baseCommit' | 'HEAD' | 'upstream' | 'commit'
+  scope: WorktreeDiffScope
+  selectedCommit?: string
+  commits: GitDiffCommitEntry[]
+  commitsTruncated: boolean
+  summary: GitDiffSummary
+  files: GitDiffFileEntry[]
+  filesTruncated: boolean
 }
 
 /** builtin:worktree acquire_worktree 动作返回结果契约。 */

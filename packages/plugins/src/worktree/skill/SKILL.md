@@ -25,7 +25,8 @@ Use `builtin:worktree` to inspect and safely clean up Helmx-managed isolated Git
 Call actions via `run_action({ actionId, input })` (or `run_action({ actionId, describe: true })` to inspect full schemas), use the direct `cleanup_worktree` tool (exposed whenever active managed worktrees exist), or run `helmx worktrees <subcommand>`:
 
 - `builtin:worktree.list_worktrees` (`{}`) — list all managed worktree registrations, including `status: "removed"` audit records and active `hold` metadata. CLI: `helmx worktrees list --json`.
-- `builtin:worktree.inspect_worktree` (`{ worktreeId? | conversationId? | path?, nodeId?, diff? }`) — read-only metadata plus a real git probe on the target node (`exists`, `currentBranch`, `currentHead`, `branchChanged`, `dirtyFiles`, `dirtyFileCount`, `commitsAhead`, `unmergedCommits`, `diffStat`, `diffPreview`, `diffBase`). `diff` defaults to `true`. CLI: `helmx worktrees inspect <worktreeId> --json`.
+- `builtin:worktree.inspect_worktree` (`{ worktreeId? | conversationId? | path?, nodeId?, scope?, commit? }`) — read-only metadata plus a lightweight git summary probe on the target node (`exists`, `currentBranch`, `currentHead`, `branchChanged`, `commitsAhead`, `unmergedCommits`, `diffBase`, `scope`, `commits`, `summary`, `files`). `scope` defaults to `'all'` (`'all' | 'committed' | 'uncommitted'`). Never runs full-repo diff. CLI: `helmx worktrees inspect <worktreeId> --json`.
+- `builtin:worktree.inspect_worktree_file` (`{ worktreeId? | conversationId? | path?, nodeId?, filePath, oldPath?, scope?, commit?, contextLines? }`) — read-only single-file diff or bounded untracked preview (`diff | untracked | binary | too_large | special_file | unchanged | absent`). CLI: `helmx worktrees file <worktreeId> --file-path <path> --json`.
 - `builtin:worktree.cleanup_worktree` / `cleanup_worktree` tool (`{ worktreeId? | conversationId? | path?, nodeId?, deleteBranch?, mergedInto?, force?, allowUnverifiedUsage? }`) — safely remove a registered worktree and update the ledger. CLI: `helmx worktrees cleanup`.
 
 ### Selector Rules
@@ -38,7 +39,7 @@ Call actions via `run_action({ actionId, input })` (or `run_action({ actionId, d
 ## Cleanup Guardrails & Recommended Flow
 
 1. **Discover**: call `builtin:worktree.list_worktrees` (`{}`) or use the `worktreeId` from execution metadata.
-2. **Inspect**: call `builtin:worktree.inspect_worktree` (`{ worktreeId }`) to verify `dirtyFiles`, `unmergedCommits`, and diff.
+2. **Inspect**: call `builtin:worktree.inspect_worktree` (`{ worktreeId }`) to verify `summary`, `files`, `commits`, and `unmergedCommits`; then call `builtin:worktree.inspect_worktree_file` (`{ worktreeId, filePath }`) on individual files you need to review.
 3. **Merge & verify**: merge the `helmx/spawn-*` branch into your target branch in the main or integration worktree and run verification.
 4. **Clean up**: call `cleanup_worktree({ worktreeId, mergedInto: "<target-branch>", deleteBranch: true })`.
 

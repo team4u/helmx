@@ -20,6 +20,7 @@ export type SwarmPanelStatus = 'running' | 'attention' | 'completed'
 export interface SwarmPanelMemberRow {
   name: string
   conversationId: number
+  nodeId: string
   profileId: string
   access: BoardMemberView['access']
   liveState: BoardMemberView['liveState']
@@ -73,6 +74,7 @@ export function buildSwarmPanelModel(
     return {
       name: member.name,
       conversationId: member.conversationId,
+      nodeId: member.nodeId,
       profileId: member.profileId,
       access: member.access,
       liveState: member.liveState,

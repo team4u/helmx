@@ -231,6 +231,8 @@ function formatNodeFileFailure(
       return `${safePath} 在打开后不是普通文件（kind=${failure.fileKind}），拒绝读取`
     case 'size_exceeded':
       return `${safePath} 为 ${failure.size} 字节，超过 ${failure.maxBytes} 字节读取上限，正文未读取`
+    case 'binary_file':
+      return `${safePath} 为二进制文件（${failure.size} 字节），正文未读取`
     case 'read_exceeded':
       return `${safePath} 读取到 ${failure.bytesRead} 字节，超过 ${failure.maxBytes} 字节上限，正文不采用`
     case 'file_changed':

@@ -430,7 +430,6 @@ describe('builtin:swarm worktree isolation, handoff & close_group recovery', { c
       assert.ok(donePost !== undefined, 'worker done 帖应存在')
       const inspected = (await kernel.plugins.invokeAction(WORKTREE_ID, 'inspect_worktree', {
         worktreeId: coder.worktreeId,
-        diff: false,
       })) as { exists: boolean; commitsAhead?: number }
       assert.equal(inspected.exists, true)
       assert.equal(inspected.commitsAhead, 1, 'worktree 内应有 1 个未合入提交')
@@ -453,7 +452,6 @@ describe('builtin:swarm worktree isolation, handoff & close_group recovery', { c
       assert.equal(cleaned.branchDeleted, true)
       const afterInspect = (await kernel.plugins.invokeAction(WORKTREE_ID, 'inspect_worktree', {
         worktreeId: coder.worktreeId,
-        diff: false,
       })) as { exists: boolean }
       assert.equal(afterInspect.exists, false)
     } finally {

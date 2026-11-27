@@ -5,7 +5,7 @@ import type { MutableRefObject, ReactNode } from 'react'
 import type { HelmxLocale } from '@helmx/protocol/browser'
 import {
   Badge, Button, Callout, Checkbox, Dialog, DialogContent, DialogDescription, DialogOverlay, DialogPortal, DialogTitle,
-  HelmxIcon, IconButton, Stack, StatusLight, Tooltip, formatModelShortName, resolveLocalizedText,
+  HelmxIcon, IconButton, PluginSlot, Stack, StatusLight, Tooltip, formatModelShortName, resolveLocalizedText,
   type LocalizedText, type StatusLightTone,
 } from '@helmx/plugin-client'
 import { extractPostRefs, postDigestLine, postKindBadgeTone, type BoardPost } from './board-model.ts'
@@ -102,17 +102,34 @@ export function SwarmMembersSection(props: SwarmMembersSectionProps): ReactNode 
                     </span>
                   ) : null}
                 </button>
-                {canAbort ? (
-                  <Button
-                    variant="danger"
-                    size="xs"
-                    icon="square"
-                    className="sw-panel-member-abort"
-                    disabled={busyAction !== undefined}
-                    onClick={() => onAbortMember(row.name)}
-                  >
-                    {t(C.ACTION_ABORT)}
-                  </Button>
+                {row.worktreeId !== undefined || canAbort ? (
+                  <div className="sw-panel-member-actions">
+                    {row.worktreeId !== undefined ? (
+                      <PluginSlot
+                        name="worktree-actions"
+                        inline
+                        slotProps={{
+                          worktreeId: row.worktreeId,
+                          ...(row.worktree?.branch !== undefined ? { branch: row.worktree.branch } : {}),
+                          nodeId: row.nodeId,
+                          parentConversationId: effectiveBoard.group.coordinatorConversationId,
+                          mode: 'member',
+                        }}
+                      />
+                    ) : null}
+                    {canAbort ? (
+                      <Button
+                        variant="danger"
+                        size="xs"
+                        icon="square"
+                        className="sw-panel-member-abort"
+                        disabled={busyAction !== undefined}
+                        onClick={() => onAbortMember(row.name)}
+                      >
+                        {t(C.ACTION_ABORT)}
+                      </Button>
+                    ) : null}
+                  </div>
                 ) : null}
               </div>
             )
@@ -126,10 +143,11 @@ export function SwarmMembersSection(props: SwarmMembersSectionProps): ReactNode 
 export interface SwarmRetainedWorktreesSectionProps {
   locale: HelmxLocale
   items: NonNullable<SwarmPanelModel['retainedWorktrees']>
+  coordinatorConversationId?: number
 }
 
 export function SwarmRetainedWorktreesSection(props: SwarmRetainedWorktreesSectionProps): ReactNode {
-  const { locale, items } = props
+  const { locale, items, coordinatorConversationId } = props
   const t = (text: LocalizedText): string => resolveLocalizedText(text, locale)
 
   return (
@@ -142,7 +160,32 @@ export function SwarmRetainedWorktreesSection(props: SwarmRetainedWorktreesSecti
         {items.map((item) => (
           <li key={item.worktreeId} className="sw-panel-retained-item">
             <HelmxIcon name="git-branch" size={11} />
-            <span title={`${item.path} · ${item.worktreeId}`}>{C.panelRetainedSummary(item, locale)}</span>
+            <span className="sw-panel-retained-label" title={`${item.path} · ${item.worktreeId}`}>
+              {C.panelRetainedSummary(item, locale)}
+            </span>
+            <span className="sw-panel-retained-actions">
+              <PluginSlot
+                name="worktree-actions"
+                inline
+                slotProps={{
+                  worktreeId: item.worktreeId,
+                  path: item.path,
+                  branch: item.branch,
+                  nodeId: item.nodeId,
+                  ...(coordinatorConversationId !== undefined ? { parentConversationId: coordinatorConversationId } : {}),
+                  mode: 'retained',
+                }}
+              />
+              <PluginSlot
+                name="worktree-cleanup"
+                inline
+                slotProps={{
+                  worktree: { id: item.worktreeId, path: item.path, branch: item.branch },
+                  nodeId: item.nodeId,
+                  compact: true,
+                }}
+              />
+            </span>
           </li>
         ))}
       </ul>

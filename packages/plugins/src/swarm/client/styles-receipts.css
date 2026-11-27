@@ -146,7 +146,8 @@
   max-width: 100%;
 }
 .sw-panel-post-worktree > svg { flex-shrink: 0; }
-.sw-panel-post-worktree > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sw-panel-post-worktree > span:not(.sw-panel-post-worktree-actions) { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sw-panel-post-worktree-actions { display: inline-flex; align-items: center; gap: 2px; margin-left: auto; flex-shrink: 0; }
 
 /* Compact Markdown inside timeline receipt cards (compound selector overrides host .msg-ai-body independent of injection order) */
 .sw-receipt-post-md.msg-ai-body {

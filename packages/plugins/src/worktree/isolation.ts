@@ -43,6 +43,7 @@ export class WorktreeIsolation {
       exec: (nodeId, cwd, args, options) => this.execGit(nodeId, cwd, args, options),
       nodeExists: (nodeId, path) => this.probeFs(nodeId, path, 'exists') as Promise<Result<boolean, FileError>>,
       nodeCanonicalPath: (nodeId, path) => this.probeFs(nodeId, path, 'canonicalPath') as Promise<Result<string, FileError>>,
+      executionEnv: (nodeId, path) => deps.host.executionEnv(nodeId, path),
       inspectPathUsage: (nodeId, path, signal) => deps.host.inspectNodePathUsage({ nodeId, path, signal }),
       redact,
     })

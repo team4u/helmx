@@ -96,6 +96,7 @@ export function localNodePorts() {
     },
     nodeExists: (_nodeId: string, path: string) => envOf(path).exists(path, BACKGROUND_CONTEXT),
     nodeCanonicalPath: (_nodeId: string, path: string) => envOf(path).canonicalPath(path, BACKGROUND_CONTEXT),
+    executionEnv: (_nodeId: string, cwd: string) => envOf(cwd),
   }
 }
 

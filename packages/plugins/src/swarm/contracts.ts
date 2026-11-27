@@ -11,6 +11,7 @@ import {
   type PluginSessionDocHandle,
   type TurnOutcome,
 } from '@helmx/protocol'
+import { SWARM_PLUGIN_ID } from '../contracts.js'
 import {
   BOARD_POST_KINDS,
   type BoardBadgesDoc,
@@ -29,7 +30,7 @@ import {
 
 export * from './contracts-types.js'
 
-export const SWARM_PLUGIN_ID = 'builtin:swarm'
+export { SWARM_PLUGIN_ID }
 export const SWARM_SKILL_ID = 'swarm'
 export const COORDINATOR_TAG = 'swarm-coordinator'
 export const WORKER_TAG = 'swarm-worker'
@@ -180,7 +181,7 @@ export const uncleanedWorktreeSchema = S.obj(
 )
 
 export const worktreeSnapshotSchema = S.obj(
-  { worktreeId: S.str({ minLength: 1 }), branch: S.str(), commitsAhead: S.int(0), dirtyCount: S.int(0), changedFilesPreview: S.arr(S.str()) },
+  { worktreeId: S.str({ minLength: 1 }), branch: S.str(), commitsAhead: S.int(0), dirtyCount: S.int(0), additions: S.int(0), deletions: S.int(0), changedFilesPreview: S.arr(S.str()) },
   ['worktreeId', 'dirtyCount', 'changedFilesPreview'],
 )
 

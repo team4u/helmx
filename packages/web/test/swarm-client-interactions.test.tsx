@@ -242,6 +242,8 @@ describe("swarm-client-interactions", () => {
       stubSessionStates[`${key.pluginId}/${key.docName}/${key.conversationId}`] ?? EMPTY_SESSION_DOC_STATE
     const noopUnsub = () => {}
     const emptyAsks: AskSpec[] = []
+    const pluginsSnapshot = { plugins: [], screens: [] }
+    const emptySlotItems: ReadonlyArray<never> = []
     const pendingAsksByConv = new Map<number, AskSpec[]>()
     for (const ask of stubPendingAsks as AskSpec[]) {
       const list = pendingAsksByConv.get(ask.conversationId)
@@ -265,6 +267,12 @@ describe("swarm-client-interactions", () => {
       subscribeConversationPendingAsks: () => noopUnsub,
       getLoadError: (key: string) => stubLoadErrors[key],
       subscribeLoadError: () => noopUnsub,
+      getPluginsSnapshot: () => pluginsSnapshot,
+      subscribePlugins: () => noopUnsub,
+      slots: {
+        collectItems: () => emptySlotItems,
+        renderItem: () => null,
+      },
       getPluginDocValue: (docKey: string) => (Object.hasOwn(pluginDocs, docKey) ? pluginDocs[docKey] : undefined),
       subscribePluginDoc: () => noopUnsub,
       ensurePluginDoc: noopEnsurePluginDoc,

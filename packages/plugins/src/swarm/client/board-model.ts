@@ -78,12 +78,17 @@ function parseWorktreeSnapshot(s: unknown): WorktreeHandoffSnapshot | undefined 
   if (
     !isPlainObject(s) || !isNonEmptyStr(s.worktreeId) || (s.branch !== undefined && typeof s.branch !== 'string') ||
     (s.commitsAhead !== undefined && !isNonNegInt(s.commitsAhead)) || !isNonNegInt(s.dirtyCount) ||
+    (s.additions !== undefined && !isNonNegInt(s.additions)) ||
+    (s.deletions !== undefined && !isNonNegInt(s.deletions)) ||
     !Array.isArray(s.changedFilesPreview) || !s.changedFilesPreview.every((f) => typeof f === 'string')
   ) return 'invalid'
   return {
     worktreeId: s.worktreeId, ...(s.branch !== undefined ? { branch: s.branch } : {}),
     ...(s.commitsAhead !== undefined ? { commitsAhead: s.commitsAhead } : {}),
-    dirtyCount: s.dirtyCount, changedFilesPreview: s.changedFilesPreview,
+    dirtyCount: s.dirtyCount,
+    ...(s.additions !== undefined ? { additions: s.additions } : {}),
+    ...(s.deletions !== undefined ? { deletions: s.deletions } : {}),
+    changedFilesPreview: s.changedFilesPreview,
   }
 }
 
