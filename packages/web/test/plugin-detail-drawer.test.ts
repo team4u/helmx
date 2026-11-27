@@ -1141,8 +1141,8 @@ test('PluginConfigForm：format="model" 渲染宿主模型目录 Select 下拉�
 
     // 1. 不再渲染普通文本输入框，而是共享 ModelPickerControl 触发按钮（无思考档位 chips）
     assert.ok(container.querySelector('input[type="text"]') === null, 'format="model" 不应渲染普通文本输入')
-    const trigger = container.querySelector('button.composer-model-button') as HTMLButtonElement | null
-    assert.ok(trigger !== null, '应渲染共享模型选择器触发按钮')
+    const trigger = container.querySelector('button.helmx-model-picker-trigger.composer-model-button') as HTMLButtonElement | null
+    assert.ok(trigger !== null, '应渲染共享模型选择器表单态触发按钮')
     assert.equal(trigger.getAttribute('aria-label'), 'Dream 整理模型')
 
     // 2. 打开选择器检查过滤与纯 model-id 语义：含「未选择模型」重置行与可用模型，

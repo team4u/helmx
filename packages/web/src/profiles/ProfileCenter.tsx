@@ -1,6 +1,17 @@
 import type * as React from 'react'
-import { useMemo, useState } from 'react'
-import { Button, CardGrid, EmptyState } from '@helmx/plugin-client'
+import { useId, useMemo, useState } from 'react'
+import {
+  Button,
+  CardGrid,
+  EmptyState,
+  Screen,
+  ScreenToolbar,
+  SearchBox,
+  TabCount,
+  Tabs,
+  TabsList,
+  TabsTrigger,
+} from '@helmx/plugin-client'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import {
   useLocationTargets,
@@ -8,7 +19,7 @@ import {
   useProfilesSlice,
   useStoreActions,
 } from '../lib/store-context.js'
-import { SystemCenterShell, SystemCenterToolbar } from '../ui/SystemCenterShell.js'
+import { CloseSplitButton, SplitToggleButton } from '../ui/SplitControls.js'
 import { usePaneSplitToggle } from '../ui/use-pane-split-toggle.js'
 import { ProfileCard } from './ProfileCard.js'
 import { ProfileDetailDrawer } from './ProfileDetailDrawer.js'
@@ -45,6 +56,7 @@ export function ProfileCenter({
   const { t } = useWebLocale()
   const [query, setQuery] = useState('')
   const [activeTab, setActiveTab] = useState<ProfileCategoryTab>('all')
+  const panelId = useId()
 
   const effectiveDefaultModelInfo = useMemo(() => {
     if (modelDefaults.defaultModel === undefined && modelDefaults.defaultThinkingLevel === undefined) {
@@ -127,31 +139,57 @@ export function ProfileCenter({
   })
 
   return (
-    <SystemCenterShell
+    <Screen
+      topbar
       dataView="profile-center"
-      isSplit={isSplit}
-      isSplitActive={isSplitActive}
-      onCloseSplit={onCloseSplit}
-      onToggleSplit={toggleSplit}
+      className={isSplit ? 'is-split' : undefined}
       icon="bot"
       title={t('profiles.center.title')}
-      headerActions={
-        <Button size="sm" icon="plus" onClick={handleCreateNew}>
+      bodyId={panelId}
+      bodyRole="tabpanel"
+      actions={
+        <Button variant="primary" size="sm" icon="plus" onClick={handleCreateNew}>
           <span className="pane-action-label">{t('profiles.center.newProfile')}</span>
         </Button>
       }
+      topbarEnd={
+        isSplit ? (
+          <CloseSplitButton onCloseSplit={onCloseSplit} />
+        ) : (
+          <SplitToggleButton isSplitActive={isSplitActive} onToggleSplit={toggleSplit} />
+        )
+      }
       toolbar={
-        <SystemCenterToolbar
-          query={query}
-          onQueryChange={setQuery}
-          searchPlaceholder={t('profiles.center.searchPlaceholder')}
-          searchAriaLabel={t('profiles.center.searchLabel')}
-          clearSearchLabel={t('profiles.center.clearSearch')}
-          filterAriaLabel={t('profiles.center.filterLabel')}
-          pills={pills}
-          activePill={effectiveTab}
-          onSelectPill={setActiveTab}
-        />
+        <ScreenToolbar
+          label={t('profiles.center.filterLabel')}
+          actions={
+            <SearchBox
+              variant="toolbar"
+              size="sm"
+              value={query}
+              onChange={setQuery}
+              placeholder={t('profiles.center.searchPlaceholder')}
+              ariaLabel={t('profiles.center.searchLabel')}
+              clearLabel={t('profiles.center.clearSearch')}
+            />
+          }
+        >
+          <Tabs
+            value={effectiveTab}
+            onValueChange={(nextValue) => setActiveTab(nextValue as ProfileCategoryTab)}
+            variant="pills"
+            size="sm"
+          >
+            <TabsList aria-label={t('profiles.center.filterLabel')}>
+              {pills.map((pill) => (
+                <TabsTrigger key={pill.key} value={pill.key} aria-controls={panelId}>
+                  <span>{pill.label}</span>
+                  <TabCount>{pill.count}</TabCount>
+                </TabsTrigger>
+              ))}
+            </TabsList>
+          </Tabs>
+        </ScreenToolbar>
       }
       overlays={
         <ProfileDetailDrawer
@@ -199,6 +237,6 @@ export function ProfileCenter({
           }
         />
       )}
-    </SystemCenterShell>
+    </Screen>
   )
 }

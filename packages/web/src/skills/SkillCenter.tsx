@@ -1,10 +1,26 @@
 import type * as React from 'react'
-import { useEffect, useMemo, useState } from 'react'
-import { Button, Callout, CardGrid, EmptyState, HelmxIcon, Select, Stack, type SelectOption } from '@helmx/plugin-client'
+import { useEffect, useId, useMemo, useState } from 'react'
+import {
+  Button,
+  Callout,
+  CardGrid,
+  EmptyState,
+  HelmxIcon,
+  Screen,
+  ScreenToolbar,
+  SearchBox,
+  Select,
+  Stack,
+  TabCount,
+  Tabs,
+  TabsList,
+  TabsTrigger,
+  type SelectOption,
+} from '@helmx/plugin-client'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { useLocationTargets, useNodes, useSkills, useStoreActions } from '../lib/store-context.js'
 import type { ResolvedTarget } from '../lib/types.js'
-import { SystemCenterShell, SystemCenterToolbar } from '../ui/SystemCenterShell.js'
+import { CloseSplitButton, SplitToggleButton } from '../ui/SplitControls.js'
 import { usePaneSplitToggle } from '../ui/use-pane-split-toggle.js'
 import { SkillCard } from './SkillCard.js'
 import { SkillDetailDrawer } from './SkillDetailDrawer.js'
@@ -50,6 +66,7 @@ export function SkillCenter({
   const [query, setQuery] = useState('')
   const [activeTab, setActiveTab] = useState<SkillCategoryTab>('all')
   const [reloadSeq, setReloadSeq] = useState(0)
+  const panelId = useId()
 
   const currentTarget = isSplit ? splitTarget : primaryTarget
   const rawNodeId = currentTarget !== null && currentTarget.kind === 'skills' ? currentTarget.nodeId : undefined
@@ -156,18 +173,26 @@ export function SkillCenter({
     selectedNodeRecord !== undefined &&
     !selectedNodeRecord.online
 
+  const hasDiagnostics =
+    scope !== undefined &&
+    (scopeLoadError !== null ||
+      nodeUnavailable !== undefined ||
+      disconnectedNotice ||
+      shadowedNodeSkillIds.length > 0 ||
+      scopeLoading)
+
   return (
-    <SystemCenterShell
+    <Screen
+      topbar
       dataView="skill-center"
-      className="skill-center"
-      isSplit={isSplit}
-      isSplitActive={isSplitActive}
-      onCloseSplit={onCloseSplit}
-      onToggleSplit={toggleSplit}
+      className={isSplit ? 'skill-center is-split' : 'skill-center'}
       icon="sparkles"
       title={t('skills.center.title')}
-      headerActions={
+      bodyId={panelId}
+      bodyRole="tabpanel"
+      actions={
         <Button
+          variant="secondary"
           size="sm"
           icon="refresh-cw"
           onClick={handleRefresh}
@@ -176,35 +201,59 @@ export function SkillCenter({
           <span className="pane-action-label">{t('common.refresh')}</span>
         </Button>
       }
-      toolbar={
-        <SystemCenterToolbar
-          leading={
-            <div className="skill-scope-picker">
-              <Select
-                className="skill-scope-select"
-                size="sm"
-                inline={inlineDrawer}
-                value={nodeId ?? HUB_SKILL_NODE_ID}
-                options={scopeOptions}
-                onChange={(ev) => handleScopeChange(ev.target.value)}
-                aria-label={t('skills.scope.label')}
-                prefixIcon="server"
-              />
-            </div>
-          }
-          query={query}
-          onQueryChange={setQuery}
-          searchPlaceholder={t('skills.center.searchPlaceholder')}
-          searchAriaLabel={t('skills.center.searchLabel')}
-          clearSearchLabel={t('skills.center.clearSearch')}
-          filterAriaLabel={t('skills.center.filterLabel')}
-          pills={pills}
-          activePill={activeTab}
-          onSelectPill={setActiveTab}
-        />
+      topbarEnd={
+        isSplit ? (
+          <CloseSplitButton onCloseSplit={onCloseSplit} />
+        ) : (
+          <SplitToggleButton isSplitActive={isSplitActive} onToggleSplit={toggleSplit} />
+        )
       }
-      diagnostics={
-        scope !== undefined ? (
+      toolbar={
+        <ScreenToolbar
+          label={t('skills.center.filterLabel')}
+          actions={
+            <SearchBox
+              variant="toolbar"
+              size="sm"
+              value={query}
+              onChange={setQuery}
+              placeholder={t('skills.center.searchPlaceholder')}
+              ariaLabel={t('skills.center.searchLabel')}
+              clearLabel={t('skills.center.clearSearch')}
+            />
+          }
+        >
+          <div className="skill-scope-picker">
+            <Select
+              className="skill-scope-select"
+              size="sm"
+              inline={inlineDrawer}
+              value={nodeId ?? HUB_SKILL_NODE_ID}
+              options={scopeOptions}
+              onChange={(ev) => handleScopeChange(ev.target.value)}
+              aria-label={t('skills.scope.label')}
+              prefixIcon="server"
+            />
+          </div>
+          <Tabs
+            value={activeTab}
+            onValueChange={(nextValue) => setActiveTab(nextValue as SkillCategoryTab)}
+            variant="pills"
+            size="sm"
+          >
+            <TabsList aria-label={t('skills.center.filterLabel')}>
+              {pills.map((pill) => (
+                <TabsTrigger key={pill.key} value={pill.key} aria-controls={panelId}>
+                  <span>{pill.label}</span>
+                  <TabCount>{pill.count}</TabCount>
+                </TabsTrigger>
+              ))}
+            </TabsList>
+          </Tabs>
+        </ScreenToolbar>
+      }
+      banner={
+        hasDiagnostics ? (
           <div className="skill-scope-diagnostics">
             {scopeLoadError !== null && (
               <Callout tone="err">
@@ -294,6 +343,6 @@ export function SkillCenter({
           }
         />
       )}
-    </SystemCenterShell>
+    </Screen>
   )
 }

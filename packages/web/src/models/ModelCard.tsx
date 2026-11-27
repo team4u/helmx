@@ -35,34 +35,28 @@ export function ModelCard({
       selected={selected}
       onSelect={onSelect}
       aria-label={t('models.cardAria', { name: provider.name })}
-      title={
-        <span className="primary-card-title-row">
-          <span className="primary-card-name" title={provider.name}>
-            {provider.name}
-          </span>
+      title={<span title={provider.name}>{provider.name}</span>}
+      badges={
+        <>
           <StatusLight
             tone={provider.configured ? 'done' : 'pending'}
             label={provider.configured ? t('models.configured') : t('models.notConfigured')}
           />
           {provider.dynamic && <Badge tone="neutral">{t('models.dynamicBadge')}</Badge>}
           {provider.custom && <Badge tone="neutral">{t('models.customBadge')}</Badge>}
-        </span>
+        </>
       }
       subtitle={<span className="mono break-word">{provider.id}</span>}
+      description={provider.description || t('models.cardFallbackDescription')}
       footer={
         <Badge tone="neutral" mono className="tabular-nums">
           {t('models.modelsAvailable', { count: provider.modelsCount })}
         </Badge>
       }
     >
-      {/* Middle: description */}
-      <div className="primary-card-desc">
-        {provider.description || t('models.cardFallbackDescription')}
-      </div>
-
       {/* Configured providers show the first 3 available model names plus the remaining count */}
       {previewNames.length > 0 && (
-        <Stack direction="horizontal" gap="xs" align="center" wrap className="primary-card-pills">
+        <Stack direction="horizontal" gap="xs" align="center" wrap>
           {previewNames.map((name) => (
             <Badge key={name} tone="neutral" mono title={name}>
               {name}

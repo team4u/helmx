@@ -1,11 +1,11 @@
-import React, { useMemo } from 'react'
-import { DEFAULT_HELMX_LOCALE } from '@helmx/protocol/browser'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
+import { DEFAULT_HELMX_LOCALE, resolveLocalizedText } from '@helmx/protocol/browser'
 import {
   Badge,
   Button,
   Callout,
   Card,
-  CopyButton,
+  copyToClipboard,
   DetailDrawer,
   EmptyState,
   HelperText,
@@ -52,6 +52,34 @@ export function CoreCapabilityDetailDrawer({
   const storeLocale = useOptionalLocale()
   const locale = storeLocale ?? DEFAULT_HELMX_LOCALE
   const t = useMemo(() => createWebTranslator(locale), [locale])
+  const [copyStatus, setCopyStatus] = useState<'idle' | 'copied' | 'failed'>('idle')
+  const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const mountedRef = useRef(true)
+
+  useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+      if (copyTimerRef.current !== null) clearTimeout(copyTimerRef.current)
+    }
+  }, [])
+
+  const handleCopyActionId = async (text: string): Promise<void> => {
+    const ok = await copyToClipboard(text)
+    if (!mountedRef.current) return
+    if (copyTimerRef.current !== null) clearTimeout(copyTimerRef.current)
+    setCopyStatus(ok ? 'copied' : 'failed')
+    copyTimerRef.current = setTimeout(() => {
+      if (mountedRef.current) setCopyStatus('idle')
+    }, ok ? 1500 : 2000)
+  }
+
+  const copyActionLabel =
+    copyStatus === 'copied'
+      ? resolveLocalizedText({ en: 'Copied', 'zh-CN': '已复制' }, locale)
+      : copyStatus === 'failed'
+        ? resolveLocalizedText({ en: 'Copy failed', 'zh-CN': '复制失败' }, locale)
+        : t('plugins.core.copyActionId')
 
   const selectedAction = useMemo(() => {
     if (!owner || !selectedActionId) return null
@@ -185,11 +213,19 @@ export function CoreCapabilityDetailDrawer({
                   }
                   actions={
                     <Stack direction="horizontal" gap="xs" align="center">
-                      <CopyButton
-                        className="btn btn-ghost btn-xs"
-                        text={`${owner.id}.${selectedAction.id}`}
-                        label={t('plugins.core.copyActionId')}
-                      />
+                      <Button
+                        variant="ghost"
+                        size="xs"
+                        icon={copyStatus === 'copied' ? 'check' : copyStatus === 'failed' ? 'alert-circle' : 'copy'}
+                        title={copyActionLabel}
+                        aria-label={copyActionLabel}
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          void handleCopyActionId(`${owner.id}.${selectedAction.id}`)
+                        }}
+                      >
+                        <span>{copyActionLabel}</span>
+                      </Button>
                       {onSelectAction && (
                         <Button
                           variant="ghost"
@@ -304,7 +340,7 @@ export function CoreCapabilityDetailDrawer({
                   >
                     <div className="flex-row-between">
                       <Stack direction="horizontal" gap="xs" align="center" wrap>
-                        <strong className="primary-card-name">{skill.name || skill.id}</strong>
+                        <strong className="helmx-card-title">{skill.name || skill.id}</strong>
                         <MonoId value={skill.id} />
                         {(skill.references?.length ?? 0) > 0 && (
                           <Badge tone="neutral" icon="file-text" className="tabular-nums">

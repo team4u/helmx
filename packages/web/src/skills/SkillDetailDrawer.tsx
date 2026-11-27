@@ -1,14 +1,15 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import type { SkillSummary } from '@helmx/protocol/browser'
+import { resolveLocalizedText, type SkillSummary } from '@helmx/protocol/browser'
 import {
   Badge,
   Button,
   Callout,
-  CopyButton,
+  copyToClipboard,
   DetailDrawer,
   EmptyState,
   HelmxIcon,
   MonoId,
+  SegmentedControl,
   Select,
   Stack,
   type BadgeTone,
@@ -85,14 +86,42 @@ export function SkillDetailDrawer({
   readSkill,
   nodeScope,
 }: SkillDetailDrawerProps): React.JSX.Element {
-  const { t } = useWebLocale()
+  const { locale, t } = useWebLocale()
   const actions = useOptionalStoreActions()
   const [loading, setLoading] = useState(false)
   const [content, setContent] = useState<string>(() => initialContent ?? '')
   const [error, setError] = useState<string | null>(null)
   const [activePath, setActivePath] = useState<string>('')
   const [viewMode, setViewMode] = useState<SkillViewMode>('rich')
+  const [copyStatus, setCopyStatus] = useState<'idle' | 'copied' | 'failed'>('idle')
   const loadGenerationRef = useRef(0)
+  const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const mountedRef = useRef(true)
+
+  useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+      if (copyTimerRef.current !== null) clearTimeout(copyTimerRef.current)
+    }
+  }, [])
+
+  const handleCopyContent = async (): Promise<void> => {
+    const ok = await copyToClipboard(content)
+    if (!mountedRef.current) return
+    if (copyTimerRef.current !== null) clearTimeout(copyTimerRef.current)
+    setCopyStatus(ok ? 'copied' : 'failed')
+    copyTimerRef.current = setTimeout(() => {
+      if (mountedRef.current) setCopyStatus('idle')
+    }, ok ? 1500 : 2000)
+  }
+
+  const copyButtonLabel =
+    copyStatus === 'copied'
+      ? t('skills.card.copied')
+      : copyStatus === 'failed'
+        ? resolveLocalizedText({ en: 'Copy failed', 'zh-CN': '复制失败' }, locale)
+        : t('skills.drawer.copy')
 
   const files = useMemo(() => buildSkillFileList(skill?.references, t), [skill?.references, t])
   const activeIndex = Math.max(
@@ -260,32 +289,27 @@ export function SkillDetailDrawer({
                         </span>
                       )}
                       {isMarkdown && (
-                        <div
-                          className="segmented-control skill-reader-mode"
-                          role="group"
+                        <SegmentedControl
+                          size="sm"
+                          className="skill-reader-mode"
                           aria-label={t('skills.drawer.readingMode')}
-                        >
-                          <button
-                            type="button"
-                            className="segmented-control-btn"
-                            aria-pressed={richText}
-                            title={t('skills.drawer.richTitle')}
-                            onClick={() => setViewMode('rich')}
-                          >
-                            <HelmxIcon name="eye" size={12} />
-                            <span>{t('skills.drawer.richMode')}</span>
-                          </button>
-                          <button
-                            type="button"
-                            className="segmented-control-btn"
-                            aria-pressed={viewMode === 'source'}
-                            title={t('skills.drawer.sourceTitle')}
-                            onClick={() => setViewMode('source')}
-                          >
-                            <HelmxIcon name="code" size={12} />
-                            <span>{t('skills.drawer.sourceMode')}</span>
-                          </button>
-                        </div>
+                          value={viewMode}
+                          onValueChange={(nextValue) => setViewMode(nextValue === 'source' ? 'source' : 'rich')}
+                          items={[
+                            {
+                              value: 'rich',
+                              icon: <HelmxIcon name="eye" size={12} />,
+                              label: <span>{t('skills.drawer.richMode')}</span>,
+                              title: t('skills.drawer.richTitle'),
+                            },
+                            {
+                              value: 'source',
+                              icon: <HelmxIcon name="code" size={12} />,
+                              label: <span>{t('skills.drawer.sourceMode')}</span>,
+                              title: t('skills.drawer.sourceTitle'),
+                            },
+                          ]}
+                        />
                       )}
                       <Badge
                         tone="neutral"
@@ -300,11 +324,20 @@ export function SkillDetailDrawer({
                       >
                         {lineCount > 0 ? t('skills.drawer.linesCount', { count: lineCount }) : '--'}
                       </span>
-                      <CopyButton
-                        className="btn btn-ghost btn-sm skill-reader-copy"
-                        text={content}
-                        label={t('skills.drawer.copy')}
-                      />
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        icon={copyStatus === 'copied' ? 'check' : copyStatus === 'failed' ? 'alert-circle' : 'copy'}
+                        className="skill-reader-copy"
+                        title={copyButtonLabel}
+                        aria-label={copyButtonLabel}
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          void handleCopyContent()
+                        }}
+                      >
+                        <span>{copyButtonLabel}</span>
+                      </Button>
                     </div>
                   </div>
 

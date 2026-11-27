@@ -653,16 +653,23 @@ test('ModelCenter SSR: renders the top bar, tabs, search box, category pills and
     e(HostStoreProviders, { value: store }, e(ModelCenter, { inlineDrawer: true })),
   )
 
-  // 1. Top bar title and subtitle
-  assert.match(html, /class="[^"]*primary-center-title[^"]*"/)
+  // 1. Top bar title and action order (secondary Refresh before primary Add custom gateway)
+  assert.match(html, /class="[^"]*pane-title[^"]*"/)
   assert.match(html, /Models &amp; Credentials Center/)
+  const refreshPos = html.indexOf('Refresh catalog')
+  const addGatewayPos = html.indexOf('Add custom gateway')
+  assert.ok(refreshPos > 0 && addGatewayPos > refreshPos, 'primary Add custom gateway button must sit to the right of secondary Refresh catalog')
 
-  // 2. Summary counts, top tabs and the global-default status row
+  // 2. Single-layer toolbar: segmented view switch, category pills with TabCount, and global-default banner
+  assert.match(html, /class="[^"]*screen-toolbar-bar[^"]*"/)
+  assert.match(html, /class="[^"]*segmented-control[^"]*"/)
+  assert.doesNotMatch(html, /model-center-tabs/)
+  assert.match(html, /helmx-tab-count/)
   assert.match(html, /Providers<\/span>/)
   assert.match(html, /Global default/)
 
   // 3. Search box and placeholder
-  assert.match(html, /class="[^"]*search-box-toolbar[^"]*"/)
+  assert.match(html, /class="[^"]*search-box-toolbar[^"]*search-box-sm[^"]*"/)
   assert.match(html, /placeholder="Search provider name, ID or included models\.\.\."/)
 
   // 4. Card grid flow
@@ -742,6 +749,8 @@ test('ModelCenter SSR: target with tab=defaults inlines the global-default form'
   assert.match(html, /aria-label="Global compaction model"/)
   assert.match(html, /Not set \(inherits system baseline\)/)
   assert.match(html, /Not set \(use current conversation model\)/)
+  assert.match(html, /helmx-model-picker-field/)
+  assert.match(html, /helmx-model-picker-trigger/)
   assert.match(html, /composer-model-button/)
   assert.doesNotMatch(html, /class="[^"]*primary-drawer-content[^"]*"/)
   assert.equal(EMOJI_REGEX.test(html), false)

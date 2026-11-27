@@ -734,7 +734,7 @@ export function NodeDetailDrawer({
               variant="subtle"
               title={<NodeSectionTitle icon="wrench" label={t('nodes.drawer.toolsSection')} />}
             >
-              <Stack direction="horizontal" gap="xs" align="center" wrap className="primary-card-pills">
+              <Stack direction="horizontal" gap="xs" align="center" wrap>
                 {tools.map((tool) => (
                   <Badge
                     key={tool}

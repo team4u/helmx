@@ -1,10 +1,21 @@
 import type * as React from 'react'
-import { useMemo, useState } from 'react'
-import { Button, CardGrid, EmptyState } from '@helmx/plugin-client'
+import { useId, useMemo, useState } from 'react'
+import {
+  Button,
+  CardGrid,
+  EmptyState,
+  Screen,
+  ScreenToolbar,
+  SearchBox,
+  TabCount,
+  Tabs,
+  TabsList,
+  TabsTrigger,
+} from '@helmx/plugin-client'
 import type { WebMessageKey } from '../i18n/catalog.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { useLocationTargets, useNodes, useStoreActions } from '../lib/store-context.js'
-import { SystemCenterShell, SystemCenterToolbar } from '../ui/SystemCenterShell.js'
+import { CloseSplitButton, SplitToggleButton } from '../ui/SplitControls.js'
 import { usePaneSplitToggle } from '../ui/use-pane-split-toggle.js'
 import { NodeCard } from './NodeCard.js'
 import { NodeDetailDrawer } from './NodeDetailDrawer.js'
@@ -44,6 +55,7 @@ export function NodeCenter({
   const { t } = useWebLocale()
   const [query, setQuery] = useState('')
   const [activeTab, setActiveTab] = useState<NodeCategoryTab>('all')
+  const panelId = useId()
 
   const categoryCounts = useMemo(() => buildNodeCategoryCounts(nodes), [nodes])
   const pills = useMemo(
@@ -89,17 +101,17 @@ export function NodeCenter({
   })
 
   return (
-    <SystemCenterShell
+    <Screen
+      topbar
       dataView="node-center"
-      className="node-center"
-      isSplit={isSplit}
-      isSplitActive={isSplitActive}
-      onCloseSplit={onCloseSplit}
-      onToggleSplit={toggleSplit}
+      className={isSplit ? 'node-center is-split' : 'node-center'}
       icon="cpu"
       title={t('nodes.title')}
-      headerActions={
+      bodyId={panelId}
+      bodyRole="tabpanel"
+      actions={
         <Button
+          variant="primary"
           size="sm"
           icon="plus"
           onClick={handleConnectNew}
@@ -108,18 +120,44 @@ export function NodeCenter({
           <span className="pane-action-label">{t('nodes.connect')}</span>
         </Button>
       }
+      topbarEnd={
+        isSplit ? (
+          <CloseSplitButton onCloseSplit={onCloseSplit} />
+        ) : (
+          <SplitToggleButton isSplitActive={isSplitActive} onToggleSplit={toggleSplit} />
+        )
+      }
       toolbar={
-        <SystemCenterToolbar
-          query={query}
-          onQueryChange={setQuery}
-          searchPlaceholder={t('nodes.searchPlaceholder')}
-          searchAriaLabel={t('nodes.searchAria')}
-          clearSearchLabel={t('nodes.searchClear')}
-          filterAriaLabel={t('nodes.filterAria')}
-          pills={pills}
-          activePill={activeTab}
-          onSelectPill={setActiveTab}
-        />
+        <ScreenToolbar
+          label={t('nodes.filterAria')}
+          actions={
+            <SearchBox
+              variant="toolbar"
+              size="sm"
+              value={query}
+              onChange={setQuery}
+              placeholder={t('nodes.searchPlaceholder')}
+              ariaLabel={t('nodes.searchAria')}
+              clearLabel={t('nodes.searchClear')}
+            />
+          }
+        >
+          <Tabs
+            value={activeTab}
+            onValueChange={(nextValue) => setActiveTab(nextValue as NodeCategoryTab)}
+            variant="pills"
+            size="sm"
+          >
+            <TabsList aria-label={t('nodes.filterAria')}>
+              {pills.map((pill) => (
+                <TabsTrigger key={pill.key} value={pill.key} aria-controls={panelId}>
+                  <span>{pill.label}</span>
+                  <TabCount>{pill.count}</TabCount>
+                </TabsTrigger>
+              ))}
+            </TabsList>
+          </Tabs>
+        </ScreenToolbar>
       }
       overlays={
         <NodeDetailDrawer
@@ -166,6 +204,6 @@ export function NodeCenter({
           }
         />
       )}
-    </SystemCenterShell>
+    </Screen>
   )
 }

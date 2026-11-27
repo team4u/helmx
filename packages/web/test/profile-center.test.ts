@@ -583,7 +583,8 @@ test('ProfileCenter: empty-state rendering', { timeout: 60_000 }, () => {
     ),
   )
 
-  assert.match(html, /primary-center is-split/)
+  assert.match(html, /screen-pane is-split/)
+  assert.match(html, /btn-primary/)
   assert.match(html, /No matching profiles/)
   assert.match(html, /Try adjusting the search keywords or switching category tabs/)
   assert.doesNotMatch(html, EMOJI_REGEX, 'empty state output must contain no emoji')
@@ -943,8 +944,8 @@ test('ProfileCard: inherited model, node and cwd, conversation count, bottom-rig
     })
 
     const text = host.textContent ?? ''
-    const modelLabel = host.querySelector('.primary-card-pills .primary-card-pill-label')
-    const modelSuffix = host.querySelector('.primary-card-pills .primary-card-pill-suffix')
+    const modelLabel = host.querySelector('.profile-card-pills .profile-card-pill-label')
+    const modelSuffix = host.querySelector('.profile-card-pills .profile-card-pill-suffix')
     const modelPill = modelLabel?.closest('.badge')
     assert.equal(modelLabel?.textContent, 'claude-3-7-sonnet')
     assert.equal(modelSuffix?.textContent, '· high')
@@ -992,8 +993,8 @@ test('ProfileCard: long full-path model shows only the short name plus a level s
       }),
     ),
   )
-  assert.match(html, /class="primary-card-pill-label">Qwen3-235B-A22B-Instruct-2507<\/span>/)
-  assert.match(html, /class="primary-card-pill-suffix">· xhigh<\/span>/)
+  assert.match(html, /class="profile-card-pill-label">Qwen3-235B-A22B-Instruct-2507<\/span>/)
+  assert.match(html, /class="profile-card-pill-suffix">· xhigh<\/span>/)
   assert.match(html, new RegExp(`title="Bound model: ${longPathModel} \\(thinking level: xhigh\\)"`))
   assert.doesNotMatch(html, />openrouter\/accounts\/fireworks\/models\//)
 
@@ -1007,7 +1008,7 @@ test('ProfileCard: long full-path model shows only the short name plus a level s
       }),
     ),
   )
-  assert.match(unsetHtml, /class="primary-card-pill-label">Follow global default<\/span>/)
+  assert.match(unsetHtml, /class="profile-card-pill-label">Follow global default<\/span>/)
 })
 
 test('ProfileDetailDrawer: close button uses .btn-icon-sm and shared ModelPickerControl', { timeout: 60_000 }, () => {
@@ -1028,6 +1029,8 @@ test('ProfileDetailDrawer: close button uses .btn-icon-sm and shared ModelPicker
   assert.match(html, /btn btn-ghost btn-icon-sm/, 'the close button must use the fixed-size .btn-icon-sm')
   // 思考档位不再有独立提示行：统一进共享 ModelPickerControl（不支持档位由选择器收敛，无 callout）
   assert.doesNotMatch(html, /callout callout-warn/, 'the private thinking-level hint row is gone (unified picker)')
+  assert.match(html, /helmx-model-picker-field/, 'ModelPickerControl renders in field variant inside forms')
+  assert.match(html, /helmx-model-picker-trigger/, 'field variant uses bordered trigger')
   assert.match(html, /composer-model-button/, 'the shared ModelPickerControl trigger renders')
 })
 
