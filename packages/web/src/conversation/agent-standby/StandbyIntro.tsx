@@ -152,14 +152,14 @@ export function StandbyIntro({
             <kbd className="kbd-hint">/</kbd>
             <span>{t('composer.standby.shortcutCommands')}</span>
           </span>
-          <button
-            type="button"
-            className="btn-inline agent-standby-shortcuts-all"
+          <Button
+            variant="inline"
+            className="agent-standby-shortcuts-all"
             onClick={openAllShortcuts}
           >
             <span>{t('composer.standby.shortcutAll')}</span>
             <kbd className="kbd-hint">{formatModShortcut('/')}</kbd>
-          </button>
+          </Button>
         </div>
       ) : null}
     </>

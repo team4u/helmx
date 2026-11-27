@@ -67,6 +67,7 @@ export function NewTopicButton({
     }
     return (
       <Button
+        variant={variant === 'toolbar' ? 'primary' : 'secondary'}
         size="sm"
         className={className}
         icon={<HelmxIcon name="plus" size={12} />}
@@ -108,6 +109,7 @@ export function NewTopicButton({
       ) : (
         <DropdownMenuTrigger asChild>
           <Button
+            variant={variant === 'toolbar' ? 'primary' : 'secondary'}
             size="sm"
             className={className}
             icon={<HelmxIcon name="plus" size={12} />}

@@ -125,10 +125,6 @@
   flex-shrink: 0;
   margin-left: auto;
 }
-.composer-model-header .btn-icon-sm {
-  width: 26px;
-  height: 26px;
-}
 .composer-model-mode-bar {
   display: inline-flex;
   align-items: center;
@@ -215,7 +211,7 @@
   gap: 0;
 }
 .composer-model-popover .composer-model-search-input {
-  height: 28px;
+  height: var(--control-h-sm);
   padding: 0 2px;
   border: none;
   border-radius: 0;

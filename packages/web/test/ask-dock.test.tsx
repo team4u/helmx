@@ -545,8 +545,11 @@ describe("ask-dock", () => {
     const hintEl = document.querySelector('.ask-dock-hint')
     assert.equal(hintEl?.textContent, 'Reply directly in composer if you want to skip this form.')
 
-    const modelButtons = [...document.querySelectorAll<HTMLButtonElement>('button.composer-model-button')]
-    assert.equal(modelButtons.length, 2, 'each model field renders a ModelPickerControl button')
+    const modelFields = [...document.querySelectorAll<HTMLElement>('.helmx-model-picker-field')]
+    assert.equal(modelFields.length, 2, 'each model field uses ModelPickerControl variant="field"')
+    const modelButtons = [...document.querySelectorAll<HTMLButtonElement>('button.helmx-model-picker-trigger')]
+    assert.equal(modelButtons.length, 2, 'each model field renders a field-variant ModelPickerControl trigger')
+    assert.equal(modelButtons[0]?.getAttribute('role'), 'combobox', 'field variant exposes combobox semantics')
     assert.match(modelButtons[0]?.textContent ?? '', /gpt-5/, 'model field honors defaultValue')
     assert.match(modelButtons[1]?.textContent ?? '', /Keep current/, 'blank model field renders Keep current placeholder')
 

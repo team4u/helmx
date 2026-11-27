@@ -21,6 +21,7 @@ const FOCUSABLE_STEP_CONTROL_SELECTOR = [
   'input:not(:disabled)',
   'textarea:not(:disabled)',
   '.ask-dock-confirm-actions button:not(:disabled)',
+  'button.helmx-model-picker-trigger:not(:disabled)',
   'button.composer-model-button:not(:disabled)',
 ].join(', ')
 

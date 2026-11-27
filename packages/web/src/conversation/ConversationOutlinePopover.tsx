@@ -7,6 +7,7 @@ import {
   PopoverContent,
   PopoverTrigger,
   SearchBox,
+  SegmentedControl,
   useSharedNowMs,
 } from '@helmx/plugin-client'
 import { useWebLocale } from '../i18n/use-web-locale.js'
@@ -285,6 +286,7 @@ export function ConversationOutlinePopover({
       >
           <div className="conversation-outline-header">
             <SearchBox
+              size="sm"
               className="search-box conversation-outline-search"
               inputRef={searchInputRef}
               value={query}
@@ -292,31 +294,21 @@ export function ConversationOutlinePopover({
               placeholder={effectiveSearchPlaceholder}
               ariaLabel={t('conv.outline.filter', { label: effectiveAccessibilityLabel })}
               clearLabel={t('conv.outline.clearSearchAria')}
-              clearButtonClassName="btn btn-ghost btn-icon-xs"
-              icon={<HelmxIcon name="search" size={13} />}
-              clearIcon={<HelmxIcon name="x" size={11} />}
               onCleared={() => searchInputRef.current?.focus()}
             />
             {hasFilterableNodes && showModeToggle ? (
-              <div className="segmented-control conversation-outline-mode" role="group" aria-label={t('conv.outline.modeSwitch')}>
-                {(
-                  [
-                    ['dialogue', t('conv.outline.modeDialogue')],
-                    ['questions', t('conv.outline.modeQuestions')],
-                    ['all', t('common.all')],
-                  ] as const
-                ).map(([value, label]) => (
-                  <button
-                    key={value}
-                    type="button"
-                    className={`segmented-control-btn${mode === value ? ' is-active' : ''}`}
-                    aria-pressed={mode === value}
-                    onClick={() => setMode(value)}
-                  >
-                    {label}
-                  </button>
-                ))}
-              </div>
+              <SegmentedControl<OutlineFilterMode>
+                size="sm"
+                rootClassName="conversation-outline-mode"
+                aria-label={t('conv.outline.modeSwitch')}
+                value={mode}
+                onValueChange={(next) => setMode(next)}
+                items={[
+                  { value: 'dialogue', label: t('conv.outline.modeDialogue') },
+                  { value: 'questions', label: t('conv.outline.modeQuestions') },
+                  { value: 'all', label: t('common.all') },
+                ]}
+              />
             ) : null}
           </div>
 

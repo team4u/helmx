@@ -44,9 +44,12 @@ import {
   IconButton,
   LoadingState,
   PluginSlot,
+  Screen,
+  ScreenToolbar,
   SearchBox,
   SegmentedControl,
   Select,
+  TabCount,
   Tooltip,
 } from '@helmx/plugin-client'
 import { OVERVIEW_CARD_META_SLOT } from '@helmx/protocol/browser'
@@ -694,325 +697,337 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
   // 绝不把「还没加载」伪报成「没有会话」；一旦有任何会话或资产+SSE 双就绪，
   // 空列表才是真实的空（此后瞬时断连保留既有快照，不闪加载）。
 
-  return (
-    <div className={`primary-center conversation-overview${isSplit ? ' is-split' : ''}`} data-view="conversation-overview">
-      <div className="primary-center-topbar pane-topbar">
-        <div className="primary-center-title-wrap pane-title-group">
-          <div className="primary-center-title">
-            <HelmxIcon name="activity" size={14} />
-            <span>{t('shell.overview.title')}</span>
-          </div>
-          <span className="primary-center-subtitle tabular-nums">
-            {isArchivedView
-              ? anySubFilterActive
-                ? t('shell.overview.statsArchivedFiltered', { count: visibleCards.length, total: archivedCards.length })
-                : t('shell.overview.statsArchived', { count: visibleCards.length })
-              : anyFilterActive
-                ? t('shell.overview.statsFiltered', { count: visibleCards.length, total: sourcePoolTotal })
-                : t('shell.overview.stats', { count: visibleCards.length })}
-          </span>
-        </div>
-        <div className="primary-center-topbar-actions pane-actions">
-          <NewTopicButton
-            variant="toolbar"
-            className="overview-newtopic-btn"
-            candidates={newTopicCandidates}
-            onSelectProfile={openNewTopic}
-          />
-          {isSplit ? (
-            <CloseSplitButton onCloseSplit={onCloseSplit} />
-          ) : (
-            <SplitToggleButton
-              isSplitActive={isSplitActive}
-              onToggleSplit={toggleSplit}
-            />
-          )}
-        </div>
-      </div>
+  const statsSubtitle = isArchivedView
+    ? anySubFilterActive
+      ? t('shell.overview.statsArchivedFiltered', { count: visibleCards.length, total: archivedCards.length })
+      : t('shell.overview.statsArchived', { count: visibleCards.length })
+    : anyFilterActive
+      ? t('shell.overview.statsFiltered', { count: visibleCards.length, total: sourcePoolTotal })
+      : t('shell.overview.stats', { count: visibleCards.length })
 
-      <div className="primary-center-toolbar overview-toolbar">
-        <SegmentedControl<BucketFilterValue>
-          value={bucketFilter}
-          onValueChange={(value) => applyFilterParam({ bucket: value === 'all' ? undefined : value })}
-          aria-label={t('shell.overview.title')}
-          items={[
-            { value: 'all', label: t('shell.overview.filterAll'), badge: <span className="tabular-nums">{bucketCounts.all}</span> },
-            { value: 'needs_attention', label: t('shell.overview.filterNeeds'), badge: <span className="tabular-nums">{bucketCounts.needs_attention}</span> },
-            { value: 'running', label: t('shell.overview.filterRunning'), badge: <span className="tabular-nums">{bucketCounts.running}</span> },
-            { value: 'unread_done', label: t('shell.overview.filterUnread'), badge: <span className="tabular-nums">{bucketCounts.unread_done}</span> },
-            ...(showArchivedTab
-              ? [{ value: 'archived' as const, label: t('shell.overview.filterArchived'), badge: <span className="tabular-nums">{bucketCounts.archived}</span> }]
-              : []),
-          ]}
+  return (
+    <Screen
+      topbar
+      layout="contained"
+      className={`conversation-overview${isSplit ? ' is-split' : ''}`}
+      dataView="conversation-overview"
+      icon="activity"
+      title={t('shell.overview.title')}
+      subtitle={<span className="tabular-nums">{statsSubtitle}</span>}
+      actions={
+        <NewTopicButton
+          variant="toolbar"
+          className="overview-newtopic-btn"
+          candidates={newTopicCandidates}
+          onSelectProfile={openNewTopic}
         />
-        <div className="overview-filter-selects">
-          <SearchBox
-            className="search-box overview-search-box"
-            clearButtonClassName="btn btn-ghost btn-icon-xs overview-search-clear"
-            icon={<HelmxIcon name="search" size={13} />}
-            clearIcon={<HelmxIcon name="x" size={12} />}
-            value={searchDraft}
-            onChange={handleSearchChange}
-            onCleared={clearSearchImmediately}
-            placeholder={t('shell.overview.searchPlaceholder')}
-            ariaLabel={t('shell.overview.searchLabel')}
-            clearLabel={t('shell.overview.clearSearch')}
-            clearOnEscape
+      }
+      topbarEnd={
+        isSplit ? (
+          <CloseSplitButton onCloseSplit={onCloseSplit} />
+        ) : (
+          <SplitToggleButton
+            isSplitActive={isSplitActive}
+            onToggleSplit={toggleSplit}
           />
-          <Select
-            className="overview-filter-select"
-            aria-label={t('shell.overview.profileFilterLabel')}
-            options={[
-              { value: '', label: t('shell.overview.profileFilter') },
-              ...profileOptions.map((option) => ({ value: option.id, label: option.label })),
+        )
+      }
+      toolbar={
+        <ScreenToolbar
+          className="overview-toolbar"
+          label={t('shell.overview.title')}
+          actions={
+            <>
+              <SearchBox
+                variant="toolbar"
+                size="sm"
+                className="overview-search-box"
+                value={searchDraft}
+                onChange={handleSearchChange}
+                onCleared={clearSearchImmediately}
+                placeholder={t('shell.overview.searchPlaceholder')}
+                ariaLabel={t('shell.overview.searchLabel')}
+                clearLabel={t('shell.overview.clearSearch')}
+              />
+              <Tooltip content={batch.batchMode ? t('shell.agents.exitBulk') : t('shell.agents.manageBulk')} side="top">
+                <IconButton
+                  variant="ghost"
+                  size="sm"
+                  active={batch.batchMode}
+                  className="overview-batch-toggle"
+                  icon="check-square"
+                  aria-label={batch.batchMode ? t('shell.agents.exitBulk') : t('shell.agents.manageBulk')}
+                  aria-pressed={batch.batchMode}
+                  onClick={batch.toggleBatchMode}
+                />
+              </Tooltip>
+            </>
+          }
+        >
+          <SegmentedControl<BucketFilterValue>
+            size="sm"
+            value={bucketFilter}
+            onValueChange={(value) => applyFilterParam({ bucket: value === 'all' ? undefined : value })}
+            aria-label={t('shell.overview.title')}
+            items={[
+              { value: 'all', label: t('shell.overview.filterAll'), badge: <TabCount>{bucketCounts.all}</TabCount> },
+              { value: 'needs_attention', label: t('shell.overview.filterNeeds'), badge: <TabCount>{bucketCounts.needs_attention}</TabCount> },
+              { value: 'running', label: t('shell.overview.filterRunning'), badge: <TabCount>{bucketCounts.running}</TabCount> },
+              { value: 'unread_done', label: t('shell.overview.filterUnread'), badge: <TabCount>{bucketCounts.unread_done}</TabCount> },
+              ...(showArchivedTab
+                ? [{ value: 'archived' as const, label: t('shell.overview.filterArchived'), badge: <TabCount>{bucketCounts.archived}</TabCount> }]
+                : []),
             ]}
-            value={profileFilter}
-            onChange={(event) => applyFilterParam({ profile: event.target.value === '' ? undefined : event.target.value })}
           />
-          <Select
-            className="overview-filter-select"
-            aria-label={t('shell.overview.nodeFilterLabel')}
-            options={[
-              { value: '', label: t('shell.overview.nodeFilter') },
-              ...nodeOptions.map((nodeId) => ({
-                value: nodeId,
-                label: nodeId === 'local' ? t('shell.overview.localNode') : nodeId,
-              })),
-            ]}
-            value={nodeFilter}
-            onChange={(event) => applyFilterParam({ node: event.target.value === '' ? undefined : event.target.value })}
-          />
-          {showSourceFilter && (
+          <div className="overview-filter-selects">
             <Select
+              size="sm"
               className="overview-filter-select"
-              aria-label={t('shell.overview.sourceFilterLabel')}
+              aria-label={t('shell.overview.profileFilterLabel')}
               options={[
-                { value: 'human', label: t('shell.overview.sourceHuman') },
-                { value: 'automated', label: t('shell.overview.sourceAutomated') },
-                { value: 'all', label: t('shell.overview.sourceFilter') },
+                { value: '', label: t('shell.overview.profileFilter') },
+                ...profileOptions.map((option) => ({ value: option.id, label: option.label })),
               ]}
-              value={sourceFilter}
+              value={profileFilter}
+              onChange={(event) => applyFilterParam({ profile: event.target.value === '' ? undefined : event.target.value })}
+            />
+            <Select
+              size="sm"
+              className="overview-filter-select"
+              aria-label={t('shell.overview.nodeFilterLabel')}
+              options={[
+                { value: '', label: t('shell.overview.nodeFilter') },
+                ...nodeOptions.map((nodeId) => ({
+                  value: nodeId,
+                  label: nodeId === 'local' ? t('shell.overview.localNode') : nodeId,
+                })),
+              ]}
+              value={nodeFilter}
+              onChange={(event) => applyFilterParam({ node: event.target.value === '' ? undefined : event.target.value })}
+            />
+            {showSourceFilter && (
+              <Select
+                size="sm"
+                className="overview-filter-select"
+                aria-label={t('shell.overview.sourceFilterLabel')}
+                options={[
+                  { value: 'human', label: t('shell.overview.sourceHuman') },
+                  { value: 'automated', label: t('shell.overview.sourceAutomated') },
+                  { value: 'all', label: t('shell.overview.sourceFilter') },
+                ]}
+                value={sourceFilter}
+                onChange={(event) =>
+                  applyFilterParam({
+                    source: event.target.value === 'human' ? undefined : (event.target.value as SourceFilterValue),
+                  })
+                }
+              />
+            )}
+            <Select<OverviewGroupBy>
+              size="sm"
+              className="overview-filter-select overview-group-select"
+              prefixIcon="layers"
+              aria-label={t('shell.overview.groupByLabel')}
+              options={[
+                { value: 'status', label: t('shell.overview.groupByStatus') },
+                { value: 'profile', label: t('shell.overview.groupByProfile') },
+                { value: 'node', label: t('shell.overview.groupByNode') },
+              ]}
+              value={groupBy}
               onChange={(event) =>
                 applyFilterParam({
-                  source: event.target.value === 'human' ? undefined : (event.target.value as SourceFilterValue),
+                  group: event.target.value === 'status' ? undefined : (event.target.value as OverviewGroupBy),
                 })
               }
             />
-          )}
-          <Select<OverviewGroupBy>
-            className="overview-filter-select overview-group-select"
-            prefixIcon="layers"
-            aria-label={t('shell.overview.groupByLabel')}
-            options={[
-              { value: 'status', label: t('shell.overview.groupByStatus') },
-              { value: 'profile', label: t('shell.overview.groupByProfile') },
-              { value: 'node', label: t('shell.overview.groupByNode') },
-            ]}
-            value={groupBy}
-            onChange={(event) =>
-              applyFilterParam({
-                group: event.target.value === 'status' ? undefined : (event.target.value as OverviewGroupBy),
-              })
+          </div>
+        </ScreenToolbar>
+      }
+      banner={
+        !isArchivedView && sourceFilter === 'human' && automatedNeedsAttentionCount > 0 ? (
+          <div className="callout callout-warn overview-automated-banner" role="status">
+            <HelmxIcon name="alert-triangle" size={13} />
+            <span className="callout-text">
+              {t('shell.overview.automatedNeedsAttention', { count: automatedNeedsAttentionCount })}
+            </span>
+            <Button
+              size="xs"
+              className="overview-automated-banner-btn"
+              onClick={() => applyFilterParam({ source: 'automated', bucket: 'needs_attention' })}
+            >
+              {t('shell.overview.viewAutomatedAttention')}
+            </Button>
+          </div>
+        ) : undefined
+      }
+    >
+      {batch.batchMode && (
+        <div className="overview-batch-bar-wrap">
+          <BatchActionBar
+            className="overview-batch-bar"
+            selectedCount={batch.selectedIds.size}
+            selectableCount={selectableCardIds.length}
+            isAllSelected={batch.isAllSelected}
+            deleting={batch.deleting}
+            busy={archiving}
+            onExit={batch.exitBatchMode}
+            onToggleSelectAll={batch.toggleSelectAll}
+            extraActions={
+              <Button
+                size="sm"
+                pending={archiving}
+                disabled={effectiveArchivableSelectedIds.length === 0 || batch.deleting}
+                onClick={() => void executeBatchArchive()}
+              >
+                {isArchivedView
+                  ? archiving
+                    ? t('shell.archived.restoring')
+                    : t('shell.archived.restoreCount', { count: effectiveArchivableSelectedIds.length })
+                  : archiving
+                    ? t('shell.agents.archiving')
+                    : t('shell.agents.archiveCount', { count: effectiveArchivableSelectedIds.length })}
+              </Button>
             }
+            confirmOpen={batch.confirmOpen}
+            onConfirmOpenChange={batch.setConfirmOpen}
+            onRequestDelete={batch.requestDeleteConfirm}
+            onConfirmDelete={() => void batch.executeBatchDelete()}
           />
         </div>
-        <Tooltip content={batch.batchMode ? t('shell.agents.exitBulk') : t('shell.agents.manageBulk')} side="top">
-          <IconButton
-            variant="ghost"
-            size="xs"
-            className={`overview-batch-toggle${batch.batchMode ? ' is-active' : ''}`}
-            icon="check-square"
-            aria-label={batch.batchMode ? t('shell.agents.exitBulk') : t('shell.agents.manageBulk')}
-            aria-pressed={batch.batchMode}
-            onClick={batch.toggleBatchMode}
-          />
-        </Tooltip>
-      </div>
+      )}
 
-      <div className="overview-scroll">
-        {!isArchivedView && sourceFilter === 'human' && automatedNeedsAttentionCount > 0 && (
-          <div className="overview-automated-banner-wrap">
-            <div className="callout callout-warn overview-automated-banner" role="status">
-              <HelmxIcon name="alert-triangle" size={13} />
-              <span className="callout-text">
-                {t('shell.overview.automatedNeedsAttention', { count: automatedNeedsAttentionCount })}
-              </span>
+      {dataReady === false ? (
+        <div className="overview-grid">
+          <div className="overview-empty overview-loading">
+            <LoadingState label={t('shell.overview.loading')} iconSize={13} />
+          </div>
+        </div>
+      ) : visibleCards.length === 0 ? (
+        <div className="overview-grid">
+          {isArchivedView && archivedCards.length === 0 ? (
+            <div className="overview-empty">
+              <span>{t('shell.overview.emptyArchived')}</span>
               <Button
-                size="xs"
-                className="overview-automated-banner-btn"
-                onClick={() => applyFilterParam({ source: 'automated', bucket: 'needs_attention' })}
+                variant="secondary"
+                size="sm"
+                icon="rotate-ccw"
+                className="overview-clear-filters"
+                onClick={clearAllFilters}
               >
-                {t('shell.overview.viewAutomatedAttention')}
+                {t('shell.overview.clearFilters')}
               </Button>
             </div>
-          </div>
-        )}
-        {batch.batchMode && (
-          <div className="overview-batch-bar-wrap">
-            <BatchActionBar
-              className="overview-batch-bar"
-              selectedCount={batch.selectedIds.size}
-              selectableCount={selectableCardIds.length}
-              isAllSelected={batch.isAllSelected}
-              deleting={batch.deleting}
-              busy={archiving}
-              onExit={batch.exitBatchMode}
-              onToggleSelectAll={batch.toggleSelectAll}
-              extraActions={
-                <Button
-                  size="sm"
-                  pending={archiving}
-                  disabled={effectiveArchivableSelectedIds.length === 0 || batch.deleting}
-                  onClick={() => void executeBatchArchive()}
-                >
-                  {isArchivedView
-                    ? archiving
-                      ? t('shell.archived.restoring')
-                      : t('shell.archived.restoreCount', { count: effectiveArchivableSelectedIds.length })
-                    : archiving
-                      ? t('shell.agents.archiving')
-                      : t('shell.agents.archiveCount', { count: effectiveArchivableSelectedIds.length })}
-                </Button>
-              }
-              confirmOpen={batch.confirmOpen}
-              onConfirmOpenChange={batch.setConfirmOpen}
-              onRequestDelete={batch.requestDeleteConfirm}
-              onConfirmDelete={() => void batch.executeBatchDelete()}
-            />
-          </div>
-        )}
-
-        {dataReady === false ? (
-          <div className="overview-grid">
-            <div className="overview-empty overview-loading">
-              <LoadingState label={t('shell.overview.loading')} iconSize={13} />
+          ) : !isArchivedView && !anyFilterActive && sourcePoolTotal === 0 ? (
+            <div className="overview-empty">{t('shell.overview.emptySystem')}</div>
+          ) : (
+            <div className="overview-empty">
+              <span>{t('shell.overview.emptyFiltered')}</span>
+              <Button
+                variant="secondary"
+                size="sm"
+                icon="rotate-ccw"
+                className="overview-clear-filters"
+                onClick={clearAllFilters}
+              >
+                {t('shell.overview.clearFilters')}
+              </Button>
             </div>
-          </div>
-        ) : visibleCards.length === 0 ? (
-          <div className="overview-grid">
-            {isArchivedView && archivedCards.length === 0 ? (
-              <div className="overview-empty">
-                <span>{t('shell.overview.emptyArchived')}</span>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="overview-clear-filters"
-                  onClick={clearAllFilters}
-                >
-                  {t('shell.overview.clearFilters')}
-                </Button>
-              </div>
-            ) : !isArchivedView && !anyFilterActive && sourcePoolTotal === 0 ? (
-              <div className="overview-empty">{t('shell.overview.emptySystem')}</div>
-            ) : (
-              <div className="overview-empty">
-                <span>{t('shell.overview.emptyFiltered')}</span>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="overview-clear-filters"
-                  onClick={clearAllFilters}
-                >
-                  {t('shell.overview.clearFilters')}
-                </Button>
-              </div>
-            )}
-          </div>
-        ) : showSectionHeaders ? (
-          <div className="overview-sections">
-            {cardGroups.map((group) => {
-              const collapsed = activeCollapsedKeys.has(group.key)
-              const headingId = `${sectionIdPrefix}-${group.key}`
-              return (
-                <section
-                  key={group.key}
-                  className={`overview-section overview-section-${group.kind}${group.bucket ? ` overview-section-${group.bucket}` : ''}`}
-                  data-group-key={group.key}
-                  aria-labelledby={headingId}
-                >
-                  <div className="overview-section-head">
-                    <button
-                      type="button"
-                      id={headingId}
-                      className="overview-section-toggle"
-                      aria-expanded={!collapsed}
-                      onClick={() => toggleGroupCollapsed(group.key)}
-                    >
-                      <HelmxIcon
-                        name={collapsed ? 'chevron-right' : 'chevron-down'}
-                        size={13}
-                        className="overview-section-chevron"
-                      />
-                      {group.kind === 'bucket' && group.bucket !== undefined && (
-                        <span
-                          className={`overview-section-dot overview-section-dot-${group.bucket}`}
-                          aria-hidden="true"
-                        />
-                      )}
-                      {group.kind === 'profile' && (
-                        <HelmxIcon name="bot" size={12} className="overview-section-icon" />
-                      )}
-                      {group.kind === 'node' && (
-                        <HelmxIcon
-                          name={group.nodeId === 'local' ? 'laptop' : 'server'}
-                          size={12}
-                          className="overview-section-icon"
-                        />
-                      )}
+          )}
+        </div>
+      ) : showSectionHeaders ? (
+        <div className="overview-sections">
+          {cardGroups.map((group) => {
+            const collapsed = activeCollapsedKeys.has(group.key)
+            const headingId = `${sectionIdPrefix}-${group.key}`
+            return (
+              <section
+                key={group.key}
+                className={`overview-section overview-section-${group.kind}${group.bucket ? ` overview-section-${group.bucket}` : ''}`}
+                data-group-key={group.key}
+                aria-labelledby={headingId}
+              >
+                <div className="overview-section-head">
+                  <button
+                    type="button"
+                    id={headingId}
+                    className="overview-section-toggle"
+                    aria-expanded={!collapsed}
+                    onClick={() => toggleGroupCollapsed(group.key)}
+                  >
+                    <HelmxIcon
+                      name={collapsed ? 'chevron-right' : 'chevron-down'}
+                      size={13}
+                      className="overview-section-chevron"
+                    />
+                    {group.kind === 'bucket' && group.bucket !== undefined && (
                       <span
-                        className={`overview-section-title${group.kind === 'node' && group.nodeId !== 'local' ? ' mono' : ''}`}
-                      >
-                        {group.label}
-                      </span>
-                      <span className="overview-section-count tabular-nums">{group.cards.length}</span>
-                    </button>
-                    <span className="overview-section-rule" aria-hidden="true" />
+                        className={`overview-section-dot overview-section-dot-${group.bucket}`}
+                        aria-hidden="true"
+                      />
+                    )}
+                    {group.kind === 'profile' && (
+                      <HelmxIcon name="bot" size={12} className="overview-section-icon" />
+                    )}
+                    {group.kind === 'node' && (
+                      <HelmxIcon
+                        name={group.nodeId === 'local' ? 'laptop' : 'server'}
+                        size={12}
+                        className="overview-section-icon"
+                      />
+                    )}
+                    <span
+                      className={`overview-section-title${group.kind === 'node' && group.nodeId !== 'local' ? ' mono' : ''}`}
+                    >
+                      {group.label}
+                    </span>
+                    <span className="overview-section-count tabular-nums">{group.cards.length}</span>
+                  </button>
+                  <span className="overview-section-rule" aria-hidden="true" />
+                </div>
+                {!collapsed && (
+                  <div className="overview-grid">
+                    {group.cards.map((card) => (
+                      <OverviewCardView
+                        key={card.root.id}
+                        card={card}
+                        onOpenConversation={openConversation}
+                        onDrawerPeek={drawerPeek}
+                        onOpenSplit={openSplit}
+                        viewedConversationIds={viewedConversationIds}
+                        batchMode={batch.batchMode}
+                        selectable={isConversationBulkSelectable(card.root)}
+                        selected={batch.selectedIds.has(card.root.id)}
+                        expanded={expandedCardIds.has(card.root.id)}
+                        onToggleSelect={batch.toggleSelect}
+                        onToggleExpanded={toggleCardExpanded}
+                      />
+                    ))}
                   </div>
-                  {!collapsed && (
-                    <div className="overview-grid">
-                      {group.cards.map((card) => (
-                        <OverviewCardView
-                          key={card.root.id}
-                          card={card}
-                          onOpenConversation={openConversation}
-                          onDrawerPeek={drawerPeek}
-                          onOpenSplit={openSplit}
-                          viewedConversationIds={viewedConversationIds}
-                          batchMode={batch.batchMode}
-                          selectable={isConversationBulkSelectable(card.root)}
-                          selected={batch.selectedIds.has(card.root.id)}
-                          expanded={expandedCardIds.has(card.root.id)}
-                          onToggleSelect={batch.toggleSelect}
-                          onToggleExpanded={toggleCardExpanded}
-                        />
-                      ))}
-                    </div>
-                  )}
-                </section>
-              )
-            })}
-          </div>
-        ) : (
-          <div className="overview-grid">
-            {visibleCards.map((card) => (
-              <OverviewCardView
-                key={card.root.id}
-                card={card}
-                onOpenConversation={openConversation}
-                onDrawerPeek={drawerPeek}
-                onOpenSplit={openSplit}
-                viewedConversationIds={viewedConversationIds}
-                batchMode={batch.batchMode}
-                selectable={isConversationBulkSelectable(card.root)}
-                selected={batch.selectedIds.has(card.root.id)}
-                expanded={expandedCardIds.has(card.root.id)}
-                onToggleSelect={batch.toggleSelect}
-                onToggleExpanded={toggleCardExpanded}
-              />
-            ))}
-          </div>
-        )}
-      </div>
-    </div>
+                )}
+              </section>
+            )
+          })}
+        </div>
+      ) : (
+        <div className="overview-grid">
+          {visibleCards.map((card) => (
+            <OverviewCardView
+              key={card.root.id}
+              card={card}
+              onOpenConversation={openConversation}
+              onDrawerPeek={drawerPeek}
+              onOpenSplit={openSplit}
+              viewedConversationIds={viewedConversationIds}
+              batchMode={batch.batchMode}
+              selectable={isConversationBulkSelectable(card.root)}
+              selected={batch.selectedIds.has(card.root.id)}
+              expanded={expandedCardIds.has(card.root.id)}
+              onToggleSelect={batch.toggleSelect}
+              onToggleExpanded={toggleCardExpanded}
+            />
+          ))}
+        </div>
+      )}
+    </Screen>
   )
 }

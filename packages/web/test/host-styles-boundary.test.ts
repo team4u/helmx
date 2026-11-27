@@ -397,9 +397,17 @@ test('样式边界：统一批量操作栏 .batch-bar 族与 .btn-danger-sm 完�
     }
   }
   const overview = readFileSync(join(STYLES_DIR, 'overview.css'), 'utf8')
-  for (const selector of ['.overview-scroll', '.overview-batch-bar-wrap', '.overview-batch-bar-wrap + .overview-grid', '.overview-batch-bar-wrap + .overview-sections']) {
-    assert.ok(ownsRule(overview, selector), `overview.css 应定义总览批量栏同域滚动与对齐规则 ${selector}`)
+  const responsive = readFileSync(join(__dirname, '../src/responsive.css'), 'utf8')
+  const outline = readFileSync(join(STYLES_DIR, 'outline.css'), 'utf8')
+  const modals = readFileSync(join(STYLES_DIR, 'modals.css'), 'utf8')
+  assert.ok(ownsRule(overview, '.overview-batch-bar-wrap'), 'overview.css 应定义总览批量栏吸顶容器规则 .overview-batch-bar-wrap')
+  for (const retiredOverview of ['.overview-scroll', '.overview-search-clear', '.overview-automated-banner-wrap']) {
+    assert.ok(!overview.includes(retiredOverview), `overview.css 不得保留已收口旧类 ${retiredOverview}`)
   }
+  assert.ok(!responsive.includes('.primary-center-topbar'), 'responsive.css 不得保留已收口旧类 .primary-center-topbar')
+  assert.ok(!outline.includes('.conversation-outline-mode .segmented-control-btn'), 'outline.css 不得保留手写 segmented-control-btn 高度覆写')
+  assert.ok(!modals.includes('.skill-reader-mode .segmented-control-btn'), 'modals.css 不得保留手写 segmented-control-btn 高度覆写')
+  assert.ok(!modals.includes('.skill-file-select .helmx-select-trigger'), 'modals.css 不得保留手写 skill-file-select 28px 高度覆写')
   // 旧词汇不得回流（sidebar/overview 私有 header/actions/count/spacer 已收口）
   for (const { name, css } of shards) {
     for (const stale of ['.sidebar-batch-bar-header', '.sidebar-batch-bar-actions', '.overview-batch-bar-count', '.overview-batch-bar-spacer', '.overview-batch-bar-actions']) {

@@ -10,7 +10,7 @@ import { ensureHappyDom, flushMacrotask } from './helpers/dom-harness.js'
 import { makeTestStore } from './helpers/store.js'
 
 ensureHappyDom()
-const { Screen } = await import('@helmx/plugin-client')
+const { Screen, ScreenToolbar } = await import('@helmx/plugin-client')
 const { resetPluginClientCache, seedPluginClientModule } = await import('../src/lib/plugin-client.js')
 const { HostStoreProviders } = await import('./helpers/host-store.js')
 const { mountSharedPluginNamespaces } = await import('./helpers/builtin-clients.js')
@@ -307,6 +307,82 @@ describe("screen-host-shell", () => {
     assert.equal(host?.querySelector('.pane-topbar .pane-actions-slot .stack-row button')?.textContent, '新建映射')
     assert.ok(host?.querySelector('.pane-topbar .pane-actions-slot')?.nextElementSibling?.classList.contains('split-toggle-btn') === true, '动作槽紧邻分屏按钮之前')
     assert.equal(actionsOnlyStage.querySelector('[data-testid="actions-only-body"]')?.textContent, '正文')
+    assert.equal(host?.querySelector('.screen-host-toolbar-slot')?.childElementCount, 0, '无 toolbar 时工具栏槽为空不占位')
+
+    // 5) Screen toolbar 经 toolbarSlot portal 到顶栏与 .screen-host-body 之间，且主/分屏各自隔离互不串槽
+    seedPluginClientModule(
+      'ext-demo',
+      'toolbar.tsx',
+      {
+        WithToolbar: (props: Record<string, unknown>) => (
+          <Screen
+            layout="contained"
+            title="带工具栏视图"
+            actions={<button type="button" data-action-pane={props.isSplit ? 'split' : 'primary'}>新建</button>}
+            toolbar={
+              <ScreenToolbar label="工具栏">
+                <span data-toolbar-pane={props.isSplit ? 'split' : 'primary'}>筛选条</span>
+              </ScreenToolbar>
+            }
+          >
+            <div data-testid="toolbar-body">主体</div>
+          </Screen>
+        ),
+      },
+      'demo-hash-3',
+    )
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      if (String(input).includes('/api/plugins/ext-demo/client.mjs')) {
+        return new Response('', { status: 200, headers: { 'x-helmx-client-hash': 'demo-hash-3' } })
+      }
+      return new Response('{}', { status: 200 })
+    }) as typeof fetch
+
+    const toolbarStore = makeTestStore({
+      primaryTarget: { kind: 'screen', pluginId: 'ext-demo', screenId: 'with-toolbar' },
+      splitTarget: { kind: 'screen', pluginId: 'ext-demo', screenId: 'with-toolbar' },
+      uiContributions: [
+        {
+          pluginId: 'ext-demo',
+          surface: 'screen',
+          spec: { id: 'with-toolbar', label: '带工具栏视图', client: { module: 'toolbar.tsx', export: 'WithToolbar' } },
+        },
+      ],
+    })
+    mount(
+      <HostStoreProviders value={toolbarStore}>
+        <div className="split-test-wrapper">
+          <div data-pane="primary">
+            <ScreenHost pluginId="ext-demo" screenId="with-toolbar" />
+          </div>
+          <div data-pane="split">
+            <ScreenHost pluginId="ext-demo" screenId="with-toolbar" isSplit onCloseSplit={() => {}} />
+          </div>
+        </div>
+      </HostStoreProviders>,
+    )
+    await flushMacrotask(0)
+
+    for (const side of ['primary', 'split'] as const) {
+      const paneWrap: HTMLElement | null | undefined = host?.querySelector<HTMLElement>(`[data-pane="${side}"]`)
+      assert.ok(paneWrap !== null && paneWrap !== undefined)
+      const screenPane: HTMLElement | null = paneWrap.querySelector<HTMLElement>('.helmx-pane.screen-pane')
+      assert.ok(screenPane !== null, `${side} ScreenHost 应挂 .helmx-pane.screen-pane`)
+      const slot: HTMLElement | null = screenPane.querySelector<HTMLElement>('.screen-host-toolbar-slot')
+      const body: HTMLElement | null = screenPane.querySelector<HTMLElement>('.screen-host-body[data-screen-host="true"]')
+      assert.ok(slot !== null && body !== null)
+      assert.ok(slot.previousElementSibling?.classList.contains('pane-topbar') === true, `${side} toolbarSlot 位于 .pane-topbar 之下`)
+      assert.ok(slot.nextElementSibling === body, `${side} toolbarSlot 紧贴 .screen-host-body 之上`)
+      const bar: HTMLElement | null = slot.querySelector<HTMLElement>('.screen-toolbar-bar[data-screen-layout="contained"]')
+      assert.ok(bar !== null, `${side} toolbar 经 portal 落入 .screen-host-toolbar-slot`)
+      assert.equal(bar.classList.contains('screen-toolbar-bar-inline'), false, `${side} hosted toolbar 不降级为 inline`)
+      assert.ok(bar.querySelector(`[data-toolbar-pane="${side}"]`) !== null, `${side} toolbar 内容归属当前面板`)
+      assert.ok(body.querySelector('.screen-toolbar-bar') === null, `${side} .screen-host-body 内零重复 toolbar`)
+      assert.ok(
+        screenPane.querySelector(`.pane-topbar .pane-actions-slot [data-action-pane="${side}"]`) !== null,
+        `${side} actions 经 portal 落入对应面板顶栏动作槽`,
+      )
+    }
   })
 
   test('CommandPaletteModal 单键快捷键徽章、聚焦分屏上下文与空查询排序', { timeout: 60_000 }, async () => {
