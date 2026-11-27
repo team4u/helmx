@@ -519,8 +519,9 @@ test('helmx-ui HIG single-source sync: repo skill (.helmx/skills/helmx-ui) match
       counterBlock.includes('variant="primary"') &&
       !counterBlock.includes('<div className="card">') &&
       !counterBlock.includes('<button type="button" className="btn') &&
-      !counterBlock.includes('variant="default"'),
-    'CounterScreen example in skill-and-plugin-dev.md must use SDK primitives (<Screen>/<Card>/<Button variant="primary">)',
+      !counterBlock.includes('variant="default"') &&
+      !counterBlock.includes('direction="row"'),
+    'CounterScreen example in skill-and-plugin-dev.md must use valid SDK primitives (<Screen>/<Card>/<Stack direction="horizontal">/<Button variant="primary">)',
   )
 
   const appTsxBlocks = extractTsxBlocks(APP_BUILDER_FULLSTACK_TEMPLATE_MD)
@@ -546,10 +547,11 @@ test('helmx-ui HIG single-source sync: repo skill (.helmx/skills/helmx-ui) match
   for (const block of patternTsxBlocks) {
     assert.ok(
       !block.includes('variant="default"') &&
+        !block.includes('direction="row"') &&
         !block.includes('<select') &&
         !block.includes('type="search"') &&
         !block.includes('<button type="button" className="btn'),
-      'HIG canonical tsx patterns must stay free of deprecated Button default variant, native controls, and raw .btn markup',
+      'HIG canonical tsx patterns must stay free of deprecated Button default variant, invalid Stack direction="row", native controls, and raw .btn markup',
     )
   }
 })

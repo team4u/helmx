@@ -485,7 +485,7 @@ export function TierFormDrawer({
             />
           </Field>
 
-          <Field label="Target Model" htmlFor={false} required>
+          <Field label="Target Model" required>
             <ModelPickerControl
               variant="field"
               size="md"
@@ -606,7 +606,7 @@ export function NodeTunnelsSlot({
               title={<span className="mono">{tunnel.listen}</span>}
               meta={<span className="mono">-{'>'} {tunnel.target}</span>}
               trailing={
-                <Stack direction="row" align="center" gap="sm">
+                <Stack direction="horizontal" align="center" gap="sm">
                   <Badge tone="neutral" mono>{tunnel.connections}</Badge>
                   <Switch
                     checked={tunnel.active}

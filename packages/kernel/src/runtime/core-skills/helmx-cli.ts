@@ -251,7 +251,7 @@ export function CounterScreen(): ReactNode {
   return (
     <Screen layout="contained" title="Counter">
       <Card title="Counter">
-        <Stack direction="row" align="center" justify="between" gap="md">
+        <Stack direction="horizontal" align="center" justify="between" gap="md">
           <span className="tabular-nums">Count: {state?.count ?? 0}</span>
           <Button variant="primary" size="sm" icon="plus" pending={pending} onClick={() => void handleIncrement()}>
             Increment
