@@ -412,12 +412,12 @@ describe("screen-host-shell", () => {
       )
       await settle()
 
-      const modal = document.querySelector<HTMLElement>('.modal[aria-label="Command palette and global search"]')
+      const modal = document.querySelector<HTMLElement>('.helmx-modal[aria-label="Command palette and global search"]')
       assert.ok(modal, '应渲染命令面板对话框')
 
-      // 所有快捷键提示均带 .kbd-hint 且绝不含双键别名分隔符（允许单键本身为 "/" 的 ⌘/ 与 Ctrl+/）
-      const hints = [...modal.querySelectorAll<HTMLElement>('.kbd-hint')]
-      assert.ok(hints.length >= 4, '应显示单键快捷键 .kbd-hint 徽章')
+      // 所有快捷键提示均带 .helmx-kbd 且绝不含双键别名分隔符（允许单键本身为 "/" 的 ⌘/ 与 Ctrl+/）
+      const hints = [...modal.querySelectorAll<HTMLElement>('.helmx-kbd')]
+      assert.ok(hints.length >= 4, '应显示单键快捷键 .helmx-kbd 徽章')
       for (const hint of hints) {
         const label = hint.textContent?.trim() ?? ''
         assert.ok(label.length > 0)

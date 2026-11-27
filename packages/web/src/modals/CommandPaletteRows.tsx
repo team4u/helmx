@@ -2,7 +2,7 @@
  * Highlighted search row and command row subcomponents extracted from CommandPaletteModal.
  */
 import { Fragment, type MouseEvent } from 'react'
-import { HelmxIcon } from '@helmx/plugin-client'
+import { HelmxIcon, Kbd } from '@helmx/plugin-client'
 import type { WebMessageTranslator } from '../i18n/catalog.js'
 import { ConversationStatusDot } from '../shell/SidebarPrimitives.js'
 import type { ConversationBackgroundIndex } from '../shell/conversation-status-model.js'
@@ -86,7 +86,7 @@ export function CommandPaletteRowItem({
         {(row.hint || row.shortcut) && (
           <span className="nav-item-meta">
             {row.hint && <span className="mono">{row.hint}</span>}
-            {row.shortcut && <kbd className="kbd-hint">{row.shortcut}</kbd>}
+            {row.shortcut && <Kbd desktopOnly>{row.shortcut}</Kbd>}
           </span>
         )}
       </button>

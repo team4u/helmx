@@ -592,7 +592,7 @@ test('CommandPaletteModal: recent conversation rows render the status dot in the
         e(HelmxExternalStoreContext.Provider, { value: store }, e(CommandPaletteModal, { onClose: () => {} })),
       )
     })
-    const recentRows = [...document.body.querySelectorAll('.modal .nav-item')].filter((row) =>
+    const recentRows = [...document.body.querySelectorAll('.helmx-modal .nav-item')].filter((row) =>
       row.textContent?.includes('Recent conversation #'),
     )
     assert.ok(recentRows.length >= 2, 'both recent rows render inside the dialog portal')
@@ -793,12 +793,12 @@ test('CommandPaletteModal: all plugin views are searchable rows and open via the
       root = createRoot(container)
       root.render(e(HelmxExternalStoreContext.Provider, { value: store }, e(CommandPaletteModal, { onClose: () => {} })))
     })
-    let viewRow = [...document.body.querySelectorAll('.modal .nav-item')].find((row) => row.textContent?.includes('App Center'))
+    let viewRow = [...document.body.querySelectorAll('.helmx-modal .nav-item')].find((row) => row.textContent?.includes('App Center'))
     assert.ok(viewRow !== undefined, 'the plugin view row renders in the empty-query palette')
     assert.ok(viewRow.textContent?.includes('Apps'), 'the row hints the owning plugin display name')
 
     // Search narrows to the view row (Cmd+K finds every plugin view).
-    const input = document.body.querySelector<HTMLInputElement>('.modal .search-box input')
+    const input = document.body.querySelector<HTMLInputElement>('.helmx-modal .search-box input')
     assert.ok(input !== null)
     await act(async () => {
       input.value = 'board'
@@ -807,7 +807,7 @@ test('CommandPaletteModal: all plugin views are searchable rows and open via the
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 0))
     })
-    viewRow = [...document.body.querySelectorAll('.modal .nav-item')].find((row) => row.textContent?.includes('App Center'))
+    viewRow = [...document.body.querySelectorAll('.helmx-modal .nav-item')].find((row) => row.textContent?.includes('App Center'))
     assert.ok(viewRow !== undefined, 'typing the view name keeps the view row visible')
 
     const rowElement = viewRow as HTMLElement

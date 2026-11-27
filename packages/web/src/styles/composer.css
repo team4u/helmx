@@ -741,39 +741,6 @@ button.attachment-chip:disabled {
   display: none;
 }
 
-.composer-plus-menu-item {
-  justify-content: flex-start;
-}
-
-.composer-plus-menu-icon {
-  flex-shrink: 0;
-  color: var(--fg-muted);
-}
-
-.composer-plus-menu-item[data-highlighted] .composer-plus-menu-icon {
-  color: var(--fg);
-}
-@media (hover: hover) {
-  .composer-plus-menu-item:hover:not([data-disabled]) .composer-plus-menu-icon {
-    color: var(--fg);
-  }
-}
-
-.composer-plus-menu-label {
-  flex: 1 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.composer-plus-menu-hint {
-  flex-shrink: 0;
-  margin-left: 8px;
-  font-size: 11px;
-  color: var(--fg-subtle);
-}
-
 .composer-toolbar-slot {
   display: contents;
 }
@@ -956,81 +923,8 @@ button.attachment-chip:disabled {
   cursor: not-allowed;
 }
 
-/* 策略选择下拉浮层 */
+/* 策略选择下拉浮层（视觉材质与菜单项结构复用 .helmx-dropdown-content / .helmx-dropdown-item） */
 .composer-busy-dropdown-content {
-  min-width: 230px;
-  padding: 5px;
-  background: var(--bg-elevated);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.14);
-}
-
-.composer-busy-menu-item {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 7px 9px;
-  border-radius: var(--radius-xs);
-  cursor: pointer;
-  transition: background 80ms ease;
-  user-select: none;
-}
-
-.composer-busy-menu-item[data-highlighted] {
-  background: var(--bg-hover);
-  outline: none;
-}
-@media (hover: hover) {
-  .composer-busy-menu-item:hover:not(:disabled) {
-    background: var(--bg-hover);
-    outline: none;
-  }
-}
-
-.composer-busy-menu-icon {
-  flex-shrink: 0;
-  color: var(--fg-muted);
-}
-
-.composer-busy-menu-text {
-  flex: 1 1 auto;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.composer-busy-menu-title {
-  font-size: 12.5px;
-  font-weight: 500;
-  color: var(--fg);
-  line-height: 1.2;
-}
-
-.composer-busy-menu-desc {
-  font-size: 11px;
-  color: var(--fg-muted);
-  line-height: 1.2;
-}
-
-.composer-busy-menu-kbd {
-  flex-shrink: 0;
-  font-size: 10.5px;
-  font-family: var(--font-mono);
-  color: var(--fg-subtle);
-  background: var(--bg-muted);
-  padding: 2px 5px;
-  border-radius: var(--radius-xs);
-  border: 1px solid var(--border);
-}
-
-.composer-busy-menu-item[data-highlighted] .composer-busy-menu-icon {
-  color: var(--fg);
-}
-@media (hover: hover) {
-  .composer-busy-menu-item:hover:not(:disabled) .composer-busy-menu-icon {
-    color: var(--fg);
-  }
+  min-width: 240px;
 }
 

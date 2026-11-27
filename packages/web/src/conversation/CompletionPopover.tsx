@@ -12,6 +12,7 @@
  * Component files export only components and TS types (Fast Refresh rule).
  */
 import { useEffect, useRef, useState } from 'react'
+import { Kbd } from '@helmx/plugin-client'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { isImeComposing } from '../lib/ime.js'
 import type { MergedCompletionItem } from './composer-completion-model.js'
@@ -110,7 +111,7 @@ export function CompletionPopover({ open, trigger, snapshot, onPick, onClose, an
     >
       <div className="popover-header">
         {triggerTitle}
-        <span className="kbd-hint popover-kbd-hint">{t('composer.kbd.navConfirmClose')}</span>
+        <Kbd size="sm" desktopOnly>{t('composer.kbd.navConfirmClose')}</Kbd>
       </div>
       <div
         ref={listRef}

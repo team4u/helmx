@@ -28,6 +28,7 @@ import {
   DropdownMenuItem,
   DropdownMenuPortal,
   DropdownMenuTrigger,
+  EmptyState,
   HelmxIcon,
   IconButton,
   LoadingState,
@@ -769,17 +770,14 @@ export function SidebarConversationList({
                 return (
                   <DropdownMenuItem
                     key={option.value}
-                    className="sidebar-group-by-item"
+                    icon={option.icon}
+                    checked={selected}
                     data-group-by-option={option.value}
                     data-active={selected ? 'true' : undefined}
                     aria-checked={selected}
                     onSelect={() => handleSelectGroupBy(option.value)}
                   >
-                    <span className="pane-more-item-label">
-                      <HelmxIcon name={option.icon} size={13} />
-                      {option.label}
-                    </span>
-                    {selected && <HelmxIcon name="check" size={12} className="sidebar-group-by-item-check" />}
+                    {option.label}
                   </DropdownMenuItem>
                 )
               })}
@@ -835,11 +833,10 @@ export function SidebarConversationList({
 
       {filterOpen && (
         <SearchBox
+          size="sm"
+          surface="subtle"
           className="sidebar-search"
           inputClassName="sidebar-search-input"
-          clearButtonClassName="btn btn-ghost btn-icon-xs sidebar-search-clear"
-          icon={<HelmxIcon name="search" size={12} />}
-          clearIcon={<HelmxIcon name="x" size={11} />}
           inputRef={searchInputRef}
           value={search}
           onChange={setSearch}
@@ -890,22 +887,24 @@ export function SidebarConversationList({
       )}
 
       {!dataReady ? (
-        <div className="sidebar-search-empty">
-          <LoadingState label={t('shell.overview.loading')} iconSize={12} />
-        </div>
+        <LoadingState label={t('shell.overview.loading')} iconSize={12} className="sidebar-search-empty" />
       ) : !workingSet.searchActive && workingSet.totalRootCount === 0 && cardGroups.length === 0 ? (
-        <div className="sidebar-overview-empty">
-          <span>{t('shell.sidebar.overviewEmpty')}</span>
-          <NewTopicButton
-            variant="empty"
-            className="sidebar-empty-new-topic-btn"
-            candidates={newTopicCandidates}
-            onSelectProfile={openStandby}
-          />
-        </div>
+        <EmptyState
+          compact
+          className="sidebar-overview-empty"
+          title={t('shell.sidebar.overviewEmpty')}
+          action={
+            <NewTopicButton
+              variant="empty"
+              className="sidebar-empty-new-topic-btn"
+              candidates={newTopicCandidates}
+              onSelectProfile={openStandby}
+            />
+          }
+        />
       ) : cardGroups.length === 0 ? (
-          <div className="sidebar-search-empty">{t('shell.overview.emptyFiltered')}</div>
-        ) : (
+        <EmptyState compact className="sidebar-search-empty" title={t('shell.overview.emptyFiltered')} />
+      ) : (
           <div className="sidebar-overview-sections">
             {cardGroups.map((group) => {
               if (

@@ -723,11 +723,11 @@ describe("composer-keybindings", () => {
       assert.equal(menuItems.length, 2, 'dropdown contains only Steer and Queue send (no duplicate Stop item)')
       assert.equal(menuContent.querySelectorAll('[role="separator"]').length, 0, 'dropdown omits bottom separator')
       assert.match(menuItems[0]!.textContent ?? '', /Steer/)
-      assert.equal(menuItems[0]!.querySelector('.kbd-hint')?.textContent, 'Enter')
+      assert.equal(menuItems[0]!.querySelector('.helmx-kbd')?.textContent, 'Enter')
       const queueItem = menuContent.querySelector<HTMLElement>('.composer-queue-button')
       assert.ok(queueItem !== null && queueItem === menuItems[1]!)
       assert.match(queueItem.textContent ?? '', /Queue send/)
-      assert.equal(queueItem.querySelector('.kbd-hint')?.textContent, '⌘/Ctrl+Enter')
+      assert.equal(queueItem.querySelector('.helmx-kbd')?.textContent, '⌘/Ctrl+Enter')
 
       await act(async () => {
         queueItem.click()

@@ -1,5 +1,5 @@
 import React from 'react'
-import { Badge, Button, DialogClose, HelmxIcon, SearchBox } from '@helmx/plugin-client'
+import { Badge, Button, DialogClose, HelmxIcon, LoadingState, SearchBox } from '@helmx/plugin-client'
 import { useWebLocale } from '../../i18n/use-web-locale.js'
 
 export interface CommandPaletteHeaderProps {
@@ -27,10 +27,11 @@ export function CommandPaletteHeader({
 }: CommandPaletteHeaderProps): React.JSX.Element {
   const { t } = useWebLocale()
   return (
-    <div className="modal-header palette-header">
+    <div className="palette-header">
       <div className="palette-search-wrap">
         <SearchBox
-          className="search-box palette-search-box"
+          surface="frameless"
+          className="palette-search-box"
           icon={<HelmxIcon name="search" size={15} />}
           clearable
           clearLabel={t('modals.palette.clearSearch')}
@@ -48,10 +49,7 @@ export function CommandPaletteHeader({
         />
       </div>
       {searching && (
-        <span className="palette-searching" role="status">
-          <HelmxIcon name="loader" size={12} className="spin-slow" />
-          {t('modals.palette.searching')}
-        </span>
+        <LoadingState label={t('modals.palette.searching')} iconSize={12} className="palette-searching" />
       )}
       <DialogClose asChild>
         <Button

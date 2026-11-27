@@ -553,106 +553,13 @@
   white-space: nowrap;
 }
 
-/* 对话空间紧凑搜索：突破工作集近期上限，检索全量未归档会话 */
+/* 对话空间紧凑搜索（外壳与聚焦态复用 primitives.css .search-box-subtle + .search-box-sm） */
 .sidebar-search {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  height: 28px;
-  padding: 0 6px 0 8px;
   margin-bottom: 4px;
-  border: 1px solid transparent;
-  border-radius: var(--radius-sm);
-  background: var(--bg-muted);
-  color: var(--fg-muted);
-  transition: border-color 120ms ease, background 120ms ease, box-shadow 120ms ease;
 }
 
-.sidebar-search:focus-within {
-  background: var(--bg-elevated);
-  border-color: var(--border-focus);
-  box-shadow: 0 0 0 2px var(--focus-ring-soft);
-}
-
-.sidebar-search-input {
-  flex: 1;
-  min-width: 0;
-  border: none;
-  background: transparent;
-  color: var(--fg);
-  font-size: 12px;
-  font-family: inherit;
-  outline: none;
-  padding: 0;
-  height: 25px;
-  line-height: normal;
-}
-
-.sidebar-search-input::placeholder {
-  color: var(--fg-subtle);
-}
-
-.sidebar-search-clear {
-  width: 18px;
-  height: 18px;
-  padding: 0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border: none;
-  border-radius: var(--radius-xs);
-  background: transparent;
-  color: var(--fg-muted);
-  cursor: pointer;
-  flex-shrink: 0;
-}
-
-.sidebar-search .sidebar-search-clear {
-  width: 18px;
-  height: 18px;
-  padding: 0;
-  color: var(--fg-muted);
-  flex-shrink: 0;
-}
-
-.sidebar-search-clear:focus-visible:not(:disabled) {
-  outline: none;
-  color: var(--fg);
-  background: var(--bg-hover);
-  box-shadow: none;
-}
-@media (hover: hover) {
-  .sidebar-search-clear:hover {
-    outline: none;
-    color: var(--fg);
-    background: var(--bg-hover);
-    box-shadow: none;
-  }
-}
-
-.sidebar-search .sidebar-search-clear:focus-visible:not(:disabled) {
-  outline: none;
-  color: var(--fg);
-  background: var(--bg-hover);
-  box-shadow: none;
-}
-@media (hover: hover) {
-  .sidebar-search .sidebar-search-clear:hover:not(:disabled) {
-    outline: none;
-    color: var(--fg);
-    background: var(--bg-hover);
-    box-shadow: none;
-  }
-}
-
-.sidebar-search-empty {
+.sidebar-search-empty.loading-state {
   padding: 10px 8px;
-  font-size: 12px;
-  color: var(--fg-muted);
-}
-
-.sidebar-search-empty .loading-state {
-  padding: 0;
 }
 
 .activity-rail-brand {
@@ -828,16 +735,6 @@
     width: 28px;
     height: 28px;
   }
-}
-
-.sidebar-group-by-item {
-  justify-content: space-between;
-  gap: 10px;
-}
-
-.sidebar-group-by-item-check {
-  color: var(--accent);
-  flex-shrink: 0;
 }
 
 .sidebar-overview-section-title {
@@ -1140,13 +1037,10 @@
 }
 
 .sidebar-overview-empty {
-  display: flex;
-  flex-direction: column;
   align-items: flex-start;
-  gap: 8px;
+  text-align: left;
   padding: 12px 8px;
-  font-size: 12px;
-  color: var(--fg-muted);
+  min-height: 0;
 }
 
 /* 侧栏底部「查看全部 / 已归档会话 / 在会话总览中查看匹配」入口 */

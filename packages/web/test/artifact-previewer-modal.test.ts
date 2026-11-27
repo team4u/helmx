@@ -311,7 +311,7 @@ test('Markdown 产物预览期间元数据对象引用刷新时不卸载 Markdow
   const root = mount(host, store, 'art-stable-scroll', 7)
   await flush()
 
-  const modalBody = document.querySelector<HTMLElement>('.modal-body')
+  const modalBody = document.querySelector<HTMLElement>('.preview-modal-body')
   const previewBefore = document.querySelector<HTMLElement>('.artifact-markdown-preview')
   assert.ok(modalBody !== null && previewBefore !== null, 'Markdown 富文本预览已挂载')
 
@@ -481,7 +481,7 @@ test('FilePreviewBody：textState="binary"（含文本类文件解码失败回�
   const modalRoot = mount(modalHost, brokenStore, 'art-broken-text', 7)
   try {
     await flush()
-    const modalCallout = document.querySelector('.modal-body .callout')
+    const modalCallout = document.querySelector('.preview-modal-body .callout')
     assert.ok(modalCallout !== null, 'failed text decode must render explicit .callout notice')
     assert.match(modalCallout.textContent ?? '', /no inline preview|暂不支持在线预览/i)
     assert.ok(document.querySelector('.preview-modal-code') === null, 'must not stay stuck in CodeBlockView readingText')

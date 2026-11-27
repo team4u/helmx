@@ -375,11 +375,11 @@ describe('conversation-drawer-nav', () => {
 
     // 叠层 z-index：后挂载的文件预览高于抽屉栈
     const drawerZ = Number(document.querySelector<HTMLElement>('.drawer-stack-dialog')?.style.zIndex || 0)
-    const modalZ = Number(document.querySelector<HTMLElement>('.modal')?.style.zIndex || 0)
+    const modalZ = Number(document.querySelector<HTMLElement>('.helmx-modal')?.style.zIndex || 0)
     assert.ok(modalZ > drawerZ, `预览弹窗 zIndex(${modalZ}) 应高于抽屉栈(${drawerZ})`)
 
     // 关闭文件预览弹窗：仅关预览框，底下的 2 层抽屉栈完好无损
-    const previewClose = document.querySelector<HTMLButtonElement>('.artifact-preview-header button[aria-label="Close preview"]')
+    const previewClose = document.querySelector<HTMLButtonElement>('.helmx-modal-header button[aria-label="Close preview"]')
     assert.ok(previewClose !== null)
     await act(async () => { previewClose!.click() })
     await waitForCondition(() => document.querySelector('.preview-modal-body') === null)

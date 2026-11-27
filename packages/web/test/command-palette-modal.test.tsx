@@ -675,7 +675,7 @@ describe("command-palette-modal", () => {
     const newConvRow = options.find((o) => o.textContent?.includes('New conversation'))
     assert.ok(newConvRow !== undefined)
     assert.ok(newConvRow.textContent?.includes('coder'))
-    const newConvKbd = newConvRow.querySelector('kbd.kbd-hint')?.textContent ?? ''
+    const newConvKbd = newConvRow.querySelector('kbd.helmx-kbd')?.textContent ?? ''
     assert.ok(newConvKbd === '⌘⇧O' || newConvKbd === 'Ctrl+Shift+O')
 
     await act(async () => {
@@ -695,11 +695,11 @@ describe("command-palette-modal", () => {
     const options2 = getOptions()
     const pluginRow = options2.find((o) => o.textContent?.includes('Toggle Sample mode'))
     assert.ok(pluginRow !== undefined)
-    assert.equal(pluginRow.querySelector('kbd.kbd-hint')?.textContent, 'Ctrl+.')
+    assert.equal(pluginRow.querySelector('kbd.helmx-kbd')?.textContent, 'Ctrl+.')
 
     const shortcutsRow = options2.find((o) => o.textContent?.includes('Keyboard shortcuts'))
     assert.ok(shortcutsRow !== undefined)
-    const shortcutsKbd = shortcutsRow.querySelector('kbd.kbd-hint')?.textContent ?? ''
+    const shortcutsKbd = shortcutsRow.querySelector('kbd.helmx-kbd')?.textContent ?? ''
     assert.ok(shortcutsKbd === '⌘/' || shortcutsKbd === 'Ctrl+/')
 
     // Footer renders desktop hints + Shortcuts trigger button

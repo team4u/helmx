@@ -243,14 +243,6 @@
   min-width: 132px;
 }
 
-.locale-menu-item {
-  justify-content: space-between;
-}
-
-.locale-menu-item[data-active='true'] {
-  font-weight: 500;
-}
-
 .helmx-dropdown-arrow {
   fill: var(--pop-bg);
   stroke: var(--border);
@@ -296,6 +288,10 @@
 
 .helmx-dropdown-item[data-checked='true'] .helmx-dropdown-item-icon {
   color: var(--accent);
+}
+
+.helmx-dropdown-item[data-checked='true'] .helmx-dropdown-item-label {
+  font-weight: 500;
 }
 
 .helmx-dropdown-item-danger .helmx-dropdown-item-icon {

@@ -84,14 +84,13 @@ export function LocaleMenuButton({
             return (
               <DropdownMenuItem
                 key={item.value}
-                className="locale-menu-item"
+                checked={selected}
                 data-locale-option={item.value}
                 data-active={selected ? 'true' : undefined}
                 aria-checked={selected}
                 onSelect={() => selectPreference(item.value)}
               >
-                <span>{item.label}</span>
-                {selected && <HelmxIcon name="check" size={12} />}
+                {item.label}
               </DropdownMenuItem>
             )
           })}

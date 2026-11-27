@@ -4,8 +4,8 @@
  * - 主舞台升级提示条带 `from` 打开「本次更新」切片（跨过的版本，新版本在上）；
  * - 未随附 changelog（老 payload / 特殊部署）如实显示空态，不装假数据。
  */
-import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { Badge, Callout, Dialog, DialogClose, DialogContent, DialogOverlay, DialogPortal, DialogTitle, HelmxIcon, IconButton, LoadingState } from '@helmx/plugin-client'
+import { useEffect, useState, type ReactNode } from 'react'
+import { Badge, Callout, LoadingState, ModalDialog } from '@helmx/plugin-client'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { apiRequest, ApiClientError } from '../lib/api.js'
 import { useIsMobile } from '../conversation/composer-model.js'
@@ -33,7 +33,6 @@ type LoadState =
 export function HubChangelogModal({ from, onClose, inline = false }: { from?: string; onClose: () => void; inline?: boolean }): ReactNode {
   const { t } = useWebLocale()
   const isMobile = useIsMobile(680)
-  const contentRef = useRef<HTMLDivElement | null>(null)
   const [state, setState] = useState<LoadState>({ phase: 'loading' })
 
   useEffect(() => {
@@ -51,76 +50,57 @@ export function HubChangelogModal({ from, onClose, inline = false }: { from?: st
   const data = state.phase === 'loaded' ? state.data : null
   const sections = data?.sections ?? []
   return (
-    <Dialog open inline={inline} onOpenChange={(open) => { if (!open) onClose() }}>
-      <DialogPortal inline={inline}>
-        <DialogOverlay className={`modal-backdrop${isMobile ? ' modal-fullscreen-backdrop' : ''}`}>
-          <DialogContent
-            ref={contentRef}
-            tabIndex={-1}
-            className={`modal hub-changelog-modal${isMobile ? ' modal-fullscreen' : ''}`}
-            aria-label={t('shell.hubChangelog.title')}
-            style={isMobile ? undefined : { maxWidth: 'min(860px, 94vw)', maxHeight: '88vh' }}
-            onOpenAutoFocus={(event) => {
-              event.preventDefault()
-              contentRef.current?.focus({ preventScroll: true })
-            }}
-          >
-            <div className="modal-header hub-changelog-header">
-              <span className="preview-modal-title-group">
-                <HelmxIcon name="file-text" size={14} />
-                <DialogTitle className="modal-title preview-modal-title">{t('shell.hubChangelog.title')}</DialogTitle>
-                {data !== null ? (
-                  <Badge tone="neutral" mono className="tabular-nums">v{data.version}</Badge>
-                ) : null}
-                {data?.from !== undefined ? (
-                  <Badge tone="neutral" className="tabular-nums">
-                    {data.fromMatched === true
-                      ? t('shell.hubChangelog.range', { from: data.from, count: sections.length })
-                      : t('shell.hubChangelog.rangeOlder', { from: data.from, count: sections.length })}
-                  </Badge>
-                ) : null}
-              </span>
-              <span className="preview-modal-actions">
-                <DialogClose asChild>
-                  <IconButton
-                    variant="ghost"
-                    size="sm"
-                    icon={<HelmxIcon name="x" size={14} />}
-                    label={t('shell.hubChangelog.closeTitle')}
-                  />
-                </DialogClose>
-              </span>
-            </div>
-            <div className="modal-body hub-changelog-body">
-              {state.phase === 'loading' ? (
-                <LoadingState
-                  label={t('shell.hubChangelog.loading')}
-                  iconSize={14}
-                  className="preview-modal-loading"
-                />
-              ) : null}
-              {state.phase === 'error' ? (
-                <Callout tone="err">{state.message}</Callout>
-              ) : null}
-              {state.phase === 'loaded' && data !== null && data.available !== true ? (
-                <Callout>{t('shell.hubChangelog.absent')}</Callout>
-              ) : null}
-              {state.phase === 'loaded' && data !== null && data.available === true && sections.length === 0 ? (
-                <Callout>{t('shell.hubChangelog.emptyRange')}</Callout>
-              ) : null}
-              {sections.map((section) => (
-                <section key={section.version} className="hub-changelog-section">
-                  <header className="hub-changelog-section-head">
-                    <span className="hub-changelog-version mono tabular-nums">v{section.version}</span>
-                    <span className="hub-changelog-date tabular-nums">{section.date}</span>
-                  </header>
-                  <MarkdownView text={section.markdown} />
-                </section>
-              ))}
-            </div>
-          </DialogContent>
-        </DialogOverlay>
-      </DialogPortal>
-    </Dialog>
+    <ModalDialog
+      open
+      inline={inline}
+      onClose={onClose}
+      size={isMobile ? 'fullscreen' : 'lg'}
+      icon="file-text"
+      title={t('shell.hubChangelog.title')}
+      titleExtra={
+        <>
+          {data !== null ? (
+            <Badge tone="neutral" mono className="tabular-nums">v{data.version}</Badge>
+          ) : null}
+          {data?.from !== undefined ? (
+            <Badge tone="neutral" className="tabular-nums">
+              {data.fromMatched === true
+                ? t('shell.hubChangelog.range', { from: data.from, count: sections.length })
+                : t('shell.hubChangelog.rangeOlder', { from: data.from, count: sections.length })}
+            </Badge>
+          ) : null}
+        </>
+      }
+      closeLabel={t('shell.hubChangelog.closeTitle')}
+      className="hub-changelog-modal"
+      bodyClassName="hub-changelog-body"
+      aria-label={t('shell.hubChangelog.title')}
+    >
+      {state.phase === 'loading' ? (
+        <LoadingState
+          label={t('shell.hubChangelog.loading')}
+          iconSize={14}
+          className="preview-modal-loading"
+        />
+      ) : null}
+      {state.phase === 'error' ? (
+        <Callout tone="err">{state.message}</Callout>
+      ) : null}
+      {state.phase === 'loaded' && data !== null && data.available !== true ? (
+        <Callout>{t('shell.hubChangelog.absent')}</Callout>
+      ) : null}
+      {state.phase === 'loaded' && data !== null && data.available === true && sections.length === 0 ? (
+        <Callout>{t('shell.hubChangelog.emptyRange')}</Callout>
+      ) : null}
+      {sections.map((section) => (
+        <section key={section.version} className="hub-changelog-section">
+          <header className="hub-changelog-section-head">
+            <span className="hub-changelog-version mono tabular-nums">v{section.version}</span>
+            <span className="hub-changelog-date tabular-nums">{section.date}</span>
+          </header>
+          <MarkdownView text={section.markdown} />
+        </section>
+      ))}
+    </ModalDialog>
   )
 }

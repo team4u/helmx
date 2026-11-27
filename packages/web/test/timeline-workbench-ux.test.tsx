@@ -541,10 +541,11 @@ describe("timeline-workbench-ux", () => {
 
     // MIME 去重：格式标签已由 MIME 推导（image/png、text/markdown）时不重复渲染原始 MIME；
     // 扩展名推导（spill 的 text/plain 来自通用文本）保留必要格式信息。
-    const deliverableMimes = [...deliverablesSection.querySelectorAll('.artifact-card-mime')].map((el) => el.textContent ?? '')
+    assert.ok(deliverablesSection.querySelector('.helmx-list.helmx-list-compact') !== null, '产物列表应使用 List(density="compact") 原语')
+    const deliverableMimes = [...deliverablesSection.querySelectorAll('.artifact-mime')].map((el) => el.textContent ?? '')
     assert.ok(!deliverableMimes.includes('image/png'), 'image/png 不再重复展示')
     assert.ok(!deliverableMimes.includes('text/markdown'), 'text/markdown 不再重复展示')
-    assert.ok(deliverablesSection.querySelectorAll('.artifact-card-format').length >= 2, '格式标签保留')
+    assert.ok(deliverablesSection.querySelectorAll('.artifact-format').length >= 2, '格式标签保留')
 
     // spill 区默认折叠且显示计数 2
     const spillToggle = ui.host.querySelector('.artifact-spill-toggle') as HTMLButtonElement

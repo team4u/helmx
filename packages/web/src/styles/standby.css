@@ -262,15 +262,6 @@
   white-space: nowrap;
 }
 
-.agent-standby-shortcuts .kbd-hint {
-  height: 18px;
-  padding: 0 5px;
-  font-size: 10px;
-  color: var(--fg-muted);
-  background: var(--bg-subtle);
-  border-color: var(--border);
-}
-
 .agent-standby-shortcuts-all {
   gap: 5px;
   padding: 2px 6px;

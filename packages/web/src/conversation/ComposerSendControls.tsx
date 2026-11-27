@@ -6,6 +6,7 @@ import {
   DropdownMenuTrigger,
   HelmxIcon,
   IconButton,
+  Kbd,
   Tooltip,
 } from '@helmx/plugin-client'
 import { useWebLocale } from '../i18n/use-web-locale.js'
@@ -137,28 +138,23 @@ export function ComposerSendControls({
             </div>
             <DropdownMenuContent portalled align="end" side="top" sideOffset={6} className="composer-busy-dropdown-content">
               <DropdownMenuItem
-                className="composer-busy-menu-item"
+                icon="corner-down-right"
+                description={t('composer.sendControls.steerHint')}
+                shortcut={<Kbd size="sm" desktopOnly>Enter</Kbd>}
                 onClick={() => void send('steer')}
               >
-                <HelmxIcon name="corner-down-right" size={14} className="composer-busy-menu-icon" />
-                <div className="composer-busy-menu-text">
-                  <div className="composer-busy-menu-title">{t('composer.sendControls.steer')}</div>
-                  <div className="composer-busy-menu-desc">{t('composer.sendControls.steerHint')}</div>
-                </div>
-                <span className="composer-busy-menu-kbd kbd-hint">Enter</span>
+                {t('composer.sendControls.steer')}
               </DropdownMenuItem>
               <DropdownMenuItem
-                className="composer-busy-menu-item composer-queue-button"
+                className="composer-queue-button"
+                icon="clock"
+                description={t('composer.sendControls.queueHint')}
+                shortcut={<Kbd size="sm" desktopOnly>⌘/Ctrl+Enter</Kbd>}
                 onClick={() => void send('followUp')}
                 title={t('composer.sendControls.queueHintKbd')}
                 aria-label={t('composer.sendControls.queueSend')}
               >
-                <HelmxIcon name="clock" size={14} className="composer-busy-menu-icon" />
-                <div className="composer-busy-menu-text">
-                  <div className="composer-busy-menu-title">{t('composer.sendControls.queueSend')}</div>
-                  <div className="composer-busy-menu-desc">{t('composer.sendControls.queueHint')}</div>
-                </div>
-                <span className="composer-busy-menu-kbd kbd-hint">⌘/Ctrl+Enter</span>
+                {t('composer.sendControls.queueSend')}
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenuRoot>

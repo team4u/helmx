@@ -1,6 +1,18 @@
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
+import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import type { ArtifactMetadata, ConversationSummary } from '@helmx/protocol/browser'
-import { Badge, Button, EmptyState, HelmxIcon, Tabs, TabsList, TabsTrigger } from '@helmx/plugin-client'
+import {
+  Badge,
+  Button,
+  EmptyState,
+  HelmxIcon,
+  List,
+  ListRow,
+  StatusLight,
+  TabCount,
+  Tabs,
+  TabsList,
+  TabsTrigger,
+} from '@helmx/plugin-client'
 import {
   useConversationArtifacts,
   useConversationDetail,
@@ -56,7 +68,7 @@ function ArtifactThumb({ artifactId, filename }: { artifactId: string; filename:
   }, [artifactId])
 
   if (thumbUrl !== null) {
-    return <img src={thumbUrl} alt={filename} className="artifact-card-img" loading="lazy" />
+    return <img src={thumbUrl} alt={filename} className="artifact-thumb-img" loading="lazy" />
   }
   return <HelmxIcon name="file" size={16} />
 }
@@ -83,76 +95,70 @@ function ArtifactCard({
   const mimeRedundant = artifactMimeRedundant(artifact.mimeType, artifact.name)
 
   return (
-    <div
-      className={compact ? 'artifact-card artifact-card-compact' : 'artifact-card'}
+    <ListRow
       data-artifact-id={artifact.id}
       data-artifact-kind={artifact.kind}
-    >
-      <div className="artifact-card-thumb" aria-hidden="true">
-        {!compact && isImageArtifact(artifact.mimeType) ? (
-          <ArtifactThumb artifactId={artifact.id} filename={artifact.name} />
-        ) : (
-          <HelmxIcon name={artifactIconName(artifact.mimeType, artifact.kind)} size={compact ? 14 : 16} />
-        )}
-      </div>
-      <div className="artifact-card-main">
-        <button
-          type="button"
-          className="artifact-card-title-btn"
-          title={t('conv.attachment.previewName', { name: artifact.name })}
-          onClick={() => onPreview(artifact)}
-        >
-          <span className="artifact-card-name">{artifact.name}</span>
-        </button>
-        <div className="artifact-card-meta">
+      onSelect={() => onPreview(artifact)}
+      leading={
+        <span className={compact ? 'artifact-thumb artifact-thumb-compact' : 'artifact-thumb'} aria-hidden="true">
+          {!compact && isImageArtifact(artifact.mimeType) ? (
+            <ArtifactThumb artifactId={artifact.id} filename={artifact.name} />
+          ) : (
+            <HelmxIcon name={artifactIconName(artifact.mimeType, artifact.kind)} size={compact ? 14 : 16} />
+          )}
+        </span>
+      }
+      title={artifact.name}
+      meta={
+        <>
           <Badge tone={artifact.kind === 'registered' ? 'accent' : 'neutral'}>
             {artifactKindLabel(artifact.kind, t)}
           </Badge>
           <span
-            className="artifact-card-format"
+            className="artifact-format"
             title={mimeRedundant ? artifact.mimeType : undefined}
           >
             {formatLabel}
           </span>
           {mimeRedundant ? null : (
-            <span className="mono artifact-card-mime" title={artifact.mimeType}>{artifact.mimeType}</span>
+            <span className="mono artifact-mime" title={artifact.mimeType}>{artifact.mimeType}</span>
           )}
-          <span className="mono tabular-nums artifact-card-size">{formatBytes(artifact.size)}</span>
+          <span className="mono tabular-nums">{formatBytes(artifact.size)}</span>
           {timestamp !== '' ? (
-            <span className="artifact-card-time" title={formatFullTimestamp(artifact.createdAt)}>
+            <span title={formatFullTimestamp(artifact.createdAt)}>
               {timestamp}
             </span>
           ) : null}
-        </div>
-      </div>
-      <div className="artifact-card-actions">
-        {/* 标签显式包一层 <span>：窄屏由 .artifact-action-btn > span 收敛为纯图标
-            （SDK Button 子节点直接参与 .btn flex，不再自带包裹层） */}
-        <Button
-          variant="ghost"
-          size="xs"
-          icon="eye"
-          className="artifact-action-btn"
-          aria-label={t('conv.attachment.previewName', { name: artifact.name })}
-          title={t('conv.workbench.preview')}
-          onClick={() => onPreview(artifact)}
-        >
-          <span>{t('conv.workbench.preview')}</span>
-        </Button>
-        <Button
-          variant="ghost"
-          size="xs"
-          icon="download"
-          pending={isDownloading}
-          className="artifact-action-btn"
-          aria-label={t('conv.workbench.downloadName', { name: artifact.name })}
-          title={t('common.download')}
-          onClick={() => onDownload(artifact)}
-        >
-          <span>{isDownloading ? t('conv.workbench.downloading') : t('common.download')}</span>
-        </Button>
-      </div>
-    </div>
+        </>
+      }
+      actions={
+        <>
+          <Button
+            variant="ghost"
+            size="xs"
+            icon="eye"
+            className="artifact-action-btn"
+            aria-label={t('conv.attachment.previewName', { name: artifact.name })}
+            title={t('conv.workbench.preview')}
+            onClick={() => onPreview(artifact)}
+          >
+            <span>{t('conv.workbench.preview')}</span>
+          </Button>
+          <Button
+            variant="ghost"
+            size="xs"
+            icon="download"
+            pending={isDownloading}
+            className="artifact-action-btn"
+            aria-label={t('conv.workbench.downloadName', { name: artifact.name })}
+            title={t('common.download')}
+            onClick={() => onDownload(artifact)}
+          >
+            <span>{isDownloading ? t('conv.workbench.downloading') : t('common.download')}</span>
+          </Button>
+        </>
+      }
+    />
   )
 }
 
@@ -200,9 +206,9 @@ function ArtifactsTab({ conversationId }: { conversationId: number }) {
           <Badge tone="neutral" className="tabular-nums">{deliverables.length}</Badge>
         </div>
         {deliverables.length === 0 ? (
-          <div className="artifact-empty-hint">{t('conv.workbench.noDeliverables')}</div>
+          <EmptyState compact title={t('conv.workbench.noDeliverables')} />
         ) : (
-          <div className="artifact-card-list">
+          <List density="compact" label={t('conv.workbench.registeredSectionAria')}>
             {deliverables.map((artifact) => (
               <ArtifactCard
                 key={artifact.id}
@@ -212,7 +218,7 @@ function ArtifactsTab({ conversationId }: { conversationId: number }) {
                 onDownload={handleDownload}
               />
             ))}
-          </div>
+          </List>
         )}
       </section>
 
@@ -231,7 +237,12 @@ function ArtifactsTab({ conversationId }: { conversationId: number }) {
             <span className="artifact-spill-hint">{spillExpanded ? t('common.collapse') : t('conv.workbench.clickToExpand')}</span>
           </button>
           {spillExpanded ? (
-            <div id={spillPanelId} className="artifact-spill-list">
+            <List
+              id={spillPanelId}
+              density="compact"
+              className="artifact-spill-list"
+              label={t('conv.workbench.spillTitle')}
+            >
               {spills.map((artifact) => (
                 <ArtifactCard
                   key={artifact.id}
@@ -242,7 +253,7 @@ function ArtifactsTab({ conversationId }: { conversationId: number }) {
                   onDownload={handleDownload}
                 />
               ))}
-            </div>
+            </List>
           ) : null}
         </section>
       ) : null}
@@ -379,30 +390,6 @@ export function WorkbenchView(props: WorkbenchViewProps) {
   }, [active, sseConnected, conversation, activeTab, currentTab, handleTabChange])
 
   const tabsScrollRef = useRef<HTMLDivElement | null>(null)
-  const [tabOverflow, setTabOverflow] = useState<{ left: boolean; right: boolean }>({ left: false, right: false })
-
-  const syncTabOverflow = useCallback(() => {
-    const el = tabsScrollRef.current
-    if (el === null) return
-    const left = el.scrollLeft > 2
-    const right = el.scrollLeft + el.clientWidth < el.scrollWidth - 2
-    setTabOverflow((prev) => (prev.left === left && prev.right === right ? prev : { left, right }))
-  }, [])
-
-  useEffect(() => {
-    const el = tabsScrollRef.current
-    if (el === null) return
-    syncTabOverflow()
-    el.addEventListener('scroll', syncTabOverflow, { passive: true })
-    window.addEventListener('resize', syncTabOverflow)
-    const ro = typeof ResizeObserver === 'function' ? new ResizeObserver(syncTabOverflow) : null
-    ro?.observe(el)
-    return () => {
-      el.removeEventListener('scroll', syncTabOverflow)
-      window.removeEventListener('resize', syncTabOverflow)
-      ro?.disconnect()
-    }
-  }, [syncTabOverflow, tabs.length])
 
   useEffect(() => {
     const activeEl = tabsScrollRef.current?.querySelector('.tab-btn-active') as HTMLElement | null
@@ -415,35 +402,23 @@ export function WorkbenchView(props: WorkbenchViewProps) {
         value={activeTab}
         onValueChange={handleTabChange}
         variant="underline"
+        size="sm"
         className="workbench-tabs-root"
       >
-        <TabsList asChild>
-          <div className="tabs-bar">
-            <div
-              ref={tabsScrollRef}
-              className="workbench-tabs-scroll"
-              data-overflow-left={tabOverflow.left ? 'true' : undefined}
-              data-overflow-right={tabOverflow.right ? 'true' : undefined}
-            >
-              {tabs.map((tab) => (
-                <TabsTrigger
-                  key={tab.id}
-                  value={tab.id}
-                  className={`tab-btn${tab.id === activeTab ? ' tab-btn-active' : ''}`}
-                >
-                  <span>{tab.label}</span>
-                  {tab.count > 0 ? (
-                    <Badge
-                      tone={tab.tone === 'warn' ? 'warn' : tab.tone === 'accent' ? 'accent' : 'neutral'}
-                      className="tabular-nums"
-                    >
-                      {tab.count}
-                    </Badge>
-                  ) : null}
-                </TabsTrigger>
-              ))}
-            </div>
-          </div>
+        <TabsList ref={tabsScrollRef} scrollable className="workbench-tabs-scroll">
+          {tabs.map((tab) => (
+            <TabsTrigger key={tab.id} value={tab.id}>
+              <span>{tab.label}</span>
+              {tab.count > 0 ? <TabCount>{tab.count}</TabCount> : null}
+              {tab.count > 0 && tab.tone !== 'neutral' ? (
+                <StatusLight
+                  tone={tab.tone === 'warn' ? 'blocked' : 'working'}
+                  aria-label={tab.label}
+                  className="workbench-tab-status"
+                />
+              ) : null}
+            </TabsTrigger>
+          ))}
         </TabsList>
         <div className="workbench-body">
           {conversationId === undefined ? (

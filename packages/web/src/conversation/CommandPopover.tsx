@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { Kbd } from '@helmx/plugin-client'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { isImeComposing } from '../lib/ime.js'
 import { ComposerPopoverShell } from './ComposerPopoverShell.js'
@@ -126,7 +127,7 @@ export function CommandPopover({
       <>
         <div className="popover-header">
           {t('composer.command.header')}
-          <span className="kbd-hint popover-kbd-hint">{t('composer.kbd.navConfirmClose')}</span>
+          <Kbd size="sm" desktopOnly>{t('composer.kbd.navConfirmClose')}</Kbd>
         </div>
         <div role="listbox" aria-label={t('composer.command.header')} className="composer-completion-list">
           {visible.map((item, idx) => (
