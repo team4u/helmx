@@ -3,7 +3,7 @@ import { test } from 'node:test'
 import { isPluginSummaryActive as protocolIsPluginSummaryActive } from '@helmx/protocol/browser'
 import type { ConversationDetail, ConversationLive, ConversationSummary, HelmxSnapshot } from '@helmx/protocol'
 import { applyConversationEntry, applyEventFrame, applyResumedFrame, applySnapshot, applyTransientLiveDeltaFrame, applyTransientLiveFrame, emptyLiveState, entryMatchesReference, isPluginSummaryActive, mergeConversationDetail, omitPluginDocLoadErrors, reconcilePluginsState, sortNodes, sseClientTimings, SseParser } from '../src/lib/live-state.js'
-import { normalizeModelCatalogInfo } from '../src/lib/api.js'
+import { assetsApi, normalizeModelCatalogInfo } from '../src/lib/api.js'
 import type { NodeInfo } from '@helmx/protocol'
 
 const conv: ConversationSummary = { id: 1, title: '助理', profileId: 'assistant', cwd: '/tmp', model: '', thinkingLevel: '', status: 'idle', tags: [], stateChangeSeq: 1, completionSeq: 0, unread: false, pinned: true, pendingAskCount: 0, createdAt: 0, updatedAt: 0 }
@@ -681,4 +681,70 @@ test('SseParser 支持大分片多 chunk 线性拼接并在超 4 MiB 上限时�
     () => oversized.push(`data: ${'b'.repeat(2 * 1024 * 1024 + 10)}\n`),
     /client receive limit/,
   )
+})
+
+test('assetsApi.setModelFilter 通过 normalizeModelCatalogInfo 统一规范化返回目录并拒绝非法响应', { timeout: 60_000 }, async () => {
+  const originalFetch = globalThis.fetch
+  let mode: 'ok' | 'bad-catalog' | 'bad-envelope' = 'ok'
+  globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    assert.equal(init?.method, 'PUT')
+    if (mode === 'bad-catalog') {
+      return new Response(JSON.stringify({ ok: true, catalog: { models: [{ id: 'broken' }] } }), { status: 200 })
+    }
+    if (mode === 'bad-envelope') {
+      return new Response(JSON.stringify({ catalog: { models: [] } }), { status: 200 })
+    }
+    return new Response(
+      JSON.stringify({
+        ok: true,
+        catalog: {
+          models: [
+            { provider: 'faux', modelId: 'faux-1', available: true, contextWindow: 128_000 },
+            { provider: 'faux', modelId: 'faux-2', available: true, disabled: true },
+          ],
+          thinkingLevels: { 'faux/faux-1': ['off', 'high'] },
+          defaultModel: 'faux/faux-1',
+        },
+      }),
+      { status: 200 },
+    )
+  }) as typeof fetch
+
+  try {
+    const result = await assetsApi.setModelFilter({ provider: 'faux', disabledModels: ['faux-2'] })
+    assert.equal(result.ok, true)
+    assert.equal(result.catalog.defaultModel, 'faux/faux-1')
+    assert.deepEqual(result.catalog.models, [
+      {
+        id: 'faux/faux-1',
+        provider: 'faux',
+        modelId: 'faux-1',
+        available: true,
+        contextWindow: 128_000,
+        thinkingLevels: ['off', 'high'],
+      },
+      {
+        id: 'faux/faux-2',
+        provider: 'faux',
+        modelId: 'faux-2',
+        available: true,
+        disabled: true,
+        thinkingLevels: ['off'],
+      },
+    ])
+
+    mode = 'bad-catalog'
+    await assert.rejects(
+      () => assetsApi.setModelFilter({ provider: 'faux', disabledModels: [] }),
+      /[Ii]nvalid/,
+    )
+
+    mode = 'bad-envelope'
+    await assert.rejects(
+      () => assetsApi.setModelFilter({ provider: 'faux', disabledModels: [] }),
+      /[Ii]nvalid/,
+    )
+  } finally {
+    globalThis.fetch = originalFetch
+  }
 })

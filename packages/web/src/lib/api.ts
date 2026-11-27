@@ -639,8 +639,13 @@ export const assetsApi = {
       ...(providers && providers.length > 0 ? { providers } : {}),
       ...(opts?.force !== undefined ? { force: opts.force } : {}),
     }),
-  setModelFilter: (body: SetModelFilterBody) =>
-    apiRequest<{ ok: boolean; catalog: ModelCatalogInfo }>('PUT', '/api/models/filter', body),
+  setModelFilter: async (body: SetModelFilterBody): Promise<{ ok: boolean; catalog: ModelCatalogInfo }> => {
+    const res = await apiRequest<{ ok: boolean; catalog: unknown }>('PUT', '/api/models/filter', body)
+    if (res === null || typeof res !== 'object' || Array.isArray(res) || typeof res.ok !== 'boolean') {
+      throw new Error('Invalid model filter response')
+    }
+    return { ok: res.ok, catalog: normalizeModelCatalogInfo(res.catalog) }
+  },
 
   listSkills: (opts?: { signal?: AbortSignal }) => apiRequest<SkillSummary[]>('GET', '/api/skills', undefined, opts?.signal),
   readSkill: (id: string, path?: string, opts?: { signal?: AbortSignal }) => {

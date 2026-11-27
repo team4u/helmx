@@ -124,6 +124,7 @@
 | 标志 | 说明 |
 | :--- | :--- |
 | `--name / --model / --thinking / --node / --cwd` | 基础字段 |
+| `--tags <t>` | 标签列表（逗号分隔或 JSON 字符串数组，空串或 `[]` 清空） |
 | `--system <str>` / `--system-file <f>` | SYSTEM.md 全文（内联优先） |
 | `--skills <json>` | 技能白名单字符串数组；`[]` 禁用全部；与 `--all-skills` 互斥 |
 | `--all-skills` | 删除 `skills` 键恢复加载全部；与 `--skills` 互斥 |

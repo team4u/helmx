@@ -121,6 +121,11 @@ test('@helmx/protocol/browser: export declarations aligned with the root entry\'
     'NODE_CORE_OPERATIONS',
     'CONVERSATION_CORE_OPERATIONS',
     'ASK_CORE_OPERATIONS',
+    'PROFILE_CORE_OPERATIONS',
+    'MODEL_CORE_OPERATIONS',
+    'PROVIDER_CORE_OPERATIONS',
+    'CREDENTIAL_CORE_OPERATIONS',
+    'AUTH_CORE_OPERATIONS',
     'CORE_OPERATIONS',
   ] as const
 

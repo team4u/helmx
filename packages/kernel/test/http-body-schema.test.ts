@@ -1123,3 +1123,27 @@ test('conversations/asks router parity: strict ?wait=1, bodySchema separation, n
   assert.equal(withdraw501.status, 501)
   assert.equal(withdraw501.code, 'not_implemented')
 })
+
+test('profiles PUT validates matching/optional body.id while rejecting mismatched body.id or unknown profileId', { timeout: 60_000 }, async () => {
+  const kernel = makeKernel()
+  const savedProfiles = new Map<string, Record<string, unknown>>([
+    ['worker', { id: 'worker', name: 'Initial' }],
+  ])
+  ;(kernel.profiles as unknown as Record<string, unknown>).get = async (id: string) => savedProfiles.get(id)
+  ;(kernel.profiles as unknown as Record<string, unknown>).save = async (p: Record<string, unknown>) => {
+    savedProfiles.set(p.id as string, p)
+    return p
+  }
+
+  const withMatchingId = await call(kernel, 'PUT', '/api/profiles/worker', { id: 'worker', name: 'Renamed' })
+  assert.equal(withMatchingId.status, 200)
+  assert.equal(withMatchingId.json.name, 'Renamed')
+
+  const withoutId = await call(kernel, 'PUT', '/api/profiles/worker', { name: 'No Body Id' })
+  assert.equal(withoutId.status, 200)
+  assert.equal(withoutId.json.name, 'No Body Id')
+
+  await expect400(kernel, 'PUT', '/api/profiles/worker', { id: 'other', name: 'Mismatch' })
+  await expect400(kernel, 'PUT', '/api/profiles/worker', { profileId: 'worker', name: 'Forbidden Field' })
+  await expect400(kernel, 'PUT', '/api/profiles/worker', { memory: 'removed field' })
+})

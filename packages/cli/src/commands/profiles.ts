@@ -1,29 +1,33 @@
 /**
  * Profile commands: profiles list/get/create/update/delete.
+ * Driven by `@helmx/protocol` `PROFILE_CORE_OPERATIONS` via `commandsFromOperations`, with custom
+ * composite handlers for `profiles create` and `profiles update`:
  *
  * PUT /api/profiles/:id uses full-replacement semantics (profiles.save overwrites profile.json):
  * - updates using semantic flags must GET the full Profile first, merge, and PUT so untouched
- *   bindings like nodeId/cwd/model are never dropped (otherwise later conversations fall back to local);
+ *   bindings like nodeId/cwd/model/tags are never dropped (otherwise later conversations fall back to local);
  * - the full system text returned by GET is stripped and not sent back unless --system[-file] is explicitly given;
  *   MEMORY.md long-term memory is managed by builtin:memory (helmx memory get/set/configure);
  * - --input alone performs an explicit full replacement (without GET); combined with semantic flags it serves as a merge layer;
  * - create has no prior config to merge and constructs a new object from semantic flags / --input directly.
  */
-import type { Profile } from '@helmx/protocol'
-import { CliError } from '../errors.js'
+import { PROFILE_CORE_OPERATIONS, type Profile } from '@helmx/protocol'
 import { flagValue, type FlagSpec } from '../args.js'
-import { printTableColumns } from '../output.js'
-import type { CommandContext, CommandSpec } from './shared.js'
+import { CliError } from '../errors.js'
 import type { HubClient } from '../hub-client.js'
+import { printTableColumns } from '../output.js'
+import { commandsFromOperations } from './from-operations.js'
+import type { CommandContext, CommandSpec } from './shared.js'
 import {
   assertNoExtraPositionals,
   coerceMetaFlag,
+  coerceTags,
   printResult,
   readTextFileFlag,
   requirePositional,
 } from './shared.js'
 
-/** Semantic flags -> Profile fields (--system[-file]/--skills/--all-skills/--starters are handled separately when building payload). */
+/** Semantic string flags -> Profile fields (--tags/--system[-file]/--skills/--all-skills/--starters are handled separately). */
 const PROFILE_FIELD_FLAGS: ReadonlyArray<{ flag: string; key: string }> = [
   { flag: 'name', key: 'name' },
   { flag: 'model', key: 'model' },
@@ -35,11 +39,13 @@ const PROFILE_FIELD_FLAGS: ReadonlyArray<{ flag: string; key: string }> = [
 const DOC_FLAGS = ['system', 'system-file'] as const
 const SKILLS_FLAGS = ['skills', 'all-skills'] as const
 const STARTERS_FLAGS = ['starters'] as const
+const TAGS_FLAGS = ['tags'] as const
 const BOOLEAN_FLAGS = ['restrict-to-cwd'] as const
 
 const semanticFlags: FlagSpec[] = [
   { name: 'input', type: 'json', help: 'Profile JSON (when used alone on update = full replacement; with semantic flags = merge layer)' },
   ...PROFILE_FIELD_FLAGS.map(({ flag }) => ({ name: flag, type: 'string' }) as FlagSpec),
+  { name: 'tags', type: 'string', help: 'comma-separated or JSON string array of tags (empty string or [] clears)' },
   { name: 'system', type: 'string', help: 'full SYSTEM.md text' },
   { name: 'system-file', type: 'string', help: 'read SYSTEM.md from local file' },
   { name: 'skills', type: 'json', help: 'skill allowlist JSON string array (e.g. \'["git-commit"]\'; [] disables all skills; mutually exclusive with --all-skills)' },
@@ -52,11 +58,18 @@ const semanticFlags: FlagSpec[] = [
 function hasSemanticFlags(flags: Map<string, unknown>): boolean {
   return (
     PROFILE_FIELD_FLAGS.some(({ flag }) => flags.has(flag)) ||
+    TAGS_FLAGS.some((flag) => flags.has(flag)) ||
     DOC_FLAGS.some((flag) => flags.has(flag)) ||
     SKILLS_FLAGS.some((flag) => flags.has(flag)) ||
     STARTERS_FLAGS.some((flag) => flags.has(flag)) ||
     BOOLEAN_FLAGS.some((flag) => flags.has(flag))
   )
+}
+
+/** Local validation for --tags: comma-separated or JSON string array (reject before making HTTP calls). */
+function validateTagsFlag(flags: Map<string, unknown>): string[] | undefined {
+  if (!flags.has('tags')) return undefined
+  return coerceTags(flags.get('tags'))
 }
 
 /** Local validation for --skills/--all-skills: mutually exclusive + string array (reject before making HTTP calls). */
@@ -124,11 +137,17 @@ function applyStartersFlag(flags: Map<string, unknown>, body: Record<string, unk
 }
 
 /** Apply semantic flags to body (write only when given; inline overrides -file when both are passed). */
-async function applySemanticFlags(flags: Map<string, unknown>, body: Record<string, unknown>, cwd: string): Promise<void> {
+async function applySemanticFlags(
+  flags: Map<string, unknown>,
+  body: Record<string, unknown>,
+  cwd: string,
+  parsedTags: string[] | undefined,
+): Promise<void> {
   for (const { flag, key } of PROFILE_FIELD_FLAGS) {
     const v = flagValue<string>(flags, flag)
     if (v !== undefined) body[key] = v
   }
+  if (parsedTags !== undefined) body['tags'] = parsedTags
   const systemInline = flagValue<string>(flags, 'system')
   if (systemInline !== undefined) body.system = systemInline
   else {
@@ -157,117 +176,91 @@ async function fetchProfileBase(hub: HubClient, id: string): Promise<Record<stri
   return base
 }
 
+async function runProfilesCreate(ctx: CommandContext): Promise<void> {
+  const id = ctx.positionals[0]
+  assertNoExtraPositionals(ctx.positionals, 1)
+  validateSkillsFlags(ctx.flags)
+  validateStartersFlag(ctx.flags)
+  const parsedTags = validateTagsFlag(ctx.flags)
+  const hasInput = ctx.flags.has('input')
+  if (!hasInput && !hasSemanticFlags(ctx.flags)) {
+    throw new CliError(
+      'no fields provided: pass --input <json> or semantic flags (--name/--model/--thinking/--node/--cwd/--tags/--system[-file]/--skills/--all-skills/--starters/--restrict-to-cwd) (profiles create)',
+      'missing_update_fields',
+    )
+  }
+  const body: Record<string, unknown> = hasInput ? coerceMetaFlag(ctx.flags.get('input'), 'input') : {}
+  await applySemanticFlags(ctx.flags, body, ctx.cwd, parsedTags)
+  if (id !== undefined) {
+    if (typeof body['id'] === 'string' && body['id'] !== id) {
+      throw new CliError(`positional id "${id}" does not match id "${String(body['id'])}" in --input`, 'invalid_flag_value')
+    }
+    body['id'] = id
+  }
+  const hub = await ctx.hub()
+  printResult(ctx, await hub.post<Profile>('/api/profiles', body))
+}
+
+async function runProfilesUpdate(ctx: CommandContext): Promise<void> {
+  const id = requirePositional(ctx.positionals, 0, 'id')
+  assertNoExtraPositionals(ctx.positionals, 1)
+  validateSkillsFlags(ctx.flags)
+  validateStartersFlag(ctx.flags)
+  const parsedTags = validateTagsFlag(ctx.flags)
+  const hasInput = ctx.flags.has('input')
+  const semantic = hasSemanticFlags(ctx.flags)
+  if (!hasInput && !semantic) {
+    throw new CliError(
+      'no fields provided: pass --input <json> or semantic flags (--name/--model/--thinking/--node/--cwd/--tags/--system[-file]/--skills/--all-skills/--starters/--restrict-to-cwd) (profiles update)',
+      'missing_update_fields',
+    )
+  }
+  const hub = await ctx.hub()
+  let body: Record<string, unknown>
+  if (semantic) {
+    // Full-replacement contract: GET and merge first so untouched fields (nodeId/cwd/model/tags...) are preserved
+    body = await fetchProfileBase(hub, id)
+    if (hasInput) Object.assign(body, coerceMetaFlag(ctx.flags.get('input'), 'input'))
+    await applySemanticFlags(ctx.flags, body, ctx.cwd, parsedTags)
+  } else {
+    // --input alone: explicit full replacement (caller guarantees completeness)
+    body = coerceMetaFlag(ctx.flags.get('input'), 'input')
+  }
+  body['id'] = id
+  printResult(ctx, await hub.put<Profile>(`/api/profiles/${encodeURIComponent(id)}`, body))
+}
+
 export function profilesCommands(): CommandSpec[] {
-  const cmds: CommandSpec[] = []
-
-  cmds.push({
-    path: ['profiles', 'list'],
-    description: 'List Profiles (GET /api/profiles)',
-    async run(ctx: CommandContext) {
-      assertNoExtraPositionals(ctx.positionals, 0)
-      const hub = await ctx.hub()
-      const list = await hub.get<Profile[]>('/api/profiles')
-      if (ctx.json || !Array.isArray(list)) {
-        printResult(ctx, list)
-        return
-      }
-      printTableColumns(ctx.io, list, [
-        { label: 'id', value: (p) => p.id },
-        { label: 'name', value: (p) => p.name ?? '' },
-        { label: 'model', value: (p) => p.model ?? '' },
-        { label: 'node', value: (p) => p.nodeId ?? 'local' },
-        { label: 'cwd', value: (p) => p.cwd ?? '' },
-      ])
-    },
-  })
-
-  cmds.push({
-    path: ['profiles', 'get'],
-    description: 'Get a Profile (GET /api/profiles/:id)',
-    positional: '<id>',
-    async run(ctx: CommandContext) {
-      const id = requirePositional(ctx.positionals, 0, 'id')
-      assertNoExtraPositionals(ctx.positionals, 1)
-      const hub = await ctx.hub()
-      printResult(ctx, await hub.get<Profile>(`/api/profiles/${encodeURIComponent(id)}`))
-    },
-  })
-
-  cmds.push({
-    path: ['profiles', 'create'],
-    description: 'Create a Profile (POST /api/profiles; semantic flags or --input)',
-    flags: semanticFlags,
-    positional: '[id]',
-    async run(ctx: CommandContext) {
-      const id = ctx.positionals[0]
-      assertNoExtraPositionals(ctx.positionals, 1)
-      validateSkillsFlags(ctx.flags)
-      validateStartersFlag(ctx.flags)
-      const hasInput = ctx.flags.has('input')
-      if (!hasInput && !hasSemanticFlags(ctx.flags)) {
-        throw new CliError(
-          'no fields provided: pass --input <json> or semantic flags (--name/--model/--node/--cwd/--system[-file]/--skills/--all-skills/--starters/--restrict-to-cwd) (profiles create)',
-          'missing_update_fields',
-        )
-      }
-      const body: Record<string, unknown> = hasInput ? coerceMetaFlag(ctx.flags.get('input'), 'input') : {}
-      await applySemanticFlags(ctx.flags, body, ctx.cwd)
-      if (id !== undefined) {
-        if (typeof body['id'] === 'string' && body['id'] !== id) {
-          throw new CliError(`positional id "${id}" does not match id "${String(body['id'])}" in --input`, 'invalid_flag_value')
+  return commandsFromOperations(PROFILE_CORE_OPERATIONS, {
+    formatHuman: {
+      'profiles.list': (ctx, result) => {
+        if (!Array.isArray(result)) {
+          printResult(ctx, result)
+          return
         }
-        body['id'] = id
-      }
-      const hub = await ctx.hub()
-      printResult(ctx, await hub.post<Profile>('/api/profiles', body))
+        printTableColumns(ctx.io, result as Profile[], [
+          { label: 'id', value: (p) => p.id },
+          { label: 'name', value: (p) => p.name ?? '' },
+          { label: 'model', value: (p) => p.model ?? '' },
+          { label: 'node', value: (p) => p.nodeId ?? 'local' },
+          { label: 'cwd', value: (p) => p.cwd ?? '' },
+        ])
+      },
+    },
+    customHandlers: {
+      'profiles create': {
+        description: 'Create a Profile (POST /api/profiles; semantic flags or --input)',
+        flags: semanticFlags,
+        positional: '[id]',
+        run: runProfilesCreate,
+      },
+      'profiles update': {
+        description:
+          'Update a Profile (PUT /api/profiles/:id full replacement; semantic flags auto-GET and merge to preserve untouched fields, --input alone replaces in full)',
+        flags: semanticFlags,
+        positional: '<id>',
+        run: runProfilesUpdate,
+      },
     },
   })
-
-  cmds.push({
-    path: ['profiles', 'update'],
-    description: 'Update a Profile (PUT /api/profiles/:id full replacement; semantic flags auto-GET and merge to preserve untouched fields, --input alone replaces in full)',
-    flags: semanticFlags,
-    positional: '<id>',
-    async run(ctx: CommandContext) {
-      const id = requirePositional(ctx.positionals, 0, 'id')
-      assertNoExtraPositionals(ctx.positionals, 1)
-      validateSkillsFlags(ctx.flags)
-      validateStartersFlag(ctx.flags)
-      const hasInput = ctx.flags.has('input')
-      const semantic = hasSemanticFlags(ctx.flags)
-      if (!hasInput && !semantic) {
-        throw new CliError(
-          'no fields provided: pass --input <json> or semantic flags (--name/--model/--node/--cwd/--system[-file]/--skills/--all-skills/--starters/--restrict-to-cwd) (profiles update)',
-          'missing_update_fields',
-        )
-      }
-      const hub = await ctx.hub()
-      let body: Record<string, unknown>
-      if (semantic) {
-        // Full-replacement contract: GET and merge first so untouched fields (nodeId/cwd/model/tags/runtime...) are preserved
-        body = await fetchProfileBase(hub, id)
-        if (hasInput) Object.assign(body, coerceMetaFlag(ctx.flags.get('input'), 'input'))
-        await applySemanticFlags(ctx.flags, body, ctx.cwd)
-      } else {
-        // --input alone: explicit full replacement (caller guarantees completeness)
-        body = coerceMetaFlag(ctx.flags.get('input'), 'input')
-      }
-      body['id'] = id
-      printResult(ctx, await hub.put<Profile>(`/api/profiles/${encodeURIComponent(id)}`, body))
-    },
-  })
-
-  cmds.push({
-    path: ['profiles', 'delete'],
-    description: 'Delete a Profile (DELETE /api/profiles/:id)',
-    positional: '<id>',
-    async run(ctx: CommandContext) {
-      const id = requirePositional(ctx.positionals, 0, 'id')
-      assertNoExtraPositionals(ctx.positionals, 1)
-      const hub = await ctx.hub()
-      printResult(ctx, await hub.delete<unknown>(`/api/profiles/${encodeURIComponent(id)}`))
-    },
-  })
-
-  return cmds
 }
