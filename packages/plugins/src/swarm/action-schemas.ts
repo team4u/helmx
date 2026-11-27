@@ -26,7 +26,11 @@ export const workerIdInputSchema = S.obj(workerRefProps)
 
 export const dispatchInputSchema = S.obj(
   {
-    prompt: S.str({ minLength: 1, description: 'Initial brief task assignment for this peer role' }),
+    prompt: S.str({
+      minLength: 1,
+      description:
+        'Self-contained initial brief for this peer role (non-forked workers do not see coordinator chat or roster: state owned files, off-limits boundaries, key context, acceptance criteria, and next-hop @peer or coordinator; stored on the shared board—do not embed raw secrets)',
+    }),
     groupId: groupIdSchema,
     name: { ...memberNameSchema, description: 'Unique lowercase role name (e.g. author, verifier)' },
     profileId: S.str({
@@ -76,7 +80,7 @@ export const dispatchInputSchema = S.obj(
 export const createGroupInputSchema = S.obj(
   {
     title: S.str({ minLength: 1, maxLength: 120, description: 'Swarm collaboration group title' }),
-    objective: S.str({ maxLength: 4000, description: 'Shared objective anchor for the squad' }),
+    objective: S.str({ maxLength: 4000, description: 'Shared squad objective and global constraints injected into every wakeup and report header' }),
     conversationId: { ...S.int(1), description: 'Target top-level coordinator conversation ID' },
   },
   ['title'],
@@ -93,7 +97,8 @@ export const boardPostInputSchema = S.obj(
     groupId: groupIdSchema,
     to: S.arr(S.str({ minLength: 1, maxLength: 64 }), {
       minItems: 1,
-      description: "Targets: 'coordinator', 'all' (coordinator/human only), or '<memberName>'",
+      description:
+        "Targets: 'coordinator', 'all' (coordinator/human only), or '<memberName>' (when wake is true, every listed target is woken—never include 'coordinator' or bystanders as a CC on a peer handoff)",
     }),
     kind: S.enm(
       ['brief', 'handoff', 'review', 'comment', 'blocker', 'done'],

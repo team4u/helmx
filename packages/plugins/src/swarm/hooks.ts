@@ -37,7 +37,7 @@ export function activeSwarmGroupCoordinatorSection(
   return [
     `<active_swarm_group id="${escapeXml(groupId)}" role="coordinator">`,
     skillStep,
-    '2. Do not write business code or sit inside long blocking builds yourself; delegate implementation and verification to workers (quick read-only lookups to size and split the work are fine). Dynamically decide the squad for the task itself (never follow fixed role-name templates): choose worker count, lowercase names, directory access ("readwrite" / "readonly"), workspace isolation ("worktree" / "inherit"), and optional profileId / model via swarm_dispatch_worker.',
+    '2. Do not write business code or sit inside long blocking builds yourself; delegate implementation and verification to workers (quick read-only lookups to size and split the work are fine). Dynamically decide the squad for the task itself (never follow fixed role-name templates): choose worker count, lowercase names, directory access ("readwrite" / "readonly"), workspace isolation ("worktree" / "inherit"), and optional profileId / model via swarm_dispatch_worker, writing self-contained briefs (owned files, off-limits boundaries, acceptance criteria, and next-hop @peer or coordinator) and recovering failed or off-track workers in place via swarm_switch_worker_model / swarm_abort_worker.',
     '3. Workers dispatched via swarm_dispatch_worker run asynchronously in the background: finish your turn to respond to the user instead of sleeping or polling. A <swarm_board_report> arrives automatically whenever a worker posts to coordinator with wake=true (mid-flight review/handoff/brief/comment wakes immediately even while the sender keeps working; per-slice done wakes as soon as that sender settles without waiting for slower peers) or on any blocker / group-wide stall. Use swarm_board_read / swarm_board_status / swarm_inspect_worker only on demand (after a report, when the user asks, before merge/close, or to inspect a suspected stuck/blocked worker), cite #seq pointers in refs without copy-pasting diffs, keep wake=true strictly for the next actor who must act, and never close the group while activeWorkingMembers is non-empty.',
     '4. When all slices pass verification, merge worktree branches and call swarm_close_group (or pass keepWorktree: true to release holds while preserving unmerged branches; force: true closes past the uncommitted/unmerged guard and discards such content).',
     '</active_swarm_group>',
@@ -54,12 +54,14 @@ export function activeSwarmGroupWorkerSection(
 ): string {
   const rules = [
     '1. Always publish your task outcome via swarm_board_post (handoff / review / done / blocker, citing #seq in refs) before ending an actionable turn; never exit silently.',
-    '2. Set wake=true only for targets who must act now (a peer for next-step handoff, or coordinator for approval/decision/slice delivery/blocker); use handoff or review if you will continue working in the same turn, reserve done for finishing your current turn, and never post pure acknowledgments.',
+    '2. Because wake=true wakes every target in "to", list only the actor(s) who must act now—never CC coordinator or bystanders on a peer handoff; use handoff or review if you will continue working in the same turn, reserve done for finishing your current turn, and never post pure acknowledgments.',
     '3. Reference prior board items by #seq instead of copying diffs or full reports.',
   ]
   if (access === 'readonly') {
     rules.push(
-      `${rules.length + 1}. Your access is readonly: run tests and checks via bash, inspect diffs, and post review/done/blocker via swarm_board_post without modifying files.`,
+      isolation === 'inherit'
+        ? `${rules.length + 1}. Your access is readonly: with isolation="inherit", your own cwd is the unmerged base directory—when verifying a worktree-isolated peer, inspect that peer's [worktree] branch or path (e.g. git diff against its branch or reading files in that worktree) rather than testing your unmodified base cwd, and post review/done/blocker via swarm_board_post without modifying files.`
+        : `${rules.length + 1}. Your access is readonly: run tests and checks via bash, inspect diffs, and post review/done/blocker via swarm_board_post without modifying files.`,
     )
   }
   if (forked) {
