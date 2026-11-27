@@ -45,7 +45,6 @@ export {
   PLAN_ELIGIBLE_SCOPE,
   PLAN_TOOL_SAVE,
   PLAN_TOOL_PROPOSE,
-  PLAN_TOOL_BASH,
   PLAN_KV_NAMESPACE,
   PLAN_MODE_SECTION_ID,
   PLAN_INPUT_META_KEY,
@@ -75,7 +74,6 @@ export {
   type PlanConversationRecord,
 } from './plan/contracts.js'
 export const PLAN_SKILL_ID = 'plan' as const
-export { validateReadOnlyShellCommand, type ReadOnlyShellValidationResult } from './plan/read-only-shell.js'
 
 function readPlanSkillAsset() {
   return loadManagedSkillAsset({
@@ -99,7 +97,7 @@ export function createPlanPlugin(options: PlanPluginOptions = {}): PluginDefinit
     name: { en: 'Plan Mode', 'zh-CN': '计划模式' },
     description: {
       en: 'Read-only exploration and structured plan drafting with clarifying questions, AskDoc approval, artifact archival, and optional context/model handoff.',
-      'zh-CN': '只读探索与结构化计划草拟：支持结构化澄清、只读 Shell 检查、AskDoc 审批、产物归档以及可选的全新上下文/模型交接执行。',
+      'zh-CN': '只读探索与结构化计划草拟：支持结构化澄清、AskDoc 审批、产物归档以及可选的全新上下文/模型交接执行。',
     },
     icon: 'list-tree',
     version: '0.1.0',

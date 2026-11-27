@@ -9,7 +9,7 @@
 设计严格遵循**机制与策略分离**：
 
 - **内核（`@helmx/kernel`）只保留极薄原语与只读事实**：`ModelRegistry` 保留 `tier` 命名空间，经插件宿主能力注册表消费插件通过 `ctx.provide('helmx.model-tiers', ...)` 提供的实时档位解析表（含变更通知与停用自动释放）；单模型档位在会话创建/改模型、`spawnAgent` / `fork`、上下文压缩与 `completeText` 处将 `tier/<id>` 一次性解引用并固化为真实 `provider/modelId`（保护进行中会话的 Prompt Cache，且停用插件或切换模板后既有会话继续无损运行）。针对 `kind: 'orchestrator'` 档位，内核额外提供三项通用机制：① `ModelRefResolutionMode`（`'human_conversation' | 'single_only' | 'subagent_inherit'`）保证**仅顶层人类直连会话**可持有符号化 `ConversationSummary.modelTier` 与 `modelOverride: 'tier/<id>'`，显式自动化调用（`subagent`、`workflow`、`swarm`、`compactionModel`、`switch_model`、`set_borrow`、`completeText`）统一报 `400 orchestrator_tier_human_only`，继承型子会话自动解包为具体 `executorModel`；② `ctx.host.setConversationRuntimeModel` 仅切换底层 SDK 运行模型与思考强度，不改写 `modelOverride` / `modelTier` 也不推进 `stateChangeSeq`（守护 AskDoc CAS）；③ `HookBridge` 经 SDK `afterResponse` 边界在排队 `followUp` 启动下个 run 前恢复 Planner 运行模型。
-- **策略、模板、提示词、双相状态机、借用状态机与界面全部在本插件内闭环**：`builtin:workflow` 与 `builtin:swarm` 零修改、零档位硬编码；停用 `builtin:tiers` 时档位映射、设置界面、动作、CLI 命令、`switch_model` / `orch_bash` / `exit_plan_mode` / `hand_back_to_planner` 工具、模型选择器「仅下一轮」标签、目录注入与受管技能即时全部退场。
+- **策略、模板、提示词、双相状态机、借用状态机与界面全部在本插件内闭环**：`builtin:workflow` 与 `builtin:swarm` 零修改、零档位硬编码；停用 `builtin:tiers` 时档位映射、设置界面、动作、CLI 命令、`switch_model` / `exit_plan_mode` / `hand_back_to_planner` 工具、模型选择器「仅下一轮」标签、目录注入与受管技能即时全部退场。
 
 ## 核心行为
 
@@ -31,8 +31,8 @@
 
 3. **双相自动规划与执行编排（`kind: 'orchestrator'`）**
    - **双阶段闭环**：
-     - **规划阶段（Planning，默认初始阶段）**：运行 `Planner` 模型，仅放行只读工具（`read`、`read_artifact`、`load_skill`、`ask_user`、`orch_bash`、`exit_plan_mode`），其中 `orch_bash` 复用共享引号感知只读 shell 校验器拒绝文件重定向与写命令。若问题只需直接讨论或调研，模型可直接文本作答，零切换完成回合；若需要修改工作区，模型调用 `exit_plan_mode({ plan })` 切至 `Executor` 模型并进入执行阶段（不清除同线程上下文）。
-     - **执行阶段（Execution）**：放行工作区写/终端/子代理等能力（剥离规划专属工具与 `switch_model`），并按 `before_turn` 记录执行步数 `executionStepCount`（上限 `maxExecutionSteps` 0–100，默认 `30`，设 `0` 表示不限步数、不触发强制交回）。当达到正数上限时工具收拢为仅 `hand_back_to_planner` 并注入静态上限提示，强制交回 `Planner` 复盘决策；`Executor` 也可随时主动调用 `hand_back_to_planner({ reason, summary })` 请求重规划或架构仲裁。
+     - **规划阶段（Planning，默认初始阶段）**：运行 `Planner` 模型，通过工具白名单仅放行规划与观察工具（`read`、`read_artifact`、`load_skill`、`ask_user`、`bash`、`run_action`、`exit_plan_mode`，不含 `update_steps`），剥离 `write`、`edit`、`register_artifact`、`update_steps`、`subagent`、`SubagentWorkflow`、`swarm_*`、`switch_model` 等文件修改、进度清单与派工工具；原生 `bash` 与 `run_action` 通过 `tiers.orchestrator.plan` 静态系统提示词施加模型级只读规划约束（仅用于代码检索、构建、类型检查、测试、`git` 只读命令以及 `list` / `describe` / 只读查询动作，不设静态 Shell 校验器）。若问题只需直接讨论或调研，模型可直接文本作答，零切换完成回合；若需要修改工作区，模型调用 `exit_plan_mode({ plan })` 切至 `Executor` 模型并进入执行阶段（不清除同线程上下文）。
+     - **执行阶段（Execution）**：放行工作区写/终端/步骤清单（`update_steps`）/子代理等能力（剥离规划专属工具与 `switch_model`），并按 `before_turn` 记录执行步数 `executionStepCount`（上限 `maxExecutionSteps` 0–100，默认 `30`，设 `0` 表示不限步数、不触发强制交回）。当达到正数上限时工具收拢为仅 `hand_back_to_planner` 并注入静态上限提示，强制交回 `Planner` 复盘决策；`Executor` 也可随时主动调用 `hand_back_to_planner({ reason, summary })` 请求重规划或架构仲裁。
    - **Prompt Cache 稳定**：注入的 `tiers.orchestrator.plan`、`tiers.orchestrator.execute`、`tiers.orchestrator.step_limit` 均为纯静态常量文本，绝不拼入动态步数或临时计划文本，最大限度保留同线程前缀 KV Cache 命中率。
    - **与 `/plan`、排队的 `followUp` / `steer` 共存**：`/plan` 模式严格优先生效（`plan.mode` 激活时剥离编排工具与提示段落）；`execution` 期间允许人工 `steer` 保持当前执行态；当执行态自然完成并紧随排队 `followUp` 时，`afterResponse` 会在 `followUp` 启动前将运行模型重置回 `Planner`，并按 `runKey` 变更回到 `planning` 阶段（即便 `Planner === Executor` 仅思考强度不同也可正确同步）。
    - **状态持久化**：持久化于 `ctx.kv('orchestrators')`，按会话投影至只读 `ctx.sessionDoc('orchestrator', null, { public: true, durable: false })`；会话退出编排档位、`conversation.deleted`、`pi.reset`（`/clear`）与异常停靠后均自动复位或清理。
@@ -97,7 +97,7 @@
 | 模块 | 路径 |
 | :--- | :--- |
 | 内核纯解引用原语与只读覆写投影 | `packages/kernel/src/runtime/model-registry.ts`、`conversation-profile.ts`、`conversation-service.ts`、`spawn-fork.ts`、`store/conversation-repo.ts` |
-| 插件后端、借用与编排状态机及校验 | `packages/plugins/src/tiers.ts`、`packages/plugins/src/tiers/contracts.ts`、`packages/plugins/src/tiers/orchestrator.ts`、`packages/plugins/src/tiers/borrow.ts`、`packages/plugins/src/tiers/validation.ts`、`packages/plugins/src/shared/read-only-shell/` |
+| 插件后端、借用与编排状态机及校验 | `packages/plugins/src/tiers.ts`、`packages/plugins/src/tiers/contracts.ts`、`packages/plugins/src/tiers/orchestrator.ts`、`packages/plugins/src/tiers/borrow.ts`、`packages/plugins/src/tiers/validation.ts` |
 | 插件前端 UI | `packages/plugins/src/tiers/client/`（`manager.tsx`、`TierDetailDrawer.tsx`、`SaveTemplateDialog.tsx`、`settings.tsx`、`BorrowToolbarPill.tsx`、`OrchestratorStatusBadge.tsx`、`SwitchModelToolRow.tsx`、`OrchestratorToolRow.tsx`、`borrow-models.ts`、`orchestrator-models.ts`） |
 | 共享选择器扩展 | `packages/plugin-client/src/ui/ModelPicker.tsx`、`model-picker-model.ts` |
 | 集成与契约测试 | `packages/plugins/test/tiers-plugin.test.ts`、`packages/plugins/test/tiers-orchestrator.integration.test.ts`、`packages/web/test/tiers-client-interactions.test.tsx`、`packages/plugin-client/test/model-picker.test.ts`、`packages/kernel/test/runtime-thinking-config.test.ts` |

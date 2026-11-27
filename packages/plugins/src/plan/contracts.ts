@@ -28,7 +28,6 @@ export const PLAN_ELIGIBLE_SCOPE: ConversationScope = {
 }
 export const PLAN_TOOL_SAVE = 'plan_save' as const
 export const PLAN_TOOL_PROPOSE = 'plan_propose' as const
-export const PLAN_TOOL_BASH = 'plan_bash' as const
 
 export const PLAN_KV_NAMESPACE = 'plans' as const
 export const PLAN_MODE_SECTION_ID = 'plan.mode' as const
@@ -38,16 +37,19 @@ export const PLAN_TITLE_MAX_CHARS = 120
 export const PLAN_MARKDOWN_MAX_BYTES = 98_304
 export const PLAN_SUMMARY_MAX_CHARS = 300
 export const PLAN_HANDOFF_MAX_BYTES = 131_072
-export const PLAN_BASH_DEFAULT_TIMEOUT_MS = 60_000
-export const PLAN_BASH_MAX_TIMEOUT_MS = 120_000
 
-/** Strict tool whitelist enforced during planning mode (read-only research, kernel `ask_user`, and plan authoring tools only). */
+/**
+ * Strict tool whitelist enforced during planning mode (read-only research, kernel `ask_user`,
+ * native `bash`/`run_action` under read-only prompt guidance, and plan authoring tools only;
+ * excludes `update_steps` and all file-editing / dispatch tools).
+ */
 export const PLAN_MODE_TOOL_WHITELIST: ReadonlySet<string> = new Set([
   'read',
   'read_artifact',
   'load_skill',
   'ask_user',
-  PLAN_TOOL_BASH,
+  'bash',
+  'run_action',
   PLAN_TOOL_SAVE,
   PLAN_TOOL_PROPOSE,
 ])

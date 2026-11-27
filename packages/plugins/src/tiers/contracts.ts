@@ -26,28 +26,23 @@ export const TIERS_BORROW_ELIGIBLE_SCOPE = {
 
 export const TIERS_ORCHESTRATOR_KV = 'orchestrators' as const
 export const TIERS_ORCHESTRATOR_SESSION_DOC = 'orchestrator' as const
-export const TIERS_ORCH_BASH_TOOL = 'orch_bash' as const
 export const TIERS_EXIT_PLAN_MODE_TOOL = 'exit_plan_mode' as const
 export const TIERS_HAND_BACK_TOOL = 'hand_back_to_planner' as const
 export const ORCHESTRATOR_PLAN_SECTION_ID = 'tiers.orchestrator.plan' as const
 export const ORCHESTRATOR_EXECUTE_SECTION_ID = 'tiers.orchestrator.execute' as const
 export const ORCHESTRATOR_STEP_LIMIT_SECTION_ID = 'tiers.orchestrator.step_limit' as const
-export const ORCHESTRATOR_BASH_DEFAULT_TIMEOUT_MS = 60_000 as const
-export const ORCHESTRATOR_BASH_MAX_TIMEOUT_MS = 120_000 as const
 
 export const ORCHESTRATOR_PLAN_TOOL_WHITELIST: ReadonlySet<string> = new Set([
   'read',
   'read_artifact',
   'load_skill',
   'ask_user',
-  // Side-effect-free live step tracking stays allowed in Planning Phase so planners can outline steps before handing off to Execution.
-  'update_steps',
-  TIERS_ORCH_BASH_TOOL,
+  'bash',
+  'run_action',
   TIERS_EXIT_PLAN_MODE_TOOL,
 ])
 
 export const ORCHESTRATOR_ONLY_TOOL_NAMES: ReadonlySet<string> = new Set([
-  TIERS_ORCH_BASH_TOOL,
   TIERS_EXIT_PLAN_MODE_TOOL,
   TIERS_HAND_BACK_TOOL,
 ])

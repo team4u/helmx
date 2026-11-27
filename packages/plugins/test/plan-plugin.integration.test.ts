@@ -1,7 +1,7 @@
 /**
  * builtin:plan real composition-root integration tests (`createHelmx` + `faux` provider):
  * - T3: `/plan <task>` first turn (`onInput` transform, fallback title without `/plan `,
- *       `before_turn` strict tool whitelist + `plan.mode` section, `<available_actions>`/`<available_profiles>` suppression);
+ *       `before_turn` strict 8-tool whitelist + `plan.mode` section, `<available_profiles>` suppression);
  * - T4: normal mode hides `plan_save`/`plan_propose` with zero prompt section; subagent & `helmx`-owned
  *       conversations reject `toggle`/`set_mode` with `400 plan_unsupported_conversation` and ignore `/plan`;
  * - T5: `plan_propose` without draft fails; `revise`, `cancelled`, and Composer new message (`superseded`)
@@ -34,7 +34,6 @@ import {
   PLAN_PLUGIN_ID,
   PLAN_SESSION_DOC,
   PLAN_SKILL_ID,
-  PLAN_TOOL_BASH,
   PLAN_TOOL_PROPOSE,
   PLAN_TOOL_SAVE,
   type PlanBadgesDoc,
@@ -257,12 +256,13 @@ test('T3 & T4: /plan <task> first turn transforms input, derives clean title, en
       'write',
       'edit',
       'register_artifact',
-      'run_action',
+      'update_steps',
       'subagent',
       'SubagentWorkflow',
       'cleanup_worktree',
       'update_memory',
       'swarm_dispatch_worker',
+      'switch_model',
     ]) {
       assert.equal(
         planReq.toolNames.includes(forbiddenTool),
@@ -270,6 +270,7 @@ test('T3 & T4: /plan <task> first turn transforms input, derives clean title, en
         `planning mode must strip ${forbiddenTool}`,
       )
     }
+    assert.equal(PLAN_MODE_TOOL_WHITELIST.size, 8)
     for (const allowedTool of [...PLAN_MODE_TOOL_WHITELIST]) {
       assert.equal(
         planReq.toolNames.includes(allowedTool),
@@ -283,11 +284,6 @@ test('T3 & T4: /plan <task> first turn transforms input, derives clean title, en
       `unexpected tool leaked into planning mode: ${planReq.toolNames.join(', ')}`,
     )
     assert.equal(
-      planReq.sectionsById['prompt.actions'] ?? null,
-      null,
-      'stripping run_action must suppress <available_actions>',
-    )
-    assert.equal(
       planReq.sectionsById['profile.catalog'] ?? null,
       null,
       'stripping dispatch tools before -100 must suppress <available_profiles>',
@@ -295,14 +291,16 @@ test('T3 & T4: /plan <task> first turn transforms input, derives clean title, en
     const planModeSection = planReq.sectionsById[PLAN_MODE_SECTION_ID]
     assert.ok(typeof planModeSection === 'string' && /READ-ONLY Plan Mode/i.test(planModeSection))
     assert.ok(
-      planModeSection.includes('plan_bash') &&
+      planModeSection.includes('`bash`') &&
+        planModeSection.includes('`run_action`') &&
         planModeSection.includes('ask_user') &&
         planModeSection.includes('plan_save') &&
         planModeSection.includes('plan_propose'),
     )
-    assert.equal(planReq.toolNames.includes('bash'), false)
-    assert.equal(planReq.toolNames.includes(PLAN_TOOL_BASH), true)
+    assert.equal(planReq.toolNames.includes('bash'), true)
+    assert.equal(planReq.toolNames.includes('run_action'), true)
     assert.equal(planReq.toolNames.includes('ask_user'), true)
+    assert.equal(planReq.toolNames.includes('update_steps'), false)
 
     // Bare `/plan` enters planning mode without hitting model
     const bareConv = await kernel.conversations.createConversation({ title: 'Bare slash' })
@@ -887,7 +885,6 @@ test('T7: pending ask abort, set_mode/toggle cancellation, disable 409 gates, re
     assert.equal(disabledReqs[0]!.toolNames.includes(PLAN_TOOL_SAVE), false)
     assert.equal(disabledReqs[0]!.toolNames.includes(PLAN_TOOL_PROPOSE), false)
     assert.equal(disabledReqs[0]!.toolNames.includes('ask_user'), true)
-    assert.equal(disabledReqs[0]!.toolNames.includes(PLAN_TOOL_BASH), false)
     assert.equal(disabledReqs[0]!.sectionsById[PLAN_MODE_SECTION_ID], undefined)
 
     // Re-enabling restores planning mode & restricted whitelist
@@ -901,10 +898,13 @@ test('T7: pending ask abort, set_mode/toggle cancellation, disable 409 gates, re
     await k2.conversations.submitInput(cid, 'turn after re-enable')
     await k2.conversations.waitForIdle(cid)
     assert.equal(reenabledReqs[0]!.toolNames.includes(PLAN_TOOL_SAVE), true)
+    assert.equal(reenabledReqs[0]!.toolNames.includes(PLAN_TOOL_PROPOSE), true)
     assert.equal(reenabledReqs[0]!.toolNames.includes('ask_user'), true)
-    assert.equal(reenabledReqs[0]!.toolNames.includes(PLAN_TOOL_BASH), true)
-    assert.equal(reenabledReqs[0]!.toolNames.includes('bash'), false)
+    assert.equal(reenabledReqs[0]!.toolNames.includes('bash'), true)
+    assert.equal(reenabledReqs[0]!.toolNames.includes('run_action'), true)
     assert.equal(reenabledReqs[0]!.toolNames.includes('write'), false)
+    assert.equal(reenabledReqs[0]!.toolNames.includes('edit'), false)
+    assert.equal(reenabledReqs[0]!.toolNames.includes('update_steps'), false)
     assert.ok(typeof reenabledReqs[0]!.sectionsById[PLAN_MODE_SECTION_ID] === 'string')
   } finally {
     await activeEnv?.close()
@@ -1000,10 +1000,10 @@ test('T8: spawned subagent reads approved plan artifact via read_artifact and de
 })
 
 // ---------------------------------------------------------------------------
-// T9: plan_bash, kernel ask_user in plan mode, update_draft before approval, and manual /clear resetConversation
+// T9: native bash & read-only run_action, kernel ask_user in plan mode, update_draft before approval, and manual /clear resetConversation
 // ---------------------------------------------------------------------------
 
-test('T9: plan_bash blocks mutations & runs read-only pwd, ask_user clarifies inside plan mode without setting awaitingApproval, update_draft edits before approval, and resetConversation clears plan state', TIMEOUT, async () => {
+test('T9: native bash & read-only run_action work in plan mode, ask_user clarifies without setting awaitingApproval, update_draft edits before approval, and resetConversation clears plan state', TIMEOUT, async () => {
   const env = await openPlanIntegrationEnv()
   try {
     const { kernel } = env.app
@@ -1011,35 +1011,40 @@ test('T9: plan_bash blocks mutations & runs read-only pwd, ask_user clarifies in
     const cid = conv.id
     await kernel.plugins.invokeAction(PLAN_PLUGIN_ID, 'set_mode', { conversationId: cid, mode: 'planning' })
 
-    // 1) plan_bash: mutating command blocked locally; allowed pwd executes via EnvFabric local node
-    let sawBashResults = ''
+    // 1) Native bash (`pwd`) and read-only `run_action` (`list` & `builtin:plan.get`) execute cleanly during planning mode
+    let sawReadOnlyResults = ''
     env.faux.setResponses([
       () =>
         fauxAssistantMessage(
           [
-            fauxToolCall(PLAN_TOOL_BASH, { command: 'rm -rf ./nonexistent-target' }),
-            fauxToolCall(PLAN_TOOL_BASH, { command: 'pwd' }),
+            fauxToolCall('bash', { command: 'pwd' }),
+            fauxToolCall('run_action', { list: true, pluginId: PLAN_PLUGIN_ID }),
+            fauxToolCall('run_action', { actionId: 'builtin:plan.get', input: {} }),
           ],
           { stopReason: 'toolUse' },
         ),
       (context) => {
-        sawBashResults = JSON.stringify(context.messages)
-        return fauxAssistantMessage('Inspected workspace via plan_bash.')
+        sawReadOnlyResults = JSON.stringify(context.messages)
+        return fauxAssistantMessage('Inspected workspace via native bash and read-only run_action.')
       },
     ])
-    await kernel.conversations.submitInput(cid, 'run blocked and read-only plan_bash commands')
+    await kernel.conversations.submitInput(cid, 'run read-only bash and run_action queries')
     await kernel.conversations.waitForIdle(cid)
 
-    assert.match(sawBashResults, /Blocked by read-only plan mode/)
-    assert.equal(sawBashResults.includes(env.dataDir), true)
-    const detailBash = await kernel.conversations.getConversationDetail(cid, { limit: 30 })
-    const bashResults = detailBash.entries
+    assert.equal(sawReadOnlyResults.includes(env.dataDir), true)
+    assert.equal(sawReadOnlyResults.includes('builtin:plan.get'), true)
+    assert.equal(sawReadOnlyResults.includes('"mode": "planning"') || sawReadOnlyResults.includes('\\"mode\\":\\"planning\\"'), true)
+    const detailReadOnly = await kernel.conversations.getConversationDetail(cid, { limit: 30 })
+    const toolResults = detailReadOnly.entries
       .filter((e) => e.kind === 'pi.tool-result')
       .map((e) => e.model?.[0] as { toolName?: string; isError?: boolean } | undefined)
-      .filter((m) => m?.toolName === PLAN_TOOL_BASH)
-    assert.equal(bashResults.length, 2)
-    assert.equal(bashResults[0]?.isError, true)
-    assert.equal(bashResults[1]?.isError, false)
+    const bashResults = toolResults.filter((m) => m?.toolName === 'bash')
+    const actionResults = toolResults.filter((m) => m?.toolName === 'run_action')
+    assert.equal(bashResults.length, 1)
+    assert.equal(bashResults[0]?.isError, false)
+    assert.equal(actionResults.length, 2)
+    assert.equal(actionResults[0]?.isError, false)
+    assert.equal(actionResults[1]?.isError, false)
 
     // 2) kernel ask_user inside planning mode: creates question AskDoc with allowCustom without triggering awaitingApproval
     let sawClarificationAnswer = ''
@@ -1189,7 +1194,8 @@ test('T9: builtin:plan bootstraps managed skill plan and removes it cleanly from
     const skillMd = await kernel.skills.readFile(PLAN_SKILL_ID)
     assert.ok(skillMd.includes('managedByPlugin: builtin:plan'))
     for (const token of [
-      PLAN_TOOL_BASH,
+      'bash',
+      'run_action',
       'ask_user',
       PLAN_TOOL_SAVE,
       PLAN_TOOL_PROPOSE,

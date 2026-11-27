@@ -5,8 +5,8 @@
  *   `turn_settled`, human `onInput`, and `pi.reset`;
  * - Disabling `builtin:steps` removes `update_steps` from tools and manifests immediately;
  * - Cross-plugin interop:
- *   - `builtin:tiers` orchestrator Planning Phase allows `update_steps` alongside `exit_plan_mode`, and
- *     Execution Phase keeps `update_steps`;
+ *   - `builtin:tiers` orchestrator Planning Phase strips `update_steps` while keeping `exit_plan_mode`, and
+ *     Execution Phase restores `update_steps` so the Executor can track live progress;
  *   - `builtin:plan` Planning Mode strips `update_steps` during read-only planning and restores it in normal mode;
  * - Real conversation rewind (`replaceFromEntryId`) accurately rolls `steps` `sessionDoc` back to prior steps
  *   or clears if rewound before any `update_steps` call.
@@ -228,7 +228,7 @@ test('end-to-end update_steps persistence, disable cleanup, and rewind recovery'
   }
 })
 
-test('cross-plugin interop: tiers orchestrator allows update_steps in planning & execution; /plan strips it during planning', TIMEOUT, async () => {
+test('cross-plugin interop: tiers orchestrator strips update_steps in planning and restores it in execution; /plan strips it during planning', TIMEOUT, async () => {
   const env = await openStepsIntegrationEnv()
   try {
     const { kernel } = env.app
@@ -247,7 +247,17 @@ test('cross-plugin interop: tiers orchestrator allows update_steps in planning &
 
     const captured: CapturedTurn[] = []
     env.faux.setResponses([
-      // Planner phase calls update_steps + exit_plan_mode in the same turn
+      // Planner phase hands off to Execution via exit_plan_mode (update_steps is excluded during planning)
+      captureTurn(
+        captured,
+        fauxAssistantMessage(
+          [
+            fauxToolCall(TIERS_EXIT_PLAN_MODE_TOOL, { plan: 'Implement fix cleanly and verify.' }),
+          ],
+          { stopReason: 'toolUse' },
+        ),
+      ),
+      // Execution phase starts live progress checklist via update_steps
       captureTurn(
         captured,
         fauxAssistantMessage(
@@ -259,7 +269,6 @@ test('cross-plugin interop: tiers orchestrator allows update_steps in planning &
                 { title: 'Verify tests', status: 'pending' },
               ],
             }),
-            fauxToolCall(TIERS_EXIT_PLAN_MODE_TOOL, { plan: 'Implement fix cleanly and verify.' }),
           ],
           { stopReason: 'toolUse' },
         ),
@@ -286,8 +295,9 @@ test('cross-plugin interop: tiers orchestrator allows update_steps in planning &
     await kernel.conversations.submitInput(orchConv.id, 'Plan and implement the fix')
     await kernel.conversations.waitForIdle(orchConv.id)
 
-    assert.ok(captured[0]!.toolNames.includes(STEPS_TOOL_UPDATE), 'Orchestrator Planning Phase must allow update_steps')
-    assert.ok(captured[1]!.toolNames.includes(STEPS_TOOL_UPDATE), 'Orchestrator Execution Phase must keep update_steps')
+    assert.equal(captured[0]!.toolNames.includes(STEPS_TOOL_UPDATE), false, 'Orchestrator Planning Phase must strip update_steps')
+    assert.ok(captured[0]!.toolNames.includes(TIERS_EXIT_PLAN_MODE_TOOL), 'Orchestrator Planning Phase must keep exit_plan_mode')
+    assert.ok(captured[1]!.toolNames.includes(STEPS_TOOL_UPDATE), 'Orchestrator Execution Phase must restore update_steps')
     assert.equal(readStepsDoc(kernel, orchConv.id)?.allTerminal, true)
 
     // /plan mode strips update_steps during strict read-only planning and restores it when exiting to normal

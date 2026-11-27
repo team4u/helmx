@@ -30,13 +30,10 @@ import {
   createTierOrchestratorManager,
   type ExitPlanModeToolInput,
   type HandBackToPlannerToolInput,
-  type OrchBashToolInput,
 } from './tiers/orchestrator.js'
 import {
   MAX_TIERS_COUNT,
   MODEL_TIERS_SKILL_ID,
-  ORCHESTRATOR_BASH_DEFAULT_TIMEOUT_MS,
-  ORCHESTRATOR_BASH_MAX_TIMEOUT_MS,
   ORCHESTRATOR_TRANSITION_META_SCHEMA,
   SWITCH_MODEL_META_SCHEMA,
   TIERS_BORROW_ELIGIBLE_SCOPE,
@@ -47,7 +44,6 @@ import {
   TIERS_INPUT_META_KEY,
   TIERS_ORCHESTRATOR_KV,
   TIERS_ORCHESTRATOR_SESSION_DOC,
-  TIERS_ORCH_BASH_TOOL,
   TIERS_PLUGIN_ID,
   TIERS_SCREEN_ID,
   TIERS_STATE_DOC,
@@ -94,7 +90,6 @@ export {
   TIERS_BORROW_ELIGIBLE_SCOPE,
   TIERS_ORCHESTRATOR_KV,
   TIERS_ORCHESTRATOR_SESSION_DOC,
-  TIERS_ORCH_BASH_TOOL,
   TIERS_EXIT_PLAN_MODE_TOOL,
   TIERS_HAND_BACK_TOOL,
   TIER_BORROW_SESSION_VIEW_SCHEMA,
@@ -351,41 +346,6 @@ export function createTiersPlugin(): PluginDefinition {
           await orchestratorManager.handleConversationReset(entry.conversationId)
           await borrowManager.handleConversationReset(entry.conversationId)
         }
-      })
-
-      ctx.tool<OrchBashToolInput>({
-        name: TIERS_ORCH_BASH_TOOL,
-        description:
-          'Execute a read-only inspection shell command on the conversation node during orchestrator planning phase (mutating commands and file redirects are blocked).',
-        promptGuidelines: [
-          'Use orch_bash strictly for read-only codebase inspection during the orchestrator planning phase (e.g., rg, ls, git status, git diff).',
-        ],
-        scope: TIERS_BORROW_ELIGIBLE_SCOPE,
-        inputSchema: {
-          type: 'object',
-          required: ['command'],
-          additionalProperties: false,
-          properties: {
-            command: { type: 'string', minLength: 1, description: 'Read-only shell command to execute' },
-            timeoutMs: {
-              type: 'integer',
-              minimum: 1,
-              maximum: ORCHESTRATOR_BASH_MAX_TIMEOUT_MS,
-              description: `Optional timeout in milliseconds (default ${ORCHESTRATOR_BASH_DEFAULT_TIMEOUT_MS}, max ${ORCHESTRATOR_BASH_MAX_TIMEOUT_MS})`,
-            },
-          },
-        },
-        structuredOutputSchema: {
-          type: 'object',
-          required: ['ok', 'exitCode', 'timedOut', 'output'],
-          properties: {
-            ok: { type: 'boolean' },
-            exitCode: { type: ['number', 'null'] },
-            timedOut: { type: 'boolean' },
-            output: { type: 'string' },
-          },
-        },
-        execute: (input, context) => orchestratorManager.executeOrchBashTool(input, context),
       })
 
       ctx.tool<ExitPlanModeToolInput>({

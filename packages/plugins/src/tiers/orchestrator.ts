@@ -33,10 +33,7 @@ import {
   ignoreConversationNotFound,
   listAllKvEntries,
 } from '../shared-helpers.js'
-import { validateReadOnlyShellCommand } from '../shared/read-only-shell/read-only-shell.js'
 import {
-  ORCHESTRATOR_BASH_DEFAULT_TIMEOUT_MS,
-  ORCHESTRATOR_BASH_MAX_TIMEOUT_MS,
   ORCHESTRATOR_EXECUTE_SECTION_ID,
   ORCHESTRATOR_ONLY_TOOL_NAMES,
   ORCHESTRATOR_PLAN_SECTION_ID,
@@ -44,7 +41,6 @@ import {
   ORCHESTRATOR_STEP_LIMIT_SECTION_ID,
   TIERS_EXIT_PLAN_MODE_TOOL,
   TIERS_HAND_BACK_TOOL,
-  TIERS_ORCH_BASH_TOOL,
   TIERS_SWITCH_MODEL_TOOL,
   isTiersBorrowEligible,
   toTierOrchestratorSessionView,
@@ -59,8 +55,8 @@ const SECTION_PREFIX = 'tiers.orchestrator.'
 
 export const ORCHESTRATOR_PLAN_SECTION = [
   '<orchestrator_planning_mode>',
-  'You are in the Planning Phase of a dual-phase orchestrator session.',
-  '1. Research strictly in read-only mode using `read`, `read_artifact`, `load_skill`, `ask_user`, and `orch_bash` (mutating shell commands and file output redirections are blocked). Do not attempt file edits or state-mutating commands in this phase.',
+  'You are in the Planning Phase of a dual-phase orchestrator session. File-editing and delegation tools (`write`, `edit`, `register_artifact`, `subagent`, `SubagentWorkflow`, `swarm_*`, etc.) are disabled in this phase.',
+  '1. Research strictly in read-only mode: use `read`, `read_artifact`, and `load_skill` to inspect files and artifacts, `bash` strictly for read-only observation (code search, builds, typecheck, tests, `git status`/`log`/`diff`), and `run_action` strictly for read-only queries (`list`, `describe`, and read-only status/inspection actions). Never edit files, redirect output into workspace files, create commits, or mutate external/host state in this phase.',
   '2. Clarify genuine requirements or architectural ambiguities with `ask_user` before planning execution.',
   '3. Once your implementation plan is ready—or if a prior execution hand-back needs a revised plan—call `exit_plan_mode({ plan })` with exact file paths, concrete step-by-step instructions, edge cases, and verification commands so the Executor model can execute immediately in this same conversation.',
   '4. If the user only asked a discussion, research, or review question requiring no code/workspace edits, answer directly in this Planning Phase without switching to execution.',
@@ -97,11 +93,6 @@ export interface HandBackToPlannerToolInput {
   summary: string
 }
 
-export interface OrchBashToolInput {
-  command: string
-  timeoutMs?: number
-}
-
 export interface TierOrchestratorManager {
   setStopping(value: boolean): void
   hydrate(): void
@@ -118,7 +109,6 @@ export interface TierOrchestratorManager {
   handleConversationUpsert(payload: unknown): Promise<void>
   handleConversationDeleted(conversationId: number): Promise<void>
   handleConversationReset(conversationId: number): Promise<void>
-  executeOrchBashTool(input: OrchBashToolInput, context: PluginToolContext): Promise<PluginToolResultEnvelope>
   executeExitPlanModeTool(input: ExitPlanModeToolInput, context: PluginToolContext): Promise<PluginToolResultEnvelope>
   executeHandBackTool(input: HandBackToPlannerToolInput, context: PluginToolContext): Promise<PluginToolResultEnvelope>
 }
@@ -555,7 +545,6 @@ export function createTierOrchestratorManager(deps: {
 
         const tools = turn.tools.filter(
           (tool) =>
-            tool.name !== TIERS_ORCH_BASH_TOOL &&
             tool.name !== TIERS_EXIT_PLAN_MODE_TOOL &&
             tool.name !== TIERS_SWITCH_MODEL_TOOL,
         )
@@ -650,58 +639,6 @@ export function createTierOrchestratorManager(deps: {
         await store.saveRecord(conversationId, next)
         await restorePlannerRuntimeModelIfNeeded(ctx, conv, active, existing?.phase === 'execution')
       })
-    },
-
-    async executeOrchBashTool(
-      input: OrchBashToolInput,
-      context: PluginToolContext,
-    ): Promise<PluginToolResultEnvelope> {
-      if (stopping) return toolError('builtin:tiers is stopping; cannot execute command.')
-      const command = typeof input?.command === 'string' ? input.command : ''
-      const check = validateReadOnlyShellCommand(command)
-      if (!check.ok) {
-        return toolError(
-          `Blocked by orchestrator read-only planning phase: ${check.reason}. Call exit_plan_mode before running mutating commands.`,
-        )
-      }
-      const rawTimeout = input?.timeoutMs
-      if (
-        rawTimeout !== undefined &&
-        (typeof rawTimeout !== 'number' || !Number.isFinite(rawTimeout) || rawTimeout < 1)
-      ) {
-        return toolError('orch_bash timeoutMs must be a positive integer.')
-      }
-      const timeoutMs =
-        rawTimeout !== undefined
-          ? Math.min(ORCHESTRATOR_BASH_MAX_TIMEOUT_MS, Math.max(1, Math.trunc(rawTimeout)))
-          : ORCHESTRATOR_BASH_DEFAULT_TIMEOUT_MS
-
-      const conversationId = context.conversationId
-      const conv = ctx.host.getConversation(conversationId)
-      const active = resolveActiveOrchestrator(conv, readTiersState())
-      if (active === undefined) {
-        return toolError('orch_bash is only allowed in top-level human conversations configured with an orchestrator tier.')
-      }
-      const existing = store.get(conversationId)
-      if ((existing?.phase ?? 'planning') !== 'planning') {
-        return toolError('orch_bash is only available during the orchestrator planning phase.')
-      }
-
-      const res = await ctx.host.execEnv(
-        { command, conversationId, timeoutMs },
-        { ...(context.signal !== undefined ? { signal: context.signal } : {}) },
-      )
-      const redactedOutput = ctx.host.redact(res.output)
-      return {
-        output: redactedOutput,
-        structuredOutput: {
-          ok: res.ok,
-          exitCode: res.exitCode,
-          timedOut: res.timedOut,
-          output: redactedOutput,
-        },
-        isError: !res.ok,
-      }
     },
 
     executeExitPlanModeTool(

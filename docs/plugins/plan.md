@@ -1,6 +1,6 @@
 # 计划模式插件（`builtin:plan`）
 
-`builtin:plan` 为顶层人类直连会话提供受控的只读调研与结构化计划审批闭环：进入计划模式后收紧为严格只读工具白名单（含只读 Shell 守卫 `plan_bash` 与内核提问工具 `ask_user`）、支持通过 `plan_save` 多轮草拟自包含实施计划（并支持在工作台面板人工直接编辑修订）、通过 `plan_propose` 经 `AskDoc` CAS 乐观锁发起人机审批（支持单选决定、即选执行模型与温和提示）、批准后将计划归档为会话 `Artifact`（`plan-v<N>.md`），并支持可选的全新上下文交接（`control.handoff`）与模型/档位切换执行。
+`builtin:plan` 为顶层人类直连会话提供受控的只读调研与结构化计划审批闭环：进入计划模式后收紧为规划工具白名单（剥离文件修改与派工工具，保留只读观察用 `bash`、`run_action` 与内核提问工具 `ask_user`）、支持通过 `plan_save` 多轮草拟自包含实施计划（并支持在工作台面板人工直接编辑修订）、通过 `plan_propose` 经 `AskDoc` CAS 乐观锁发起人机审批（支持单选决定、即选执行模型与温和提示）、批准后将计划归档为会话 `Artifact`（`plan-v<N>.md`），并支持可选的全新上下文交接（`control.handoff`）与模型/档位切换执行。
 
 ## 当前状态
 
@@ -34,7 +34,7 @@
 以一次顶层人类直连会话为例，计划模式按以下顺序闭环（各步的入口、工具边界与状态字段见上下两节）：
 
 1. **进入计划模式**：点击输入框左下角 `+` 菜单内「计划模式」、按 `Ctrl+.`、在输入框选或发 `/plan` / `/plan <任务>`，或在 CLI 执行 `helmx plan toggle --current`；待命页（`#/a/<profileId>`）只在本地写入预武装态并显示紧凑胶囊，首条消息发出时才真正进入计划模式。
-2. **只读调研**：`before_turn`（`priority: -50`）将本回合工具收紧为 `PLAN_MODE_TOOL_WHITELIST` 中的七个工具；模型使用 `read` / `read_artifact` / `load_skill` / `plan_bash` 收集事实，`plan_bash` 先经 `validateReadOnlyShellCommand` 校验通过后才在节点执行。
+2. **只读调研**：`before_turn`（`priority: -50`）将本回合工具收紧为 `PLAN_MODE_TOOL_WHITELIST` 中的八个工具（不含 `update_steps`）；文件编辑与派工工具全部剥离，模型使用 `read` / `read_artifact` / `load_skill` 审阅内容，并在模型级只读提示词约束下使用原生 `bash`（代码检索、构建、类型检查、测试、`git status/log/diff`）与 `run_action`（`list` / `describe` 及只读状态/检查动作）收集事实（不设静态 Shell 校验器）。
 3. **澄清需求**：存在真实歧义时调用内核内建工具 `ask_user` 发起 1..4 题结构化提问（不触发 `awaitingApproval`）；等待期间人类直接在 Composer 发送消息会以 `'superseded'` 结算该 AskDoc，并保持在 `planning` 模式。
 4. **起草计划**：调用 `plan_save` 写入自包含草稿（完整文件路径、关键符号、分步改动、约束与验收命令），可多轮覆盖，`version` 递增并经 `ctx.kv('plans')` 持久化后投影到 `plan` sessionDoc；人类可在右侧「执行计划」面板直接编辑（`update_draft` 携带 `expectedVersion` 做 CAS 校验，冲突报 `409 plan_draft_conflict`）。
 5. **提交审批**：调用 `plan_propose` 生成 AskDoc 审批卡，单选 `approve_handoff`「批准并在新上下文执行」/ `approve`「批准并在当前上下文继续」/ `revise`「退回修改」，可选 `executionModel` 模型与思考等级选择器（`thinkingLevelField: 'executionThinkingLevel'`）；`revise`、取消或超时销单都会清除 `pendingAskId` 并停留在 `planning` 模式，不生成 Artifact。
@@ -46,16 +46,15 @@
 
 ### 1. `before_turn` 严格工具白名单（`priority: -50`）
 
-- **普通模式（`mode === 'normal'`）**：仅剔除 `plan_save`、`plan_propose` 与 `plan_bash`（保留内核 `ask_user`），不注入任何提示词段落；
-- **计划模式（`mode === 'planning'`）**：仅保留 `PLAN_MODE_TOOL_WHITELIST` 中的七个工具：
-  `read`、`read_artifact`、`load_skill`、`ask_user`、`plan_bash`、`plan_save`、`plan_propose`。
-  内核裸 `bash` 以及 `write`、`edit`、`register_artifact`、`run_action`、`subagent`、`SubagentWorkflow`、`cleanup_worktree`、`update_memory`、`swarm_dispatch_worker` 等修改或派工工具全部被剔除；由于钩子在 `builtin:profile`（`-100`）之前执行且剔除了 `run_action` 与派工工具，系统提示词中的 `<available_actions>` 与 `<available_profiles>` 同步自然省略，并注入 `plan.mode` 段落明确自包含计划交接契约（要求完整写入文件路径、关键符号、约束与验收命令，确保 `handoff` 后零上下文执行者无需二次盲搜）。
+- **普通模式（`mode === 'normal'`）**：仅剔除 `plan_save` 与 `plan_propose`（保留内核 `ask_user`），不注入任何提示词段落；
+- **计划模式（`mode === 'planning'`）**：仅保留 `PLAN_MODE_TOOL_WHITELIST` 中的八个工具：
+  `read`、`read_artifact`、`load_skill`、`ask_user`、`bash`、`run_action`、`plan_save`、`plan_propose`（明确不含 `update_steps`，实时步骤清单面向执行阶段）。
+  `write`、`edit`、`register_artifact`、`subagent`、`SubagentWorkflow`、`cleanup_worktree`、`update_memory`、`swarm_*`、`switch_model` 等文件修改与派工工具全部被剔除；原生 `bash` 与 `run_action` 经 `plan.mode` 段落施加模型级只读规划约束（仅用于代码检索、构建、类型检查、测试、`git` 只读命令以及 `list` / `describe` / 只读查询动作，禁止修改文件、重定向写入、提交或变更宿主机状态；无静态 Shell 校验器）。由于钩子在 `builtin:profile`（`-100`）之前执行且剔除了派工工具，系统提示词中的 `<available_profiles>` 同步自然省略；同时注入 `plan.mode` 段落明确只读约束与自包含计划交接契约（要求完整写入文件路径、关键符号、约束与验收命令，确保 `handoff` 后零上下文执行者无需二次盲搜）。
 
 ### 2. 工具清单与边界
 
 | 工具 | 参数与边界 | 行为 |
 | :--- | :--- | :--- |
-| `plan_bash` | `command`、`timeoutMs?`（默认 `60_000`，上限 `120_000`） | 仅允许在顶层人类会话 `planning` 模式下调用；先经引号感知分词器校验只读安全性（允许引号内包含关键词、仅放行 `2>&1`/`>/dev/null` 等无害重定向；拦截写文件重定向、`rm`/`mv`/`cp`/`mkdir`/`touch`/`sed -i`/`git commit`/`git checkout`/`pnpm install` 等变更命令与命令替换；对 `helmx` CLI 实施严格只读白名单——仅放行有界只读核心/内置插件查询、`helmx api GET` 与 `--help`/`--version`，拒绝写参数如 `--output`/`-o`/`--set`/`--unset`/`--input`（写命令）/`--watch` 以及未知/外部插件命令，并无条件拦截 `helmx-hub` 与 `helmx-node`），通过后经 `ctx.host.execEnv` 在节点执行并脱敏 |
 | `plan_save` | `title`（1..120 字符）、`markdown`（1..98,304 UTF-8 字节） | 仅允许在顶层人类会话 `planning` 模式下调用；经 `ctx.host.redact` 脱敏、递增 `version`、持久化 `ctx.kv('plans')` 并 `await flushKv()`，更新 `plan` `sessionDoc` 与 `plan-badges`，返回结构化 `presentationMeta` |
 | `plan_propose` | `summary`（1..300 字符纯文本，拒绝 ```` ``` ```` 代码围栏） | 要求已存在草稿且无并发挂起审批；生成 `kind: 'approval'` 全双语 `AskCreateSpec`：单选 `decision`（默认 `approve_handoff`「批准并在新上下文执行」，标 `recommended: true`；`approve`「批准并在当前上下文继续」；`revise`「退回修改」）、可选 `executionModel` 模型选择器（默认预填配置项 `executionModel`，无论是否切换新上下文均生效）、可选 `feedback` 与底部直接打字修订提示 |
 
@@ -82,7 +81,7 @@
   - `PlanToolbarButton`（`COMPOSER_TOOLBAR_SLOT`）：仅在计划/待批或待命预武装激活态呈现 24px 紧凑可退出胶囊，普通态仅保留隐藏的 `Ctrl+.` 快捷键锚点以保持工具栏零冗余；
   - `PlanActiveTray`（`COMPOSER_DOCK_SLOT`）：存在草稿或等待审批时展示；桌面端（`innerWidth > 900`）在同一会话内 `awaitingApproval` 由 `false` 跃迁为 `true` 时自动展开右侧 `Plan` 面板；展开托盘内嵌可滚动 `<MarkdownText>` 计划预览；
   - `PlanWorkbenchPanel`（右侧 `plan` 面板）：展示计划正文（支持人工「编辑 / 保存」与外部版本冲突提醒）及准确区分「上下文交接」与「执行模型」的已批准记录；
-  - `PlanToolRow`（`toolView`）：消费 `props.presentationMeta` 渲染 `plan_save` 与 `plan_propose` 的 26px `.trace-row`（`plan_bash` 复用宿主可展开通用命令工具行）。
+  - `PlanToolRow`（`toolView`）：消费 `props.presentationMeta` 渲染 `plan_save` 与 `plan_propose` 的 26px `.trace-row`。
 - **服务治理与事件清理**：
   - `start()` 经 `ctx.host.skills.ensureSkill` 自举受管技能 `plan`（`managedByPlugin: builtin:plan`，覆盖准入条件、只读工具、自包含计划撰写、AskDoc 审批/交接与 `get`/`toggle`/`set_mode`/`update_draft` 动作；停用插件后即时从可用技能目录消失）并从 KV 水合 `plan` 与 `plan-badges` 投影；`reconcile()` 在重启后扫描孤儿 `pendingAskId`，以 `'superseded'` 清理对应 `AskDoc` 并解除会话 `blocked`；
   - 监听 `conversation.entry`：人工 `/clear`（非本插件 `handoff` 豁免的 `pi.reset`）自动清空旧话题的计划模式、草稿与角标；时间线编辑重发（`helmx.rewind`）仅以 `'superseded'` 结算挂起 Ask 并保留计划模式与草稿；`turn_settled` 兜底清理未消费的交接豁免计数；
@@ -96,10 +95,9 @@
 | 插件入口（配置 / 动作 / 命令 / UI / 服务） | `packages/plugins/src/plan.ts` |
 | 受管技能资产 | `packages/plugins/src/plan/skill/SKILL.md` |
 | 契约、白名单、Schema 与边界守卫 | `packages/plugins/src/plan/contracts.ts` |
-| 只读 Shell 命令校验器 | `packages/plugins/src/plan/read-only-shell.ts` |
 | 状态管理、KV 序列化与生命周期对账 | `packages/plugins/src/plan/state.ts` |
 | 钩子注册（`input` / `before_turn` / `turn_settled` / `conversation.entry` / `conversation.deleted`） | `packages/plugins/src/plan/hooks.ts` |
-| 模型工具（`plan_save` / `plan_propose` / `plan_bash`） | `packages/plugins/src/plan/tools.ts` |
+| 模型工具（`plan_save` / `plan_propose`） | `packages/plugins/src/plan/tools.ts` |
 | 前端组件与样式 | `packages/plugins/src/plan/client/` |
 | 内核 `AskDoc` 与工具 `control` 契约 | `packages/protocol/src/ask.ts`、`packages/kernel/src/runtime/asks.ts`、`packages/kernel/src/runtime/tools/tool-result-contract.ts` |
 | 单测、集成与前端 DOM 测试 | `packages/plugins/test/plan-plugin.test.ts`、`packages/plugins/test/plan-plugin.integration.test.ts`、`packages/web/test/plan-client-interactions.test.tsx` |

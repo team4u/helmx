@@ -5,7 +5,7 @@
  *   `400 orchestrator_tier_not_borrowable`, `409 orchestrator_tier_active`);
  * - Profile inheritance unwrapping (`human_conversation` -> Planner + `modelTier`,
  *   `subagent_inherit` -> concrete `executorModel` without `modelTier`);
- * - Full Planning (`orch_bash` read-only + `exit_plan_mode`) -> Execution (step budget,
+ * - Full Planning (native `bash` + read-only `run_action` + `exit_plan_mode`) -> Execution (step budget,
  *   static Prompt Cache sections, `hand_back_to_planner`) -> Planner review loop;
  * - `followUp` boundary reset via `afterResponse` (including `plannerModel === executorModel`)
  *   while preserving mid-turn `steer` execution phase;
@@ -24,11 +24,11 @@ import {
   TIERS_EXIT_PLAN_MODE_TOOL,
   TIERS_HAND_BACK_TOOL,
   TIERS_ORCHESTRATOR_SESSION_DOC,
-  TIERS_ORCH_BASH_TOOL,
   TIERS_PLUGIN_ID,
   TIERS_SWITCH_MODEL_TOOL,
   type TierOrchestratorSessionView,
 } from '../src/tiers.js'
+import { ORCHESTRATOR_PLAN_TOOL_WHITELIST } from '../src/tiers/contracts.js'
 import {
   ORCHESTRATOR_EXECUTE_SECTION,
   ORCHESTRATOR_PLAN_SECTION,
@@ -405,7 +405,7 @@ test('machine invisibility: orchestrator tiers stay invisible in catalog, reject
   }
 })
 
-test('full planner -> orch_bash -> exit_plan_mode -> execution (step limit) -> hand_back_to_planner loop and static Prompt Cache', { timeout: 60_000 }, async () => {
+test('full planner -> native bash & read-only run_action -> exit_plan_mode -> execution (step limit) -> hand_back_to_planner loop and static Prompt Cache', { timeout: 60_000 }, async () => {
   const env = await openOrchestratorEnv()
   try {
     const { kernel } = env.app
@@ -431,15 +431,15 @@ test('full planner -> orch_bash -> exit_plan_mode -> execution (step limit) -> h
       { path: 'missing-or-check.txt' },
       { id: 'call-exec-read' },
     )
-    const orchBashAllowed = fauxToolCall(
-      TIERS_ORCH_BASH_TOOL,
+    const planBashRead = fauxToolCall(
+      'bash',
       { command: 'pwd' },
-      { id: 'call-orch-pwd' },
+      { id: 'call-plan-pwd' },
     )
-    const orchBashBlocked = fauxToolCall(
-      TIERS_ORCH_BASH_TOOL,
-      { command: 'echo pwn > evil.txt' },
-      { id: 'call-orch-redir' },
+    const planActionRead = fauxToolCall(
+      'run_action',
+      { actionId: 'builtin:tiers.list', input: {} },
+      { id: 'call-plan-tiers-list' },
     )
     const exitPlanCall = fauxToolCall(
       TIERS_EXIT_PLAN_MODE_TOOL,
@@ -459,10 +459,10 @@ test('full planner -> orch_bash -> exit_plan_mode -> execution (step limit) -> h
     })
 
     env.faux.setResponses([
-      // 1. Planner step 1: inspect tools, run allowed + blocked orch_bash
+      // 1. Planner step 1: inspect tools, run native read-only bash and read-only run_action
       captureStep(observed, conv.id, () => {
         stepSnapshots.push(snapshotNow())
-        return fauxAssistantMessage([orchBashAllowed, orchBashBlocked], { stopReason: 'toolUse' })
+        return fauxAssistantMessage([planBashRead, planActionRead], { stopReason: 'toolUse' })
       }),
       // 2. Planner step 2: call exit_plan_mode
       captureStep(observed, conv.id, () => {
@@ -495,27 +495,36 @@ test('full planner -> orch_bash -> exit_plan_mode -> execution (step limit) -> h
     assert.equal(observed.length, 5)
     assert.equal(stepSnapshots.length, 5)
 
-    // Verify Step 1 (Planner initial)
+    // Verify Step 1 (Planner initial: 7-tool whitelist with bash, run_action, exit_plan_mode; update_steps & write/dispatch stripped)
     assert.equal(observed[0]?.modelId, 'faux/flagship')
     assert.equal(observed[0]?.reasoning, 'high')
-    assert.ok(observed[0]?.toolNames.includes(TIERS_ORCH_BASH_TOOL))
+    assert.equal(ORCHESTRATOR_PLAN_TOOL_WHITELIST.size, 7)
+    assert.ok(observed[0]?.toolNames.every((name) => ORCHESTRATOR_PLAN_TOOL_WHITELIST.has(name)))
+    assert.ok(observed[0]?.toolNames.includes('bash'))
+    assert.ok(observed[0]?.toolNames.includes('run_action'))
     assert.ok(observed[0]?.toolNames.includes(TIERS_EXIT_PLAN_MODE_TOOL))
+    assert.ok(!observed[0]?.toolNames.includes('update_steps'))
     assert.ok(!observed[0]?.toolNames.includes('write'))
     assert.ok(!observed[0]?.toolNames.includes('edit'))
-    assert.ok(!observed[0]?.toolNames.includes('bash'))
+    assert.ok(!observed[0]?.toolNames.includes('register_artifact'))
+    assert.ok(!observed[0]?.toolNames.includes('subagent'))
+    assert.ok(!observed[0]?.toolNames.includes('SubagentWorkflow'))
     assert.ok(!observed[0]?.toolNames.includes(TIERS_HAND_BACK_TOOL))
     assert.ok(!observed[0]?.toolNames.includes(TIERS_SWITCH_MODEL_TOOL))
+    assert.ok(observed[0]?.systemPrompt.includes(ORCHESTRATOR_PLAN_SECTION))
 
     // Verify Step 2 (Planner static cache before exit_plan_mode)
     assert.equal(observed[1]?.modelId, 'faux/flagship')
     assert.equal(observed[1]?.systemPrompt, observed[0]?.systemPrompt, 'planning prompt cache section must remain identical')
 
-    // Verify Step 3 (Executor 1/1: switched model without mutating modelOverride/modelTier)
+    // Verify Step 3 (Executor 1/1: switched model without mutating modelOverride/modelTier; update_steps & workspace tools available)
     assert.equal(observed[2]?.modelId, 'faux/workhorse')
     assert.equal(observed[2]?.reasoning, 'low')
     assert.ok(observed[2]?.toolNames.includes('write'))
+    assert.ok(observed[2]?.toolNames.includes('bash'))
+    assert.ok(observed[2]?.toolNames.includes('run_action'))
+    assert.ok(observed[2]?.toolNames.includes('update_steps'))
     assert.ok(observed[2]?.toolNames.includes(TIERS_HAND_BACK_TOOL))
-    assert.ok(!observed[2]?.toolNames.includes(TIERS_ORCH_BASH_TOOL))
     assert.ok(!observed[2]?.toolNames.includes(TIERS_EXIT_PLAN_MODE_TOOL))
     assert.ok(!observed[2]?.toolNames.includes(TIERS_SWITCH_MODEL_TOOL))
     assert.ok(observed[2]?.systemPrompt.includes(ORCHESTRATOR_EXECUTE_SECTION))
@@ -540,7 +549,7 @@ test('full planner -> orch_bash -> exit_plan_mode -> execution (step limit) -> h
     assert.ok(observed[4]?.systemPrompt.includes(ORCHESTRATOR_PLAN_SECTION))
     assert.equal(observed[4]?.systemPrompt, observed[0]?.systemPrompt, 'returned planner prompt must remain static for KV cache reuse')
 
-    // Verify orch_bash read-only & redirect results and transition presentationMeta persisted cleanly
+    // Verify native bash, read-only run_action, and transition presentationMeta persisted cleanly
     const detail = await kernel.conversations.getConversationDetail(conv.id)
     const toolResults = detail.entries
       .filter((e) => e.kind === 'pi.tool-result')
@@ -551,11 +560,12 @@ test('full planner -> orch_bash -> exit_plan_mode -> execution (step limit) -> h
       content?: Array<{ type?: string; text?: string }>
       details?: Record<string, unknown>
     }>
-    const pwdResult = toolResults.find((m) => m.toolName === TIERS_ORCH_BASH_TOOL && m.isError === false)
-    assert.ok(pwdResult !== undefined, 'read-only orch_bash pwd must succeed')
-    const redirResult = toolResults.find((m) => m.toolName === TIERS_ORCH_BASH_TOOL && m.isError === true)
-    assert.ok(redirResult !== undefined, 'mutating redirection orch_bash must be blocked')
-    assert.match(redirResult.content?.[0]?.text ?? '', /read-only/i)
+    const pwdResult = toolResults.find((m) => m.toolName === 'bash' && m.isError === false)
+    assert.ok(pwdResult !== undefined, 'native bash pwd must succeed in orchestrator planning phase')
+    assert.ok((pwdResult.content?.[0]?.text ?? '').includes(env.dataDir))
+    const tiersListResult = toolResults.find((m) => m.toolName === 'run_action' && m.isError === false)
+    assert.ok(tiersListResult !== undefined, 'read-only run_action builtin:tiers.list must succeed in orchestrator planning phase')
+    assert.ok((tiersListResult.content?.[0]?.text ?? '').includes('auto-main'))
 
     const exitMeta = toolResults.find((m) => m.toolName === TIERS_EXIT_PLAN_MODE_TOOL)?.details
     assert.equal(exitMeta?.['tool'], TIERS_EXIT_PLAN_MODE_TOOL)
@@ -684,9 +694,13 @@ test('switching off orchestrator tier cleans state and /plan takes strict preced
     assert.equal(observedPlan.length, 1)
     assert.ok(observedPlan[0]!.systemPrompt.includes('<plan_mode>'))
     assert.ok(!observedPlan[0]!.systemPrompt.includes('<orchestrator_planning_mode>'))
-    assert.ok(observedPlan[0]!.toolNames.includes('plan_bash'))
-    assert.ok(!observedPlan[0]!.toolNames.includes(TIERS_ORCH_BASH_TOOL))
+    assert.ok(observedPlan[0]!.toolNames.includes('bash'))
+    assert.ok(observedPlan[0]!.toolNames.includes('run_action'))
+    assert.ok(observedPlan[0]!.toolNames.includes('plan_save'))
+    assert.ok(observedPlan[0]!.toolNames.includes('plan_propose'))
+    assert.ok(!observedPlan[0]!.toolNames.includes('update_steps'))
     assert.ok(!observedPlan[0]!.toolNames.includes(TIERS_EXIT_PLAN_MODE_TOOL))
+    assert.ok(!observedPlan[0]!.toolNames.includes(TIERS_HAND_BACK_TOOL))
 
     // 2. Exit /plan cleanly via pi.reset or switch model to plain concrete model -> clears modelTier & sessionDoc
     env.faux.setResponses([fauxAssistantMessage('Plain orchestrator turn.')])

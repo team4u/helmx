@@ -1,5 +1,5 @@
 /**
- * builtin:plan model tools (`plan_save`, `plan_propose`, and `plan_bash`).
+ * builtin:plan model tools (`plan_save` and `plan_propose`).
  */
 import { randomUUID } from 'node:crypto'
 import {
@@ -10,14 +10,11 @@ import {
   type PluginToolResultEnvelope,
 } from '@helmx/protocol'
 import {
-  PLAN_BASH_DEFAULT_TIMEOUT_MS,
-  PLAN_BASH_MAX_TIMEOUT_MS,
   PLAN_HANDOFF_MAX_BYTES,
   PLAN_MARKDOWN_MAX_BYTES,
   PLAN_PLUGIN_ID,
   PLAN_SUMMARY_MAX_CHARS,
   PLAN_TITLE_MAX_CHARS,
-  PLAN_TOOL_BASH,
   PLAN_TOOL_META_SCHEMA,
   PLAN_TOOL_PROPOSE,
   PLAN_TOOL_SAVE,
@@ -28,7 +25,6 @@ import {
   type PlanDraftSummary,
   type PlanToolPresentationMeta,
 } from './contracts.js'
-import { validateReadOnlyShellCommand } from './read-only-shell.js'
 import type { PlanStateManager } from './state.js'
 import { errorMessageOf } from '../shared-helpers.js'
 
@@ -828,95 +824,6 @@ function registerPlanProposeTool(
   })
 }
 
-function registerPlanBashTool(ctx: HelmxPluginContext, state: PlanStateManager): void {
-  ctx.tool<{ command: string; timeoutMs?: number }>({
-    name: PLAN_TOOL_BASH,
-    description:
-      'Execute a read-only inspection shell command on the conversation node (plan mode only; mutating commands and file redirects are blocked).',
-    promptGuidelines: [
-      'Use plan_bash strictly for read-only codebase inspection (e.g., rg, ls, git status, git diff, git log). Mutating commands and file redirects are blocked.',
-    ],
-    inputSchema: {
-      type: 'object',
-      properties: {
-        command: {
-          type: 'string',
-          minLength: 1,
-          description: 'Read-only shell command to execute',
-        },
-        timeoutMs: {
-          type: 'integer',
-          minimum: 1,
-          maximum: PLAN_BASH_MAX_TIMEOUT_MS,
-          description: `Optional timeout in milliseconds (default ${PLAN_BASH_DEFAULT_TIMEOUT_MS}, max ${PLAN_BASH_MAX_TIMEOUT_MS})`,
-        },
-      },
-      required: ['command'],
-      additionalProperties: false,
-    },
-    structuredOutputSchema: {
-      type: 'object',
-      properties: {
-        ok: { type: 'boolean' },
-        exitCode: { type: ['number', 'null'] },
-        timedOut: { type: 'boolean' },
-        output: { type: 'string' },
-      },
-      required: ['ok', 'exitCode', 'timedOut', 'output'],
-    },
-    async execute(input, context): Promise<PluginToolResultEnvelope> {
-      const command = typeof input?.command === 'string' ? input.command : ''
-      const check = validateReadOnlyShellCommand(command)
-      if (!check.ok) {
-        return toolError(
-          `Blocked by read-only plan mode: ${check.reason}. Use read/read_artifact or a read-only inspection command.`,
-        )
-      }
-
-      const rawTimeout = input?.timeoutMs
-      if (
-        rawTimeout !== undefined &&
-        (typeof rawTimeout !== 'number' || !Number.isFinite(rawTimeout) || rawTimeout < 1)
-      ) {
-        return toolError('plan_bash timeoutMs must be a positive integer.')
-      }
-      const timeoutMs =
-        rawTimeout !== undefined
-          ? Math.min(PLAN_BASH_MAX_TIMEOUT_MS, Math.max(1, Math.trunc(rawTimeout)))
-          : PLAN_BASH_DEFAULT_TIMEOUT_MS
-
-      const conversationId = context.conversationId
-      if (state.isStopping()) {
-        return toolError('builtin:plan is stopping; cannot execute command.')
-      }
-      const conv = ctx.host.getConversation(conversationId)
-      if (!isPlanConversationEligible(conv)) {
-        return toolError('plan_bash is only allowed in top-level human conversations.')
-      }
-      const current = state.getRecord(conversationId)
-      if ((current?.mode ?? 'normal') !== 'planning') {
-        return toolError('plan_bash is only allowed while in planning mode.')
-      }
-
-      const res = await ctx.host.execEnv(
-        { command, conversationId, timeoutMs },
-        { ...(context.signal !== undefined ? { signal: context.signal } : {}) },
-      )
-      const redactedOutput = ctx.host.redact(res.output)
-      return {
-        output: redactedOutput,
-        structuredOutput: {
-          ok: res.ok,
-          exitCode: res.exitCode,
-          timedOut: res.timedOut,
-          output: redactedOutput,
-        },
-        isError: !res.ok,
-      }
-    },
-  })
-}
-
 export function registerPlanTools(
   ctx: HelmxPluginContext,
   state: PlanStateManager,
@@ -924,5 +831,4 @@ export function registerPlanTools(
 ): void {
   registerPlanSaveTool(ctx, state)
   registerPlanProposeTool(ctx, state, getExecutionModel)
-  registerPlanBashTool(ctx, state)
 }

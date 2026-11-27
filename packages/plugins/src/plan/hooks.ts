@@ -10,7 +10,6 @@ import {
 import {
   PLAN_MODE_SECTION_ID,
   PLAN_MODE_TOOL_WHITELIST,
-  PLAN_TOOL_BASH,
   PLAN_TOOL_PROPOSE,
   PLAN_TOOL_SAVE,
   hasPlanModeInputMeta,
@@ -21,8 +20,8 @@ import type { PlanStateManager } from './state.js'
 
 export const PLAN_MODE_SYSTEM_SECTION = [
   '<plan_mode>',
-  'You are currently in READ-ONLY Plan Mode.',
-  '1. Research only: use `read`, `read_artifact`, `load_skill`, and `plan_bash` strictly for read-only inspection (`plan_bash` rejects mutating shell commands and file output redirections). Never edit files, run side-effecting installs/builds, create commits, or mutate external state.',
+  'You are currently in READ-ONLY Plan Mode. File-editing and delegation tools (`write`, `edit`, `register_artifact`, `subagent`, `SubagentWorkflow`, `swarm_*`, etc.) are disabled until the user approves your plan.',
+  '1. Research only: use `read`, `read_artifact`, and `load_skill` to inspect files and artifacts. Use `bash` strictly for read-only observation (code search, builds, typecheck, tests, `git status`/`log`/`diff`) and `run_action` strictly for read-only queries (`list`, `describe`, and read-only status/inspection actions). Never edit files, redirect output into workspace files, create commits, or mutate external/host state.',
   '2. Clarify ambiguity cleanly: when requirements, scope, or architecture tradeoffs have genuine ambiguity, call `ask_user` with 1–4 concise structured questions instead of asking long walls of open-ended questions. For minor details, ask concisely in your text reply.',
   '3. Draft a self-contained plan via `plan_save({ title, markdown })`: if the user approves with a fresh-context handoff, ALL prior exploration messages and file reads will be cleared and the executor will ONLY see this Markdown. Therefore include exact file paths, key symbol/API names, concrete step-by-step changes, discovered edge cases/constraints, and exact verification commands so an executor with zero prior context can implement immediately without re-researching the repository.',
   '4. Propose via `plan_propose({ summary })`: when ready, call `plan_propose` with a concise plain-text summary (1–300 chars, no fenced code blocks). Workspace mutation tools remain disabled until the user approves the proposal.',
@@ -32,7 +31,6 @@ export const PLAN_MODE_SYSTEM_SECTION = [
 const PLAN_ONLY_TOOL_NAMES: ReadonlySet<string> = new Set([
   PLAN_TOOL_SAVE,
   PLAN_TOOL_PROPOSE,
-  PLAN_TOOL_BASH,
 ])
 
 export function registerPlanHooks(ctx: HelmxPluginContext, state: PlanStateManager): void {
