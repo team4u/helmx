@@ -735,6 +735,8 @@ describe("tiers-client-interactions", () => {
     assert.match(cssText as string, /\.tiers-borrow-pill/)
     assert.match(cssText as string, /\.tiers-orch-status-trigger/)
     assert.doesNotMatch(cssText as string, /\.tiers-orch-status-icon/)
+    assert.doesNotMatch(cssText as string, /\.tiers-orch-status-steps/)
+    assert.doesNotMatch(cssText as string, /\.tiers-orch-status-trigger--execution/)
     assert.match(cssText as string, /\.tiers-orch-popover/)
     assert.match(cssText as string, /\.tiers-trace-row/)
 
@@ -1789,7 +1791,6 @@ describe("tiers-client-interactions", () => {
     const {
       parseTierOrchestratorSessionView,
       parseOrchestratorTransitionMeta,
-      formatOrchestratorStepLabel,
       formatOrchestratorActiveModelShort,
     } = await import('../../plugins/src/tiers/client/orchestrator-models.ts')
     assert.equal(parseTierOrchestratorSessionView(null), null)
@@ -1807,9 +1808,6 @@ describe("tiers-client-interactions", () => {
       })?.maxExecutionSteps,
       0,
     )
-    assert.equal(formatOrchestratorStepLabel('planning', 3, 10), '')
-    assert.equal(formatOrchestratorStepLabel('execution', 3, 10), '3/10')
-    assert.equal(formatOrchestratorStepLabel('execution', 3, 0), '3')
     assert.equal(formatOrchestratorActiveModelShort('faux/workhorse'), 'workhorse')
     assert.equal(formatOrchestratorActiveModelShort('tier/claude-auto'), 'tier/claude-auto')
 
@@ -1937,6 +1935,11 @@ describe("tiers-client-interactions", () => {
       const composerHost = document.createElement('div')
       document.body.appendChild(composerHost)
       const composerRoot = createRoot(composerHost)
+      const flushUi = async () => {
+        await act(async () => {
+          await new Promise((resolve) => setTimeout(resolve, 15))
+        })
+      }
       const renderComposer = async (convToRender: ConversationSummary, harness = execHarness) => {
         const storeForRender = makeTestStore({
           conversations: [convToRender],
@@ -1970,9 +1973,17 @@ describe("tiers-client-interactions", () => {
         const trigger = composerHost.querySelector<HTMLButtonElement>('.composer-status-row .tiers-orch-status-trigger')
         assert.ok(trigger !== null, 'status row renders OrchestratorStatusBadge trigger')
         assert.ok(trigger.querySelector('svg') === null, 'status-row trigger stays pure quiet text without pill icon')
+        assert.ok(
+          trigger.classList.contains('tiers-orch-status-trigger--execution') === false,
+          'execution phase stays neutral gray without special execution modifier class',
+        )
+        assert.ok(
+          trigger.querySelector('.tiers-orch-status-steps') === null,
+          'status-row trigger omits execution step counter',
+        )
         assert.equal(trigger.getAttribute('data-tiers-orchestrator-phase'), 'execution')
         assert.equal(trigger.getAttribute('data-tiers-orchestrator-tier'), 'claude-auto')
-        assert.match(trigger.textContent ?? '', /Exec.*3\/10.*workhorse/)
+        assert.match(trigger.textContent ?? '', /^Exec·workhorse$/)
         assert.equal(EMOJI_RE.test(trigger.textContent ?? ''), false)
 
         // Idle orchestrator conversation still exposes tiers:one-turn mode inside ModelPicker
@@ -1981,17 +1992,22 @@ describe("tiers-client-interactions", () => {
         await act(async () => {
           modelBtn.click()
         })
+        await flushUi()
         assert.ok(document.body.querySelector('.composer-model-mode-bar') !== null, 'idle orchestrator still exposes tiers:one-turn mode tab')
         await act(async () => {
-          modelBtn.click()
+          document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
         })
+        await flushUi()
+        assert.ok(document.body.querySelector('.composer-model-popover') === null)
 
         // Click trigger -> opens Radix Popover with full tier & Planner/Executor details
         await act(async () => {
           trigger.click()
         })
+        await flushUi()
         const popover = document.body.querySelector<HTMLElement>('.tiers-orch-popover')
         assert.ok(popover !== null, 'clicking status badge opens detail popover')
+        assert.ok(popover.querySelector('.badge-warn') === null, 'detail popover uses neutral badges without yellow warn highlight')
         const popText = popover.textContent ?? ''
         assert.match(popText, /tier\/claude-auto/)
         assert.match(popText, /Execution/)
@@ -2007,6 +2023,7 @@ describe("tiers-client-interactions", () => {
         await act(async () => {
           closeBtn.click()
         })
+        await flushUi()
         assert.ok(document.body.querySelector('.tiers-orch-popover') === null)
 
         // Busy orchestrator conversation: suppresses tiers:one-turn mode while keeping status badge visible
@@ -2020,10 +2037,12 @@ describe("tiers-client-interactions", () => {
         await act(async () => {
           composerHost.querySelector<HTMLButtonElement>('button.composer-model-button')?.click()
         })
+        await flushUi()
         assert.ok(document.body.querySelector('.composer-model-mode-bar') === null, 'busy orchestrator suppresses tiers:one-turn mode')
         await act(async () => {
-          composerHost.querySelector<HTMLButtonElement>('button.composer-model-button')?.click()
+          document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
         })
+        await flushUi()
         assert.ok(
           composerHost.querySelector('.composer-status-row .tiers-orch-status-trigger') !== null,
           'status row badge stays visible while working',
@@ -2167,7 +2186,8 @@ describe("tiers-client-interactions", () => {
       try {
         const trigger = zhExecMount.host.querySelector<HTMLButtonElement>('.tiers-orch-status-trigger')
         assert.ok(trigger !== null)
-        assert.match(trigger.textContent ?? '', /执行4·workhorse/)
+        assert.ok(trigger.querySelector('.tiers-orch-status-steps') === null)
+        assert.match(trigger.textContent ?? '', /^执行·workhorse$/)
         await act(async () => {
           trigger.click()
         })

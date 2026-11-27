@@ -268,11 +268,11 @@ test('展示模型：实时/工具暂停/终态口径区分与诚实标注；无
   assert.equal(tokenSpeedLabelOf({ ...base, phase: 'tools' }), null)
   assert.equal(tokenSpeedLabelOf({ ...base, phase: 'decoding', tps: 0 }), null)
   assert.equal(tokenSpeedLabelOf({ ...base, phase: 'settled', tps: Number.NaN }), null)
-  // 正的低速率四舍五入后钳到 1，绝不渲染 "0 tok/s"（0 = 无可测量速率，应返回 null）。
-  assert.equal(tokenSpeedLabelOf({ ...base, phase: 'decoding', tps: 0.3 })!.text, '1 tok/s')
+  // 正的低速率四舍五入后钳到 1，绝不渲染 "0 t/s"（0 = 无可测量速率，应返回 null）。
+  assert.equal(tokenSpeedLabelOf({ ...base, phase: 'decoding', tps: 0.3 })!.text, '1 t/s')
   // 工具暂停期保留最近有效速率，并在 tooltip 如实标注暂停计时。
   const tools = tokenSpeedLabelOf({ ...base, phase: 'tools', tps: 52.35, ttftMs: 640 })!
-  assert.equal(tools.text, '52 tok/s')
+  assert.equal(tools.text, '52 t/s')
   assert.match(tools.title, /Timer paused during tools · latest decode 52 tok\/s/)
   assert.match(tools.title, /tool execution time is not counted as decode time/)
   assert.match(tools.title, /provider usage \+ char estimate mixed/)
@@ -280,7 +280,7 @@ test('展示模型：实时/工具暂停/终态口径区分与诚实标注；无
   // 实时：滑动窗口口径 + 口径标注 + TTFT 首次观测声明；徽标为四舍五入整数（无 ≈/小数），
   // 近似性披露由 tooltip 文本承担。
   const live = tokenSpeedLabelOf({ ...base, phase: 'decoding', tps: 52.35, ttftMs: 640 })!
-  assert.equal(live.text, '52 tok/s')
+  assert.equal(live.text, '52 t/s')
   assert.match(live.title, /Live decode 52 tok\/s/)
   assert.match(live.title, /1\.0s sliding-window streaming rate/)
   assert.match(live.title, /provider usage \+ char estimate mixed/)
@@ -289,7 +289,10 @@ test('展示模型：实时/工具暂停/终态口径区分与诚实标注；无
   assert.match(live.title, /TTFT 640ms \(first observed by the plugin, not the exact request start\)/)
   // 终态：对账口径（不再提滑动窗口）；时间仍为帧观测近似。
   const settled = tokenSpeedLabelOf({ ...base, phase: 'settled', tps: 125 })!
-  assert.equal(settled.text, '125 tok/s')
+  assert.equal(settled.text, '125 t/s')
+  const fourDigit = tokenSpeedLabelOf({ ...base, phase: 'decoding', tps: 1024 })!
+  assert.equal(fourDigit.text, '1024 t/s')
+  assert.equal(fourDigit.text.length, 8)
   assert.match(settled.title, /Last turn decode 125 tok\/s \(settled/)
   assert.match(settled.title, /observed net decode time/)
   assert.doesNotMatch(settled.title, /sliding-window/)

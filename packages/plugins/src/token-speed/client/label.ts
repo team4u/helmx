@@ -24,7 +24,7 @@ export function tokenSpeedLabelOf(
     typeof status.ttftMs === 'number' && Number.isFinite(status.ttftMs) && status.ttftMs >= 0
       ? loc(`; TTFT ${Math.round(status.ttftMs)}ms (first observed by the plugin, not the exact request start)`, `；首字延迟 ${Math.round(status.ttftMs)}ms（起点为插件首次观测，非请求精确起点）`, locale)
       : ''
-  const text = `${tpsText} tok/s`
+  const text = `${tpsText} t/s`
   if (status.phase === 'settled') {
     return {
       text,

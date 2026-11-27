@@ -34,7 +34,6 @@ import { ORCHESTRATOR_DEFAULT_MAX_STEPS } from './models.ts'
 import {
   TIERS_ORCHESTRATOR_SESSION_DOC,
   formatOrchestratorActiveModelShort,
-  formatOrchestratorStepLabel,
   hasOrchestratorTierBound,
   parseTierOrchestratorSessionView,
 } from './orchestrator-models.ts'
@@ -87,7 +86,6 @@ function OrchestratorStatusBadgeConversation({
   const maxSteps = orchView?.maxExecutionSteps ?? catalogTier?.maxExecutionSteps ?? ORCHESTRATOR_DEFAULT_MAX_STEPS
 
   const phaseLabel = phase === 'execution' ? t(C.orchestratorStatusExec) : t(C.orchestratorStatusPlan)
-  const stepLabel = formatOrchestratorStepLabel(phase, stepCount, maxSteps)
   const modelShort = formatOrchestratorActiveModelShort(activeModel)
   const statusTitle = orchestratorStatusTitle(
     tierId,
@@ -104,16 +102,13 @@ function OrchestratorStatusBadgeConversation({
       <PopoverTrigger asChild>
         <button
           type="button"
-          className={`tiers-orch-status-trigger tiers-orch-status-trigger--${phase}`}
+          className="tiers-orch-status-trigger"
           data-tiers-orchestrator-phase={phase}
           data-tiers-orchestrator-tier={tierId}
           aria-label={statusTitle}
           title={statusTitle}
         >
           <span className="tiers-orch-status-phase">{phaseLabel}</span>
-          {stepLabel !== '' ? (
-            <span className="tiers-orch-status-steps mono tabular-nums">{stepLabel}</span>
-          ) : null}
           {modelShort !== '' ? (
             <>
               <span className="tiers-orch-status-sep" aria-hidden="true">·</span>
@@ -133,7 +128,7 @@ function OrchestratorStatusBadgeConversation({
         <div className="tiers-orch-popover-header">
           <div className="tiers-orch-popover-title-wrap">
             <span className="tiers-orch-popover-title mono">{`tier/${tierId}`}</span>
-            <Badge tone={phase === 'execution' ? 'warn' : 'accent'}>
+            <Badge tone="neutral">
               {phase === 'execution' ? t(C.orchestratorPhaseExecution) : t(C.orchestratorPhasePlanning)}
             </Badge>
           </div>
@@ -151,7 +146,7 @@ function OrchestratorStatusBadgeConversation({
             <div className="tiers-orch-popover-row-head">
               <span className="tiers-orch-popover-label">{t(C.orchestratorPopoverPlanner)}</span>
               {phase === 'planning' ? (
-                <Badge tone="accent">{t(C.orchestratorPopoverActiveBadge)}</Badge>
+                <Badge tone="neutral">{t(C.orchestratorPopoverActiveBadge)}</Badge>
               ) : null}
             </div>
             <span className="tiers-orch-popover-model mono">{plannerModel || '—'}</span>
@@ -160,7 +155,7 @@ function OrchestratorStatusBadgeConversation({
             <div className="tiers-orch-popover-row-head">
               <span className="tiers-orch-popover-label">{t(C.orchestratorPopoverExecutor)}</span>
               {phase === 'execution' ? (
-                <Badge tone="warn">{t(C.orchestratorPopoverActiveBadge)}</Badge>
+                <Badge tone="neutral">{t(C.orchestratorPopoverActiveBadge)}</Badge>
               ) : null}
             </div>
             <span className="tiers-orch-popover-model mono">{executorModel || '—'}</span>

@@ -1,10 +1,14 @@
 /* builtin:token-speed composer status badge: read-only status text (not an action item);
- * colors inherit the host status-area variables, no generic component styles duplicated. */
+ * colors inherit the host status-area variables, no generic component styles duplicated.
+ * Reserves 8ch (fits up to "9999 t/s" in monospace tabular-nums) so fluctuating digit
+ * counts never shift or wrap neighboring status-row items. */
 .token-speed-status {
+  display: inline-block;
+  min-inline-size: 8ch;
   flex-shrink: 0;
   color: var(--fg-muted);
   font-size: 11.5px;
-  line-height: normal;
+  line-height: 1.4;
   user-select: none;
   white-space: nowrap;
 }

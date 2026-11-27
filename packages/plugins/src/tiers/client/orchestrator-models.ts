@@ -126,15 +126,6 @@ export function parseOrchestratorTransitionMeta(raw: unknown): OrchestratorTrans
   }
 }
 
-export function formatOrchestratorStepLabel(
-  phase: TierOrchestratorPhase,
-  executionStepCount: number,
-  maxExecutionSteps: number,
-): string {
-  if (phase !== 'execution') return ''
-  return maxExecutionSteps > 0 ? `${executionStepCount}/${maxExecutionSteps}` : String(executionStepCount)
-}
-
 export function formatOrchestratorActiveModelShort(activeModel: string): string {
   return formatModelShortName(activeModel) || activeModel.trim()
 }

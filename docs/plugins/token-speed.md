@@ -10,7 +10,7 @@
 
 ### 展示与数据流
 
-经 `ctx.ui.slot` 注入 `COMPOSER_STATUS_SLOT`（宿主输入区状态行），组件 `TokenSpeedStatusBadge` 经专用 SSE 订阅公共会话文档 `speed`（`ctx.sessionDoc`，写入按 120ms 节流并在窗口尾部延迟补写末帧；首测 / 阶段变化 / 速率首现 / 终态立即写）。徽标文本为四舍五入的整数（无 `≈` 前缀、无小数）——一切速率都是节流帧观测估算，近似性披露由 tooltip 明示口径。
+经 `ctx.ui.slot` 注入 `COMPOSER_STATUS_SLOT`（宿主输入区状态行），组件 `TokenSpeedStatusBadge` 经专用 SSE 订阅公共会话文档 `speed`（`ctx.sessionDoc`，写入按 120ms 节流并在窗口尾部延迟补写末帧；首测 / 阶段变化 / 速率首现 / 终态立即写）。外层徽标以紧凑的四舍五入整数 `<N> t/s` 呈现（无 `≈` 前缀、无小数）并按等宽 `8ch` 预留最小宽度，避免流式速率位数变化导致布局抖动或将后续状态项挤换行；tooltip 内仍保留完整 `tok/s` 节流帧观测近似性口径说明。
 
 ```
 内核 conversation.live 帧（generation 事实）→ 状态机（tracker.ts）

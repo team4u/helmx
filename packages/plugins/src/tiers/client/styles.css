@@ -937,15 +937,8 @@
 }
 
 .tiers-orch-status-phase,
-.tiers-orch-status-steps,
 .tiers-orch-status-sep {
   flex-shrink: 0;
-}
-
-.tiers-orch-status-trigger--execution .tiers-orch-status-phase,
-.tiers-orch-status-trigger--execution .tiers-orch-status-steps {
-  color: var(--warn);
-  font-weight: 500;
 }
 
 .tiers-orch-status-sep {
