@@ -278,7 +278,7 @@ export const TIER_ORCHESTRATOR_SESSION_VIEW_SCHEMA: JsonSchema = {
     plannerModel: { type: 'string', minLength: 1 },
     executorModel: { type: 'string', minLength: 1 },
     executionStepCount: { type: 'integer', minimum: 0 },
-    maxExecutionSteps: { type: 'integer', minimum: 1 },
+    maxExecutionSteps: { type: 'integer', minimum: 0 },
     updatedAt: { type: 'number' },
   },
   required: [

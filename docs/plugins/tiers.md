@@ -32,7 +32,7 @@
 3. **双相自动规划与执行编排（`kind: 'orchestrator'`）**
    - **双阶段闭环**：
      - **规划阶段（Planning，默认初始阶段）**：运行 `Planner` 模型，仅放行只读工具（`read`、`read_artifact`、`load_skill`、`ask_user`、`orch_bash`、`exit_plan_mode`），其中 `orch_bash` 复用共享引号感知只读 shell 校验器拒绝文件重定向与写命令。若问题只需直接讨论或调研，模型可直接文本作答，零切换完成回合；若需要修改工作区，模型调用 `exit_plan_mode({ plan })` 切至 `Executor` 模型并进入执行阶段（不清除同线程上下文）。
-     - **执行阶段（Execution）**：放行工作区写/终端/子代理等能力（剥离规划专属工具与 `switch_model`），并按 `before_turn` 记录执行步数 `executionStepCount`（上限 `maxExecutionSteps` 1–50，默认 `10`）。当达到上限时工具收拢为仅 `hand_back_to_planner` 并注入静态上限提示，强制交回 `Planner` 复盘决策；`Executor` 也可随时主动调用 `hand_back_to_planner({ reason, summary })` 请求重规划或架构仲裁。
+     - **执行阶段（Execution）**：放行工作区写/终端/子代理等能力（剥离规划专属工具与 `switch_model`），并按 `before_turn` 记录执行步数 `executionStepCount`（上限 `maxExecutionSteps` 0–100，默认 `30`，设 `0` 表示不限步数、不触发强制交回）。当达到正数上限时工具收拢为仅 `hand_back_to_planner` 并注入静态上限提示，强制交回 `Planner` 复盘决策；`Executor` 也可随时主动调用 `hand_back_to_planner({ reason, summary })` 请求重规划或架构仲裁。
    - **Prompt Cache 稳定**：注入的 `tiers.orchestrator.plan`、`tiers.orchestrator.execute`、`tiers.orchestrator.step_limit` 均为纯静态常量文本，绝不拼入动态步数或临时计划文本，最大限度保留同线程前缀 KV Cache 命中率。
    - **与 `/plan`、排队的 `followUp` / `steer` 共存**：`/plan` 模式严格优先生效（`plan.mode` 激活时剥离编排工具与提示段落）；`execution` 期间允许人工 `steer` 保持当前执行态；当执行态自然完成并紧随排队 `followUp` 时，`afterResponse` 会在 `followUp` 启动前将运行模型重置回 `Planner`，并按 `runKey` 变更回到 `planning` 阶段（即便 `Planner === Executor` 仅思考强度不同也可正确同步）。
    - **状态持久化**：持久化于 `ctx.kv('orchestrators')`，按会话投影至只读 `ctx.sessionDoc('orchestrator', null, { public: true, durable: false })`；会话退出编排档位、`conversation.deleted`、`pi.reset`（`/clear`）与异常停靠后均自动复位或清理。
@@ -82,7 +82,7 @@
 
 ## Web 界面
 
-- **模型档位主视图**（`#/s/builtin:tiers/main`）：管理激活档位（支持在单模型与双相编排 `Planner -> Executor` 模式间逐行切换、分别绑定规划/执行模型及思考强度、设置最大执行步数 1–50；支持一键填充推荐 5 档草稿骨架）、查看实时可用性状态、保存与一键切换自定义模板。
+- **模型档位主视图**（`#/s/builtin:tiers/main`）：管理激活档位（支持在单模型与双相编排 `Planner -> Executor` 模式间逐行切换、分别绑定规划/执行模型及思考强度、设置最大执行步数 0–100，默认 30，0 表示不限步数；支持一键填充推荐 5 档草稿骨架）、查看实时可用性状态、保存与一键切换自定义模板。
 - **插件详情设置面板**（`settingsPanel`）：展示当前激活档位数、模板数与生效模板名，提供快捷入口跳转主视图。
 - **Composer 集成**（`BorrowToolbarPill` + `useComposerModelPickerMode`）：
   - 在配置了双相编排档位的顶层人类会话中，自动禁用「仅下一轮」借用标签并渲染只读阶段胶囊（展示当前处于规划中/执行中、实时底层模型名及执行步数 `step/max`）；

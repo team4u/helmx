@@ -28,6 +28,7 @@ import {
   type LocalizedText,
 } from '@helmx/plugin-client'
 import {
+  ORCHESTRATOR_DEFAULT_MAX_STEPS, ORCHESTRATOR_MAX_STEPS_LIMIT,
   TIERS_STATE_DOC, buildStarterDraftRows, isDraftDirty, parseTiersStateDoc,
   resolveTierRowStatus, tiersRecordToDraftRows, validateDraftRows, type TierDraftRow, type TierTemplateView,
 } from './models.ts'
@@ -152,7 +153,7 @@ export function TiersManagerScreen(_props: ScreenProps): ReactNode {
                     thinkingLevel: '',
                     executorModel: '',
                     executorThinkingLevel: '',
-                    maxExecutionSteps: '10',
+                    maxExecutionSteps: String(ORCHESTRATOR_DEFAULT_MAX_STEPS),
                     description: '',
                   },
                 ])
@@ -278,8 +279,8 @@ export function TiersManagerScreen(_props: ScreenProps): ReactNode {
                         <Input
                           type="number"
                           mono
-                          min={1}
-                          max={50}
+                          min={0}
+                          max={ORCHESTRATOR_MAX_STEPS_LIMIT}
                           value={row.maxExecutionSteps}
                           disabled={busy}
                           placeholder={t(C.fieldMaxStepsPlaceholder)}

@@ -83,15 +83,15 @@ export const TIERS_COPY = {
   tierKindAria: { en: 'Tier mode', 'zh-CN': '档位模式' },
   fieldPlannerModel: { en: 'Planner model & thinking level', 'zh-CN': '规划模型（Planner）与思考档位' },
   fieldExecutorModel: { en: 'Executor model & thinking level', 'zh-CN': '执行模型（Executor）与思考档位' },
-  fieldMaxSteps: { en: 'Max execution steps', 'zh-CN': '最大执行步数' },
-  fieldMaxStepsPlaceholder: { en: '10', 'zh-CN': '10' },
+  fieldMaxSteps: { en: 'Max execution steps (0 = unlimited)', 'zh-CN': '最大执行步数（0 = 不限）' },
+  fieldMaxStepsPlaceholder: { en: '30', 'zh-CN': '30' },
   errExecutorRequired: {
     en: 'Dual-phase tiers must bind an Executor model before saving.',
     'zh-CN': '双相编排档位保存前必须绑定执行模型（Executor）。',
   },
   errMaxStepsInvalid: {
-    en: 'Max execution steps must be an integer between 1 and 50.',
-    'zh-CN': '最大执行步数必须为 1 到 50 之间的整数。',
+    en: 'Max execution steps must be an integer between 0 and 100 (0 = unlimited).',
+    'zh-CN': '最大执行步数必须为 0 到 100 之间的整数（0 表示不限）。',
   },
   orchestratorPillPlanning: { en: 'Planning:', 'zh-CN': '规划中:' },
   orchestratorPillExecuting: { en: 'Executing:', 'zh-CN': '执行中:' },
@@ -154,10 +154,20 @@ export const orchestratorPillTitle = (
   locale: HelmxLocale,
 ): string => {
   if (locale === 'zh-CN') {
-    const phaseLabel = phase === 'execution' ? `执行阶段（${steps}/${maxSteps} 步）` : '规划阶段'
+    const phaseLabel =
+      phase === 'execution'
+        ? maxSteps > 0
+          ? `执行阶段（${steps}/${maxSteps} 步）`
+          : `执行阶段（第 ${steps} 步 · 不限步数）`
+        : '规划阶段'
     return `双相编排 tier/${tierId} · ${phaseLabel}（Planner: ${plannerModel} / Executor: ${executorModel}）`
   }
-  const phaseLabel = phase === 'execution' ? `Execution (${steps}/${maxSteps} steps)` : 'Planning'
+  const phaseLabel =
+    phase === 'execution'
+      ? maxSteps > 0
+        ? `Execution (${steps}/${maxSteps} steps)`
+        : `Execution (step ${steps} · unlimited)`
+      : 'Planning'
   return `Dual-phase tier/${tierId} · ${phaseLabel} (Planner: ${plannerModel} / Executor: ${executorModel})`
 }
 

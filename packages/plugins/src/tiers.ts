@@ -131,7 +131,7 @@ const TIER_SPEC_SCHEMA = {
     thinkingLevel: { type: 'string' },
     executorModel: { type: 'string', minLength: 1 },
     executorThinkingLevel: { type: 'string' },
-    maxExecutionSteps: { type: 'integer', minimum: 1, maximum: ORCHESTRATOR_TIER_MAX_STEPS_LIMIT },
+    maxExecutionSteps: { type: 'integer', minimum: 0, maximum: ORCHESTRATOR_TIER_MAX_STEPS_LIMIT },
     description: { type: 'string', maxLength: MODEL_TIER_DESCRIPTION_MAX_LENGTH },
   },
 } as const
@@ -486,7 +486,7 @@ export function createTiersPlugin(): PluginDefinition {
             thinkingLevel: { type: 'string', enum: ['', ...TIER_THINKING_LEVELS] },
             executorModel: { type: 'string', minLength: 1 },
             executorThinkingLevel: { type: 'string', enum: ['', ...TIER_THINKING_LEVELS] },
-            maxExecutionSteps: { type: 'integer', minimum: 1, maximum: ORCHESTRATOR_TIER_MAX_STEPS_LIMIT },
+            maxExecutionSteps: { type: 'integer', minimum: 0, maximum: ORCHESTRATOR_TIER_MAX_STEPS_LIMIT },
             description: { type: 'string', maxLength: MODEL_TIER_DESCRIPTION_MAX_LENGTH },
           },
         },

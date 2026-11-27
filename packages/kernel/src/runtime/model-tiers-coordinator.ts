@@ -184,7 +184,7 @@ export class ModelTiersCoordinator {
           const maxSteps =
             typeof spec.maxExecutionSteps === 'number' &&
             Number.isInteger(spec.maxExecutionSteps) &&
-            spec.maxExecutionSteps >= 1 &&
+            spec.maxExecutionSteps >= 0 &&
             spec.maxExecutionSteps <= ORCHESTRATOR_TIER_MAX_STEPS_LIMIT
               ? spec.maxExecutionSteps
               : ORCHESTRATOR_TIER_DEFAULT_MAX_STEPS

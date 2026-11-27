@@ -68,7 +68,7 @@ export function parseTierOrchestratorSessionView(raw: unknown): TierOrchestrator
     executionStepCount < 0 ||
     typeof maxExecutionSteps !== 'number' ||
     !Number.isInteger(maxExecutionSteps) ||
-    maxExecutionSteps < 1 ||
+    maxExecutionSteps < 0 ||
     typeof updatedAt !== 'number' ||
     !Number.isFinite(updatedAt)
   ) {
@@ -134,7 +134,9 @@ export function formatOrchestratorPillModelLabel(
 ): string {
   const short = formatModelShortName(activeModel) || activeModel.trim()
   if (phase === 'execution') {
-    return `${short} (${executionStepCount}/${maxExecutionSteps})`
+    return maxExecutionSteps > 0
+      ? `${short} (${executionStepCount}/${maxExecutionSteps})`
+      : `${short} (${executionStepCount})`
   }
   return short
 }

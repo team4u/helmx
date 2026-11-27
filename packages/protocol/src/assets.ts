@@ -104,9 +104,9 @@ export const MODEL_TIER_PREFIX = 'tier' as const
 /** Model tier flavor: single-model alias or human-only dual-phase orchestrator (`planner <-> executor`). */
 export type ModelTierKind = 'single' | 'orchestrator'
 
-/** Default and maximum execution steps before an orchestrator tier requires planner review. */
-export const ORCHESTRATOR_TIER_DEFAULT_MAX_STEPS = 10 as const
-export const ORCHESTRATOR_TIER_MAX_STEPS_LIMIT = 50 as const
+/** Default and maximum execution steps before an orchestrator tier requires planner review (`0` = unlimited). */
+export const ORCHESTRATOR_TIER_DEFAULT_MAX_STEPS = 30 as const
+export const ORCHESTRATOR_TIER_MAX_STEPS_LIMIT = 100 as const
 
 /** Allowed model tier identifier pattern (lowercase slug, 1..63 chars). */
 const MODEL_TIER_ID_PATTERN = /^[a-z0-9][a-z0-9_-]{0,62}$/
@@ -147,7 +147,7 @@ export interface ModelTierSpec {
   executorModel?: string
   /** Optional executor thinking level (allowed only when `kind === 'orchestrator'`). */
   executorThinkingLevel?: string
-  /** Optional max execution steps in a single execution phase before checkpointing back to planner (`1..50`, default `10`; allowed only when `kind === 'orchestrator'`). */
+  /** Optional max execution steps in a single execution phase before checkpointing back to planner (`0..100`, `0` = unlimited, default `30`; allowed only when `kind === 'orchestrator'`). */
   maxExecutionSteps?: number
   /** Optional concise routing description for humans and agents (<= 240 chars). */
   description?: string
