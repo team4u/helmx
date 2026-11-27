@@ -188,11 +188,13 @@ describe("memory-client-interactions", () => {
       await save(ui.host)
       await ui.render('b')
       assert.match(ui.host.textContent!, /Loading memory/)
+      assert.ok(ui.host.querySelector('.loading-state[role="status"]') !== null, '加载态复用 SDK LoadingState 原语')
       await act(async () => { refreshA.resolve(memory('a', 'A 保存结果')) })
       assert.match(ui.host.textContent!, /Loading memory/, 'A finally 不得清掉 B busy')
       assert.ok(ui.host.querySelector('textarea') === null)
       await act(async () => { loadB.resolve(memory('b', 'B 结果')) })
       assert.equal(editor(ui.host).value, 'B 结果')
+      assert.equal(ui.host.querySelectorAll('.helmx-card.helmx-card-subtle').length, 2, 'Memory 与 Dream 分区均复用 Card(variant="subtle")')
     } finally { ui.unmount() }
   })
 

@@ -230,10 +230,13 @@ describe("magpie-client-interactions", () => {
     }
   })
 
-  test('状态概览：KV 网关地址 / 可达 / 模型数 / 自动刷新间隔 / 最近刷新（无路由组项）', { timeout: 60_000 }, async () => {
+  test('状态概览：KV 网关地址 / 可达 / 模型数 / 自动刷新间隔 / 最近刷新（无路由组项、无多余 screen-header）', { timeout: 60_000 }, async () => {
     const spy = makeSpyCtx()
     const { host, unmount } = await mount(spy)
     try {
+      assert.ok(host.querySelector('.screen-container') === null, '窄设置面板不得重复嵌套 .screen-container')
+      assert.ok(host.querySelector('.screen-header') === null, '窄设置面板不得重复渲染大号 .screen-header')
+      assert.ok(host.querySelector('.screen-section .kv-grid') !== null, '状态概览复用 ScreenSection + KvGrid')
       assert.match(host.textContent ?? '', /Magpie Gateway/, '标题')
       assert.match(host.textContent ?? '', /Magpie · 12 模型/, 'summaryText')
       assert.match(host.textContent ?? '', /http:\/\/127\.0\.0\.1:3425/, '网关地址')
@@ -249,10 +252,14 @@ describe("magpie-client-interactions", () => {
     }
   })
 
-  test('诊断与配额表渲染（窗口 / 剩余 / 重置，不含路由轨迹区）', { timeout: 60_000 }, async () => {
+  test('诊断与配额紧凑列表渲染（窗口 / 剩余 / 重置，无窄屏宽表与路由轨迹区）', { timeout: 60_000 }, async () => {
     const spy = makeSpyCtx()
     const { host, unmount } = await mount(spy)
     try {
+      assert.ok(host.querySelector('table') === null, '窄设置面板不得使用原始 HTML table 或 >3 列宽表')
+      const quotaList = host.querySelector('.helmx-list.helmx-list-compact[aria-label="Quotas"]')
+      assert.ok(quotaList !== null, '配额列表使用 compact List 原语')
+      assert.equal(quotaList.querySelectorAll('[role="listitem"]').length, 2, '配额列表渲染 2 条 ListRow')
       assert.match(host.textContent ?? '', /Diagnostics/, '诊断区块标题')
       assert.match(host.textContent ?? '', /No diagnostics/, '空诊断如实展示')
       assert.match(host.textContent ?? '', /Quotas/, '配额区块标题')
@@ -283,6 +290,9 @@ describe("magpie-client-interactions", () => {
       const spy = makeSpyCtx()
       const { host, unmount } = await mount(spy)
       try {
+        assert.ok(host.querySelector('table') === null, '诊断列表复用 compact List 原语而非原始 table')
+        const diagList = host.querySelector('.helmx-list.helmx-list-compact[aria-label="Diagnostics"]')
+        assert.ok(diagList !== null && diagList.querySelectorAll('[role="listitem"]').length === 1)
         assert.match(host.textContent ?? '', /Models \(cached\)/, '不可达时标注缓存计数')
         assert.match(host.textContent ?? '', /connect ECONNREFUSED/, 'lastError 如实展示')
         assert.match(host.textContent ?? '', /配额不可用：timeout/, '诊断如实展示')

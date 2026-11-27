@@ -49,7 +49,7 @@ function LazyMermaidPreviewModal({ code, svg, onClose }: { code: string; svg: st
         <div className="mermaid-error-body">
           <span className="selectable">{loadError}</span>
           <div className="mermaid-error-actions">
-            <Button size="sm" icon="refresh-cw" onClick={() => setAttempt((n) => n + 1)}>
+            <Button variant="secondary" size="sm" icon="refresh-cw" onClick={() => setAttempt((n) => n + 1)}>
               {t(C.retry)}
             </Button>
           </div>
@@ -131,7 +131,7 @@ export function MermaidCodeBlock({ code }: MarkdownCodeBlockProps): ReactNode {
             <div className="mermaid-error-body">
               <span className="selectable">{error}</span>
               <div className="mermaid-error-actions">
-                <Button size="sm" icon="refresh-cw" onClick={() => { setError(null); setSvg(null); setRetryCount((n) => n + 1) }}>
+                <Button variant="secondary" size="sm" icon="refresh-cw" onClick={() => { setError(null); setSvg(null); setRetryCount((n) => n + 1) }}>
                   {t(C.retry)}
                 </Button>
               </div>

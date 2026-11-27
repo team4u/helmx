@@ -35,7 +35,7 @@ export function SwarmWorkbenchPanel(props?: Partial<WorkbenchPanelProps>): React
       <div className="sw-panel">
         <Callout tone={s.loadError ? 'err' : 'warn'} title={t(C.PANEL_STATUS_LOAD_FAILED)}>
           {s.loadError ? <p className="sw-panel-error-text">{s.loadError}</p> : null}
-          <Button size="xs" icon="rotate-cw" onClick={s.fallback.reload}>
+          <Button variant="secondary" size="xs" icon="rotate-cw" onClick={s.fallback.reload}>
             {t(C.PANEL_RETRY)}
           </Button>
         </Callout>
@@ -75,13 +75,14 @@ export function SwarmWorkbenchPanel(props?: Partial<WorkbenchPanelProps>): React
           {s.isFallbackData ? (
             <>
               <Badge tone="neutral">{t(C.PANEL_FALLBACK_NOTE)}</Badge>
-              <Button size="xs" icon="rotate-cw" onClick={s.fallback.reload}>
+              <Button variant="secondary" size="xs" icon="rotate-cw" onClick={s.fallback.reload}>
                 {t(C.PANEL_REFRESH)}
               </Button>
             </>
           ) : null}
           {isCoordinatorActive ? (
             <Button
+              variant="secondary"
               size="xs"
               icon="check-circle"
               className="sw-panel-close-btn"

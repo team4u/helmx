@@ -60,7 +60,7 @@ export function SwarmPostPeekPopover(props: SwarmPostPeekPopoverProps): ReactNod
                 {resolveLocalizedText(C.PEEK_LOCATE, locale)}
               </Button>
             ) : null}
-            <IconButton variant="ghost" size="sm" icon="x" className="sw-peek-close-btn" label={resolveLocalizedText(C.PEEK_CLOSE, locale)} onClick={onClose} />
+            <IconButton variant="ghost" size="xs" icon="x" className="sw-peek-close-btn" label={resolveLocalizedText(C.PEEK_CLOSE, locale)} onClick={onClose} />
           </div>
         </div>
 
@@ -76,7 +76,7 @@ export function SwarmPostPeekPopover(props: SwarmPostPeekPopoverProps): ReactNod
           ) : error ? (
             <Callout tone="err" title={resolveLocalizedText(C.PEEK_LOAD_FAILED, locale)}>
               <p className="sw-panel-error-text">{error}</p>
-              <Button size="xs" icon="rotate-cw" onClick={onRetry}>
+              <Button variant="secondary" size="xs" icon="rotate-cw" onClick={onRetry}>
                 {resolveLocalizedText(C.PANEL_RETRY, locale)}
               </Button>
             </Callout>

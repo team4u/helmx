@@ -95,8 +95,8 @@ export function MermaidPreviewModal({ code, svg, onClose }: { code: string; svg?
                 <Badge tone="neutral" mono className="tabular-nums">{Math.round(scale * 100)}%</Badge>
                 <IconButton variant="secondary" size="sm" icon="zoom-in" onClick={() => zoomBy(STEP)} label={t(C.zoomInTitle)} />
                 <IconButton variant="secondary" size="sm" icon="zoom-out" onClick={() => zoomBy(-STEP)} label={t(C.zoomOutTitle)} />
-                <Button size="sm" onClick={resetView} title={t(C.resetTitle)}>{t(C.reset)}</Button>
-                <Button size="sm" onClick={() => setView((v) => (v === 'diagram' ? 'source' : 'diagram'))}>
+                <Button variant="secondary" size="sm" onClick={resetView} title={t(C.resetTitle)}>{t(C.reset)}</Button>
+                <Button variant="secondary" size="sm" onClick={() => setView((v) => (v === 'diagram' ? 'source' : 'diagram'))}>
                   {view === 'diagram' ? t(C.viewSource) : t(C.viewDiagram)}
                 </Button>
                 <CopyButton text={code} label={t(C.copySource)} />
@@ -128,7 +128,7 @@ export function MermaidPreviewModal({ code, svg, onClose }: { code: string; svg?
                     <div className="mermaid-error-body">
                       <span className="selectable">{error}</span>
                       <div className="mermaid-error-actions">
-                        <Button size="sm" icon="refresh-cw" onClick={() => { setError(null); setRenderedSvg(null); setRetryCount((n) => n + 1) }}>
+                        <Button variant="secondary" size="sm" icon="refresh-cw" onClick={() => { setError(null); setRenderedSvg(null); setRetryCount((n) => n + 1) }}>
                           {t(C.retry)}
                         </Button>
                       </div>

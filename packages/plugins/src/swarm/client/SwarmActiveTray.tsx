@@ -138,6 +138,7 @@ function SwarmCoordinatorTray(props: { conversationId: number; groupId: string }
       elapsed={groupTiming?.label}
       barAction={
         <Button
+          variant="secondary"
           size="xs"
           icon="network"
           className="dock-tray-workbench sw-tray-workbench"

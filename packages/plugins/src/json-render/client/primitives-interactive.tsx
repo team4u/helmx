@@ -55,6 +55,7 @@ export function TextInputImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: Sp
     <Field label={fieldLabel}>
       <Stack direction="horizontal" gap="xs" align="center">
         <Input
+          size="sm"
           className="jr-input-grow"
           type={secret ? 'password' : 'text'}
           value={text}
@@ -64,8 +65,8 @@ export function TextInputImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: Sp
         />
         {node.props['action'] !== undefined && (
           <Button
+            variant="secondary"
             size="sm"
-            className="jr-btn-shrink0"
             pending={pending}
             icon={succeeded ? 'check' : undefined}
             onClick={() => ctx.runAction(node.props['action'], { ...ctx.scope, $value: text }, pendingKey)}
@@ -98,6 +99,7 @@ export function SelectImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecR
   return (
     <Field label={label !== '' ? label : undefined}>
       <Select
+        size="sm"
         value={selected}
         options={options}
         onChange={(e) => {
@@ -206,6 +208,7 @@ export function ButtonImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecR
   return (
     <Button
       variant={resolvedVariant}
+      size="sm"
       pending={pending}
       disabled={node.props['action'] === undefined}
       icon={succeeded ? 'check' : icon !== '' ? icon : undefined}
@@ -239,6 +242,7 @@ export function ActionBarImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: Sp
             <Button
               key={i}
               variant={resolvedVariant}
+              size="sm"
               pending={pending}
               icon={succeeded ? 'check' : icon !== '' ? icon : undefined}
               onClick={() => ctx.runAction(a['action'], ctx.scope, pendingKey)}
@@ -273,10 +277,10 @@ export function TabsImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRen
   const [activeId, setActiveId] = useState(tabs[0]?.id)
   const active = tabs.find((t) => t.id === activeId) ?? tabs[0]
   return (
-    <Tabs value={active?.id} onValueChange={(val) => setActiveId(val)} variant="underline" className="jr-tabs">
-      <TabsList className="tabs-bar">
+    <Tabs value={active?.id} onValueChange={(val) => setActiveId(val)} variant="underline" size="sm" className="jr-tabs">
+      <TabsList>
         {tabs.map((t) => (
-          <TabsTrigger key={t.id} value={t.id} className="tab-btn">
+          <TabsTrigger key={t.id} value={t.id}>
             {t.label}
           </TabsTrigger>
         ))}
