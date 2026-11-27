@@ -604,3 +604,61 @@ test('样式边界：流内停靠工作台固定窄列与子会话 50/50 等分 
   const wideDockedBlock = shellCss.match(/\.drawer-stack-dialog-wide\.is-docked\s*\{([^}]*)\}/)?.[1] ?? ''
   assert.ok(/flex:\s*1 1 0%;/.test(wideDockedBlock), '.drawer-stack-dialog-wide.is-docked 必须声明 flex: 1 1 0% 实现 50/50 等分')
 })
+
+/** Checks whether comment-stripped CSS declares or targets an exact class token (avoiding false matches like .helmx-card or .kv-list-foo). */
+const hasExactClassSelector = (strippedCss: string, className: string): boolean => {
+  const escaped = className.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return new RegExp(`(?<![a-zA-Z0-9_-])\\.${escaped}(?![a-zA-Z0-9_-])`).test(strippedCss)
+}
+
+test('样式边界：Round 2 已退场的 7 组旧容器/表单/浮层样式族不得回流宿主样式表，modals.css 不再滞留已迁出块', { timeout: 60_000 }, () => {
+  const allHostCss = [
+    ...readdirSync(STYLES_DIR)
+      .filter((name) => name.endsWith('.css'))
+      .map((name) => ({ name, css: stripCssComments(readFileSync(join(STYLES_DIR, name), 'utf8')) })),
+    { name: 'responsive.css', css: stripCssComments(readFileSync(join(__dirname, '../src/responsive.css'), 'utf8')) },
+  ]
+  assert.ok(allHostCss.length > 0, '应能读取宿主样式表')
+
+  const retiredLegacyClasses = [
+    'list',
+    'row',
+    'card',
+    'section-flat',
+    'section-flat-header',
+    'section-flat-title',
+    'form-grid',
+    'form-grid-align-start',
+    'form-grid-label',
+    'form-grid-value',
+    'kv-list',
+    'dropdown-panel',
+  ] as const
+
+  for (const { name, css } of allHostCss) {
+    for (const className of retiredLegacyClasses) {
+      assert.ok(
+        !ownsRule(css, `.${className}`) && !hasExactClassSelector(css, className),
+        `宿主样式表 ${name} 不得回流已退场的旧类选择器 .${className}（请使用 @helmx/plugin-client 对应原语）`,
+      )
+    }
+  }
+
+  // modals.css 中已归位 centers.css 的技能阅读器 / 角色编辑器规则及死类不得回流
+  const modalsCss = stripCssComments(readFileSync(join(STYLES_DIR, 'modals.css'), 'utf8'))
+  for (const movedOrDead of [
+    'skill-drawer-content',
+    'skill-reader',
+    'skill-scope-picker',
+    'profile-editor-textarea',
+    'profile-editor-meta',
+    'profile-editor-hint',
+    'plugin-card-header',
+    'modal-body-flush',
+  ]) {
+    assert.ok(
+      !hasExactClassSelector(modalsCss, movedOrDead),
+      `modals.css 不得保留已归位 centers.css 或已清除的旧类 .${movedOrDead}`,
+    )
+  }
+})

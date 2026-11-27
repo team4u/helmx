@@ -321,7 +321,6 @@ describe('plan-client-interactions', () => {
     const cssText = rawModule['__helmxClientCss']
     assert.equal(typeof cssText, 'string')
     assert.match(cssText as string, /\.plan-toolbar-btn/)
-    assert.match(cssText as string, /\.plan-menu-item/)
     assert.match(cssText as string, /\.plan-workbench/)
     assert.match(cssText as string, /\.plan-tray-preview/)
     assert.match(cssText as string, /\.plan-editor/)
@@ -737,7 +736,7 @@ describe('plan-client-interactions', () => {
       assert.ok(item !== null)
       assert.match(item.textContent ?? '', /Plan mode/)
       assert.match(item.textContent ?? '', /Ctrl\+\./)
-      assert.ok(item.querySelector('.plan-menu-item-check') === null)
+      assert.ok(item.querySelector('.helmx-dropdown-item-check') === null)
 
       await act(async () => {
         item.click()
@@ -764,7 +763,7 @@ describe('plan-client-interactions', () => {
       )
       const armedItem = standbyMount.host.querySelector<HTMLElement>('.plan-menu-item')
       assert.ok(armedItem?.classList.contains('plan-menu-item--active'))
-      assert.ok(armedItem?.querySelector('.plan-menu-item-check') !== null)
+      assert.ok(armedItem?.querySelector('.helmx-dropdown-item-check') !== null)
     } finally {
       await standbyMount.unmount()
     }
@@ -794,7 +793,7 @@ describe('plan-client-interactions', () => {
     try {
       const item = liveMount.host.querySelector<HTMLElement>('.plan-menu-item')
       assert.ok(item !== null && item.classList.contains('plan-menu-item--active'))
-      assert.ok(item.querySelector('.plan-menu-item-check') !== null)
+      assert.ok(item.querySelector('.helmx-dropdown-item-check') !== null)
       await act(async () => {
         item.click()
       })

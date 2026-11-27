@@ -347,7 +347,6 @@ button, a, input, select, textarea { touch-action: manipulation; }
   .modal-backdrop { padding: 10px; }
   .modal { max-height: 94dvh; }
   .modal-body { min-width: 0; }
-  .form-grid { grid-template-columns: minmax(0, 1fr) !important; gap: 6px; }
   .config-fields > div { grid-template-columns: minmax(0, 1fr) !important; }
 }
 /* 产物预览弹窗：移动端全屏时标题独占一行，操作按钮折到第二行 */

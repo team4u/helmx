@@ -469,61 +469,6 @@
   box-shadow: none;
 }
 
-/* 1px 发丝分隔列表 */
-.list {
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--bg-elevated);
-  overflow: hidden;
-  flex: none;
-}
-
-/* 行原语：列表内与平铺场景通用行骨架，相邻行间以 1px 发丝线分割 */
-.list > .row,
-.row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  min-height: 44px;
-  padding: 7px 12px 7px 14px;
-  border-bottom: none;
-}
-
-.list > .row + .row,
-.row + .row {
-  border-top: 1px solid var(--line-2);
-}
-
-.list > .row {
-  padding: 9px 12px;
-  gap: 10px;
-}
-
-/* 卡片与表单 */
-.card {
-  background: var(--bg-elevated);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  padding: 12px 14px;
-}
-
-/* 静音平铺容器原语 */
-.section-flat {
-  background: var(--bg-subtle);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  padding: 12px 14px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-.section-flat-header {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-wrap: wrap;
-}
 /* 同插件多 settings.panel：面板间分隔与独立挂载区域 */
 .plugin-settings-panels + .plugin-settings-panels {
   border-top: 1px solid var(--border);
@@ -534,11 +479,6 @@
   font-weight: 600;
   color: var(--fg-muted);
   margin-bottom: 4px;
-}
-.section-flat-title {
-  font-weight: 600;
-  font-size: 12.5px;
-  color: var(--fg);
 }
 
 /* 统一搜索输入框原语（容器式：描边/背景/focus 高亮全部由容器提供，
@@ -784,29 +724,6 @@ input[type="search"]::-moz-search-clear-button {
 }
 .empty-state-prominent .empty-state-hint {
   max-width: 320px;
-}
-
-/* 表单两列网格对齐原语 */
-.form-grid {
-  display: grid;
-  grid-template-columns: 130px 1fr;
-  gap: 8px 12px;
-  align-items: center;
-}
-.form-grid-align-start {
-  align-items: start;
-}
-.form-grid-label {
-  font-size: 12px;
-  color: var(--fg-muted);
-  display: inline-flex;
-  gap: 5px;
-  align-items: center;
-  user-select: none;
-}
-.form-grid-value {
-  font-size: 11.5px;
-  word-break: break-all;
 }
 
 /* ==========================================================================
@@ -1414,8 +1331,7 @@ button.helmx-toolbar-pill[aria-busy='true']:disabled {
  * 通用键值对概览原语 (Key-Value Grid Primitives)
  * ========================================================================== */
 
-.kv-grid,
-.kv-list {
+.kv-grid {
   display: grid;
   grid-template-columns: minmax(84px, auto) minmax(0, 1fr);
   gap: 6px 14px;
@@ -1746,7 +1662,7 @@ input::placeholder {
   }
 }
 
-/* Card：纯静态结构化容器，不承载整卡点击，保留既有 .card / .section-flat 公共契约 */
+/* Card：纯静态结构化容器，不承载整卡点击，统一取代旧容器手写类 */
 .helmx-card {
   display: flex;
   flex-direction: column;

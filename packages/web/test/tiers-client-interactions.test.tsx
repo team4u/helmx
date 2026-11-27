@@ -472,8 +472,8 @@ describe("tiers-client-interactions", () => {
       const tplDialog = document.body.querySelector<HTMLElement>('[role="dialog"]')
       assert.ok(tplDialog !== null, 'Save as template opens Dialog')
       assert.ok(
-        tplDialog.closest('.modal-backdrop') !== null,
-        'SaveTemplateDialog content must be nested inside .modal-backdrop so it centers visibly on desktop and mobile',
+        tplDialog.closest('.helmx-modal-backdrop') !== null,
+        'SaveTemplateDialog content must be nested inside .helmx-modal-backdrop so it centers visibly on desktop and mobile',
       )
       await act(async () => {
         findButton(tplDialog, 'Save template').click()

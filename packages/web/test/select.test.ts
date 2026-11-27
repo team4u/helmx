@@ -299,7 +299,7 @@ test('CSS stacking regression: Popover 内容节点必须声明 z-index: 80，Se
 
   const plainPopover = makeWrapped('helmx-popover-content magpie-quota-popover')
   const modelPopover = makeWrapped('helmx-popover-content composer-popover composer-model-popover')
-  const selectPopover = makeWrapped('helmx-popover-content helmx-select-popover dropdown-panel')
+  const selectPopover = makeWrapped('helmx-popover-content helmx-select-popover')
   const nestedDialogPopover = makeWrapped('helmx-popover-content magpie-quota-popover', '1002')
   try {
     assert.equal(getComputedStyle(plainPopover).zIndex, '80', '普通 Popover 必须向 Radix Popper 暴露 z-index: 80 而非 auto')

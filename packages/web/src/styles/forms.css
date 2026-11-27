@@ -96,18 +96,6 @@
   transform: rotate(180deg);
 }
 
-/* 下拉菜单面板通用样式规范（毛玻璃与高精投影） */
-.dropdown-panel {
-  background: var(--pop-bg);
-  backdrop-filter: blur(20px) saturate(1.1);
-  -webkit-backdrop-filter: blur(20px) saturate(1.1);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  box-shadow: var(--shadow-lg);
-  outline: none;
-  box-sizing: border-box;
-}
-
 /* 浮层下拉列表 */
 .helmx-select-popover {
   position: absolute;

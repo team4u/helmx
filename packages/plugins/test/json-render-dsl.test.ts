@@ -533,6 +533,12 @@ test('spec-primitives: 原型链查表拦截、组件切换 Hook 数量稳定，
   assert.match(html, /Unregistered component: hasOwnProperty/)
   assert.equal(html.includes('native code'), false, '原型链函数绝不得泄露到 className 或表格单元格')
   assert.match(html, /safe callout/)
+  assert.ok(
+    container.querySelector('.helmx-list .helmx-list-row') !== null &&
+      container.querySelector('.list') === null &&
+      container.querySelector('.row') === null,
+    'Steps 复用 SDK List / ListRow 原语（无旧 .list / .row）',
+  )
 
   // 2) 组件切换 Hook 数量稳定：同一 SpecNodeList 位置从 Text(0 hooks) -> Button(1 hook) -> TextInput(4 hooks) -> Text(0 hooks)
   for (const spec of [

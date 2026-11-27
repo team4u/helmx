@@ -9,6 +9,8 @@ import {
   Card,
   HelmxIcon,
   KvGrid,
+  List,
+  ListRow,
   MarkdownText,
   Stack,
   type BadgeTone,
@@ -181,28 +183,29 @@ export function StepsImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRe
       }))
     : []
   return (
-    <div className="list">
+    <List density="compact">
       {items.map((item, i) => {
         const meta = ownProp(STEP_STATUS_META, item.status) ?? STEP_STATUS_META['pending']!
         return (
-          <div key={i} className="row">
-            <div className="jr-step-main">
+          <ListRow
+            key={i}
+            leading={
               <Badge
                 tone={meta.tone}
                 icon={<HelmxIcon name={meta.icon} size={10} className={item.status === 'running' ? 'spin-slow' : undefined} />}
               />
-              <div className="jr-step-text">
-                <span className="jr-step-title">{item.title}</span>
-                {item.detail !== '' && <span className="jr-step-detail">{item.detail}</span>}
-              </div>
-            </div>
-            <span className="jr-metric-label tabular-nums">
-              {i + 1}/{items.length}
-            </span>
-          </div>
+            }
+            title={item.title}
+            description={item.detail !== '' ? item.detail : undefined}
+            trailing={
+              <span className="jr-metric-label tabular-nums">
+                {i + 1}/{items.length}
+              </span>
+            }
+          />
         )
       })}
-    </div>
+    </List>
   )
 }
 
