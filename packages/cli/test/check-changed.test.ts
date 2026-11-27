@@ -41,6 +41,7 @@ import {
 } from '../../../scripts/lib/test-hygiene.mjs'
 import { resolvePackageManagerInvoke, runManagedCommand } from '../../../scripts/lib/spawn-checked.mjs'
 import { collectSourceCssFiles, findUngatedHoverRules } from '../../../scripts/lib/css-hygiene.mjs'
+import { analyzeUiSource, collectSourceUiFiles } from '../../../scripts/lib/ui-hygiene.mjs'
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
 const scriptsDir = path.join(repoRoot, 'scripts')
@@ -993,6 +994,122 @@ test('css-hygiene: collectSourceCssFiles returns only packages/<pkg>/src/**/*.cs
       'packages/web/src/deep/b.css',
     ])
     assert.deepEqual(collectSourceCssFiles(path.join(root, 'missing')), [])
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+// ---------------------------------------------------------------- UI TSX hygiene gate (scripts/lib/ui-hygiene.mjs)
+
+test('ui-hygiene: reports native <select>, <input type="search">, UI Emoji in JSX/strings, and raw .btn/.input on intrinsic tags', { timeout: 60_000 }, () => {
+  const report = analyzeUiSource(
+    ts,
+    'sample.tsx',
+    `import { Button, CopyButton, Select } from '@helmx/plugin-client'
+export function BadView({ active, kind, variant }: { active: boolean; kind: string; variant: string }) {
+  const greeting = 'Launch 🚀 now'
+  const status = \`Done ✅ \${kind}\`
+  return (
+    <div className="input">
+      <select value={kind}>
+        <option value="a">A</option>
+      </select>
+      <input type="search" />
+      <input type={'SEARCH'} />
+      <input type={active ? 'search' : 'text'} />
+      <input type="text" className="input input-sm" />
+      <button type="button" className="btn btn-ghost btn-icon-xs">X</button>
+      <button type="button" className={\`btn-\${variant}\`}>Y</button>
+      <a className={active ? 'btn-inline' : 'link'} href="#x">Link</a>
+      <span>Hello 🔥 world</span>
+      <p title="Warning ⚠️">text</p>
+      <CopyButton className="btn btn-ghost" text="ok" />
+      <Select value="a" options={[{ value: 'a', label: 'A' }]} onChange={() => {}} />
+    </div>
+  )
+}
+`,
+  )
+
+  assert.deepEqual(
+    report.violations.map((v) => ({ line: v.line, rule: v.rule })),
+    [
+      { line: 3, rule: 'no-ui-emoji' },
+      { line: 4, rule: 'no-ui-emoji' },
+      { line: 6, rule: 'no-raw-control-class' },
+      { line: 7, rule: 'no-native-select' },
+      { line: 10, rule: 'no-search-input' },
+      { line: 11, rule: 'no-search-input' },
+      { line: 12, rule: 'no-search-input' },
+      { line: 13, rule: 'no-raw-control-class' },
+      { line: 14, rule: 'no-raw-control-class' },
+      { line: 15, rule: 'no-raw-control-class' },
+      { line: 16, rule: 'no-raw-control-class' },
+      { line: 17, rule: 'no-ui-emoji' },
+      { line: 18, rule: 'no-ui-emoji' },
+    ],
+  )
+})
+
+test('ui-hygiene: clean SDK components, comments with Emoji, typography glyphs, hyphenated domain classes, and ternary conditions produce zero violations', { timeout: 60_000 }, () => {
+  const report = analyzeUiSource(
+    ts,
+    'clean.tsx',
+    `// Comment with Emoji 🚀 ✅ 🔥 and <select> and type="search" must never trip hygiene
+/* Block comment 🎉 <button className="btn"> */
+import { Button, CopyButton, SearchBox, Select } from '@helmx/plugin-client'
+
+const EMOJI_STRIP = /[\\u{1F000}-\\u{1FAFF}]/u
+
+export function CleanView({ kind, prefix, mode }: { kind: string; prefix: string; mode: string }) {
+  const hint = 'localhost:3000 → 127.0.0.1:8080 • ⌘K — ✓ ✕ × …'
+  return (
+    <div className={kind === 'input' ? 'field-row' : 'output-row'}>
+      {/* JSX comment with Emoji 🚀 and <select> */}
+      <p>Don&apos;t use native controls: {hint}</p>
+      <p>Visit https://example.com/docs</p>
+      <CopyButton className="btn btn-ghost btn-sm" text={hint} />
+      <Button variant="danger" size="sm" className="btn-danger-sm">Delete</Button>
+      <SearchBox variant="toolbar" size="sm" value="" onChange={() => {}} />
+      <Select value={kind} options={[{ value: 'a', label: 'A' }]} onChange={() => {}} />
+      <button type="button" className="chg-compact-slot-btn">Domain button</button>
+      <button type="button" className={\`\${prefix}-btn\`}>Prefixed</button>
+      <input
+        // Shared search-box spec: never type="search"
+        type={mode === 'search' ? 'text' : 'password'}
+        className="sidebar-search-input"
+      />
+      <span>{String(EMOJI_STRIP.test('ok'))}</span>
+    </div>
+  )
+}
+`,
+  )
+
+  assert.deepEqual(report.violations, [])
+})
+
+test('ui-hygiene: collectSourceUiFiles returns only packages/web/src/**/*.tsx and packages/plugins/src/*/client/**/*.tsx, sorted', { timeout: 60_000 }, () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'helmx-ui-hygiene-'))
+  try {
+    write(root, 'packages/web/src/App.tsx', '')
+    write(root, 'packages/web/src/ui/Panel.tsx', '')
+    write(root, 'packages/web/src/model.ts', '')
+    write(root, 'packages/web/test/App.test.tsx', '')
+    write(root, 'packages/web/dist/App.tsx', '')
+    write(root, 'packages/plugin-client/src/ui/Button.tsx', '')
+    write(root, 'packages/plugins/src/tiers/client/manager.tsx', '')
+    write(root, 'packages/plugins/src/tiers/client/sub/Row.tsx', '')
+    write(root, 'packages/plugins/src/tiers/client/models.ts', '')
+    write(root, 'packages/plugins/src/tiers/index.ts', '')
+    write(root, 'packages/plugins/test/tiers.test.tsx', '')
+    assert.deepEqual(collectSourceUiFiles(root), [
+      'packages/plugins/src/tiers/client/manager.tsx',
+      'packages/plugins/src/tiers/client/sub/Row.tsx',
+      'packages/web/src/App.tsx',
+      'packages/web/src/ui/Panel.tsx',
+    ])
+    assert.deepEqual(collectSourceUiFiles(path.join(root, 'missing')), [])
   } finally {
     rmSync(root, { recursive: true, force: true })
   }

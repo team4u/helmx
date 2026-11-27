@@ -456,10 +456,14 @@ test('plugins init: generates local skeleton (default full template: plugin.json
   assert.ok(client.includes('export function SamplePanel'))
   assert.ok(client.includes('@helmx/plugin-client'), 'standard template imports host shared frontend package')
   assert.ok(client.includes('usePluginDoc'), 'standard template uses shared hook')
-  // Standard template uses shared layout primitives without pseudo-Tailwind class names
-  for (const primitive of ['ScreenSection', 'DataTable', 'KvGrid']) {
+  assert.ok(client.includes('usePluginAction'), 'standard template uses shared action hook')
+  // Standard template uses narrow-panel HIG primitives without raw loading-state div, 1-col DataTable, or pseudo-Tailwind classes
+  for (const primitive of ['LoadingState', 'Card', 'KvGrid', 'List', 'ListRow', 'Button']) {
     assert.ok(client.includes(primitive), `standard template should use shared layout primitive ${primitive}`)
   }
+  assert.ok(client.includes('density="compact"'), 'standard template narrow panel should use compact List')
+  assert.ok(!client.includes('className="loading-state"'), 'standard template must not render raw loading-state div')
+  assert.ok(!client.includes('DataTable'), 'standard template must not use 1-col DataTable in narrow panel')
   assert.ok(!/\b(font-medium|text-subtle|text-xs)\b/.test(client), 'standard template must not retain pseudo-Tailwind class names')
   assert.ok(await fsp.stat(path.join(body.dir, 'README.md')))
 
@@ -819,7 +823,8 @@ test('plugins init: all three templates pass real standalone tsc --noEmit outsid
   await fsp.writeFile(path.join(badBackendDir, 'index.ts'), origIndex.replace("id: 'add_item',", 'id: 42,'), 'utf8')
 
   const badFrontendDir = cloneAppVariant('bad-frontend')
-  await fsp.writeFile(path.join(badFrontendDir, 'client', 'index.tsx'), origClient.replace('columns={2}', 'columns="not-a-number"'), 'utf8')
+  assert.ok(origClient.includes('layout="contained"'), 'app template should declare layout="contained" on Screen')
+  await fsp.writeFile(path.join(badFrontendDir, 'client', 'index.tsx'), origClient.replace('layout="contained"', 'layout="invalid-layout"'), 'utf8')
 
   await fsp.writeFile(
     path.join(appDir, 'client', 'shim-aria-probe.tsx'),
@@ -899,7 +904,7 @@ test('plugins init: all three templates pass real standalone tsc --noEmit outsid
     `standalone pure-shim tsc --noEmit failed for template app + React 19 ARIA + SDK primitives:\n${appAndShimRes.stdout}\n${appAndShimRes.stderr}`,
   )
   assert.notEqual(badBackend.status, 0, 'invalid backend PluginActionSpec.id must fail tsc --noEmit')
-  assert.notEqual(badFrontend.status, 0, 'invalid DataTable columns prop must fail tsc --noEmit')
+  assert.notEqual(badFrontend.status, 0, 'invalid Screen layout prop must fail tsc --noEmit')
   assert.equal(
     withRealTypes.status,
     0,

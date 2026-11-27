@@ -123,37 +123,72 @@ export default {
 } satisfies PluginDefinition
 `
 
-export const SCAFFOLD_CLIENT_INDEX_TSX = `import React from 'react'
-import { usePluginDoc, ScreenSection, DataTable, KvGrid } from '@helmx/plugin-client'
+export const SCAFFOLD_CLIENT_INDEX_TSX = `import type { ReactNode } from 'react'
+import {
+  Badge,
+  Button,
+  Card,
+  KvGrid,
+  List,
+  ListRow,
+  LoadingState,
+  Stack,
+  usePluginAction,
+  usePluginDoc,
+} from '@helmx/plugin-client'
 
-export function SamplePanel(): React.JSX.Element {
+export function SamplePanel(): ReactNode {
   const state = usePluginDoc<{ count: number }>('state')
-  const loading = state === undefined
+  const actions = usePluginAction({ notifyError: true })
+
+  if (state === undefined) {
+    return <LoadingState label="Loading count..." />
+  }
+
   return (
-    <ScreenSection title="Sample Panel">
-      {loading ? (
-        <div className="loading-state" role="status">Loading count...</div>
-      ) : (
+    <Stack gap="md">
+      <Card
+        variant="subtle"
+        title="Sample Panel"
+        actions={
+          <Button
+            variant="secondary"
+            size="sm"
+            icon="plus"
+            pending={actions.pending}
+            onClick={() => void actions.run('increment', {})}
+          >
+            Increment
+          </Button>
+        }
+      >
         <KvGrid
           items={[
-            { key: 'Current count', value: state.count },
-            { key: 'How to update', value: 'Invoke the increment action to update the count' },
+            { key: 'Current count', value: <span className="tabular-nums">{state.count}</span> },
+            {
+              key: 'Status',
+              value: (
+                <Badge tone={state.count > 0 ? 'ok' : 'neutral'}>
+                  {state.count > 0 ? 'Active' : 'Idle'}
+                </Badge>
+              ),
+            },
           ]}
         />
-      )}
-      <DataTable columns={1} empty={!loading && state !== undefined && state.count === 0} emptyLabel="Count is zero">
-        <thead>
-          <tr>
-            <th>Count log</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr>
-            <td>count = {state === undefined ? '-' : state.count}</td>
-          </tr>
-        </tbody>
-      </DataTable>
-    </ScreenSection>
+      </Card>
+      <List density="compact" label="Counter activity">
+        <ListRow
+          interactive={false}
+          title="Latest value"
+          meta={<code className="mono">count = {state.count}</code>}
+          trailing={
+            <Badge tone="neutral" mono>
+              {state.count}
+            </Badge>
+          }
+        />
+      </List>
+    </Stack>
   )
 }
 `
@@ -259,22 +294,39 @@ export default {
 `
 
 /**
- * Frontend for the app template: uses only @helmx/plugin-client host primitives (Screen/ScreenSection/KvGrid/
- * DataTable/Checkbox/Field/Input/Button); zero private stylesheet by default — add scoped
- * custom CSS only when the host vocabulary is genuinely insufficient; zero Emoji; 13px body text.
+ * Frontend for the app template: canonical HIG composition using only @helmx/plugin-client primitives
+ * (Screen + ScreenToolbar + SearchBox + Tabs/TabCount + List/ListRow + DetailDrawer + useScreenDrawer);
+ * zero private stylesheet by default, zero variant="default", zero Emoji.
  */
-export const SCAFFOLD_CLIENT_APP_TSX = `import { useState, type ReactNode } from 'react'
+export const SCAFFOLD_CLIENT_APP_TSX = `import { useMemo, useState, type KeyboardEvent, type ReactNode } from 'react'
+import type { ScreenProps } from '@helmx/protocol/browser'
 import {
-  usePluginContext,
-  usePluginDoc,
-  Screen,
-  ScreenSection,
-  DataTable,
-  KvGrid,
-  Checkbox,
+  Badge,
   Button,
+  Callout,
+  Checkbox,
+  DetailDrawer,
+  EmptyState,
   Field,
   Input,
+  KvGrid,
+  List,
+  ListRow,
+  LoadingState,
+  Screen,
+  ScreenToolbar,
+  SearchBox,
+  Stack,
+  StatusLight,
+  TabCount,
+  Tabs,
+  TabsList,
+  TabsTrigger,
+  formatTime,
+  usePluginAction,
+  usePluginContext,
+  usePluginDoc,
+  useScreenDrawer,
 } from '@helmx/plugin-client'
 
 interface Item {
@@ -284,100 +336,275 @@ interface Item {
   createdAt: number
 }
 
-export function MainScreen(): ReactNode {
-  const { callAction, notify } = usePluginContext()
+export function MainScreen(props: Partial<ScreenProps>): ReactNode {
+  const ctx = usePluginContext()
   const doc = usePluginDoc<{ list: Item[] }>('items')
+  const actions = usePluginAction({ notifyError: true })
+
+  const [statusFilter, setStatusFilter] = useState<'all' | 'open' | 'done'>('all')
+  const [query, setQuery] = useState('')
   const [draft, setDraft] = useState('')
-  const [pending, setPending] = useState(false)
 
   const list = doc?.list ?? []
   const doneCount = list.filter((it) => it.done).length
+  const openCount = list.length - doneCount
 
-  const add = async () => {
+  const drawer = useScreenDrawer({
+    param: 'item',
+    createParam: 'create',
+    hasItem: (id) => doc === undefined || list.some((it) => it.id === id),
+    scope: props,
+  })
+
+  const filtered = useMemo(
+    () =>
+      list.filter((it) => {
+        if (statusFilter === 'open' && it.done) return false
+        if (statusFilter === 'done' && !it.done) return false
+        const q = query.trim().toLowerCase()
+        if (q === '') return true
+        return it.title.toLowerCase().includes(q)
+      }),
+    [list, statusFilter, query],
+  )
+
+  const selectedItem =
+    drawer.itemId !== undefined ? list.find((it) => it.id === drawer.itemId) : undefined
+
+  const openCreateDrawer = (): void => {
+    setDraft('')
+    actions.clearError()
+    drawer.openCreate()
+  }
+
+  const resetFilters = (): void => {
+    setStatusFilter('all')
+    setQuery('')
+  }
+
+  const handleCreate = async (): Promise<void> => {
     const title = draft.trim()
     if (title === '') return
-    setPending(true)
-    try {
-      await callAction('add_item', { title })
+    const result = await actions.run('add_item', { title }, { key: 'add_item' })
+    if (result !== undefined) {
       setDraft('')
-    } catch (err) {
-      notify('Failed to add item: ' + (err instanceof Error ? err.message : String(err)), 'error')
-    } finally {
-      setPending(false)
+      ctx.notify('Added item')
+      drawer.close()
+    }
+  }
+
+  const handleCreateKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
+    if ((event.metaKey || event.ctrlKey) && event.key === 'Enter' && draft.trim() !== '' && !actions.pending) {
+      event.preventDefault()
+      void handleCreate()
     }
   }
 
   return (
-    <Screen title="Items Workbench" subtitle={'Completed ' + doneCount + ' / ' + list.length}>
-      <ScreenSection
-        title="Add Item"
-        titleExtra={
-          <Button
-            variant="primary"
+    <Screen
+      layout="contained"
+      title="Items Workbench"
+      subtitle={\`\${doneCount} / \${list.length} completed\`}
+      actions={
+        <Button
+          variant="primary"
+          size="sm"
+          icon="plus"
+          disabled={actions.pending}
+          onClick={openCreateDrawer}
+        >
+          <span className="pane-action-label">New Item</span>
+        </Button>
+      }
+      toolbar={
+        <ScreenToolbar
+          label="Item filters"
+          actions={
+            <SearchBox
+              variant="toolbar"
+              size="sm"
+              value={query}
+              onChange={setQuery}
+              placeholder="Filter items..."
+              ariaLabel="Filter items"
+            />
+          }
+        >
+          <Tabs
+            value={statusFilter}
+            onValueChange={(next: string) => setStatusFilter(next === 'open' || next === 'done' ? next : 'all')}
+            variant="pills"
             size="sm"
-            pending={pending}
-            disabled={draft.trim() === ''}
-            onClick={() => void add()}
           >
-            Add
-          </Button>
+            <TabsList aria-label="Item status">
+              <TabsTrigger value="all">
+                <span>All</span>
+                <TabCount>{list.length}</TabCount>
+              </TabsTrigger>
+              <TabsTrigger value="open">
+                <span>Open</span>
+                <TabCount>{openCount}</TabCount>
+              </TabsTrigger>
+              <TabsTrigger value="done">
+                <span>Done</span>
+                <TabCount>{doneCount}</TabCount>
+              </TabsTrigger>
+            </TabsList>
+          </Tabs>
+        </ScreenToolbar>
+      }
+    >
+      {doc === undefined ? (
+        <LoadingState label="Loading items..." />
+      ) : filtered.length === 0 ? (
+        <EmptyState
+          icon={list.length === 0 ? 'inbox' : 'search'}
+          title={list.length === 0 ? 'No items yet' : 'No matching items'}
+          hint={list.length === 0 ? 'Create your first item to get started.' : undefined}
+          hintSubtle
+          action={
+            list.length === 0 ? (
+              <Button variant="primary" size="sm" icon="plus" onClick={openCreateDrawer}>
+                New Item
+              </Button>
+            ) : (
+              <Button variant="secondary" size="sm" icon="rotate-ccw" onClick={resetFilters}>
+                Reset Filters
+              </Button>
+            )
+          }
+        />
+      ) : (
+        <List label="Item list">
+          {filtered.map((item) => (
+            <ListRow
+              key={item.id}
+              selected={drawer.itemId === item.id}
+              leading={
+                <StatusLight
+                  tone={item.done ? 'done' : 'idle'}
+                  label={item.done ? 'Completed' : 'Open'}
+                />
+              }
+              title={item.title}
+              meta={<span className="mono tabular-nums">{formatTime(item.createdAt)}</span>}
+              trailing={
+                <Checkbox
+                  checked={item.done}
+                  disabled={actions.pendingKey === \`toggle:\${item.id}\`}
+                  aria-label={\`Mark \${item.title} as \${item.done ? 'open' : 'completed'}\`}
+                  onChange={(checked) => {
+                    void actions.run('set_done', { id: item.id, done: checked }, { key: \`toggle:\${item.id}\` })
+                  }}
+                />
+              }
+              onSelect={() => drawer.openItem(item.id)}
+            />
+          ))}
+        </List>
+      )}
+
+      <DetailDrawer
+        open={drawer.creating}
+        onClose={() => drawer.close()}
+        title="New Item"
+        footer={
+          <>
+            <div className="flex-1" />
+            <Button variant="ghost" size="sm" disabled={actions.pending} onClick={() => drawer.close()}>
+              Cancel
+            </Button>
+            <Button
+              variant="primary"
+              size="sm"
+              icon="check"
+              pending={actions.pendingKey === 'add_item'}
+              disabled={draft.trim() === ''}
+              onClick={() => void handleCreate()}
+            >
+              Create
+            </Button>
+          </>
         }
       >
-        <Field label="Item title">
-          <Input
-            value={draft}
-            placeholder="Enter item title and press Enter..."
-            onChange={(e) => setDraft(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') void add()
-            }}
+        <div onKeyDown={handleCreateKeyDown}>
+          <Stack gap="md">
+            {actions.error !== undefined && <Callout tone="err">{actions.error}</Callout>}
+            <Field label="Item title" required>
+              <Input
+                value={draft}
+                placeholder="Enter item title..."
+                disabled={actions.pending}
+                onChange={(e) => setDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && draft.trim() !== '' && !actions.pending) {
+                    e.preventDefault()
+                    void handleCreate()
+                  }
+                }}
+              />
+            </Field>
+          </Stack>
+        </div>
+      </DetailDrawer>
+
+      <DetailDrawer
+        open={!drawer.creating && selectedItem !== undefined}
+        onClose={() => drawer.close()}
+        title={selectedItem?.title ?? ''}
+        titleExtra={
+          selectedItem !== undefined ? (
+            <Badge tone={selectedItem.done ? 'ok' : 'neutral'}>
+              {selectedItem.done ? 'Completed' : 'Open'}
+            </Badge>
+          ) : undefined
+        }
+        meta={selectedItem?.id}
+        footer={
+          selectedItem !== undefined ? (
+            <>
+              <div className="flex-1" />
+              <Button
+                variant="secondary"
+                size="sm"
+                pending={actions.pendingKey === \`toggle:\${selectedItem.id}\`}
+                onClick={() => {
+                  void actions.run(
+                    'set_done',
+                    { id: selectedItem.id, done: !selectedItem.done },
+                    { key: \`toggle:\${selectedItem.id}\` },
+                  )
+                }}
+              >
+                {selectedItem.done ? 'Mark Open' : 'Mark Completed'}
+              </Button>
+              <Button variant="ghost" size="sm" onClick={() => drawer.close()}>
+                Close
+              </Button>
+            </>
+          ) : undefined
+        }
+      >
+        {selectedItem !== undefined && (
+          <KvGrid
+            items={[
+              {
+                key: 'Status',
+                value: (
+                  <Badge tone={selectedItem.done ? 'ok' : 'neutral'}>
+                    {selectedItem.done ? 'Completed' : 'Open'}
+                  </Badge>
+                ),
+              },
+              {
+                key: 'Created',
+                value: <span className="mono tabular-nums">{formatTime(selectedItem.createdAt)}</span>,
+              },
+              { key: 'Data source', value: "public doc 'items' (live usePluginDoc subscription)" },
+            ]}
           />
-        </Field>
-      </ScreenSection>
-
-      <ScreenSection title="Overview">
-        <KvGrid
-          items={[
-            { key: 'Total items', value: list.length },
-            { key: 'Completed', value: doneCount },
-            { key: 'Data source', value: "public doc 'items' (live usePluginDoc subscription)" },
-          ]}
-        />
-      </ScreenSection>
-
-      <ScreenSection title="Item List">
-        <DataTable
-          loading={doc === undefined}
-          empty={list.length === 0}
-          emptyLabel="No items yet; enter a title above to add one"
-          columns={2}
-          label="Item List"
-        >
-          <thead>
-            <tr>
-              <th>Status</th>
-              <th>Content</th>
-            </tr>
-          </thead>
-          <tbody>
-            {list.map((it) => (
-              <tr key={it.id}>
-                <td>
-                  <Checkbox
-                    checked={it.done}
-                    onChange={(checked) => {
-                      void callAction('set_done', { id: it.id, done: checked }).catch((err: unknown) =>
-                        notify('Failed to update item: ' + (err instanceof Error ? err.message : String(err)), 'error'),
-                      )
-                    }}
-                  />
-                </td>
-                <td>{it.title}</td>
-              </tr>
-            ))}
-          </tbody>
-        </DataTable>
-      </ScreenSection>
+        )}
+      </DetailDrawer>
     </Screen>
   )
 }
@@ -388,13 +615,13 @@ export const SCAFFOLD_README = (template: ScaffoldTemplate) =>
     ? `# Full-Stack Micro-App (generated by helmx plugins init --template app)
 
 - Backend entrypoint: \`index.ts\` (public doc 'items' + add_item/set_done dual-schema actions + ctx.ui.screen + sidebar shortcut)
-- Frontend component: \`client/index.tsx\` (clientRoot is ./client; uses only @helmx/plugin-client host primitives and host public CSS classes — no private stylesheet by default)
+- Frontend component: \`client/index.tsx\` (clientRoot is ./client; composes canonical Helmx UI HIG primitives \`Screen\` + \`ScreenToolbar\` + \`SearchBox\` + \`Tabs\`/\`TabCount\` + \`List\`/\`ListRow\` + \`DetailDrawer\` + \`useScreenDrawer\` from \`@helmx/plugin-client\` — zero private stylesheet by default, zero Emoji)
 - Manifest: \`plugin.json\`; local typechecking: \`tsconfig.json\` + \`.helmx/types/\` (used by editors/\`tsc --noEmit\`; host runtime transpiler ignores \`tsconfig.json\` and skips \`.helmx/\` during installs; refresh types after upgrading Helmx via \`helmx plugins types\`)
 
 ## Development Loop (verify locally before installing)
 
 \`\`\`bash
-helmx plugins doctor <absolute-path-to-dir>              # 4-stage check: manifest/backend/register/client + screens
+helmx plugins doctor <absolute-path-to-dir>              # 4-stage check: manifest/backend/register/client (compile + UI/CSS hygiene) + screens
 helmx plugins install <absolute-path-to-dir> --enable    # install (or idempotently hot-update from same dir) and enable
 helmx plugins remove <pluginId>                          # uninstall (local source directory is untouched)
 \`\`\`
@@ -403,13 +630,13 @@ The sidebar entry (\`ctx.ui.sidebarItem\`) is optional and removable; the app re
 `
     : `# External Plugin (generated by helmx plugins init)
 
-- Backend entrypoint: \`index.ts\` (export default PluginDefinition)${template === 'full' ? '\n- Frontend component: \`client/index.tsx\` (clientRoot declared as ./client)' : ''}
+- Backend entrypoint: \`index.ts\` (export default PluginDefinition)${template === 'full' ? '\n- Frontend component: \`client/index.tsx\` (clientRoot declared as ./client; narrow panel composed with \`LoadingState\`, \`Card\`, \`KvGrid\`, \`List\`, and \`Button\` from \`@helmx/plugin-client\`)' : ''}
 - Manifest: \`plugin.json\`; local typechecking: \`tsconfig.json\` + \`.helmx/types/\` (used by editors/\`tsc --noEmit\`; host runtime transpiler ignores \`tsconfig.json\` and skips \`.helmx/\` during installs; refresh types after upgrading Helmx via \`helmx plugins types\`)
 
 ## Development Loop
 
 \`\`\`bash
-helmx plugins doctor <absolute-path-to-dir>   # static self-check (real load + register + client compile)
+helmx plugins doctor <absolute-path-to-dir>   # static self-check (real load + register + client compile & UI/CSS hygiene)
 helmx plugins rescan                          # incrementally discover new plugin directories on Hub (disabled by default)
 helmx plugins enable <id>                     # enable plugin
 helmx plugins reload <id>                     # hot-reload after edits (previous instance stays active if preflight fails)
