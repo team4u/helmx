@@ -182,7 +182,7 @@ export function ProviderCredentialsSection({
             layout="horizontal"
           >
             <Stack direction="vertical" gap="xs">
-              <div className="form-grid-value" title={t('models.apiKey.pluginKeyTitle')}>
+              <div className="provider-readonly-value" title={t('models.apiKey.pluginKeyTitle')}>
                 {t('models.apiKey.pluginManaged', { pluginId: provider.pluginId })}
               </div>
               {onOpenPluginSettings !== undefined ? (
@@ -247,7 +247,7 @@ export function ProviderCredentialsSection({
             hint={endpointHint}
             layout="horizontal"
           >
-            <div className="form-grid-value mono break-word" title={t('models.endpoint.readOnlyTitle')}>
+            <div className="provider-readonly-value mono break-word selectable" title={t('models.endpoint.readOnlyTitle')}>
               {provider?.baseUrl || '—'}
             </div>
           </Field>

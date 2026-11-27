@@ -6,6 +6,7 @@ import {
   ComposerCommandContext,
   ComposerModelPickerModeContext,
   HelmxIcon,
+  Kbd,
   PluginSlot,
   createComposerCommandRegistry,
   createComposerModelPickerModeRegistry,
@@ -394,7 +395,7 @@ export const Composer = memo(function Composer({
                         title={t('conv.composer.cancelEditTitle')}
                       >
                         <span>{t('common.cancel')}</span>
-                        <span className="kbd-hint composer-inline-kbd">Esc</span>
+                        <Kbd size="sm" desktopOnly>Esc</Kbd>
                       </Button>
                     </div>
                   ) : null}

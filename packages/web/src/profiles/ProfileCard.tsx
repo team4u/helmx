@@ -147,7 +147,7 @@ export function ProfileCard({
               : t('profiles.card.noLinkedConversations')}
           </span>
           <Button
-            size="sm"
+            size="xs"
             icon="message-square"
             disabled={activity.managingPluginDisabled}
             title={

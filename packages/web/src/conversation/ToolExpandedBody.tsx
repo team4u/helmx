@@ -23,7 +23,7 @@
 import { Fragment, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { ToolEditDiff } from '@helmx/protocol/browser'
-import { Badge, Button, CopyButton, HelmxIcon, type BadgeTone } from '@helmx/plugin-client'
+import { Badge, Button, CopyButton, HelmxIcon, KvGrid, type BadgeTone } from '@helmx/plugin-client'
 import { useStoreActions } from '../lib/store-context.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { formatBytes } from '../lib/format.js'
@@ -631,18 +631,17 @@ function GenericToolBody({ tool, resultFetch }: ToolBodyProps): ReactNode {
       {kv.length > 0 ? (
         <>
           <div className="trace-section-label">{t('conv.generic.input')}</div>
-          <div className="kv-list trace-kv">
-            {kv.map((entry) => (
-              <Fragment key={entry.key}>
-                <span className="kv-key">{entry.key}</span>
-                {entry.block ? (
-                  <pre className="kv-val trace-kv-block code-block-pre">{entry.value}</pre>
-                ) : (
-                  <span className="kv-val">{entry.value}</span>
-                )}
-              </Fragment>
-            ))}
-          </div>
+          <KvGrid
+            className="trace-kv"
+            items={kv.map((entry) => ({
+              key: entry.key,
+              value: entry.block ? (
+                <pre className="trace-kv-block code-block-pre">{entry.value}</pre>
+              ) : (
+                entry.value
+              ),
+            }))}
+          />
         </>
       ) : null}
       {slice !== undefined ? (
@@ -744,14 +743,13 @@ function AskUserToolBody({ tool, conversationId, resultFetch }: ToolBodyProps): 
         </div>
       ) : null}
       {hasItems ? (
-        <div className="kv-list trace-kv ask-user-tool-items">
-          {meta.items!.map((item) => (
-            <Fragment key={item.id}>
-              <span className="kv-key">{item.question}</span>
-              <span className="kv-val">{item.answer}</span>
-            </Fragment>
-          ))}
-        </div>
+        <KvGrid
+          className="trace-kv ask-user-tool-items"
+          items={meta.items!.map((item) => ({
+            key: item.question,
+            value: item.answer,
+          }))}
+        />
       ) : tool.isError && tool.resultText !== undefined && tool.resultText.trim() !== '' ? (
         <span className="trace-tool-note">{tool.resultText}</span>
       ) : null}

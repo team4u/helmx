@@ -21,8 +21,8 @@ export interface NodeCardProps {
  * - built on SelectCard (<article> + <button aria-pressed> + sibling footer);
  * - header: leading icon block, status pulse indicator (done when online,
  *   idle when offline), node name, local/version badges and mono node ID;
- * - middle: platform/OS and CPU architecture badge, hostname and host uptime;
- * - bottom: supported tool capability badges (bash / read / write / edit, ...);
+ * - body: supported tool capability badges (bash / read / write / edit, ...);
+ * - footer: single-line runtime metadata (platform/arch badge, hostname, uptime);
  * - strictly zero Emoji and Fast Refresh compliant.
  */
 export function NodeCard({
@@ -44,6 +44,8 @@ export function NodeCard({
     Array.isArray(node.tools) && node.tools.length > 0
       ? node.tools
       : ['bash', 'read', 'write', 'edit']
+
+  const hasRuntimeMeta = platformArch !== '--' || Boolean(node.hostname) || uptime !== '--'
 
   return (
     <SelectCard
@@ -77,40 +79,44 @@ export function NodeCard({
         </span>
       }
       footer={
-        <Stack direction="horizontal" gap="xs" align="center" wrap>
-          {tools.slice(0, 4).map((tool) => (
-            <Badge key={tool} tone="neutral" mono icon="terminal" title={t('nodes.cardToolTitle', { tool })}>
-              {tool}
-            </Badge>
-          ))}
-          {tools.length > 4 && (
-            <Badge
-              tone="neutral"
-              className="tabular-nums"
-              title={t('nodes.moreTools', { count: tools.length - 4 })}
-            >
-              +{tools.length - 4}
-            </Badge>
-          )}
-        </Stack>
+        hasRuntimeMeta ? (
+          <>
+            <Stack direction="horizontal" gap="xs" align="center" className="node-card-runtime-meta">
+              {platformArch !== '--' && (
+                <Badge tone="neutral" mono title={t('nodes.platformTitle')}>
+                  {platformArch}
+                </Badge>
+              )}
+              {node.hostname && (
+                <span className="mono text-subtle node-card-hostname" title={t('nodes.hostnameTitle', { hostname: node.hostname })}>
+                  {node.hostname}
+                </span>
+              )}
+            </Stack>
+            {uptime !== '--' && (
+              <span className="text-subtle tabular-nums nowrap" title={t('nodes.uptimeTitle', { uptime })}>
+                {uptime}
+              </span>
+            )}
+          </>
+        ) : undefined
       }
     >
-      {/* Middle: platform, architecture and runtime overview */}
+      {/* Body: registered tool capability badges */}
       <Stack direction="horizontal" gap="xs" align="center" wrap>
-        {platformArch !== '--' && (
-          <Badge tone="neutral" mono title={t('nodes.platformTitle')}>
-            {platformArch}
+        {tools.slice(0, 4).map((tool) => (
+          <Badge key={tool} tone="neutral" mono icon="terminal" title={t('nodes.cardToolTitle', { tool })}>
+            {tool}
           </Badge>
-        )}
-        {node.hostname && (
-          <span className="mono text-subtle break-word" title={t('nodes.hostnameTitle', { hostname: node.hostname })}>
-            {node.hostname}
-          </span>
-        )}
-        {uptime !== '--' && (
-          <span className="text-subtle" title={t('nodes.uptimeTitle', { uptime })}>
-            {uptime}
-          </span>
+        ))}
+        {tools.length > 4 && (
+          <Badge
+            tone="neutral"
+            className="tabular-nums"
+            title={t('nodes.moreTools', { count: tools.length - 4 })}
+          >
+            +{tools.length - 4}
+          </Badge>
         )}
       </Stack>
     </SelectCard>

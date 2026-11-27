@@ -5,7 +5,7 @@ import {
   Callout,
   CardGrid,
   EmptyState,
-  HelmxIcon,
+  LoadingState,
   Screen,
   ScreenToolbar,
   SearchBox,
@@ -289,10 +289,7 @@ export function SkillCenter({
               </Callout>
             )}
             {scopeLoading && scopeLoadError === null && (
-              <div className="skill-scope-loading text-subtle" role="status">
-                <HelmxIcon name="loader" size={12} className="spin" />
-                <span>{t('skills.scope.loading')}</span>
-              </div>
+              <LoadingState className="skill-scope-loading" label={t('skills.scope.loading')} />
             )}
           </div>
         ) : undefined

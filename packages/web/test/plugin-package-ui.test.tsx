@@ -89,8 +89,11 @@ test('PluginInstallModal：SSR 渲染安全提示、来源输入与安装后启�
   assert.match(html, /run inside the Hub process/)
   assert.match(html, /not sandboxed/)
   assert.match(html, /Enable after install/)
-  assert.match(html, /modal-backdrop/, 'SSR 输出必须包含遮罩层容器')
+  assert.match(html, /helmx-modal-backdrop/, 'SSR 输出必须包含 ModalDialog 遮罩层容器')
+  assert.match(html, /helmx-modal-header/, 'SSR 输出必须包含 ModalDialog 顶栏')
+  assert.match(html, /helmx-modal-footer/, 'SSR 输出必须包含 ModalDialog 底栏')
   assert.match(html, /plugin-install-modal/, 'SSR 输出必须包含安装模态容器')
+  assert.doesNotMatch(html, /helmx-field-horizontal/, '安装模态表单字段应采用垂直 Field 排版')
   assert.doesNotMatch(html, /[\u{1F300}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}]/u)
 })
 
@@ -105,8 +108,8 @@ test('PluginInstallModal：输入旁来源识别提示随输入实时变化', { 
       root.render(e(PluginInstallModal, { open: true, onClose: () => {}, onInstalled: () => {}, inline: true }))
     })
 
-    const backdropModal = host.querySelector('.modal-backdrop .plugin-install-modal')
-    assert.ok(backdropModal, '安装模态必须置于 .modal-backdrop 内部以支持居中对齐与全屏遮罩')
+    const backdropModal = host.querySelector('.helmx-modal-backdrop .plugin-install-modal')
+    assert.ok(backdropModal, '安装模态必须置于 .helmx-modal-backdrop 内部以支持居中对齐与全屏遮罩')
 
     const input = host.querySelector<HTMLInputElement>('#plugin-install-source')
     assert.ok(input, '必须存在来源输入框')
@@ -216,8 +219,8 @@ test('PluginInstallModal：默认不启用（enable 不上送），失败展示�
       root.render(e(PluginInstallModal, { open: true, onClose: () => {}, onInstalled: () => {}, inline: true }))
     })
 
-    const backdropModal = host.querySelector('.modal-backdrop .plugin-install-modal')
-    assert.ok(backdropModal, '安装模态必须置于 .modal-backdrop 内部以支持居中对齐与全屏遮罩')
+    const backdropModal = host.querySelector('.helmx-modal-backdrop .plugin-install-modal')
+    assert.ok(backdropModal, '安装模态必须置于 .helmx-modal-backdrop 内部以支持居中对齐与全屏遮罩')
 
     const input = host.querySelector<HTMLInputElement>('#plugin-install-source')
     assert.ok(input, '模态内必须存在来源输入框')
@@ -276,8 +279,8 @@ test('PluginInstallModal：真实 Hub 422 失败时从 details.report 结构化�
       root.render(e(PluginInstallModal, { open: true, onClose: () => {}, onInstalled: () => {}, inline: true }))
     })
 
-    const backdropModal = host.querySelector('.modal-backdrop .plugin-install-modal')
-    assert.ok(backdropModal, '安装模态必须置于 .modal-backdrop 内部以支持居中对齐与全屏遮罩')
+    const backdropModal = host.querySelector('.helmx-modal-backdrop .plugin-install-modal')
+    assert.ok(backdropModal, '安装模态必须置于 .helmx-modal-backdrop 内部以支持居中对齐与全屏遮罩')
 
     const input = host.querySelector<HTMLInputElement>('#plugin-install-source')
     assert.ok(input, '模态内必须存在来源输入框')
@@ -579,8 +582,8 @@ test('PluginCenter 集成：安装成功后 syncPlugins 刷新列表并导航至
       installBtn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
     })
 
-    let modal = host.querySelector('.modal-backdrop .plugin-install-modal')
-    assert.ok(modal, '点击后必须在 .modal-backdrop 内部打开安装模态')
+    let modal = host.querySelector('.helmx-modal-backdrop .plugin-install-modal')
+    assert.ok(modal, '点击后必须在 .helmx-modal-backdrop 内部打开安装模态')
 
     // 服务端已注册新插件（模拟安装完成时刻的服务端状态）
     serverPlugins = [builtinPlugin, makeManagedPlugin()]

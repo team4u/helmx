@@ -618,7 +618,7 @@ test('CommandPaletteModal 与 ScreenHost 双语本地化及语言循环命令（
   render(store, e(CommandPaletteModal, { onClose: () => {} }))
   await act(async () => {})
 
-  const dialog = document.querySelector('.modal[aria-label="命令面板与全局搜索"]')
+  const dialog = document.querySelector('.helmx-modal[aria-label="命令面板与全局搜索"]')
   assert.ok(dialog)
   const langRowAuto = [...dialog.querySelectorAll<HTMLElement>('[data-idx].nav-item')].find((el) =>
     el.textContent?.includes('切换语言为 English'),

@@ -1,6 +1,6 @@
 import React from 'react'
 import type { PluginDoctorReport, PluginManagedMeta } from '@helmx/protocol/browser'
-import { Badge, Button, Card, Field, HelmxIcon, Input, Stack } from '@helmx/plugin-client'
+import { Badge, Button, Card, HelmxIcon, Input, KvGrid, Stack } from '@helmx/plugin-client'
 import { useWebLocale } from '../../i18n/use-web-locale.js'
 import {
   detectPluginSourceKind,
@@ -48,7 +48,6 @@ export function PluginPackageSection({
   return (
     <Card
       variant="subtle"
-      className="plugin-package-section"
       title={
         <Stack direction="horizontal" gap="xs" align="center" inline>
           <HelmxIcon name="boxes" size={13} />
@@ -56,86 +55,88 @@ export function PluginPackageSection({
         </Stack>
       }
     >
-      <Stack direction="vertical" gap="sm" className="plugin-package-meta">
-        <Field
-          label={t('plugins.package.sourceLabel')}
-          htmlFor={false}
-          layout="horizontal"
-        >
-          <Stack direction="horizontal" gap="xs" align="center" wrap className="plugin-package-source-row">
-            <Badge tone="neutral" mono data-source-kind={managed.source.kind}>
-              {pluginSourceBadgeLabel(managed.source, t)}
-            </Badge>
-            <span className="mono selectable plugin-package-source-text">
-              {pluginSourceDisplayText(managed.source)}
-            </span>
-            <Button
-              variant="ghost"
-              size="xs"
-              disabled={operationsLocked}
-              onClick={() => {
-                if (editingSource) {
-                  onEditingChange(false)
-                  onSourceDraftChange('')
-                } else {
-                  onEditingChange(true)
-                  onSourceDraftChange(managed.source.raw)
-                }
-              }}
-            >
-              {editingSource ? t('common.cancel') : t('plugins.package.changeSource')}
-            </Button>
-          </Stack>
-          {editingSource && (
-            <Stack direction="vertical" gap="xs" className="plugin-package-source-editor">
-              <Input
-                mono
-                type="text"
-                value={sourceDraft}
-                invalid={draftTrimmed !== '' && draftHint.kind === 'unknown'}
-                placeholder={t('plugins.package.newSourcePlaceholder')}
-                aria-label={t('plugins.package.changeSource')}
-                spellCheck={false}
-                autoComplete="off"
-                disabled={operationsLocked}
-                onChange={(e) => onSourceDraftChange(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && draftSubmittable) {
-                    e.preventDefault()
-                    onUpdate()
-                  }
-                }}
-              />
-              {draftTrimmed !== '' && (
-                <span
-                  className={`plugin-source-hint${draftHint.kind === 'unknown' ? ' is-unknown' : ''}`}
-                  data-source-kind={draftHint.kind}
-                >
-                  {draftHint.label}
-                </span>
-              )}
-            </Stack>
-          )}
-        </Field>
-        {managed.installedVersion !== '' && (
-          <Field
-            label={t('plugins.package.installedVersionLabel')}
-            htmlFor={false}
-            layout="horizontal"
-          >
-            <span className="form-grid-value mono">{managed.installedVersion}</span>
-          </Field>
-        )}
-        {installedAt !== '' && (
-          <Field
-            label={t('plugins.package.installedAtLabel')}
-            htmlFor={false}
-            layout="horizontal"
-          >
-            <span className="form-grid-value">{installedAt}</span>
-          </Field>
-        )}
-      </Stack>
+      <KvGrid
+        className="plugin-package-meta"
+        items={[
+          {
+            key: t('plugins.package.sourceLabel'),
+            value: (
+              <Stack direction="vertical" gap="xs">
+                <Stack direction="horizontal" gap="xs" align="center" wrap className="plugin-package-source-row">
+                  <Badge tone="neutral" mono data-source-kind={managed.source.kind}>
+                    {pluginSourceBadgeLabel(managed.source, t)}
+                  </Badge>
+                  <span className="mono selectable plugin-package-source-text">
+                    {pluginSourceDisplayText(managed.source)}
+                  </span>
+                  <Button
+                    variant="ghost"
+                    size="xs"
+                    disabled={operationsLocked}
+                    onClick={() => {
+                      if (editingSource) {
+                        onEditingChange(false)
+                        onSourceDraftChange('')
+                      } else {
+                        onEditingChange(true)
+                        onSourceDraftChange(managed.source.raw)
+                      }
+                    }}
+                  >
+                    {editingSource ? t('common.cancel') : t('plugins.package.changeSource')}
+                  </Button>
+                </Stack>
+                {editingSource && (
+                  <Stack direction="vertical" gap="xs" className="plugin-package-source-editor">
+                    <Input
+                      mono
+                      type="text"
+                      value={sourceDraft}
+                      invalid={draftTrimmed !== '' && draftHint.kind === 'unknown'}
+                      placeholder={t('plugins.package.newSourcePlaceholder')}
+                      aria-label={t('plugins.package.changeSource')}
+                      spellCheck={false}
+                      autoComplete="off"
+                      disabled={operationsLocked}
+                      onChange={(e) => onSourceDraftChange(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && draftSubmittable) {
+                          e.preventDefault()
+                          onUpdate()
+                        }
+                      }}
+                    />
+                    {draftTrimmed !== '' && (
+                      <span
+                        className={`plugin-source-hint${draftHint.kind === 'unknown' ? ' is-unknown' : ''}`}
+                        data-source-kind={draftHint.kind}
+                      >
+                        {draftHint.label}
+                      </span>
+                    )}
+                  </Stack>
+                )}
+              </Stack>
+            ),
+          },
+          ...(managed.installedVersion !== ''
+            ? [
+                {
+                  key: t('plugins.package.installedVersionLabel'),
+                  value: <span className="mono tabular-nums">{managed.installedVersion}</span>,
+                },
+              ]
+            : []),
+          ...(installedAt !== ''
+            ? [
+                {
+                  key: t('plugins.package.installedAtLabel'),
+                  value: <span className="tabular-nums">{installedAt}</span>,
+                },
+              ]
+            : []),
+        ]}
+      />
       <Stack direction="horizontal" gap="sm" align="center" wrap className="plugin-package-actions">
         <Button
           size="sm"

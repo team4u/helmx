@@ -586,7 +586,9 @@ test('SkillCard: omits the 0-references pill without references; the /skill:<id>
     ),
   )
   assert.ok(!html.includes('0 reference files'), 'the 0-references pill must not render without references')
-  assert.ok(html.includes('/skill:database-migration'), 'the copyable /skill:<id> command pill must render')
+  assert.ok(html.includes('/skill:database-migration'), 'the copyable /skill:<id> command button must render')
+  assert.match(html, /btn-xs/, 'the footer copy button must use size="xs"')
+  assert.doesNotMatch(html, /btn-pill/, 'the footer copy button must use crisp 5px geometry without pill radius')
 
   const host = document.createElement('div')
   document.body.appendChild(host)
@@ -1004,8 +1006,8 @@ test('SkillDetailDrawer: Failed to read errors explicitly and empty files show a
       ),
     )
   })
-  const placeholder = host2.querySelector('.skill-reader-placeholder') as HTMLElement
-  assert.ok(placeholder, 'empty files must render the placeholder hint')
+  const placeholder = host2.querySelector('.empty-state.empty-state-compact.skill-reader-placeholder') as HTMLElement
+  assert.ok(placeholder, 'empty files must render the unified compact EmptyState placeholder')
   assert.ok(placeholder.textContent?.includes('The file is empty'), 'the placeholder copy must be the empty-file message')
 
   await act(async () => {

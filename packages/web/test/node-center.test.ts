@@ -256,6 +256,11 @@ test('NodeCard: SSR renders node name, architecture badge, online indicator with
   assert.match(localHtml, /Online/)
   assert.match(localHtml, /bash/)
   assert.match(localHtml, /read/)
+  const nodeBodyIdx = localHtml.indexOf('helmx-card-body')
+  const nodeFooterIdx = localHtml.indexOf('helmx-card-footer')
+  assert.ok(nodeBodyIdx > 0 && nodeFooterIdx > nodeBodyIdx, 'NodeCard renders capability badges in body before single-line runtime footer')
+  assert.match(localHtml.slice(nodeBodyIdx, nodeFooterIdx), /bash[\s\S]*read/)
+  assert.match(localHtml.slice(nodeFooterIdx), /linux \/ x64[\s\S]*dev-box/)
   assert.doesNotMatch(localHtml, EMOJI_REGEX)
 
   // 2. Selected-state class names

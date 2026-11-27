@@ -349,15 +349,14 @@ export function ComposerInputShell({
                   }}
                 >
                   <DropdownMenuItem
-                    className="composer-plus-menu-item"
+                    icon="paperclip"
                     disabled={uploadDisabled}
                     onSelect={() => {
                       plusMenuClosedByActionRef.current = true
                       plusMenu.onOpenFilePicker()
                     }}
                   >
-                    <HelmxIcon name="paperclip" size={14} className="composer-plus-menu-icon" />
-                    <span className="composer-plus-menu-label">{plusMenu.uploadButtonLabel}</span>
+                    {plusMenu.uploadButtonLabel}
                   </DropdownMenuItem>
                   {hasToolsSection ? (
                     <div className="composer-plus-menu-group">
@@ -366,24 +365,15 @@ export function ComposerInputShell({
                       {plusMenu.commands?.map((cmd) => (
                         <DropdownMenuItem
                           key={`cmd:${cmd.pluginId}/${cmd.spec.id}`}
-                          className="composer-plus-menu-item"
+                          icon={cmd.spec.icon ?? 'terminal'}
+                          shortcut={cmd.spec.slash !== undefined ? `/${cmd.spec.slash}` : undefined}
                           disabled={menuCommandsDisabled}
                           onSelect={() => {
                             plusMenuClosedByActionRef.current = true
                             plusMenu.onRunCommand?.(cmd)
                           }}
                         >
-                          <HelmxIcon
-                            name={cmd.spec.icon ?? 'terminal'}
-                            size={14}
-                            className="composer-plus-menu-icon"
-                          />
-                          <span className="composer-plus-menu-label">
-                            {resolveLocalizedText(cmd.spec.title, locale)}
-                          </span>
-                          {cmd.spec.slash !== undefined ? (
-                            <span className="composer-plus-menu-hint mono">{`/${cmd.spec.slash}`}</span>
-                          ) : null}
+                          {resolveLocalizedText(cmd.spec.title, locale)}
                         </DropdownMenuItem>
                       ))}
                     </div>

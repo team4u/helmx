@@ -8,7 +8,9 @@
  */
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
 import {
+  EmptyState,
   HelmxIcon,
+  Kbd,
   Popover,
   PopoverContent,
   PopoverTrigger,
@@ -212,9 +214,10 @@ export function StandbyProfilePicker({
               <div className="composer-model-search-bar">
                 <SearchBox
                   size="sm"
+                  surface="subtle"
                   clearable={false}
                   clearOnEscape={false}
-                  className="search-box composer-model-search-input"
+                  className="composer-model-search-input"
                   inputRef={searchInputRef}
                   ariaLabel={t('composer.standby.searchProfilesAria')}
                   placeholder={t('composer.standby.searchProfilesPlaceholder')}
@@ -225,7 +228,7 @@ export function StandbyProfilePicker({
             ) : null}
             <div className="popover-header">
               <span>{t('composer.standby.switchProfileHeader')}</span>
-              <span className="kbd-hint popover-kbd-hint">{t('composer.kbd.navConfirm')}</span>
+              <Kbd size="sm" desktopOnly>{t('composer.kbd.navConfirm')}</Kbd>
             </div>
             <div
               ref={listRef}
@@ -235,9 +238,7 @@ export function StandbyProfilePicker({
               className="agent-standby-profile-list"
             >
               {filtered.length === 0 ? (
-                <div className="popover-item composer-model-empty">
-                  {t('composer.standby.noMatchingProfiles')}
-                </div>
+                <EmptyState compact title={t('composer.standby.noMatchingProfiles')} />
               ) : (
                 filtered.map((opt, idx) => {
                   const selected = opt.profileId === profileId

@@ -86,17 +86,6 @@
   white-space: nowrap;
 }
 
-.composer-inline-kbd {
-  font-size: 10px;
-  font-family: var(--font-mono);
-  color: var(--fg-subtle);
-  background: var(--bg-muted);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-xs);
-  padding: 0 4px;
-  line-height: 1.4;
-}
-
 /* Composer 顶部直出托盘插槽（COMPOSER_DOCK_SLOT）：无在途贡献时归零高度与 flex 间距 */
 .composer-dock-slot {
   display: flex;

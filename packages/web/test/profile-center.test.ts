@@ -267,6 +267,8 @@ test('ProfileCard: SSR structure, badges, skill pills and zero emoji', { timeout
   assert.match(systemHtml, /claude-3-7-sonnet/)
   assert.match(systemHtml, /2 skills/)
   assert.match(systemHtml, /系统/) // system lock pill (zh fixture name)
+  assert.match(systemHtml, /helmx-card-footer[\s\S]*btn-xs/, 'ProfileCard footer conversation button must use size="xs"')
+  assert.doesNotMatch(systemHtml, /helmx-card-footer[\s\S]*btn-sm/, 'ProfileCard footer must not use size="sm"')
   assert.doesNotMatch(systemHtml, EMOJI_REGEX, 'system profile card output must contain no emoji')
 
   // 2. Custom profile following all skills

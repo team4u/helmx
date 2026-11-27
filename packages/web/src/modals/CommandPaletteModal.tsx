@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
-import { Dialog, DialogContent, DialogOverlay, DialogPortal, DialogTitle, HelmxIcon } from '@helmx/plugin-client'
+import { Dialog, DialogContent, DialogOverlay, DialogPortal, DialogTitle, EmptyState, HelmxIcon, LoadingState } from '@helmx/plugin-client'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { isImeComposing } from '../lib/ime.js'
 import { formatModShortcut } from '../shell/shortcuts-model.js'
@@ -135,10 +135,10 @@ export function CommandPaletteModal({
   return (
     <Dialog open onOpenChange={(open) => { if (!open) onClose() }}>
       <DialogPortal>
-        <DialogOverlay className="modal-backdrop palette-backdrop">
+        <DialogOverlay className="helmx-modal-backdrop palette-backdrop">
           <DialogContent
             ref={attachModalRef}
-            className="modal palette-modal"
+            className="helmx-modal palette-modal"
             aria-label={t('modals.palette.dialogTitle')}
             onKeyDown={onKeyDown}
             onEscapeKeyDown={handleEscapeKeyDown}
@@ -159,7 +159,7 @@ export function CommandPaletteModal({
               }}
             />
 
-            <div className="modal-body palette-body" ref={listRef}>
+            <div className="helmx-modal-body palette-body" ref={listRef}>
               {previewCmd && (
                 <CommandPalettePreview
                   pluginId={previewCmd.pluginId}
@@ -187,15 +187,27 @@ export function CommandPaletteModal({
               )}
 
               {rows.length === 0 && (
-                <div className="palette-empty" role="status">
-                  {trimmedQuery === ''
-                    ? t('modals.palette.emptyHint')
-                    : searchUnavailable
-                      ? t('modals.palette.searchUnavailable')
-                      : isSearchPending
-                        ? t('modals.palette.searchingHint')
-                        : t('modals.palette.noResults')}
-                </div>
+                isSearchPending ? (
+                  <LoadingState
+                    label={t('modals.palette.searchingHint')}
+                    iconSize={13}
+                    className="palette-empty"
+                  />
+                ) : (
+                  <div role="status">
+                    <EmptyState
+                      compact
+                      className="palette-empty"
+                      title={
+                        trimmedQuery === ''
+                          ? t('modals.palette.emptyHint')
+                          : searchUnavailable
+                            ? t('modals.palette.searchUnavailable')
+                            : t('modals.palette.noResults')
+                      }
+                    />
+                  </div>
+                )
               )}
 
               <CommandPaletteList

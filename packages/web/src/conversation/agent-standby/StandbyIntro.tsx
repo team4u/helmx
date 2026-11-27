@@ -8,6 +8,7 @@ import type { Profile } from '@helmx/protocol/browser'
 import {
   Button,
   HelmxIcon,
+  Kbd,
   Stack,
   type HelmxShortcutEventDetail,
 } from '@helmx/plugin-client'
@@ -136,20 +137,20 @@ export function StandbyIntro({
         <div className="agent-standby-shortcuts" aria-label={t('composer.standby.shortcutsAria')}>
           {canSwitchProfile ? (
             <span className="agent-standby-shortcut-item">
-              <kbd className="kbd-hint">{formatModShiftShortcut('O')}</kbd>
+              <Kbd size="sm" desktopOnly>{formatModShiftShortcut('O')}</Kbd>
               <span>{t('composer.standby.shortcutProfile')}</span>
             </span>
           ) : null}
           <span className="agent-standby-shortcut-item">
-            <kbd className="kbd-hint">{formatModShortcut('K')}</kbd>
+            <Kbd size="sm" desktopOnly>{formatModShortcut('K')}</Kbd>
             <span>{t('composer.standby.shortcutSearch')}</span>
           </span>
           <span className="agent-standby-shortcut-item">
-            <kbd className="kbd-hint">{COMPOSER_SHORTCUTS.toggleModelPicker}</kbd>
+            <Kbd size="sm" desktopOnly>{COMPOSER_SHORTCUTS.toggleModelPicker}</Kbd>
             <span>{t('composer.standby.shortcutModel')}</span>
           </span>
           <span className="agent-standby-shortcut-item">
-            <kbd className="kbd-hint">/</kbd>
+            <Kbd size="sm" desktopOnly>/</Kbd>
             <span>{t('composer.standby.shortcutCommands')}</span>
           </span>
           <Button
@@ -158,7 +159,7 @@ export function StandbyIntro({
             onClick={openAllShortcuts}
           >
             <span>{t('composer.standby.shortcutAll')}</span>
-            <kbd className="kbd-hint">{formatModShortcut('/')}</kbd>
+            <Kbd size="sm" desktopOnly>{formatModShortcut('/')}</Kbd>
           </Button>
         </div>
       ) : null}

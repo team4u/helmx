@@ -1,5 +1,5 @@
 import React from 'react'
-import { Button } from '@helmx/plugin-client'
+import { Button, Kbd } from '@helmx/plugin-client'
 import { useWebLocale } from '../../i18n/use-web-locale.js'
 import { formatModShortcut } from '../../shell/shortcuts-model.js'
 
@@ -12,19 +12,19 @@ export function CommandPaletteFooter({ onOpenShortcuts }: { onOpenShortcuts: () 
     <div className="palette-footer">
       <div className="palette-footer-hints" aria-hidden="true">
         <span className="palette-footer-hint">
-          <kbd className="kbd-hint">↑↓</kbd>
+          <Kbd size="sm">↑↓</Kbd>
           <span>{t('modals.palette.footerSelect')}</span>
         </span>
         <span className="palette-footer-hint">
-          <kbd className="kbd-hint">Enter</kbd>
+          <Kbd size="sm">Enter</Kbd>
           <span>{t('modals.palette.footerOpen')}</span>
         </span>
         <span className="palette-footer-hint">
-          <kbd className="kbd-hint">{modEnterHint}</kbd>
+          <Kbd size="sm">{modEnterHint}</Kbd>
           <span>{t('modals.palette.footerSplit')}</span>
         </span>
         <span className="palette-footer-hint">
-          <kbd className="kbd-hint">Esc</kbd>
+          <Kbd size="sm">Esc</Kbd>
           <span>{t('modals.palette.footerClose')}</span>
         </span>
       </div>
@@ -35,7 +35,7 @@ export function CommandPaletteFooter({ onOpenShortcuts }: { onOpenShortcuts: () 
         onClick={onOpenShortcuts}
       >
         <span>{t('modals.palette.footerShortcuts')}</span>
-        <kbd className="kbd-hint">{shortcutsHint}</kbd>
+        <Kbd size="sm">{shortcutsHint}</Kbd>
       </Button>
     </div>
   )

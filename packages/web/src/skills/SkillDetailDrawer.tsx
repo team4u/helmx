@@ -8,6 +8,7 @@ import {
   DetailDrawer,
   EmptyState,
   HelmxIcon,
+  LoadingState,
   MonoId,
   SegmentedControl,
   Select,
@@ -255,7 +256,7 @@ export function SkillDetailDrawer({
       closeLabel={t('common.close')}
     >
             {!skill ? (
-              <EmptyState>{t('skills.drawer.noSkillSelected')}</EmptyState>
+              <EmptyState compact title={t('skills.drawer.noSkillSelected')} />
             ) : (
               <>
                 {/* Compact file reader: single toolbar row + single scrollable reader */}
@@ -283,10 +284,7 @@ export function SkillDetailDrawer({
 
                     <div className="skill-reader-toolbar-meta">
                       {loading && (
-                        <span className="skill-reader-loading text-subtle">
-                          <HelmxIcon name="loader" size={12} className="spin" />
-                          <span>{t('common.loading')}</span>
-                        </span>
+                        <LoadingState className="skill-reader-loading" label={t('common.loading')} />
                       )}
                       {isMarkdown && (
                         <SegmentedControl
@@ -352,12 +350,18 @@ export function SkillDetailDrawer({
                           </span>
                         </Callout>
                       ) : loading && content === '' ? (
-                        <div className="skill-reader-placeholder text-subtle">
-                          <HelmxIcon name="loader" size={13} className="spin" />
-                          <span>{t('skills.drawer.readingContent')}</span>
-                        </div>
+                        <LoadingState
+                          className="skill-reader-placeholder"
+                          iconSize={13}
+                          label={t('skills.drawer.readingContent')}
+                        />
                       ) : content === '' ? (
-                        <div className="skill-reader-placeholder text-subtle">{t('skills.drawer.fileEmpty')}</div>
+                        <EmptyState
+                          compact
+                          icon="file-text"
+                          className="skill-reader-placeholder"
+                          title={t('skills.drawer.fileEmpty')}
+                        />
                       ) : richText ? (
                         <div className="skill-reader-doc selectable">
                           <MarkdownView text={displayText} />

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Badge,
   Button,
+  EmptyState,
   HelmxIcon,
   Popover,
   PopoverContent,
@@ -287,7 +288,8 @@ export function ConversationOutlinePopover({
           <div className="conversation-outline-header">
             <SearchBox
               size="sm"
-              className="search-box conversation-outline-search"
+              surface="subtle"
+              className="conversation-outline-search"
               inputRef={searchInputRef}
               value={query}
               onChange={setQuery}
@@ -335,9 +337,7 @@ export function ConversationOutlinePopover({
 
           <div ref={listRef} className="conversation-outline-list" role="listbox" aria-label={t('conv.outline.entries')}>
             {filtered.length === 0 ? (
-              <div className="conversation-outline-empty">
-                {t('conv.outline.noMatches')}
-              </div>
+              <EmptyState compact title={t('conv.outline.noMatches')} />
             ) : (
               filtered.map((node, idx) => {
                 const isSelected = idx === selectedIdx

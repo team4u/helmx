@@ -26,7 +26,7 @@ export function PluginDrawerActionBar({
 }: PluginDrawerActionBarProps): React.JSX.Element {
   const { t } = useWebLocale()
   return (
-    <Card variant="subtle" className="plugin-drawer-action-card">
+    <Card variant="subtle">
       <Stack direction="horizontal" gap="md" align="center" justify="between" wrap>
         <Stack direction="horizontal" gap="sm" align="center" className="plugin-drawer-status-wrap">
           <span className="text-subtle">{t('plugins.drawer.currentStatus')}</span>

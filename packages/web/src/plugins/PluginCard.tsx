@@ -35,8 +35,8 @@ export interface PluginCardProps {
  * 全屏插件中心单张插件卡片视图组件：
  * - 基于 SelectCard（<article> + <button aria-pressed> + 兄弟 footer/actions 槽位）；
  * - 顶部展示名称、ID（严格靠左对齐）、版本与常驻徽章，零图标杂音；
- * - 中部展示简要功能说明；
- * - 底部展示能力徽章（Tools / Actions / Hooks）与快捷启停开关；
+ * - 中部展示简要功能说明、能力计数徽章（Tools / Actions / Hooks）与故障摘要；
+ * - 底部统一为单行 size="xs" 快捷操作按钮与启停开关；
  * - 全程零 Emoji，符合无障碍与键盘导航规范。
  */
 export function PluginCard({
@@ -89,6 +89,11 @@ export function PluginCard({
     .join(' ')
 
   const versionLabel = plugin.version ? `v${plugin.version.replace(/^v/, '')}` : null
+  const toolCount = plugin.tools?.length ?? 0
+  const actionCount = plugin.actions?.length ?? 0
+  const hookCount = plugin.hooks?.length ?? 0
+  const hasCapabilityBadges = toolCount > 0 || actionCount > 0 || hookCount > 0
+  const errorSummary = failed && plugin.error?.message ? plugin.error.message : null
 
   return (
     <SelectCard
@@ -135,117 +140,120 @@ export function PluginCard({
         </span>
       }
       footer={
-        <>
-          <Stack direction="horizontal" gap="xs" align="center" wrap>
-            {(plugin.tools?.length ?? 0) > 0 && (
-              <Badge tone="neutral" mono icon="wrench" title={t('plugins.card.toolsTitle', { count: plugin.tools.length })}>
-                {`${plugin.tools.length} Tools`}
-              </Badge>
-            )}
-            {(plugin.actions?.length ?? 0) > 0 && (
-              <Badge tone="neutral" mono icon="zap" title={t('plugins.card.actionsTitle', { count: plugin.actions.length })}>
-                {`${plugin.actions.length} Actions`}
-              </Badge>
-            )}
-            {(plugin.hooks?.length ?? 0) > 0 && (
-              <Badge tone="neutral" mono icon="layers" title={t('plugins.card.hooksTitle', { count: plugin.hooks.length })}>
-                {`${plugin.hooks.length} Hooks`}
-              </Badge>
-            )}
-          </Stack>
-
-          <Stack direction="horizontal" gap="xs" align="center" className="plugin-card-actions">
-            {plugin.managed !== undefined && onUpdate !== undefined && (
+        <Stack direction="horizontal" gap="xs" align="center" className="plugin-card-actions">
+          {plugin.managed !== undefined && onUpdate !== undefined && (
+            <IconButton
+              variant="secondary"
+              size="xs"
+              icon={<HelmxIcon name="refresh-cw" size={10} className={updating ? 'spin' : undefined} />}
+              className="plugin-card-update-btn"
+              disabled={updating || updateDisabled}
+              title={updating ? t('plugins.package.updating') : t('plugins.card.updateTitle')}
+              aria-label={t('plugins.card.updateAria', { name })}
+              onClick={(e) => {
+                e.stopPropagation()
+                void onUpdate()
+              }}
+              onKeyDown={(e) => {
+                e.stopPropagation()
+              }}
+            />
+          )}
+          {primaryScreen !== null && actions !== null && (
+            <>
+              <Button
+                size="xs"
+                icon="play"
+                className="plugin-card-open-btn"
+                title={t('plugins.card.openViewTitle')}
+                aria-label={t('plugins.card.openViewAria', { name })}
+                onClick={(e) => {
+                  e.stopPropagation()
+                  actions.openTarget({
+                    kind: 'screen',
+                    pluginId: primaryScreen.pluginId,
+                    screenId: primaryScreen.screenId,
+                  })
+                }}
+                onKeyDown={(e) => {
+                  e.stopPropagation()
+                }}
+              >
+                {t('plugins.openView')}
+              </Button>
               <IconButton
                 variant="secondary"
                 size="xs"
-                icon={<HelmxIcon name="refresh-cw" size={10} className={updating ? 'spin' : undefined} />}
-                className="plugin-card-update-btn"
-                disabled={updating || updateDisabled}
-                title={updating ? t('plugins.package.updating') : t('plugins.card.updateTitle')}
-                aria-label={t('plugins.card.updateAria', { name })}
+                icon="columns"
+                className="split-toggle-btn plugin-card-split-btn"
+                title={t('plugins.card.openSplitTitle')}
+                aria-label={t('plugins.card.openSplitAria', { name })}
                 onClick={(e) => {
                   e.stopPropagation()
-                  void onUpdate()
+                  actions.openTarget(
+                    {
+                      kind: 'screen',
+                      pluginId: primaryScreen.pluginId,
+                      screenId: primaryScreen.screenId,
+                    },
+                    { split: true },
+                  )
                 }}
                 onKeyDown={(e) => {
                   e.stopPropagation()
                 }}
               />
-            )}
-            {primaryScreen !== null && actions !== null && (
-              <>
-                <Button
-                  size="xs"
-                  icon="play"
-                  className="plugin-card-open-btn"
-                  title={t('plugins.card.openViewTitle')}
-                  aria-label={t('plugins.card.openViewAria', { name })}
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    actions.openTarget({
-                      kind: 'screen',
-                      pluginId: primaryScreen.pluginId,
-                      screenId: primaryScreen.screenId,
-                    })
-                  }}
-                  onKeyDown={(e) => {
-                    e.stopPropagation()
-                  }}
-                >
-                  {t('plugins.openView')}
-                </Button>
-                <IconButton
-                  variant="secondary"
-                  size="xs"
-                  icon="columns"
-                  className="split-toggle-btn plugin-card-split-btn"
-                  title={t('plugins.card.openSplitTitle')}
-                  aria-label={t('plugins.card.openSplitAria', { name })}
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    actions.openTarget(
-                      {
-                        kind: 'screen',
-                        pluginId: primaryScreen.pluginId,
-                        screenId: primaryScreen.screenId,
-                      },
-                      { split: true },
-                    )
-                  }}
-                  onKeyDown={(e) => {
-                    e.stopPropagation()
-                  }}
-                />
-              </>
-            )}
-            <div
-              className="plugin-card-switch-wrap"
-              onClick={(e) => {
-                e.stopPropagation()
+            </>
+          )}
+          <div
+            className="plugin-card-switch-wrap"
+            onClick={(e) => {
+              e.stopPropagation()
+            }}
+            onKeyDown={(e) => {
+              e.stopPropagation()
+            }}
+          >
+            <Switch
+              checked={plugin.enabled}
+              disabled={isSwitchDisabled}
+              onChange={(checked) => {
+                void onToggle(checked)
               }}
-              onKeyDown={(e) => {
-                e.stopPropagation()
-              }}
-            >
-              <Switch
-                checked={plugin.enabled}
-                disabled={isSwitchDisabled}
-                onChange={(checked) => {
-                  void onToggle(checked)
-                }}
-                aria-label={t('plugins.card.switchAria', { name })}
-                title={switchTitle}
-              />
-            </div>
-          </Stack>
-        </>
+              aria-label={t('plugins.card.switchAria', { name })}
+              title={switchTitle}
+            />
+          </div>
+        </Stack>
       }
     >
-      {failed && plugin.error?.message ? (
-        <div className="plugin-card-error-summary" title={plugin.error.message}>
-          {plugin.error.message}
-        </div>
+      {hasCapabilityBadges || errorSummary !== null ? (
+        <>
+          {hasCapabilityBadges && (
+            <Stack direction="horizontal" gap="xs" align="center" wrap>
+              {toolCount > 0 && (
+                <Badge tone="neutral" mono icon="wrench" title={t('plugins.card.toolsTitle', { count: toolCount })}>
+                  {`${toolCount} Tools`}
+                </Badge>
+              )}
+              {actionCount > 0 && (
+                <Badge tone="neutral" mono icon="zap" title={t('plugins.card.actionsTitle', { count: actionCount })}>
+                  {`${actionCount} Actions`}
+                </Badge>
+              )}
+              {hookCount > 0 && (
+                <Badge tone="neutral" mono icon="layers" title={t('plugins.card.hooksTitle', { count: hookCount })}>
+                  {`${hookCount} Hooks`}
+                </Badge>
+              )}
+            </Stack>
+          )}
+          {errorSummary !== null && (
+            <div className="plugin-card-error-summary" title={errorSummary}>
+              {errorSummary}
+            </div>
+          )}
+        </>
       ) : null}
     </SelectCard>
   )
