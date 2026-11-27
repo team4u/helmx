@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useState } from 'react'
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import type { ArtifactMetadata, ConversationSummary } from '@helmx/protocol/browser'
 import { Badge, Button, EmptyState, HelmxIcon, Tabs, TabsList, TabsTrigger } from '@helmx/plugin-client'
 import {
@@ -378,6 +378,37 @@ export function WorkbenchView(props: WorkbenchViewProps) {
     }
   }, [active, sseConnected, conversation, activeTab, currentTab, handleTabChange])
 
+  const tabsScrollRef = useRef<HTMLDivElement | null>(null)
+  const [tabOverflow, setTabOverflow] = useState<{ left: boolean; right: boolean }>({ left: false, right: false })
+
+  const syncTabOverflow = useCallback(() => {
+    const el = tabsScrollRef.current
+    if (el === null) return
+    const left = el.scrollLeft > 2
+    const right = el.scrollLeft + el.clientWidth < el.scrollWidth - 2
+    setTabOverflow((prev) => (prev.left === left && prev.right === right ? prev : { left, right }))
+  }, [])
+
+  useEffect(() => {
+    const el = tabsScrollRef.current
+    if (el === null) return
+    syncTabOverflow()
+    el.addEventListener('scroll', syncTabOverflow, { passive: true })
+    window.addEventListener('resize', syncTabOverflow)
+    const ro = typeof ResizeObserver === 'function' ? new ResizeObserver(syncTabOverflow) : null
+    ro?.observe(el)
+    return () => {
+      el.removeEventListener('scroll', syncTabOverflow)
+      window.removeEventListener('resize', syncTabOverflow)
+      ro?.disconnect()
+    }
+  }, [syncTabOverflow, tabs.length])
+
+  useEffect(() => {
+    const activeEl = tabsScrollRef.current?.querySelector('.tab-btn-active') as HTMLElement | null
+    activeEl?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' })
+  }, [activeTab, tabs.length])
+
   return (
     <div className="helmx-workbench-view">
       <Tabs
@@ -388,7 +419,12 @@ export function WorkbenchView(props: WorkbenchViewProps) {
       >
         <TabsList asChild>
           <div className="tabs-bar">
-            <div className="workbench-tabs-scroll">
+            <div
+              ref={tabsScrollRef}
+              className="workbench-tabs-scroll"
+              data-overflow-left={tabOverflow.left ? 'true' : undefined}
+              data-overflow-right={tabOverflow.right ? 'true' : undefined}
+            >
               {tabs.map((tab) => (
                 <TabsTrigger
                   key={tab.id}

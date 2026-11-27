@@ -268,6 +268,7 @@ export function ComposerInputShell({
             onClick={draft.onClick}
             onKeyDown={draft.onKeyDown}
             onPaste={draft.onPaste}
+            enterKeyHint="send"
             spellCheck={false}
           />
           {completions.slashOpen ? (

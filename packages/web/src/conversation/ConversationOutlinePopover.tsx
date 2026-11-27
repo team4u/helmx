@@ -118,6 +118,7 @@ export function ConversationOutlinePopover({
   const [query, setQuery] = useState('')
   const [mode, setMode] = useState<OutlineFilterMode>('dialogue')
   const [selectedIdx, setSelectedIdx] = useState(0)
+  const popoverContentRef = useRef<HTMLDivElement | null>(null)
   const searchInputRef = useRef<HTMLInputElement | null>(null)
   const listRef = useRef<HTMLDivElement | null>(null)
   const awaitingInitialAnchorRef = useRef(false)
@@ -255,6 +256,8 @@ export function ConversationOutlinePopover({
       </PopoverTrigger>
       {!forceMount || open ? (
       <PopoverContent
+        ref={popoverContentRef}
+        tabIndex={-1}
         portalled={portalled}
         forceMount={forceMount ? true : undefined}
         align="end"
@@ -263,7 +266,14 @@ export function ConversationOutlinePopover({
         aria-label={effectiveAccessibilityLabel}
         onOpenAutoFocus={(e) => {
           e.preventDefault()
-          searchInputRef.current?.focus()
+          const isCoarseTouch =
+            typeof window !== 'undefined' &&
+            window.matchMedia?.('(hover: none) and (pointer: coarse)').matches === true
+          if (isCoarseTouch) {
+            popoverContentRef.current?.focus({ preventScroll: true })
+          } else {
+            searchInputRef.current?.focus()
+          }
         }}
         onCloseAutoFocus={(e) => {
           const active = document.activeElement

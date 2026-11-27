@@ -834,4 +834,47 @@ describe("timeline-workbench-ux", () => {
     })
     assert.equal(ui.host.querySelector('[data-testid="focus-panel"]')?.textContent, 'none')
   })
+
+  test('WorkbenchView 横向页签超出容器宽度时同步 data-overflow-left / data-overflow-right', { timeout: 60_000 }, async () => {
+    const conv = makeConversation(1, { profileId: 'coder' })
+    const store = makeTestStore({
+      conversations: [conv],
+      plugins: [{ id: 'sample', name: 'Sample', version: '1.0.0', enabled: true, locked: false, hooks: [], actions: [], tools: [], clientHashes: { 'index.tsx': 'h1' } }],
+      uiContributions: [1, 2, 3, 4].map((idx) => ({
+        pluginId: 'sample',
+        surface: 'workbench.panel' as const,
+        spec: { id: `tab-${idx}`, label: `Tab ${idx}`, order: idx * 10, client: { module: 'index.tsx', export: 'FocusPanel' } },
+      })),
+    })
+
+    store.actions.openWorkbenchDrawer({ tab: 'artifacts', conversationId: 1 })
+    const ui = mountNode()
+    await ui.render(store, e(WorkbenchView, { conversationId: 1 }))
+
+    const scrollEl = ui.host.querySelector<HTMLElement>('.workbench-tabs-scroll')
+    assert.ok(scrollEl !== null)
+    Object.defineProperty(scrollEl, 'clientWidth', { value: 180, configurable: true })
+    Object.defineProperty(scrollEl, 'scrollWidth', { value: 420, configurable: true })
+    Object.defineProperty(scrollEl, 'scrollLeft', { value: 0, writable: true, configurable: true })
+
+    await act(async () => {
+      window.dispatchEvent(new Event('resize'))
+    })
+    assert.equal(scrollEl.getAttribute('data-overflow-left'), null)
+    assert.equal(scrollEl.getAttribute('data-overflow-right'), 'true')
+
+    await act(async () => {
+      scrollEl.scrollLeft = 100
+      scrollEl.dispatchEvent(new Event('scroll'))
+    })
+    assert.equal(scrollEl.getAttribute('data-overflow-left'), 'true')
+    assert.equal(scrollEl.getAttribute('data-overflow-right'), 'true')
+
+    await act(async () => {
+      scrollEl.scrollLeft = 240
+      scrollEl.dispatchEvent(new Event('scroll'))
+    })
+    assert.equal(scrollEl.getAttribute('data-overflow-left'), 'true')
+    assert.equal(scrollEl.getAttribute('data-overflow-right'), null)
+  })
 })

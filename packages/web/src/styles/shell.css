@@ -7,11 +7,20 @@
  * ========================================================================== */
 
 .helmx-shell {
+  --helmx-drawer-width: 0px;
   display: flex;
   width: 100vw;
   height: 100dvh;
   overflow: hidden;
   background: var(--bg);
+}
+
+.helmx-shell.drawer-docked {
+  --helmx-drawer-width: clamp(380px, 36vw, 560px);
+}
+
+.helmx-shell.drawer-docked.drawer-docked-wide {
+  --helmx-drawer-width: min(740px, 52vw);
 }
 
 .helmx-sidebar {
@@ -206,6 +215,8 @@
   height: 100%;
   display: flex;
   overflow: hidden;
+  padding-right: var(--helmx-drawer-width);
+  transition: padding-right var(--dur-normal) var(--ease-out);
 }
 
 .helmx-pane {
@@ -446,6 +457,15 @@
 
 .drawer-stack-dialog-wide {
   width: min(740px, 94vw);
+}
+
+.drawer-stack-dialog.is-docked {
+  width: var(--helmx-drawer-width);
+  max-width: var(--helmx-drawer-width);
+  left: auto;
+  box-shadow: none;
+  border-left: 1px solid var(--border);
+  z-index: var(--z-floating) !important;
 }
 
 .drawer-stack-header {

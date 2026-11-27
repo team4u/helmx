@@ -61,8 +61,6 @@ button, a, input, select, textarea { touch-action: manipulation; }
   .ask-dock-shortcut-hint { display: none; }
   .ask-dock-choice-btn { padding: 7px 9px; gap: 7px; }
   .ask-dock-choice-custom { padding-left: 0; }
-  .ask-dock .input,
-  .ask-dock .textarea { font-size: 16px; }
 }
 @container (max-width: 450px) {
   .conversation-topbar .pane-title { min-width: 40px; }
@@ -165,8 +163,8 @@ button, a, input, select, textarea { touch-action: manipulation; }
     align-items: center;
     justify-content: center;
     position: fixed;
-    /* 与 46px 会话顶栏垂直居中对齐（(46-36)/2 = 5px），叠加安全区偏移 */
-    top: calc(max(5px, env(safe-area-inset-top)));
+    /* 与 46px 会话顶栏垂直居中对齐（(46-36)/2 = 5px），叠加顶部安全区偏移 */
+    top: calc(env(safe-area-inset-top) + 5px);
     left: max(8px, env(safe-area-inset-left));
     z-index: var(--z-mobile-nav);
     width: 36px;
@@ -196,7 +194,7 @@ button, a, input, select, textarea { touch-action: manipulation; }
     align-items: center;
     gap: 4px;
     position: fixed;
-    top: calc(max(5px, env(safe-area-inset-top)) + 3px);
+    top: calc(env(safe-area-inset-top) + 8px);
     left: max(48px, calc(env(safe-area-inset-left) + 44px));
     z-index: var(--z-mobile-nav);
   }
@@ -304,6 +302,19 @@ button, a, input, select, textarea { touch-action: manipulation; }
   .primary-center-topbar {
     padding-left: max(48px, calc(env(safe-area-inset-left) + 44px));
   }
+  .helmx-panes > .helmx-pane:first-child > .pane-topbar,
+  .helmx-primary-pane .helmx-pane > .pane-topbar,
+  .primary-center-topbar {
+    min-height: calc(46px + env(safe-area-inset-top));
+    height: calc(46px + env(safe-area-inset-top));
+    padding-top: env(safe-area-inset-top);
+    padding-right: max(12px, env(safe-area-inset-right));
+  }
+  .helmx-sidebar {
+    padding-top: env(safe-area-inset-top);
+    padding-bottom: env(safe-area-inset-bottom);
+    box-sizing: border-box;
+  }
   .helmx-main-stage > .helmx-card.hub-update-card {
     margin-left: max(48px, calc(env(safe-area-inset-left) + 44px));
   }
@@ -357,9 +368,9 @@ button, a, input, select, textarea { touch-action: manipulation; }
   .skill-reader-body { min-height: 0; }
   .pane-action-label { display: none; }
   .primary-drawer-content,
-  .plugin-drawer-content { width: 100vw; max-width: 100vw; left: 0; right: 0; border-left: none; }
+  .plugin-drawer-content { width: 100vw; max-width: 100vw; left: 0; right: 0; border-left: none; padding-bottom: env(safe-area-inset-bottom); box-sizing: border-box; }
   .primary-drawer-header,
-  .plugin-drawer-header { flex-wrap: nowrap; align-items: flex-start; justify-content: space-between; }
+  .plugin-drawer-header { flex-wrap: nowrap; align-items: flex-start; justify-content: space-between; padding-top: max(12px, env(safe-area-inset-top)); padding-left: max(14px, env(safe-area-inset-left)); padding-right: max(14px, env(safe-area-inset-right)); }
   .primary-drawer-header > button:last-child,
   .plugin-drawer-close-btn { margin-left: auto; flex-shrink: 0; }
   .palette-backdrop {
@@ -394,10 +405,11 @@ button, a, input, select, textarea { touch-action: manipulation; }
   .palette-close-desktop { display: none !important; }
   .palette-close-mobile { display: inline-flex !important; }
   .palette-close-btn { min-height: 32px; padding: 0 8px; }
-  .drawer-stack-dialog,
-  .drawer-stack-dialog-narrow,
-  .drawer-stack-dialog-wide { width: 100vw; max-width: 100vw; left: 0; right: 0; border-left: none; }
-  .drawer-stack-header { padding: 4px 8px; }
+  .drawer-stack-dialog:not(.is-docked),
+  .drawer-stack-dialog-narrow:not(.is-docked),
+  .drawer-stack-dialog-wide:not(.is-docked) { width: 100vw; max-width: 100vw; left: 0; right: 0; border-left: none; padding-bottom: env(safe-area-inset-bottom); box-sizing: border-box; }
+  .drawer-stack-header { padding: max(6px, env(safe-area-inset-top)) max(10px, env(safe-area-inset-right)) 6px max(10px, env(safe-area-inset-left)); }
+  .workbench-footer { padding-bottom: max(10px, env(safe-area-inset-bottom)); }
   .drawer-stack-back-btn { min-height: 36px; }
   .drawer-stack-close-btn { min-height: 44px; min-width: 44px; margin-left: auto; flex-shrink: 0; }
   .drawer-stack-back-label { display: none; }
@@ -406,6 +418,14 @@ button, a, input, select, textarea { touch-action: manipulation; }
 
 @media (max-width: 680px), (hover: none) and (pointer: coarse) {
   .kbd-hint { display: none !important; }
+}
+
+@media (pointer: coarse) {
+  .composer-icon-button { min-width: 34px; min-height: 34px; }
+  .segmented-control-btn { min-height: 32px; padding-left: 10px; padding-right: 10px; }
+  .pane-more-popover .popover-item,
+  .helmx-dropdown-item,
+  .helmx-select-option { min-height: 36px; }
 }
 
 @media (prefers-reduced-motion: reduce) {

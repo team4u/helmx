@@ -15,17 +15,26 @@
 
 .helmx-tabs-segmented {
   display: inline-flex;
+  max-width: 100%;
+  min-width: 0;
 }
 
 .segmented-control {
   display: inline-flex;
   align-items: center;
+  max-width: 100%;
+  overflow-x: auto;
+  scrollbar-width: none;
   background: var(--seg-track);
   border: none;
   border-radius: 7px;
   padding: 2px;
   gap: 2px;
   box-sizing: border-box;
+}
+
+.segmented-control::-webkit-scrollbar {
+  display: none;
 }
 
 .segmented-control-btn {
@@ -45,6 +54,7 @@
   transition: background 120ms ease, color 120ms ease, box-shadow 120ms ease;
   white-space: nowrap;
   box-sizing: border-box;
+  flex-shrink: 0;
   user-select: none;
 }
 

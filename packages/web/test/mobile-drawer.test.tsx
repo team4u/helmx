@@ -31,6 +31,7 @@ import { hangingEventStream } from './helpers/sse-stream.js'
 const { createRoot } = await import('react-dom/client')
 const { useMobileDrawerSwipe } = await import('../src/shell/use-mobile-drawer-swipe.js')
 const { App } = await import('../src/App.js')
+const { applyDocumentTheme, THEME_COLOR_DARK, THEME_COLOR_LIGHT } = await import('../src/lib/theme-preferences.js')
 
 const e = React.createElement
 
@@ -853,6 +854,159 @@ test('mobile coarse viewport (390x800): passive standby skips focus while all Ne
       root?.unmount()
     })
     container.remove()
+    resetStandbyDrafts()
+    globalThis.fetch = originalFetch
+    window.matchMedia = originalMatchMedia
+    Object.defineProperty(window, 'innerWidth', { value: originalWidth, configurable: true })
+    happyDomWindow.happyDOM?.setViewport?.({ width: originalWidth, height: originalHeight })
+    window.history.replaceState(null, '', originalHash || '#')
+  }
+})
+
+test('tablet viewport (760px): disables mq-quick-on while keeping drawer swipe active, Composer sets enterKeyHint=send, and applyDocumentTheme syncs theme-color', { timeout: 60_000 }, async () => {
+  const originalFetch = globalThis.fetch
+  const originalMatchMedia = window.matchMedia
+  const originalWidth = window.innerWidth
+  const originalHeight = window.innerHeight
+  const originalHash = window.location.hash
+  const originalTheme = document.documentElement.dataset.theme
+  const happyDomWindow = window as unknown as { happyDOM?: { setViewport?: (v: { width: number; height: number }) => void } }
+  const encoder = new TextEncoder()
+  const jsonResponse = (body: unknown): Response =>
+    new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } })
+
+  // Verify meta[name="theme-color"] syncing with dark/light overrides
+  const themeMetaLight = document.createElement('meta')
+  themeMetaLight.setAttribute('name', 'theme-color')
+  themeMetaLight.setAttribute('media', '(prefers-color-scheme: light)')
+  themeMetaLight.setAttribute('content', THEME_COLOR_LIGHT)
+  const themeMetaDark = document.createElement('meta')
+  themeMetaDark.setAttribute('name', 'theme-color')
+  themeMetaDark.setAttribute('media', '(prefers-color-scheme: dark)')
+  themeMetaDark.setAttribute('content', THEME_COLOR_DARK)
+  document.head.appendChild(themeMetaLight)
+  document.head.appendChild(themeMetaDark)
+  applyDocumentTheme('dark')
+  assert.equal(document.documentElement.dataset.theme, 'dark')
+  assert.equal(themeMetaLight.getAttribute('content'), THEME_COLOR_DARK)
+  assert.equal(themeMetaDark.getAttribute('content'), THEME_COLOR_DARK)
+  applyDocumentTheme('light')
+  assert.equal(document.documentElement.dataset.theme, 'light')
+  assert.equal(themeMetaLight.getAttribute('content'), THEME_COLOR_LIGHT)
+  assert.equal(themeMetaDark.getAttribute('content'), THEME_COLOR_LIGHT)
+
+  happyDomWindow.happyDOM?.setViewport?.({ width: 760, height: 900 })
+  Object.defineProperty(window, 'innerWidth', { value: 760, configurable: true })
+  window.matchMedia = ((query: string) => ({
+    // 760px matches (max-width: 860px) drawer threshold, but NOT (max-width: 680px) compact mobile phone threshold
+    matches: query === '(max-width: 860px)',
+    media: query,
+    onchange: null,
+    addEventListener() {},
+    removeEventListener() {},
+    addListener() {},
+    removeListener() {},
+    dispatchEvent() { return false },
+  })) as typeof window.matchMedia
+  window.history.replaceState(null, '', '#/a/assistant')
+  resetStandbyDrafts()
+
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const path = String(input)
+    if (path === '/api/auth/status') return jsonResponse({ configured: true, authenticated: true })
+    if (path === '/api/events') {
+      return new Response(
+        hangingEventStream((send) => {
+          send(encoder.encode(`event: snapshot\ndata: ${JSON.stringify({
+            bootId: 'tablet-test',
+            seq: 1,
+            conversations: [],
+            pendingAsks: [],
+            plugins: [],
+            ui: [
+              {
+                pluginId: 'demo-desk',
+                surface: 'screen',
+                spec: { id: 'tasks', label: { en: 'Tasks' }, client: { module: 'index.tsx', export: 'Screen' } },
+              },
+              {
+                pluginId: 'demo-desk',
+                surface: 'sidebar.item',
+                spec: { id: 'tasks-nav', label: { en: 'Tasks' }, target: 'screen:demo-desk/tasks', quickEntry: true },
+              },
+            ],
+          })}\n\n`))
+        }, { signal: init?.signal }),
+        { status: 200, headers: { 'Content-Type': 'text/event-stream' } },
+      )
+    }
+    if (path === '/api/profiles') return jsonResponse([{ id: 'assistant', name: 'Assistant' }])
+    if (path === '/api/models') {
+      return jsonResponse({
+        models: [{ id: 'faux/model', provider: 'faux', modelId: 'model', available: true, thinkingLevels: ['off', 'high'] }],
+        thinkingLevels: ['off', 'high'],
+        defaultModel: 'faux/model',
+      })
+    }
+    if (path === '/api/nodes') return jsonResponse([{ id: 'local', kind: 'local', online: true }])
+    return jsonResponse([])
+  }) as typeof globalThis.fetch
+
+  const container = document.createElement('div')
+  document.body.appendChild(container)
+  let root: Root | undefined
+
+  try {
+    await act(async () => {
+      root = createRoot(container)
+      root.render(e(App, { connectionBannerDelayMs: 60_000 }))
+    })
+    await waitForCondition(() => container.querySelector('.helmx-shell') !== null && container.querySelector('textarea.composer-textarea') !== null)
+
+    const shell = container.querySelector<HTMLElement>('.helmx-shell')!
+    assert.ok(!shell.classList.contains('mq-quick-on'), '760px tablet must not set mq-quick-on even when quickEntry exists')
+    assert.ok(container.querySelector('.mobile-quick-nav') === null, '760px tablet must not mount .mobile-quick-nav')
+
+    const ta = container.querySelector<HTMLTextAreaElement>('textarea.composer-textarea')!
+    assert.equal(ta.getAttribute('enterkeyhint'), 'send')
+
+    // 760px still sits inside (max-width: 860px) drawer viewport, so swipe opens the drawer
+    const now = performance.now()
+    await act(async () => {
+      shell.dispatchEvent(new TouchEvent('touchstart', {
+        bubbles: true,
+        touches: [{ identifier: 1, clientX: 80, clientY: 220, target: shell } as unknown as Touch],
+      }))
+    })
+    await flushMacrotask(10)
+    await act(async () => {
+      shell.dispatchEvent(new TouchEvent('touchmove', {
+        bubbles: true,
+        touches: [{ identifier: 1, clientX: 110, clientY: 222, target: shell } as unknown as Touch],
+      }))
+      shell.dispatchEvent(new TouchEvent('touchmove', {
+        bubbles: true,
+        touches: [{ identifier: 1, clientX: 190, clientY: 224, target: shell } as unknown as Touch],
+      }))
+      shell.dispatchEvent(new TouchEvent('touchend', {
+        bubbles: true,
+        changedTouches: [{ identifier: 1, clientX: 190, clientY: 224, target: shell } as unknown as Touch],
+      }))
+    })
+    assert.ok(performance.now() - now < 600)
+    assert.ok(shell.classList.contains('sidebar-open'), '760px tablet preserves right-swipe drawer open gesture')
+  } finally {
+    await act(async () => {
+      root?.unmount()
+    })
+    container.remove()
+    themeMetaLight.remove()
+    themeMetaDark.remove()
+    if (originalTheme === undefined) {
+      delete document.documentElement.dataset.theme
+    } else {
+      document.documentElement.dataset.theme = originalTheme
+    }
     resetStandbyDrafts()
     globalThis.fetch = originalFetch
     window.matchMedia = originalMatchMedia

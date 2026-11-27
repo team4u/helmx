@@ -70,6 +70,7 @@ export function MobileQuickNavSlot({
   onVisibilityChange: (visible: boolean) => void
 }): ReactNode {
   const { locale } = useWebLocale()
+  const isMobileViewport = useIsMobileViewport()
   const groupedUi = useGroupedUi()
   const conversations = useConversations()
   const primaryTarget = usePrimaryTarget()
@@ -81,11 +82,12 @@ export function MobileQuickNavSlot({
   const quickBadgeItems = useMemo(() => (firstQuickEntry !== null ? [firstQuickEntry] : []), [firstQuickEntry])
   const quickEntryBadges = useSidebarBadges(quickBadgeItems)
   const quickEntryBadge = firstQuickEntry !== null ? (quickEntryBadges.get(firstQuickEntry.key) ?? null) : null
-  const visible = firstQuickEntry !== null && !isSameResolvedTarget(primaryTarget, firstQuickEntry.target)
+  const visible = isMobileViewport && firstQuickEntry !== null && !isSameResolvedTarget(primaryTarget, firstQuickEntry.target)
 
   useEffect(() => {
     onVisibilityChange(visible)
   }, [visible, onVisibilityChange])
 
+  if (!isMobileViewport) return null
   return <MobileQuickNav quickEntry={firstQuickEntry} quickEntryBadge={quickEntryBadge} />
 }

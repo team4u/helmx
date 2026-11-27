@@ -134,9 +134,15 @@ export function resolveTheme(pref: ThemePreference, systemTheme?: ThemeMode): Th
   return pref === 'system' ? (systemTheme ?? getSystemTheme()) : pref
 }
 
-/** Sync the effective theme to the root document data-theme attribute. */
+export const THEME_COLOR_LIGHT = '#f4f4f6'
+export const THEME_COLOR_DARK = '#1a1a1e'
+
+/** Sync the effective theme to the root document data-theme attribute and browser theme-color meta tags. */
 export function applyDocumentTheme(theme: ThemeMode): void {
-  if (typeof document !== 'undefined') {
-    document.documentElement.dataset.theme = theme
+  if (typeof document === 'undefined') return
+  document.documentElement.dataset.theme = theme
+  const themeColor = theme === 'dark' ? THEME_COLOR_DARK : THEME_COLOR_LIGHT
+  for (const meta of document.querySelectorAll?.('meta[name="theme-color"]') ?? []) {
+    meta.setAttribute('content', themeColor)
   }
 }

@@ -544,4 +544,62 @@ describe('conversation-drawer-nav', () => {
     )
     assert.deepEqual(pruned, [{ kind: 'workbench', tab: 'artifacts' }])
   })
+
+  test('宽屏 (>=1280px 且无 splitTarget) 以非模态停靠展示右侧抽屉栈，Mod+I 可直达主区输入框，切入 split 后退回模态遮罩', { timeout: 60_000 }, async () => {
+    const originalMatchMedia = window.matchMedia
+    window.matchMedia = ((query: string) => ({
+      matches: query === '(min-width: 1280px)',
+      media: query,
+      onchange: null,
+      addEventListener() {},
+      removeEventListener() {},
+      addListener() {},
+      removeListener() {},
+      dispatchEvent() { return false },
+    })) as typeof window.matchMedia
+
+    try {
+      await mountReal('#/c/1?drawer=wb/artifacts')
+      await waitForCondition(() =>
+        document.querySelector('.drawer-stack-dialog.is-docked[data-drawer-docked="true"]') !== null &&
+        host!.querySelector('[data-helmx-panel="primary"] textarea.composer-textarea') !== null,
+      )
+
+      const shell = host!.querySelector<HTMLElement>('.helmx-shell')!
+      const mainStage = host!.querySelector<HTMLElement>('main.helmx-main-stage')!
+      assert.ok(shell.classList.contains('drawer-docked'), 'wide desktop docks drawer beside main stage')
+      assert.ok(!shell.classList.contains('drawer-docked-wide'), 'workbench drawer uses narrow docked width')
+      assert.ok(document.querySelector('.drawer-stack-backdrop') === null, 'docked drawer renders without modal backdrop')
+      assert.equal(mainStage.hasAttribute('inert'), false, 'docked non-modal drawer keeps main stage interactive')
+
+      // Mod+I focuses main composer while docked workbench is open
+      const primaryTextarea = host!.querySelector<HTMLTextAreaElement>('[data-helmx-panel="primary"] textarea.composer-textarea')!
+      assert.ok(primaryTextarea !== null)
+      primaryTextarea.blur()
+      await act(async () => {
+        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'i', ctrlKey: true, bubbles: true, cancelable: true }))
+      })
+      assert.ok(document.activeElement === primaryTextarea, 'Mod+I focuses primary composer when workbench is docked')
+
+      // Pushing a child conversation switches to wide docked width while remaining non-modal
+      window.history.replaceState(null, '', '#/c/1?drawer=wb/artifacts&drawer=c/11')
+      await act(async () => {
+        window.dispatchEvent(new HashChangeEvent('hashchange'))
+      })
+      await waitForCondition(() => shell.classList.contains('drawer-docked-wide'))
+      assert.ok(document.querySelector('.drawer-stack-dialog.is-docked[data-drawer-docked="true"]') !== null)
+      assert.ok(document.querySelector('.drawer-stack-backdrop') === null)
+
+      // Opening split pane immediately degrades docked drawer back to modal overlay with backdrop
+      window.history.replaceState(null, '', '#/c/1?split=c/999&drawer=wb/artifacts')
+      await act(async () => {
+        window.dispatchEvent(new HashChangeEvent('hashchange'))
+      })
+      await waitForCondition(() => document.querySelector('.drawer-stack-backdrop') !== null)
+      assert.ok(!shell.classList.contains('drawer-docked'), 'split view disables docked mode')
+      assert.ok(document.querySelector('[data-drawer-docked="true"]') === null)
+    } finally {
+      window.matchMedia = originalMatchMedia
+    }
+  })
 })

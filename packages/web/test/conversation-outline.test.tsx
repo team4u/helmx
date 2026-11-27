@@ -837,4 +837,52 @@ describe("conversation-outline", () => {
       globalThis.fetch = origFetch
     }
   })
+
+  test('粗指针触控环境打开大纲浮层时聚焦浮层容器而非搜索框，避免弹出软键盘', { timeout: 60_000 }, async () => {
+    const originalMatchMedia = window.matchMedia
+    const origFetch = globalThis.fetch
+    window.matchMedia = ((query: string) => ({
+      matches: query === '(hover: none) and (pointer: coarse)',
+      media: query,
+      onchange: null,
+      addEventListener() {},
+      removeEventListener() {},
+      addListener() {},
+      removeListener() {},
+      dispatchEvent() { return false },
+    })) as typeof window.matchMedia
+    globalThis.fetch = (async () => new Response('[]', { status: 200 })) as typeof globalThis.fetch
+
+    const conv = makeConv(22)
+    const entries: ConversationEntry[] = [
+      { id: '401', kind: 'helmx.input', data: { id: 'q1', text: '触控测试问题', origin: 'human' }, createdAt: 1000 },
+    ]
+    const store = makeTestStore({
+      conversations: [conv],
+      conversationDetails: { 22: { ...conv, entries } },
+    })
+
+    try {
+      host = document.createElement('div')
+      document.body.appendChild(host)
+      await act(async () => {
+        root = createRoot(host!)
+        root.render(e(HostStoreProviders, { value: store }, e(ConversationPane, { conversationId: 22 })))
+      })
+
+      const trigger = host.querySelector<HTMLButtonElement>('.conversation-outline-trigger')
+      assert.ok(trigger !== null)
+      await act(async () => {
+        trigger.click()
+      })
+      const popover = document.querySelector<HTMLElement>('.conversation-outline-popover')
+      const searchInput = popover?.querySelector<HTMLInputElement>('input') ?? null
+      assert.ok(popover !== null && searchInput !== null)
+      assert.ok(document.activeElement === popover, 'coarse touch should focus popover container')
+      assert.ok(document.activeElement !== searchInput, 'coarse touch must not auto-focus search input')
+    } finally {
+      globalThis.fetch = origFetch
+      window.matchMedia = originalMatchMedia
+    }
+  })
 })

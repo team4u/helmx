@@ -51,6 +51,8 @@ const WorkbenchView = lazy(() =>
 export interface DrawerStackShellProps {
   /** Active conversation in the underlying primary/split stage (used by unbound root workbench frames). */
   activeConversationId?: number
+  /** Dock the drawer non-modally beside the main stage on wide single-pane desktop viewports. */
+  docked?: boolean
   /** Render inline without Portal (for happy-dom / SSR tests). */
   inline?: boolean
 }
@@ -81,7 +83,7 @@ function DrawerConversationFrame({
   )
 }
 
-export function DrawerStackShell({ activeConversationId, inline = false }: DrawerStackShellProps) {
+export function DrawerStackShell({ activeConversationId, docked = false, inline = false }: DrawerStackShellProps) {
   const drawerStack = useDrawerStack()
   const conversations = useConversations()
   const conversationDetails = useConversationDetailsMap()
@@ -123,26 +125,31 @@ export function DrawerStackShell({ activeConversationId, inline = false }: Drawe
     t,
   })
   const isWide = topFrame.kind === 'conversation'
+  const isDocked = docked === true && !inline
 
   return (
     <Dialog
       open
+      modal={!isDocked}
       inline={inline}
       onOpenChange={(open) => {
         if (!open) closeAllDrawers()
       }}
     >
       <DialogPortal inline={inline}>
-        <DialogOverlay
-          className="drawer-stack-backdrop"
-          aria-label={t('conv.drawer.closeAll')}
-        />
+        {!isDocked ? (
+          <DialogOverlay
+            className="drawer-stack-backdrop"
+            aria-label={t('conv.drawer.closeAll')}
+          />
+        ) : null}
         <DialogContent
           ref={contentRef}
           tabIndex={-1}
-          className={`drawer-stack-dialog ${isWide ? 'drawer-stack-dialog-wide' : 'drawer-stack-dialog-narrow'}`}
+          className={`drawer-stack-dialog ${isWide ? 'drawer-stack-dialog-wide' : 'drawer-stack-dialog-narrow'}${isDocked ? ' is-docked' : ''}`}
           aria-label={dialogAriaLabel}
           data-drawer-depth={drawerStack.length}
+          data-drawer-docked={isDocked ? 'true' : undefined}
           onOpenAutoFocus={(event) => {
             event.preventDefault()
             contentRef.current?.focus({ preventScroll: true })
@@ -151,6 +158,15 @@ export function DrawerStackShell({ activeConversationId, inline = false }: Drawe
             if (event.defaultPrevented) return
             event.preventDefault()
             popDrawer()
+          }}
+          onPointerDownOutside={(event) => {
+            if (isDocked) event.preventDefault()
+          }}
+          onFocusOutside={(event) => {
+            if (isDocked) event.preventDefault()
+          }}
+          onInteractOutside={(event) => {
+            if (isDocked) event.preventDefault()
           }}
         >
           <DialogTitle className="helmx-sr-only">{dialogAriaLabel}</DialogTitle>

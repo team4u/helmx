@@ -54,6 +54,7 @@
 - `replace` 只替换当前历史项，不能也不宣称清空整个历史栈；历史策略统一维护在 `shouldPushLocationHistory`，调用方可经 `openTarget({ history })` 覆写下一拍；
 - 访问已删除会话的深链显式提示不存在，不得路由循环或静默跳转；
 - **抽屉栈与顶层模态正交**：右侧抽屉栈通过重复查询参数 `drawer=wb/<tab>`、`drawer=wb@<convId>/<tab>`、`drawer=c/<id>` 按底到顶序列化（同帧去重截断、上限 5 层），与顶层居中预览模态（`modal=artifact` / `modal=file`）完全正交、互不覆盖；
+- **宽屏非模态停靠与窄屏叠加退化**：在非分屏（`splitTarget === null`）且桌面视口宽于 `1280px` 时，`DrawerStackShell` 以非模态停靠形态（`modal={false}`、无遮罩、`--helmx-drawer-width` 让出主舞台右侧）呈现，主区输入（含 `Mod+I`）与右侧工作台/抽屉会话可并行交互，停靠与否只随视口和分屏状态变化、不因抽屉栈顶切换 `wb` / `c` 帧而重建子树；不足 `1280px` 或处于分屏时自动退回带遮罩的叠加模态抽屉；
 - **主屏导航自动收起抽屉栈**：非 split 的 `openTarget` 推进主屏目标时若抽屉栈非空，顺手清空 `drawerStack`——否则抽屉内徽标/通知触发的深链被全高抽屉自身遮挡，表现为「点击无反应」；分屏导航不遮挡不收；深链恢复（`applyExternalLocation`）不走此路径，`drawer` + `modal` 组合态仍可精确还原。
 
 ## 目标路由参数（Screen 与总览共用 `sp.*` / `ssp.*` 机制）

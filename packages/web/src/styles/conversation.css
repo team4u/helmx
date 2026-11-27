@@ -61,7 +61,7 @@
 
 .pane-title {
   font-size: 13.5px;
-  font-weight: 400;
+  font-weight: 500;
   color: var(--fg);
   line-height: 46px;
   overflow: hidden;
@@ -299,6 +299,21 @@
 .helmx-workbench-view .workbench-tabs-scroll::-webkit-scrollbar,
 .helmx-workbench .workbench-tabs-scroll::-webkit-scrollbar {
   display: none;
+}
+.helmx-workbench-view .workbench-tabs-scroll[data-overflow-left='true']:not([data-overflow-right='true']),
+.helmx-workbench .workbench-tabs-scroll[data-overflow-left='true']:not([data-overflow-right='true']) {
+  -webkit-mask-image: linear-gradient(to right, transparent 0, #000 18px, #000 100%);
+  mask-image: linear-gradient(to right, transparent 0, #000 18px, #000 100%);
+}
+.helmx-workbench-view .workbench-tabs-scroll[data-overflow-right='true']:not([data-overflow-left='true']),
+.helmx-workbench .workbench-tabs-scroll[data-overflow-right='true']:not([data-overflow-left='true']) {
+  -webkit-mask-image: linear-gradient(to right, #000 0, #000 calc(100% - 18px), transparent 100%);
+  mask-image: linear-gradient(to right, #000 0, #000 calc(100% - 18px), transparent 100%);
+}
+.helmx-workbench-view .workbench-tabs-scroll[data-overflow-left='true'][data-overflow-right='true'],
+.helmx-workbench .workbench-tabs-scroll[data-overflow-left='true'][data-overflow-right='true'] {
+  -webkit-mask-image: linear-gradient(to right, transparent 0, #000 18px, #000 calc(100% - 18px), transparent 100%);
+  mask-image: linear-gradient(to right, transparent 0, #000 18px, #000 calc(100% - 18px), transparent 100%);
 }
 .helmx-workbench-view .tab-btn,
 .helmx-workbench .tab-btn {

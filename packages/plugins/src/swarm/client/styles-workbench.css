@@ -16,7 +16,7 @@
   min-width: 0;
 }
 
-.sw-panel { gap: 10px; padding: 10px; }
+.sw-panel { gap: 10px; padding: 2px 4px; }
 .sw-panel-section { gap: 6px; }
 .sw-panel-members, .sw-panel-retained { gap: 4px; }
 .sw-panel-posts { gap: 6px; }
@@ -68,7 +68,7 @@
   margin: 0;
   padding: 6px 8px;
   border-radius: var(--radius-sm);
-  border: 1px solid var(--border);
+  border: 1px solid var(--line-2);
   background: var(--bg-subtle);
   font-size: 12px;
   color: var(--fg-secondary);
@@ -81,7 +81,7 @@
 .sw-panel-objective {
   gap: 2px;
   padding: 8px 10px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--line-2);
   border-radius: var(--radius-sm);
   background: var(--bg-subtle);
 }
@@ -95,9 +95,9 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--line-2);
   border-radius: var(--radius-sm);
-  background: var(--bg);
+  background: var(--bg-subtle);
   min-width: 0;
 }
 .sw-panel-member-row {
@@ -140,9 +140,9 @@
 .sw-panel-post {
   gap: 3px;
   padding: 6px 8px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--line-2);
   border-radius: var(--radius-sm);
-  background: var(--bg);
+  background: var(--bg-subtle);
 }
 .sw-panel-post-highlighted { border-color: var(--accent); background: var(--bg-subtle); }
 .sw-panel-post-head { display: flex; align-items: center; gap: 6px; min-width: 0; flex-wrap: wrap; }
@@ -185,7 +185,7 @@
 .sw-panel-jump-back {
   gap: 6px;
   padding: 3px 6px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--line-2);
   border-radius: var(--radius-sm);
   background: var(--bg-subtle);
   position: sticky;

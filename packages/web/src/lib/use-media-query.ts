@@ -33,17 +33,18 @@ function subscribeCompactMobileViewport(listener: () => void): () => void {
   return subscribeMediaQuery(COMPACT_MOBILE_QUERY, listener)
 }
 
-interface MaxWidthQueryStore {
+interface WidthQueryStore {
   subscribe: (listener: () => void) => () => void
   getSnapshot: () => boolean
 }
 
-const maxWidthStoreCache = new Map<number, MaxWidthQueryStore>()
+const widthStoreCache = new Map<string, WidthQueryStore>()
 
-function getMaxWidthQueryStore(maxWidth: number): MaxWidthQueryStore {
-  let entry = maxWidthStoreCache.get(maxWidth)
+function getWidthQueryStore(mode: 'max' | 'min', px: number): WidthQueryStore {
+  const key = `${mode}:${px}`
+  let entry = widthStoreCache.get(key)
   if (entry === undefined) {
-    const query = `(max-width: ${maxWidth}px)`
+    const query = `(${mode}-width: ${px}px)`
     entry = {
       subscribe: (listener: () => void) => subscribeMediaQuery(query, listener),
       getSnapshot: () =>
@@ -51,7 +52,7 @@ function getMaxWidthQueryStore(maxWidth: number): MaxWidthQueryStore {
           ? window.matchMedia(query).matches
           : false,
     }
-    maxWidthStoreCache.set(maxWidth, entry)
+    widthStoreCache.set(key, entry)
   }
   return entry
 }
@@ -67,6 +68,12 @@ export function useIsMobileViewport(): boolean {
 
 /** 订阅任意 `(max-width: Npx)` 媒体查询（供 Composer 等按阈值响应式切换，模块级订阅稳定）。 */
 export function useMaxWidthMediaQuery(maxWidth: number): boolean {
-  const store = getMaxWidthQueryStore(maxWidth)
+  const store = getWidthQueryStore('max', maxWidth)
+  return useSyncExternalStore(store.subscribe, store.getSnapshot, SERVER_FALSE)
+}
+
+/** 订阅任意 `(min-width: Npx)` 媒体查询（供宽屏停靠工作台等桌面阈值切换，模块级订阅稳定）。 */
+export function useMinWidthMediaQuery(minWidth: number): boolean {
+  const store = getWidthQueryStore('min', minWidth)
   return useSyncExternalStore(store.subscribe, store.getSnapshot, SERVER_FALSE)
 }

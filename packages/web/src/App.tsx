@@ -47,7 +47,7 @@ import { MobileQuickNavSlot } from './shell/MobileQuickNav.js'
 import { HubUpdateCard } from './shell/HubUpdateCard.js'
 import { HubUpgradedNotice } from './shell/HubUpgradedNotice.js'
 import { useMobileDrawerSwipe } from './shell/use-mobile-drawer-swipe.js'
-import { useIsMobileViewport, useMaxWidthMediaQuery } from './lib/use-media-query.js'
+import { useMaxWidthMediaQuery, useMinWidthMediaQuery } from './lib/use-media-query.js'
 import { loadSplitRatio, saveSplitRatio } from './shell/split-ratio-model.js'
 import { SplitResizeHandle } from './ui/SplitResizeHandle.js'
 
@@ -56,6 +56,8 @@ const CONNECTION_BANNER_DELAY_MS = 1500
 
 /** Matches `@media (max-width: 860px)` off-canvas mobile sidebar breakpoint in `responsive.css`. */
 const MOBILE_DRAWER_MAX_WIDTH = 860
+/** Minimum desktop viewport width at which the right drawer docks non-modally beside the main stage. */
+const WORKBENCH_DOCK_MIN_WIDTH = 1280
 const MOBILE_SIDEBAR_ID = 'helmx-mobile-sidebar'
 const FOCUSABLE_SELECTOR = [
   'a[href]',
@@ -411,15 +413,17 @@ function HelmxShellInner({
   const mobileNavToggleRef = useRef<HTMLButtonElement | null>(null)
   const sidebarRef = useRef<HTMLElement | null>(null)
   const wasMobileDrawerOpenRef = useRef(false)
-  const isMobileViewport = useIsMobileViewport()
   const isDrawerViewport = useMaxWidthMediaQuery(MOBILE_DRAWER_MAX_WIDTH)
+  const isWideDesktop = useMinWidthMediaQuery(WORKBENCH_DOCK_MIN_WIDTH)
+  const isDrawerDocked = drawerStack.length > 0 && isWideDesktop && splitTarget === null
+  const isDockedWide = isDrawerDocked && drawerStack[drawerStack.length - 1]?.kind === 'conversation'
   const isMobileDrawerOpen = isDrawerViewport && sidebarOpen
   const openMobileSidebar = useCallback(() => setSidebarOpen(true), [])
   const closeMobileSidebar = useCallback(() => setSidebarOpen(false), [])
   const toggleMobileSidebar = useCallback(() => setSidebarOpen((open) => !open), [])
   useMobileDrawerSwipe({
     containerRef: shellRef,
-    enabled: authReady && !authError && authenticated && isMobileViewport && activeModal === null && drawerStack.length === 0,
+    enabled: authReady && !authError && authenticated && isDrawerViewport && activeModal === null && drawerStack.length === 0,
     sidebarOpen,
     onOpen: openMobileSidebar,
     onClose: closeMobileSidebar,
@@ -563,7 +567,7 @@ function HelmxShellInner({
   return (
       <div
         ref={shellRef}
-        className={`helmx-shell${sidebarOpen ? ' sidebar-open' : ''}${sidebarCollapsed ? ' sidebar-collapsed' : ''}${mobileQuickEntryVisible ? ' mq-quick-on' : ''}`}
+        className={`helmx-shell${sidebarOpen ? ' sidebar-open' : ''}${sidebarCollapsed ? ' sidebar-collapsed' : ''}${mobileQuickEntryVisible ? ' mq-quick-on' : ''}${isDrawerDocked ? ' drawer-docked' : ''}${isDockedWide ? ' drawer-docked-wide' : ''}`}
         onClick={(event) => {
           const target = event.target as HTMLElement
           if (target.closest('.nav-item')) {
@@ -673,7 +677,7 @@ function HelmxShellInner({
         </main>
 
         {drawerStack.length > 0 && (
-          <DrawerStackShell activeConversationId={activeConversationId} />
+          <DrawerStackShell activeConversationId={activeConversationId} docked={isDrawerDocked} />
         )}
 
         {activeModal?.kind === 'command-palette' && (

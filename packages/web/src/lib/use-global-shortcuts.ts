@@ -123,7 +123,11 @@ export function useGlobalShortcuts(store: HelmxExternalStore): void {
           window.dispatchEvent(new CustomEvent<HelmxShortcutDetail>('helmx:shortcut', { detail }))
           return
         }
-        if (drawerStack.length === 0 && (activeTarget.kind === 'conversation' || activeTarget.kind === 'agent')) {
+        const isWorkbenchDocked =
+          top?.kind === 'workbench' &&
+          typeof document !== 'undefined' &&
+          document.querySelector('[data-drawer-docked="true"]') !== null
+        if ((drawerStack.length === 0 || isWorkbenchDocked) && (activeTarget.kind === 'conversation' || activeTarget.kind === 'agent')) {
           event.preventDefault()
           store.navActions.clearEscAbortPrompt()
           const detail: HelmxShortcutDetail = { action: 'focus-composer', panel }

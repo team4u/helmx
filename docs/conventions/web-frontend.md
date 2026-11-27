@@ -73,11 +73,13 @@ SDK 不导入 Web store、路由或渲染实现。`HelmxStoreProvider` 经 `Plug
 - 会话与产物/工作区 Markdown 预览共用同一套阅读档排版（`.msg-ai-block` 与 `.artifact-markdown-preview` 内的 `.msg-ai-body`：正文 15px / 行高 1.65，标题阶梯按 em 比例）；
 - **提问与输入字号一致**：人类提问胶囊与 Composer 输入框（含待命页）均为 15px / 行高 1.55，桌面、移动与分屏同字号。
 
-### 移动端（`@media (max-width: 680px)`）
+### 移动端（`@media (max-width: 680px)`）与粗指针触控
 
-- 弹窗与抽屉 `width: 100vw; max-width: 100vw; left: 0; right: 0;` 全宽自适应；
-- 头部容器 `flex-wrap: wrap`，标题截断保底，关闭按钮绝对可用；
-- **严禁任何输入框在移动端或分屏宽度下字号突兀放大**（平台点击放大渲染异常须用精确 CSS 覆盖消除）。
+- **视口与安全区**：`index.html` 通过 `maximum-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content` 防止 iOS 15px 输入自动放大（保留 iOS 10+ 双指缩放）、覆盖刘海/Home Indicator 安全区，并由启动内联脚本与 `applyDocumentTheme` 同步 `<meta name="theme-color">`；主顶栏（`<= 860px`）、侧栏与全宽抽屉头尾显式叠加 `env(safe-area-inset-*)`；
+- **输入法与触控策略**：Composer `<textarea>` 声明 `enterKeyHint="send"`，保持桌面与移动端统一的 Enter 发送行为；大纲等带搜索框的浮层在 `@media (hover: none) and (pointer: coarse)` 下打开时不自动聚焦内部输入框（防止软键盘误弹出）；`@media (pointer: coarse)` 适度放宽工具按钮/下拉选项点按热区，桌面端仍保持紧凑密度；
+- **视口分界**：`MobileQuickNavSlot` 仅在移动端紧凑视口（`<= 680px`）渲染并置顶占位，681–860px 平板档仅保留左上角汉堡抽屉开关，侧栏滑动手势判定（`<= 860px`）与 CSS 抽屉断点对齐；
+- 弹窗与抽屉在 `<= 680px` 下 `width: 100vw; max-width: 100vw; left: 0; right: 0;` 全宽自适应；头部容器保持关闭按钮与截断保底；
+- **严禁任何输入框在移动端或分屏宽度下字号突兀放大**（包括 `.ask-dock` 与分屏表单，必须坚持 12–15px 统一字阶，禁止 `font-size: 16px` 这类破坏性补丁）；
 - **悬停样式必须门禁**：所有 `:hover` 规则包在 `@media (hover: hover)` 内（`pnpm check:hygiene` 强制），`:focus-visible` / `[aria-expanded]` / `.is-active` 等持久态选择器留在门禁外；悬停才显露的控件在 `@media (hover: none)` 下常显或经 `:focus-within` 显露；系统原生点按高亮已在 `base.css` 全局关闭，按压反馈统一走 `:active`。
 
 ## 零 Emoji 铁律
