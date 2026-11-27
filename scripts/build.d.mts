@@ -35,4 +35,9 @@ export declare class BuildArgError extends Error {}
 export declare function buildUsageText(): string
 export declare function parseBuildArgs(argv?: string[], env?: NodeJS.ProcessEnv): ParsedBuildArgs
 export declare function planBuildStages(options?: PlanBuildStagesOptions): BuildPlan
+export declare function prepareBuildDist(
+  repoRoot: string,
+  plan: Pick<BuildPlan, 'cleanPackages' | 'force'>,
+  env?: NodeJS.ProcessEnv,
+): void
 export declare function runBuild(options?: RunBuildOptions): Promise<number>

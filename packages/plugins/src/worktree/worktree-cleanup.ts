@@ -16,6 +16,7 @@ import {
   pruneWorktreeRegistrations,
   resolveMergeReferenceHead,
   resolveRepoAuthority,
+  resolveRepoCommonDir,
 } from './worktree-git.js'
 import { validateWorktreeSelector, type ManagedWorktreeRecord, type WorktreeStore } from './worktree-store.js'
 import { ownerMismatchError } from './worktree-inspect.js'
@@ -382,12 +383,12 @@ export async function cleanupWorktree(
     return forceClearMissingRegistration(deps, store, redact, withRepoLock, record, input)
   }
 
-  const authority = await resolveRepoAuthority(deps, record.nodeId, record.repoRoot, input.signal)
+  const { commonDir, canonicalCommonDir } = await resolveRepoCommonDir(deps, record.nodeId, record.repoRoot, input.signal)
   let outcome:
     | { removed: boolean; branchDeleted: boolean; processUsage?: 'verified' | 'unverified'; processUsageNote?: string }
     | undefined
 
-  await withRepoLock(record.nodeId, authority.canonicalCommonDir, async () => {
+  await withRepoLock(record.nodeId, canonicalCommonDir, async () => {
     const fresh = store.findById(record.id)
     if (fresh === undefined) {
       throw new HelmxError('not_found', `受管 worktree 记录 ${record.id} 不存在（存储状态不一致）`, 404, { id: record.id })
@@ -398,7 +399,7 @@ export async function cleanupWorktree(
     }
     assertWorktreeUnoccupied(deps, store, redact, fresh, input.callerPluginId)
 
-    const locked = await resolveRepoAuthority(deps, fresh.nodeId, fresh.repoRoot, input.signal)
+    const locked = await resolveRepoAuthority(deps, fresh.nodeId, fresh.repoRoot, input.signal, commonDir)
     const entries = locked.entries
     const mainEntry = entries[0]!
     const match = matchWorktreeEntry(entries, fresh.path)

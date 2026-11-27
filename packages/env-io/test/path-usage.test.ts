@@ -418,4 +418,42 @@ describe('scanPathUsage (injected io)', { timeout: 60_000 }, () => {
     assert.equal(r4.ok, true)
     if (r4.ok) assert.equal(r4.value.matchedTotal, 1)
   })
+
+  it('skips /fd scan once cwd matches and preserves ascending order across multi-batch scans', { timeout: 60_000 }, async () => {
+    const fdDirsRead: string[] = []
+    const pids: Fixture['pids'] = {}
+    for (let i = 1; i <= 35; i += 1) {
+      pids[String(i)] =
+        i % 5 === 0
+          ? { cwd: `/wt/cwd-${i}`, fds: { '3': `/wt/fd-${i}` }, comm: `p-${i}\n` }
+          : i % 7 === 0
+            ? { cwd: '/safe', fds: { '3': `/wt/fd-${i}` }, comm: `p-${i}\n` }
+            : { cwd: '/safe', fds: {} }
+    }
+    const base = makeIo({ pids })
+    const trackingIo: PathUsageIo = {
+      ...base,
+      readdir: async (p) => {
+        if (p.endsWith('/fd')) fdDirsRead.push(p)
+        return base.readdir(p)
+      },
+    }
+
+    const r = await scanPathUsage('/wt', { io: trackingIo, platform: 'linux', maxReported: 8, maxPids: 35 })
+    assert.equal(r.ok, true)
+    if (!r.ok) return
+    assert.equal(r.value.complete, true)
+    for (const pid of [5, 10, 15, 20, 25, 30, 35]) {
+      assert.equal(fdDirsRead.includes(`/proc/${pid}/fd`), false, `cwd match on pid ${pid} should skip /fd scan`)
+    }
+    const sorted = [...r.value.processes.map((p) => p.pid)].sort((a, b) => a - b)
+    assert.deepEqual(r.value.processes.map((p) => p.pid), sorted)
+    assert.deepEqual(
+      r.value.processes.slice(0, 4).map((p) => `${p.pid}:${p.source}`),
+      ['5:cwd', '7:fd', '10:cwd', '14:fd'],
+    )
+    assert.equal(r.value.matchedTotal, 11)
+    assert.equal(r.value.processes.length, 8)
+    assert.equal(r.value.processesTruncated, true)
+  })
 })

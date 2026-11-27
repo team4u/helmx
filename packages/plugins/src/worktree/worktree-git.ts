@@ -250,6 +250,37 @@ export async function canonicalPathOnNode(ports: WorktreeNodePorts, nodeId: stri
   return result.value
 }
 
+async function readCommonDir(
+  ports: WorktreeNodePorts,
+  nodeId: string,
+  cwd: string,
+  signal?: AbortSignal,
+): Promise<string> {
+  const redact = ports.redact ?? ((t: string) => t)
+  const common = await gitExec(ports, nodeId, cwd, ['rev-parse', '--path-format=absolute', '--git-common-dir'], signal)
+  const commonDir = common.ok ? common.output.trim() : ''
+  if (!common.ok || commonDir === '') {
+    throw new HelmxError(
+      'worktree_check_failed',
+      `无法在节点 ${nodeId} 解析 '${redact(cwd)}' 的 git common-dir（不猜测主仓路径，操作中止）：\n${common.output.trim()}`,
+      502,
+      { nodeId, cwd: redact(cwd), output: common.output.slice(0, 2000) },
+    )
+  }
+  return commonDir
+}
+
+/** 解析仓库 git common-dir 及其节点规范真实路径（用于锁键构造，避免额外触发 `git worktree list`）。 */
+export async function resolveRepoCommonDir(
+  ports: WorktreeNodePorts,
+  nodeId: string,
+  cwd: string,
+  signal?: AbortSignal,
+): Promise<{ commonDir: string; canonicalCommonDir: string }> {
+  const commonDir = await readCommonDir(ports, nodeId, cwd, signal)
+  return { commonDir, canonicalCommonDir: await canonicalPathOnNode(ports, nodeId, commonDir) }
+}
+
 /**
  * 从 cwd 出发取同一仓库的权威信息（`knownCommonDir` 已由上游批量 `rev-parse` 解析时免重复调用）。
  * 布局校验：`common-dir` 必须位于主工作树下（`<mainPath>/.git`），非常规布局显式拒绝。
@@ -262,19 +293,7 @@ export async function resolveRepoAuthority(
   knownCommonDir?: string,
 ): Promise<RepoAuthority> {
   const redact = ports.redact ?? ((t: string) => t)
-  let commonDir = knownCommonDir ?? ''
-  if (commonDir === '') {
-    const common = await gitExec(ports, nodeId, cwd, ['rev-parse', '--path-format=absolute', '--git-common-dir'], signal)
-    commonDir = common.ok ? common.output.trim() : ''
-    if (!common.ok || commonDir === '') {
-      throw new HelmxError(
-        'worktree_check_failed',
-        `无法在节点 ${nodeId} 解析 '${redact(cwd)}' 的 git common-dir（不猜测主仓路径，操作中止）：\n${common.output.trim()}`,
-        502,
-        { nodeId, cwd: redact(cwd), output: common.output.slice(0, 2000) },
-      )
-    }
-  }
+  const commonDir = knownCommonDir && knownCommonDir !== '' ? knownCommonDir : await readCommonDir(ports, nodeId, cwd, signal)
   const list = await gitExec(ports, nodeId, cwd, ['worktree', 'list', '--porcelain', '-z'], signal)
   if (!list.ok) {
     throw new HelmxError(

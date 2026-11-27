@@ -446,6 +446,8 @@ export function createStoreNavActions(
       escAbortTimer = null
       clearEscAbortPrompt()
     }, options.escAbortWindowMs)
+    const timerHandle = escAbortTimer as unknown as { unref?: () => void }
+    timerHandle.unref?.()
   }
 
   const confirmOrArmEscAbort = (conversationId: number): void => {

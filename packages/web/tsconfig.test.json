@@ -22,9 +22,6 @@
       ],
       "@helmx/plugins/*": [
         "../plugins/src/*"
-      ],
-      "@helmx/plugin-build": [
-        "../plugin-build/src/index.ts"
       ]
     }
   },

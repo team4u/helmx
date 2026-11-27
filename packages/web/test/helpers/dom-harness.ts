@@ -10,6 +10,7 @@ import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import { resetDomEnvironment } from '@helmx/test-kit'
 import type { Root } from 'react-dom/client'
 import { resetServerClock } from '../../src/lib/server-clock.js'
+import { testResetCallbacks } from './store-reset-registry.js'
 
 let registered = false
 
@@ -106,6 +107,9 @@ export function getBaselineFetch(): typeof globalThis.fetch {
  * `--test-isolation=none` 跨文件复跑）。
  */
 export function resetHappyDom(): void {
+  for (const cb of [...testResetCallbacks]) {
+    cb()
+  }
   ensureHappyDom()
   if (baseline !== undefined) {
     globalThis.fetch = baseline.fetch

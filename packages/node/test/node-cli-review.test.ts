@@ -21,6 +21,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
+import { existsSync, statSync } from 'node:fs';
 import path from 'node:path';
 import http from 'node:http';
 import net from 'node:net';
@@ -33,7 +34,7 @@ import { createBirpc } from 'birpc';
 import type { EnvExecOutputEvent } from '@helmx/protocol';
 import { sanitizedHostEnv } from './helpers/sanitized-env.js';
 import { bindIdentityFromJoinToken } from '../src/daemon/index.js';
-import { isDirectRun, runNodeCli, type NodeCliIo } from '../src/cli.js';
+import { defaultSpawnDaemon, isDirectRun, runNodeCli, type NodeCliIo } from '../src/cli.js';
 import {
   getNodeServiceStatus,
   installNodeService,
@@ -48,6 +49,31 @@ interface Captured {
   code: number;
 }
 
+const REPO_ROOT = fileURLToPath(new URL('../../..', import.meta.url));
+const SRC_CLI_ENTRY = fileURLToPath(new URL('../src/cli.ts', import.meta.url));
+const DIST_CLI_ENTRY = fileURLToPath(new URL('../dist/cli.js', import.meta.url));
+const USE_DIST_CLI =
+  existsSync(DIST_CLI_ENTRY) &&
+  existsSync(path.join(REPO_ROOT, 'packages/protocol/dist/index.js')) &&
+  existsSync(path.join(REPO_ROOT, 'packages/env-io/dist/index.js')) &&
+  statSync(DIST_CLI_ENTRY).mtimeMs >= statSync(SRC_CLI_ENTRY).mtimeMs;
+
+/**
+ * When compiled `dist/cli.js` is built and fresh, spawn background daemons via plain Node instead
+ * of tsx to eliminate ~1.5s tsx loader startup per daemon spawn; fall back to `src/cli.ts` + tsx
+ * if dist is missing or older than `src/cli.ts`.
+ */
+const distAwareSpawnDaemon: NonNullable<NodeCliIo['spawnDaemon']> = (options) => {
+  if (!USE_DIST_CLI || options.args[0] !== SRC_CLI_ENTRY) {
+    return defaultSpawnDaemon(options);
+  }
+  return defaultSpawnDaemon({
+    ...options,
+    args: [DIST_CLI_ENTRY, ...options.args.slice(1)],
+    execArgv: [],
+  });
+};
+
 /** In-memory I/O entry; complements (and does not replace) standalone CLI child-process tests. */
 async function runCli(argv: string[], io: Partial<NodeCliIo> = {}): Promise<Captured> {
   let out = '';
@@ -57,6 +83,7 @@ async function runCli(argv: string[], io: Partial<NodeCliIo> = {}): Promise<Capt
     env: sanitizedHostEnv(),
     out: (t) => (out += t),
     err: (t) => (err += t),
+    ...(USE_DIST_CLI && io.spawnDaemon === undefined ? { spawnDaemon: distAwareSpawnDaemon } : {}),
     ...io,
   });
   return { out, err, code };
@@ -149,7 +176,6 @@ async function startHubFixture(options: { expectedToken: string; reject?: boolea
   };
 }
 
-const REPO_ROOT = fileURLToPath(new URL('../../..', import.meta.url));
 const TSX_TSCONFIG_PATH = path.join(REPO_ROOT, 'tsconfig.dev.json');
 
 /** Probe child liveness via `process.kill(pid, 0)`. */
@@ -180,16 +206,18 @@ test('three independent CLI child processes start -d / status / stop: registered
   }, { timeout: 60_000 });
   await bindIdentityFromJoinToken(dir, 'rev-lc:s3cret', hub.url);
 
-  const cliEntry = fileURLToPath(new URL('../src/cli.ts', import.meta.url));
-  const tsxLoader = import.meta.resolve('tsx');
+  const tsxLoader = USE_DIST_CLI ? '' : import.meta.resolve('tsx');
   const childCli = (args: string[]): Promise<Captured> =>
     new Promise((resolve, reject) => {
+      const cliArgs = USE_DIST_CLI
+        ? [DIST_CLI_ENTRY, ...args, '--data-dir', dir, '--json']
+        : ['--import', tsxLoader, SRC_CLI_ENTRY, ...args, '--data-dir', dir, '--json'];
       const child = spawn(
         process.execPath,
-        ['--import', tsxLoader, cliEntry, ...args, '--data-dir', dir, '--json'],
+        cliArgs,
         {
           stdio: ['ignore', 'pipe', 'pipe'],
-          env: { ...sanitizedHostEnv(), TSX_TSCONFIG_PATH, HELMX_HUB_URL: hub.url },
+          env: { ...sanitizedHostEnv(), ...(USE_DIST_CLI ? {} : { TSX_TSCONFIG_PATH }), HELMX_HUB_URL: hub.url },
         },
       );
       let out = '';

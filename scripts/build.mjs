@@ -161,11 +161,6 @@ export function planBuildStages(options = {}) {
         args: [path.join(repoRoot, 'packages/cli/scripts/generate-sdk-types.mjs'), ...forceArgs],
         label: 'generate-sdk-types',
       },
-      {
-        cmd: execPath,
-        args: [tscBin, '--noEmit', '-p', path.join(repoRoot, 'packages/plugin-client/tsconfig.json')],
-        label: 'tsc --noEmit plugin-client',
-      },
     ],
     payloadCommand:
       mode === 'full'
@@ -189,17 +184,13 @@ function flushCommandOutput(command, res, quiet) {
 }
 
 /**
- * Execute the planned DAG workspace build.
- * @param {{ repoRoot?: string, execPath?: string, tscBin?: string, mode?: 'full' | 'skip-payload' | 'for-typecheck' | 'unit-deps', force?: boolean, quiet?: boolean, env?: NodeJS.ProcessEnv }} [options]
- * @returns {Promise<number>}
+ * Pre-clean stale dist outputs and honor HELMX_CLEAN_DIST / --force before tsc -b inspects tsbuildinfo.
+ * Shared by `runBuild` and `scripts/verify.mjs`.
+ * @param {string} repoRoot
+ * @param {{ cleanPackages: string[], force: boolean }} plan
+ * @param {NodeJS.ProcessEnv} [env]
  */
-export async function runBuild(options = {}) {
-  const repoRoot = path.resolve(options.repoRoot ?? defaultRepoRoot);
-  const env = options.env ?? process.env;
-  const quiet = options.quiet === true;
-  const plan = planBuildStages(options);
-
-  // Pre-clean stale dist outputs and honor HELMX_CLEAN_DIST / --force before tsc -b inspects tsbuildinfo.
+export function prepareBuildDist(repoRoot, plan, env = process.env) {
   for (const pkg of plan.cleanPackages) {
     const pkgRoot = path.join(repoRoot, 'packages', pkg);
     const preserveClients = pkg === 'plugins';
@@ -213,6 +204,20 @@ export async function runBuild(options = {}) {
       env,
     });
   }
+}
+
+/**
+ * Execute the planned DAG workspace build.
+ * @param {{ repoRoot?: string, execPath?: string, tscBin?: string, mode?: 'full' | 'skip-payload' | 'for-typecheck' | 'unit-deps', force?: boolean, quiet?: boolean, env?: NodeJS.ProcessEnv }} [options]
+ * @returns {Promise<number>}
+ */
+export async function runBuild(options = {}) {
+  const repoRoot = path.resolve(options.repoRoot ?? defaultRepoRoot);
+  const env = options.env ?? process.env;
+  const quiet = options.quiet === true;
+  const plan = planBuildStages(options);
+
+  prepareBuildDist(repoRoot, plan, env);
 
   const controller = new AbortController();
   let interruptedCode = null;

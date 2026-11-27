@@ -18,6 +18,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 
 const STATE_KEY = '__helmxDomShardPreloadState';
+const RESET_CALLBACKS_KEY = '__helmxDomResetCallbacks';
 const RESTORED_CONSOLE_METHODS = ['error', 'warn', 'log'];
 
 function getState() {
@@ -99,6 +100,9 @@ export async function installDomShardPreload() {
   const state = getState();
   if (state.installed) return;
   state.installed = true;
+  if (!(globalThis[RESET_CALLBACKS_KEY] instanceof Set)) {
+    globalThis[RESET_CALLBACKS_KEY] = new Set();
+  }
 
   const url = resolveGlobalRegistratorUrl();
   if (!url) return;
@@ -136,6 +140,18 @@ export async function installDomShardPreload() {
  * Only touches globals when happy-dom has already been registered in this process.
  */
 export function resetSharedHappyDom() {
+  const callbacks = globalThis[RESET_CALLBACKS_KEY];
+  if (callbacks instanceof Set) {
+    for (const cb of [...callbacks]) {
+      if (typeof cb !== 'function') continue;
+      try {
+        cb();
+      } catch {
+        // Ignore callback cleanup errors between test files
+      }
+    }
+  }
+
   const state = getState();
   const isRegistered =
     Boolean(state.registrator?.isRegistered) ||

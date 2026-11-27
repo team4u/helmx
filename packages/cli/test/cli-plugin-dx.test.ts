@@ -369,18 +369,13 @@ test('plugins remove: --json non-interactive, --yes bypass, and non-interactive 
   assert.ok(r2.out.includes('Removed my:pl'))
   assert.ok(r2.out.includes('/data/plugins/my:pl'))
 
-  // Human mode without --yes: ensure non-TTY rejection (even if external runner inherits TTY stdin under --test-isolation=none)
-  const origIsTTY = Object.getOwnPropertyDescriptor(process.stdin, 'isTTY')
-  Object.defineProperty(process.stdin, 'isTTY', { value: false, configurable: true })
-  try {
-    const r3 = await runCliCaptured(['plugins', 'remove', 'my:pl'], env)
-    assert.notEqual(r3.code, 0)
-    assert.ok(r3.err.includes('--yes'))
-    assert.ok(r3.err.includes('confirmation_required') || r3.err.includes('removing'))
-  } finally {
-    if (origIsTTY) Object.defineProperty(process.stdin, 'isTTY', origIsTTY)
-    else delete (process.stdin as { isTTY?: boolean }).isTTY
-  }
+  // Human mode without --yes: ensure non-TTY rejection via injected stdin (avoids global process.stdin mutation)
+  const r3 = await runCliCaptured(['plugins', 'remove', 'my:pl'], env, {
+    stdin: { isTTY: false, readAll: async () => '', readLine: async () => '' },
+  })
+  assert.notEqual(r3.code, 0)
+  assert.ok(r3.err.includes('--yes'))
+  assert.ok(r3.err.includes('confirmation_required') || r3.err.includes('removing'))
   assert.equal(hub.hits.length, 2, 'must not call Hub without confirmation')
 
   // Missing and extra positional arguments rejected without contacting Hub
@@ -805,18 +800,9 @@ test('plugins init: all three templates pass real standalone tsc --noEmit outsid
       return { template, dir: body.dir }
     }),
   )
-  await Promise.all(
-    initResults.map(async ({ template, dir }) => {
-      const tscRes = await runTscNoEmitAsync(path.join(dir, 'tsconfig.json'), dir)
-      assert.equal(
-        tscRes.status,
-        0,
-        `standalone tsc --noEmit failed for template ${template}:\n${tscRes.stdout}\n${tscRes.stderr}`,
-      )
-    }),
-  )
-
   const appDir = initResults.find((r) => r.template === 'app')!.dir
+  const minimalDir = initResults.find((r) => r.template === 'minimal')!.dir
+  const fullDir = initResults.find((r) => r.template === 'full')!.dir
   const origIndex = await fsp.readFile(path.join(appDir, 'index.ts'), 'utf8')
   const origClient = await fsp.readFile(path.join(appDir, 'client', 'index.tsx'), 'utf8')
   const variantsRoot = path.join(workDir, 'variants')
@@ -827,16 +813,16 @@ test('plugins init: all three templates pass real standalone tsc --noEmit outsid
     return dir
   }
 
-  // Wave 2: negative checks + pure-shim ARIA/SDK probe + @types/react/@types/node coexistence in parallel
+  // Clone clean app template before adding extra ARIA/SDK pure-shim probe into appDir,
+  // then run all positive + negative + coexistence tsc --noEmit checks in a single parallel wave.
   const badBackendDir = cloneAppVariant('bad-backend')
   await fsp.writeFile(path.join(badBackendDir, 'index.ts'), origIndex.replace("id: 'add_item',", 'id: 42,'), 'utf8')
 
   const badFrontendDir = cloneAppVariant('bad-frontend')
   await fsp.writeFile(path.join(badFrontendDir, 'client', 'index.tsx'), origClient.replace('columns={2}', 'columns="not-a-number"'), 'utf8')
 
-  const shimProbeDir = cloneAppVariant('shim-probe')
   await fsp.writeFile(
-    path.join(shimProbeDir, 'client', 'shim-aria-probe.tsx'),
+    path.join(appDir, 'client', 'shim-aria-probe.tsx'),
     [
       "import type { PointerEvent, ReactNode } from 'react'",
       "import { Badge, Button, Card, CardGrid, Field, IconButton, Input, MonoId, SelectCard, Stack, StatusLight, Textarea } from '@helmx/plugin-client'",
@@ -896,20 +882,24 @@ test('plugins init: all three templates pass real standalone tsc --noEmit outsid
     'utf8',
   )
 
-  const [badBackend, badFrontend, shimProbeRes, withRealTypes] = await Promise.all([
+  const [minimalRes, fullRes, appAndShimRes, badBackend, badFrontend, withRealTypes] = await Promise.all([
+    runTscNoEmitAsync(path.join(minimalDir, 'tsconfig.json'), minimalDir),
+    runTscNoEmitAsync(path.join(fullDir, 'tsconfig.json'), fullDir),
+    runTscNoEmitAsync(path.join(appDir, 'tsconfig.json'), appDir),
     runTscNoEmitAsync(path.join(badBackendDir, 'tsconfig.json'), badBackendDir),
     runTscNoEmitAsync(path.join(badFrontendDir, 'tsconfig.json'), badFrontendDir),
-    runTscNoEmitAsync(path.join(shimProbeDir, 'tsconfig.json'), shimProbeDir),
     runTscNoEmitAsync(path.join(coexistDir, 'tsconfig.json'), coexistDir),
   ])
 
+  assert.equal(minimalRes.status, 0, `standalone tsc --noEmit failed for template minimal:\n${minimalRes.stdout}\n${minimalRes.stderr}`)
+  assert.equal(fullRes.status, 0, `standalone tsc --noEmit failed for template full:\n${fullRes.stdout}\n${fullRes.stderr}`)
+  assert.equal(
+    appAndShimRes.status,
+    0,
+    `standalone pure-shim tsc --noEmit failed for template app + React 19 ARIA + SDK primitives:\n${appAndShimRes.stdout}\n${appAndShimRes.stderr}`,
+  )
   assert.notEqual(badBackend.status, 0, 'invalid backend PluginActionSpec.id must fail tsc --noEmit')
   assert.notEqual(badFrontend.status, 0, 'invalid DataTable columns prop must fail tsc --noEmit')
-  assert.equal(
-    shimProbeRes.status,
-    0,
-    `standalone pure-shim tsc --noEmit failed on React 19 ARIA + SDK primitives:\n${shimProbeRes.stdout}\n${shimProbeRes.stderr}`,
-  )
   assert.equal(
     withRealTypes.status,
     0,

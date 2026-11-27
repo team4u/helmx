@@ -52,6 +52,13 @@ import {
   parseBuildArgs,
   planBuildStages,
 } from '../../../scripts/build.mjs'
+import { TYPECHECK_TARGETS } from '../../../scripts/typecheck.mjs'
+import {
+  VerifyArgError,
+  parseVerifyArgs,
+  planVerifyStages,
+  verifyUsageText,
+} from '../../../scripts/verify.mjs'
 import { pruneTsxCacheIfBloated } from '../../../scripts/lib/tsx-cache-hygiene.mjs'
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
@@ -1061,13 +1068,13 @@ test('scripts/build.mjs: parseBuildArgs & planBuildStages cover full, --skip-pay
   assert.deepEqual(fullPlan.cleanPackages, ['protocol', 'env-io', 'node', 'plugin-build', 'kernel', 'plugins', 'hub', 'cli'])
   assert.deepEqual(fullPlan.tscCommand.args, ['/tsc.js', '-b', 'tsconfig.build.json', '--force'])
   assert.ok(fullPlan.webCommand && fullPlan.webCommand.args.includes('--force'))
-  assert.equal(fullPlan.postTscCommands.length, 3)
+  assert.deepEqual(fullPlan.postTscCommands.map((c) => c.label), ['copy-plugin-clients', 'generate-sdk-types'])
   assert.ok(fullPlan.payloadCommand && fullPlan.payloadCommand.args.includes('--force'))
 
   const skipPayloadPlan = planBuildStages({ repoRoot, execPath: '/node', tscBin: '/tsc.js', mode: 'skip-payload' })
   assert.equal(skipPayloadPlan.payloadCommand, null)
   assert.ok(skipPayloadPlan.webCommand)
-  assert.equal(skipPayloadPlan.postTscCommands.length, 3)
+  assert.deepEqual(skipPayloadPlan.postTscCommands.map((c) => c.label), ['copy-plugin-clients', 'generate-sdk-types'])
 
   const typecheckPlan = planBuildStages({ repoRoot, execPath: '/node', tscBin: '/tsc.js', mode: 'for-typecheck' })
   assert.deepEqual(typecheckPlan.cleanPackages, ['protocol', 'env-io', 'node', 'plugin-build', 'kernel', 'plugins', 'hub'])
@@ -1092,4 +1099,45 @@ test('scripts/build.mjs: parseBuildArgs & planBuildStages cover full, --skip-pay
   assert.equal(cliErr.status, 2)
   assert.ok(cliErr.stderr.includes('Unknown argument'))
   assert.ok(buildUsageText().includes('--for-typecheck'))
+})
+
+test('scripts/typecheck.mjs & scripts/verify.mjs: TYPECHECK_TARGETS, parseVerifyArgs, planVerifyStages, and CLI exit 2', { timeout: 60_000 }, () => {
+  assert.deepEqual(
+    TYPECHECK_TARGETS.map((t) => t.project),
+    [
+      'tsconfig.check.json',
+      'packages/plugin-client/tsconfig.json',
+      'packages/plugins/tsconfig.client.json',
+      'packages/web/tsconfig.json',
+      'packages/web/tsconfig.test.json',
+    ],
+  )
+
+  assert.deepEqual(parseVerifyArgs([], {}), { force: false, skipTests: false, quiet: false })
+  assert.deepEqual(parseVerifyArgs(['--', '-f', '--skip-tests', '-q'], {}), {
+    force: true,
+    skipTests: true,
+    quiet: true,
+  })
+  assert.deepEqual(parseVerifyArgs([], { HELMX_CLEAN_DIST: '1' }), { force: true, skipTests: false, quiet: false })
+  assert.throws(() => parseVerifyArgs(['--bogus'], {}), VerifyArgError)
+
+  const fullVerify = planVerifyStages({ repoRoot, execPath: '/node', tscBin: '/tsc.js', oxlintBin: '/oxlint', force: true })
+  assert.equal(fullVerify.buildPlan.mode, 'full')
+  assert.equal(fullVerify.buildPlan.force, true)
+  assert.deepEqual(fullVerify.lintCommand.args, ['/oxlint'])
+  assert.deepEqual(fullVerify.hygieneCommand.args, [path.join(repoRoot, 'scripts', 'check-test-hygiene.mjs')])
+  assert.deepEqual(fullVerify.testsCommand?.args, [path.join(repoRoot, 'scripts', 'test-suites.mjs'), 'all'])
+
+  const skipVerify = planVerifyStages({ repoRoot, execPath: '/node', tscBin: '/tsc.js', oxlintBin: '/oxlint', skipTests: true })
+  assert.equal(skipVerify.testsCommand, null)
+
+  const cliErr = spawnSync(process.execPath, [path.join(repoRoot, 'scripts', 'verify.mjs'), '--unknown-flag'], {
+    cwd: repoRoot,
+    encoding: 'utf8',
+    timeout: 60_000,
+  })
+  assert.equal(cliErr.status, 2)
+  assert.ok(cliErr.stderr.includes('Unknown argument'))
+  assert.ok(verifyUsageText().includes('--skip-tests'))
 })

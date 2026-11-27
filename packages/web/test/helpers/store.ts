@@ -14,8 +14,24 @@ import { HelmxExternalStore, type AuthSlice, type CatalogSlice, type NavSlice, t
 import { emptyLiveState } from '../../src/lib/live-state.js'
 import { HelmxExternalStoreContext } from '../../src/lib/store-context.js'
 import type { HelmxStoreValue, ToastNotice } from '../../src/lib/types.js'
+import { testResetCallbacks } from './store-reset-registry.js'
 
 export { HelmxExternalStoreContext }
+
+const activeTestStores = new Set<HelmxExternalStore>()
+
+/** 清理通过 `makeTestStore()` 创建且尚未手动释放的测试 store（消除泄漏定时器）。 */
+export function disposeTestStores(): void {
+  for (const store of [...activeTestStores]) {
+    store.dispose()
+  }
+  activeTestStores.clear()
+}
+
+testResetCallbacks.add(disposeTestStores)
+// 仅在 dom-shared 预加载器已初始化集合时登记（禁写 globalThis 属性，避免影响 AST 纯度分池）。
+const domResetCallbacks = (globalThis as { __helmxDomResetCallbacks?: Set<() => void> }).__helmxDomResetCallbacks
+domResetCallbacks?.add(disposeTestStores)
 
 /** 状态覆写面：沿用历史字段名；groupedUi 由 store 从 uiContributions 派生（与生产同链路），
  * 动作函数不可覆写（真实 store 提供真实动作）——类型层显式排除，避免静默丢弃。 */
@@ -164,5 +180,11 @@ export function makeTestStore(overrides: TestStoreOverrides = {}): HelmxExternal
   if (conversationArtifacts !== undefined) store.setConversationArtifacts(conversationArtifacts)
   if (loadErrors !== undefined) store.setLoadErrors(loadErrors)
   if (notices !== undefined) hydrate.setNotices(notices)
+  activeTestStores.add(store)
+  const origDispose = store.dispose.bind(store)
+  store.dispose = () => {
+    activeTestStores.delete(store)
+    origDispose()
+  }
   return store
 }

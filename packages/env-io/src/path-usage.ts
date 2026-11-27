@@ -205,6 +205,8 @@ export async function scanPathUsage(target: string, options: ScanPathUsageOption
     diagnostics.add(`PID count ${pids.length} exceeds scan limit ${maxPids}; only the first ${maxPids} PIDs were scanned (scan incomplete)`)
   }
 
+const PID_BATCH_SIZE = 16
+
   const processes: NodePathUsageProcess[] = []
   /** Deduplicate hits by PID (first hit wins; `cwd` is checked before `fd`). */
   const matchedPids = new Set<number>()
@@ -212,7 +214,7 @@ export async function scanPathUsage(target: string, options: ScanPathUsageOption
   let truncated = false
   const pidDenied = new Set<number>()
   let unobservable = 0
-  let scanned = 0
+  const pidsToScan = pids.slice(0, maxPids)
 
   /**
    * Record a persistent read failure (deduplicated per PID): `EACCES`/`EPERM` counts as a structural
@@ -247,41 +249,6 @@ export async function scanPathUsage(target: string, options: ScanPathUsageOption
     }
   }
 
-  /**
-   * Bounded re-check after a denied read (exactly once):
-   * - `stat` returns `ENOENT`/`ESRCH`: process exited -> ignore race;
-   * - `stat` succeeds: retry the read once (adopts success on transient failure; otherwise records denial);
-   * - `stat` fails with non-exit errno: record via `recordDenied` (same `EACCES`/`EPERM` vs fail-closed split).
-   */
-  const settleDenied = async <T>(
-    pid: number,
-    what: string,
-    reread: () => Promise<{ ok: true; value: T } | { ok: false; code: string }>,
-  ): Promise<{ result: 'gone' } | { result: 'ok'; value: T } | { result: 'denied' }> => {
-    const st = await statPid(pid)
-    if (st.kind === 'gone') return { result: 'gone' }
-    if (st.kind === 'unknown') {
-      recordDenied(pid, what, undefined, st.code)
-      return { result: 'denied' }
-    }
-    const retry = await reread()
-    if (retry.ok) return { result: 'ok', value: retry.value }
-    if (retry.code === 'ENOENT' || retry.code === 'ESRCH') return { result: 'gone' }
-    recordDenied(pid, what, st.uid, retry.code)
-    return { result: 'denied' }
-  }
-
-  const retryLink = (p: string) =>
-    readLink(io, p).then((o): { ok: true; value: string } | { ok: false; code: string } =>
-      o.kind === 'value' ? { ok: true, value: o.value } : { ok: false, code: o.kind === 'gone' ? 'ENOENT' : o.code })
-
-  const settleLink = async (pid: number, what: string, p: string): Promise<ReadOutcome> => {
-    const settled = await settleDenied<string>(pid, what, () => retryLink(p))
-    if (settled.result === 'ok') return { kind: 'value', value: settled.value }
-    if (settled.result === 'gone') return { kind: 'gone' }
-    return { kind: 'denied', code: 'DENIED', message: 'denied after re-check' }
-  }
-
   const pushMatch = async (pid: number, source: 'cwd' | 'fd', path: string): Promise<void> => {
     if (matchedPids.has(pid)) return
     matchedPids.add(pid)
@@ -302,51 +269,124 @@ export async function scanPathUsage(target: string, options: ScanPathUsageOption
   }
 
   const baseList = [...bases]
+  const isAborted = (): boolean => options.signal?.aborted === true
 
-  for (const pid of pids) {
-    if (scanned >= maxPids) break
-    scanned += 1
-    if (options.signal?.aborted === true) {
-      return { ok: false, error: { code: 'aborted', message: 'path-usage scan aborted' } }
+  interface PidScanResult {
+    pid: number
+    aborted: boolean
+    match?: { source: 'cwd' | 'fd'; path: string }
+    denied?: { what: string; uid: number | undefined; code: string }
+  }
+
+  const scanSinglePid = async (pid: number): Promise<PidScanResult> => {
+    if (isAborted()) {
+      return { pid, aborted: true }
     }
+
+    let denied: { what: string; uid: number | undefined; code: string } | undefined
+    const noteDenied = (what: string, uid: number | undefined, code: string): void => {
+      if (denied === undefined) denied = { what, uid, code }
+    }
+
+    /**
+     * Bounded re-check after a denied read (exactly once):
+     * - `stat` returns `ENOENT`/`ESRCH`: process exited -> ignore race;
+     * - `stat` succeeds: retry the read once (adopts success on transient failure; otherwise records denial);
+     * - `stat` fails with non-exit errno: record via `noteDenied` (same `EACCES`/`EPERM` vs fail-closed split).
+     */
+    const settleDenied = async <T>(
+      what: string,
+      reread: () => Promise<{ ok: true; value: T } | { ok: false; code: string }>,
+    ): Promise<{ result: 'gone' } | { result: 'ok'; value: T } | { result: 'denied' }> => {
+      const st = await statPid(pid)
+      if (st.kind === 'gone') return { result: 'gone' }
+      if (st.kind === 'unknown') {
+        noteDenied(what, undefined, st.code)
+        return { result: 'denied' }
+      }
+      const retry = await reread()
+      if (retry.ok) return { result: 'ok', value: retry.value }
+      if (retry.code === 'ENOENT' || retry.code === 'ESRCH') return { result: 'gone' }
+      noteDenied(what, st.uid, retry.code)
+      return { result: 'denied' }
+    }
+
+    const retryLink = (p: string) =>
+      readLink(io, p).then((o): { ok: true; value: string } | { ok: false; code: string } =>
+        o.kind === 'value' ? { ok: true, value: o.value } : { ok: false, code: o.kind === 'gone' ? 'ENOENT' : o.code })
+
+    const settleLink = async (what: string, p: string): Promise<ReadOutcome> => {
+      const settled = await settleDenied<string>(what, () => retryLink(p))
+      if (settled.result === 'ok') return { kind: 'value', value: settled.value }
+      if (settled.result === 'gone') return { kind: 'gone' }
+      return { kind: 'denied', code: 'DENIED', message: 'denied after re-check' }
+    }
+
     let cwd = await readLink(io, `${procRoot}/${pid}/cwd`)
     if (cwd.kind === 'denied') {
-      cwd = await settleLink(pid, 'cwd', `${procRoot}/${pid}/cwd`)
+      cwd = await settleLink('cwd', `${procRoot}/${pid}/cwd`)
     }
     if (cwd.kind === 'value' && cwd.value.startsWith('/') && baseList.some((base) => pathContains(base, cwd.value))) {
-      await pushMatch(pid, 'cwd', cwd.value)
+      // `cwd` already confirms usage for this PID and takes precedence over open `fd`s; skip `/proc/<pid>/fd`.
+      return { pid, aborted: false, match: { source: 'cwd', path: cwd.value }, denied }
     }
+
     let fdNames: string[] | undefined
     try {
       fdNames = await io.readdir(`${procRoot}/${pid}/fd`)
     } catch (error) {
       const code = (error as { code?: string } | null)?.code
-      if (code === 'ENOENT' || code === 'ESRCH') continue
-      const settled = await settleDenied(pid, 'fd', () =>
+      if (code === 'ENOENT' || code === 'ESRCH') return { pid, aborted: false, denied }
+      const settled = await settleDenied('fd', () =>
         io.readdir(`${procRoot}/${pid}/fd`).then(
           (names): { ok: true; value: string[] } | { ok: false; code: string } => ({ ok: true, value: names }),
           (e: unknown) => ({ ok: false as const, code: (e as { code?: string } | null)?.code ?? 'UNKNOWN' }),
         ),
       )
-      if (settled.result !== 'ok') continue
+      if (settled.result !== 'ok') return { pid, aborted: false, denied }
       fdNames = settled.value
     }
+
+    let match: { source: 'cwd' | 'fd'; path: string } | undefined
     for (const fdName of fdNames) {
       if (!/^\d+$/.test(fdName)) continue
-      const signal = options.signal
-      if (signal?.aborted === true) {
-        return { ok: false, error: { code: 'aborted', message: 'path-usage scan aborted' } }
+      if (isAborted()) {
+        return { pid, aborted: true, match, denied }
       }
       let link = await readLink(io, `${procRoot}/${pid}/fd/${fdName}`)
       if (link.kind === 'denied') {
-        link = await settleLink(pid, `fd/${fdName}`, `${procRoot}/${pid}/fd/${fdName}`)
+        link = await settleLink(`fd/${fdName}`, `${procRoot}/${pid}/fd/${fdName}`)
       }
       if (link.kind !== 'value') {
         continue
       }
-      if (link.value.startsWith('/') && baseList.some((base) => pathContains(base, link.value))) {
-        await pushMatch(pid, 'fd', link.value)
+      if (match === undefined && link.value.startsWith('/') && baseList.some((base) => pathContains(base, link.value))) {
+        match = { source: 'fd', path: link.value }
       }
+    }
+
+    return { pid, aborted: false, match, denied }
+  }
+
+  for (let offset = 0; offset < pidsToScan.length; offset += PID_BATCH_SIZE) {
+    if (isAborted()) {
+      return { ok: false, error: { code: 'aborted', message: 'path-usage scan aborted' } }
+    }
+    const batch = pidsToScan.slice(offset, offset + PID_BATCH_SIZE)
+    const batchResults = await Promise.all(batch.map(scanSinglePid))
+    if (isAborted() || batchResults.some((r) => r.aborted)) {
+      return { ok: false, error: { code: 'aborted', message: 'path-usage scan aborted' } }
+    }
+    for (const r of batchResults) {
+      if (r.denied !== undefined) {
+        recordDenied(r.pid, r.denied.what, r.denied.uid, r.denied.code)
+      }
+      if (r.match !== undefined) {
+        await pushMatch(r.pid, r.match.source, r.match.path)
+      }
+    }
+    if (offset + PID_BATCH_SIZE < pidsToScan.length) {
+      await new Promise<void>((resolve) => setImmediate(resolve))
     }
   }
 

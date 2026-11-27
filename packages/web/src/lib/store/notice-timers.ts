@@ -62,10 +62,13 @@ export class StoreNoticeController {
       remainingMs: delayMs,
       startedAt: Date.now(),
     }
-    entry.timer = setTimeout(() => {
+    const timer = setTimeout(() => {
       this.noticeTimers.delete(id)
       this.dismissNotice(id)
     }, delayMs)
+    const timerHandle = timer as unknown as { unref?: () => void }
+    timerHandle.unref?.()
+    entry.timer = timer
     this.noticeTimers.set(id, entry)
   }
 

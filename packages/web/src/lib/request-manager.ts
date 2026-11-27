@@ -54,6 +54,8 @@ export class StoreRequestManager {
       this.timers.delete(timer)
       fn()
     }, ms)
+    const timerHandle = timer as unknown as { unref?: () => void }
+    timerHandle.unref?.()
     this.timers.add(timer)
   }
 

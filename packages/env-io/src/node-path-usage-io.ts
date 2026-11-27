@@ -1,19 +1,20 @@
 /**
- * Real `node:fs/promises` adapter implementing `PathUsageIo` (`@helmx/env-io`).
+ * Real `node:fs` adapter implementing `PathUsageIo` (`@helmx/env-io`).
  *
  * Shared by `@helmx/kernel` (local Hub scans) and `@helmx/node` (remote daemon) so filesystem
- * semantics are never duplicated. Errors preserve their `node:fs` `code` property (`ENOENT`,
- * `EACCES`, `ESRCH`, etc.) for fail-closed classification by `path-usage.ts`.
+ * semantics are never duplicated. Synchronous `node:fs` syscalls inside async methods avoid
+ * libuv fs-threadpool contention when scanning Linux `/proc` across concurrent test workers,
+ * while errors preserve their `node:fs` `code` property (`ENOENT`, `EACCES`, `ESRCH`, etc.).
  */
-import { readlink, readdir, stat, readFile, realpath } from 'node:fs/promises'
+import { readFileSync, readdirSync, readlinkSync, realpathSync, statSync } from 'node:fs'
 import type { PathUsageIo } from './path-usage.js'
 
 export function createNodePathUsageIo(): PathUsageIo {
   return {
-    readlink: (path) => readlink(path),
-    readdir: (path) => readdir(path),
-    stat: (path) => stat(path).then((s) => ({ uid: s.uid })),
-    readFile: (path) => readFile(path, 'utf8'),
-    realpath: (path) => realpath(path),
+    readlink: async (p) => readlinkSync(p),
+    readdir: async (p) => readdirSync(p),
+    stat: async (p) => ({ uid: statSync(p).uid }),
+    readFile: async (p) => readFileSync(p, 'utf8'),
+    realpath: async (p) => realpathSync(p),
   }
 }

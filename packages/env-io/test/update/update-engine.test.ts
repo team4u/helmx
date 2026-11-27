@@ -1471,10 +1471,10 @@ test('runNpm timeout kills entire process group so descendant processes cannot k
   };
   t.after(async () => {
     await cleanup();
-  });
+  }, { timeout: 60_000 });
 
-  const npmPromise = runNpm(['run', 'hold'], dir, 3_000);
-  const deadline = Date.now() + 2_500;
+  const npmPromise = runNpm(['run', 'hold'], dir, 1_500);
+  const deadline = Date.now() + 1_400;
   for (;;) {
     const exists = await fs.readFile(grandPidFile, 'utf8').then(
       () => true,
@@ -1498,8 +1498,8 @@ test('runNpm timeout kills entire process group so descendant processes cannot k
     }
   };
   let alive = isAlive(grandPid);
-  for (let i = 0; i < 20 && alive; i += 1) {
-    await new Promise((resolve) => setTimeout(resolve, 100));
+  for (let i = 0; i < 40 && alive; i += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 50));
     alive = isAlive(grandPid);
   }
   assert.equal(alive, false, 'descendant process must be killed with its process group on timeout without leaving orphans');
@@ -1593,9 +1593,9 @@ test('runControlledProcess: enforces per-stream tail-retaining output cap and ki
 
     const pending = runControlledProcess(process.execPath, [runner, grandPidFile], {
       cwd: dir,
-      timeoutMs: 3_000,
+      timeoutMs: 800,
     });
-    const waitDeadline = Date.now() + 2_500;
+    const waitDeadline = Date.now() + 700;
     let rawPid = '';
     while (Date.now() < waitDeadline) {
       rawPid = await fs.readFile(grandPidFile, 'utf8').catch(() => '');
@@ -1613,10 +1613,10 @@ test('runControlledProcess: enforces per-stream tail-retaining output cap and ki
     const grandPid = Number(rawPid.trim());
     assert.ok(Number.isInteger(grandPid) && grandPid > 0, `descendant pid file must be written before timeout (got ${JSON.stringify(rawPid)})`);
     let alive = true;
-    for (let i = 0; i < 20 && alive; i += 1) {
+    for (let i = 0; i < 50 && alive; i += 1) {
       try {
         process.kill(grandPid, 0);
-        await delay(50);
+        await delay(20);
       } catch {
         alive = false;
       }

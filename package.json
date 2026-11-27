@@ -10,7 +10,7 @@
     "build": "node scripts/build.mjs",
     "typecheck:only": "node scripts/typecheck.mjs",
     "typecheck": "node scripts/build.mjs --for-typecheck && pnpm run typecheck:only",
-    "verify": "pnpm build && pnpm typecheck:only && pnpm lint && pnpm check:hygiene && pnpm test:all:run",
+    "verify": "node scripts/verify.mjs",
     "test": "node scripts/build.mjs --skip-payload && node scripts/test-suites.mjs all",
     "test:all": "node scripts/build.mjs --skip-payload && node scripts/test-suites.mjs all",
     "test:unit": "node scripts/build.mjs --unit-deps && node scripts/test-suites.mjs unit",
