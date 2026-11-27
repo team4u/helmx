@@ -2824,7 +2824,6 @@ const SCHEMA_CLI_MAPPINGS: Readonly<Record<string, SchemaCliMapping>> = {
     positionals: { id: '[id]' },
     exempt: {
       managedByPlugin: 'Plugin-managed ownership marker set by plugin registration (also accepted via --input JSON).',
-      tags: 'Supplied via --input <json> on profiles create; no dedicated semantic flag in profiles.ts.',
     },
   },
   profileUpdate: {
@@ -2833,7 +2832,6 @@ const SCHEMA_CLI_MAPPINGS: Readonly<Record<string, SchemaCliMapping>> = {
     positionals: { id: '<id>' },
     exempt: {
       managedByPlugin: 'Plugin-managed ownership marker set by plugin registration (also accepted via --input JSON).',
-      tags: 'Supplied via --input <json> on profiles update; no dedicated semantic flag in profiles.ts.',
     },
   },
   providersPut: {
@@ -3081,4 +3079,54 @@ test('coerceTags invalid JSON, profiles --system-file cwd resolution, and extra 
     assert.equal(parseCliError(res).code, 'unexpected_positional', `wrong error code for ${argv.join(' ')}`)
   }
   assert.equal(hub.recorded.hits.length, hitsBefore)
+})
+
+test('profiles create/update --tags: accepts CSV and JSON arrays, preserves fields on GET-merge PUT, and rejects malformed JSON client-side', { timeout: 60_000 }, async (t) => {
+  const dataDir = useTempDir(t, 'helmx-cli-profile-tags-')
+  const hub = await startMockHub(
+    {
+      'POST /api/profiles': (body) => ({ status: 201, body }),
+      'GET /api/profiles/worker': () => ({
+        body: { id: 'worker', name: 'Worker', nodeId: 'gpu-box', tags: ['old'], system: '# system' },
+      }),
+      'PUT /api/profiles/worker': (body) => ({ body }),
+    },
+    { autoRegisterCleanup: t },
+  )
+  const env = makeCliEnv(hub.url, dataDir)
+
+  const createdCsv = await runCliCaptured(
+    ['profiles', 'create', 'tagged', '--tags', 'alpha, beta', '--json'],
+    env,
+  )
+  assert.equal(createdCsv.code, 0, createdCsv.err)
+  assert.deepEqual(JSON.parse(createdCsv.out), { id: 'tagged', tags: ['alpha', 'beta'] })
+
+  const updatedJson = await runCliCaptured(
+    ['profiles', 'update', 'worker', '--tags', '["ops","canary"]', '--json'],
+    env,
+  )
+  assert.equal(updatedJson.code, 0, updatedJson.err)
+  assert.deepEqual(JSON.parse(updatedJson.out), {
+    id: 'worker',
+    name: 'Worker',
+    nodeId: 'gpu-box',
+    tags: ['ops', 'canary'],
+  })
+
+  const clearedTags = await runCliCaptured(
+    ['profiles', 'update', 'worker', '--tags', '', '--json'],
+    env,
+  )
+  assert.equal(clearedTags.code, 0, clearedTags.err)
+  assert.deepEqual((JSON.parse(clearedTags.out) as { tags?: string[] }).tags, [])
+
+  const hitsBeforeBad = hub.recorded.hits.length
+  const badTags = await runCliCaptured(
+    ['profiles', 'update', 'worker', '--tags', '[bad-json', '--json'],
+    env,
+  )
+  assert.equal(badTags.code, 1)
+  assert.equal(parseCliError(badTags).code, 'invalid_flag_value')
+  assert.equal(hub.recorded.hits.length, hitsBeforeBad, 'invalid --tags must reject before contacting Hub')
 })

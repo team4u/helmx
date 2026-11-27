@@ -155,6 +155,11 @@ describe('Core actions (core:*) parity, discovery, and security invariants', { t
         'core:skills',
       ])
 
+      const profileActionIds = coreManifests.filter((m) => m.pluginId === 'core:profiles').map((m) => m.id)
+      assert.deepEqual(profileActionIds, ['list', 'get', 'create', 'update', 'delete'])
+      const modelActionIds = coreManifests.filter((m) => m.pluginId === 'core:models').map((m) => m.id)
+      assert.deepEqual(modelActionIds, ['list', 'providers', 'refresh', 'default_get', 'default', 'filter'])
+
       // Every core:* action must set exposeToPrompt: false and declare an explicit static cli.command
       // matching CORE_CLI_COMMAND_PATHS (never lying with cli.hidden: true), and actionCliCommand must
       // render the real `helmx ...` command while CLI dynamic mounting skips core:* by namespace.
@@ -195,9 +200,13 @@ describe('Core actions (core:*) parity, discovery, and security invariants', { t
       const listedIds = new Set(items.map((i) => i.actionId))
       assert.ok(listedIds.has('core:conversations.search'))
       assert.ok(listedIds.has('core:profiles.list'))
+      assert.ok(listedIds.has('core:models.default_get'), 'core:models.default_get should be discoverable and idempotent')
       assert.ok(listedIds.has('core:plugins.config_get'))
       assert.ok(listedIds.has('core:nodes.endpoints'), 'core:nodes.endpoints should be discoverable and idempotent')
       assert.ok(listedIds.has('core:nodes.remove'), 'top-level human session should see host-governance mutations')
+      const defaultGetMeta = items.find((i) => i.actionId === 'core:models.default_get')!
+      assert.equal(defaultGetMeta.cli, 'helmx models default')
+      assert.equal(defaultGetMeta.idempotent, true)
       const endpointsMeta = items.find((i) => i.actionId === 'core:nodes.endpoints')!
       assert.equal(endpointsMeta.cli, 'helmx nodes endpoints')
       assert.equal(endpointsMeta.idempotent, true)
@@ -1661,9 +1670,12 @@ describe('Core actions (core:*) parity, discovery, and security invariants', { t
       })
       assert.equal(actionSetDefaults.status, 200)
       const httpGetDefaults = await apiCall(kernel, 'GET', '/api/models/default')
+      const actionGetDefaults = await postCoreAction(kernel, 'models', 'default_get', {})
       const directDefaults = await kernel.models.getDefaults()
       assert.equal(httpGetDefaults.status, 200)
+      assert.equal(actionGetDefaults.status, 200)
       assert.deepEqual(httpGetDefaults.body, directDefaults)
+      assert.deepEqual(actionGetDefaults.body, directDefaults)
       assert.equal(directDefaults.defaultModel, 'faux/faux-1')
       assert.equal(directDefaults.modelThinkingLevels['faux/faux-1'], 'medium')
 

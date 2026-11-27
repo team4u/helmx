@@ -1,7 +1,8 @@
 /**
- * Profile domain routes: /api/profiles CRUD (thin HTTP adapter delegating to single-source
- * domain operations in `services/profile-service.ts`).
+ * Profile domain routes: /api/profiles CRUD driven by `PROFILE_CORE_OPERATIONS` via `createCoreOperationRouter`
+ * (thin HTTP adapter delegating to single-source domain operations in `services/profile-service.ts`).
  */
+import { PROFILE_CORE_OPERATIONS, type Profile } from '@helmx/protocol'
 import type { ProfileService } from '../services/index.js'
 import {
   createManagedGuardedProfile,
@@ -12,9 +13,10 @@ import {
 } from '../services/profile-service.js'
 import type { ConversationService } from '../runtime/conversation-service.js'
 import type { ModelRegistry } from '../runtime/model-registry.js'
-import { errorResponse, jsonOk, readJsonBody, type JsonRedactor } from './http-utils.js'
-import { parseProfileBody, requireIdParam } from './validate.js'
-import { methodNotAllowed, type RouteContext } from './route-context.js'
+import { createCoreOperationRouter } from './core-operation-router.js'
+import { errorResponse, type JsonRedactor } from './http-utils.js'
+import type { RouteContext } from './route-context.js'
+import { parseProfileBody } from './validate.js'
 
 export interface ProfileRoutesTarget {
   readonly profiles: Pick<ProfileService, 'list' | 'get' | 'getSystem' | 'save' | 'delete'>
@@ -23,15 +25,8 @@ export interface ProfileRoutesTarget {
   readonly models?: Partial<Pick<ModelRegistry, 'assertModelEnabled'>>
 }
 
-export async function handleProfilesDomain(
-  ctx: RouteContext,
-  kernel: ProfileRoutesTarget,
-  redactor: JsonRedactor | undefined,
-): Promise<Response> {
-  const { method, segments } = ctx
-  const second = segments[1]
-  const third = segments[2]
-  const mutationHooks: ProfileMutationHooks = {
+function buildProfileMutationHooks(kernel: ProfileRoutesTarget): ProfileMutationHooks {
+  return {
     assertModelEnabled: kernel.models?.assertModelEnabled
       ? (providerId, modelId) => kernel.models!.assertModelEnabled!(providerId, modelId)
       : undefined,
@@ -41,32 +36,57 @@ export async function handleProfilesDomain(
     isProfileInUse: (pid) =>
       kernel.conversations.listConversations().some((c) => c.profileId === pid),
   }
-  if (second === undefined) {
-    if (method === 'GET') return jsonOk(redactor, await kernel.profiles.list())
-    if (method === 'POST') {
-      const body = await readJsonBody(ctx.request)
-      const profile = parseProfileBody(body, { requireId: true })
-      const created = await createManagedGuardedProfile(kernel.profiles, profile, mutationHooks)
-      return jsonOk(redactor, created, { status: 201 })
-    }
-    return methodNotAllowed(redactor, method)
-  }
-  const profileId = requireIdParam(second, 'profileId')
-  if (third === undefined) {
-    if (method === 'GET') {
-      return jsonOk(redactor, await getProfileWithSystem(kernel.profiles, profileId))
-    }
-    if (method === 'PUT') {
-      const body = await readJsonBody(ctx.request)
-      const profile = parseProfileBody(body, { requireId: false })
-      const replaced = await replaceManagedGuardedProfile(kernel.profiles, profileId, profile, mutationHooks)
-      return jsonOk(redactor, replaced)
-    }
-    if (method === 'DELETE') {
-      await deleteManagedGuardedProfile(kernel.profiles, profileId, mutationHooks)
-      return jsonOk(redactor, { ok: true })
-    }
-    return methodNotAllowed(redactor, method)
-  }
+}
+
+function dispatchProfileRoutes(
+  kernel: ProfileRoutesTarget,
+): (ctx: RouteContext, redactor: JsonRedactor | undefined) => Promise<Response | undefined> {
+  return createCoreOperationRouter(PROFILE_CORE_OPERATIONS, {
+    'profiles.list': () => kernel.profiles.list(),
+
+    'profiles.get': (input) => getProfileWithSystem(kernel.profiles, input.id as string),
+
+    'profiles.create': {
+      validate: (input) => ({ profile: parseProfileBody(input, { requireId: true }) }),
+      handle: (input) =>
+        createManagedGuardedProfile(
+          kernel.profiles,
+          input.profile as Profile,
+          buildProfileMutationHooks(kernel),
+        ),
+    },
+
+    'profiles.update': {
+      validate: (_input, ctx) => ({
+        profileId: ctx.path.profileId as string,
+        profile: parseProfileBody(ctx.body, { requireId: false }),
+      }),
+      handle: (input) =>
+        replaceManagedGuardedProfile(
+          kernel.profiles,
+          input.profileId as string,
+          input.profile as Profile,
+          buildProfileMutationHooks(kernel),
+        ),
+    },
+
+    'profiles.delete': async (input) => {
+      await deleteManagedGuardedProfile(
+        kernel.profiles,
+        input.id as string,
+        buildProfileMutationHooks(kernel),
+      )
+      return { ok: true }
+    },
+  })
+}
+
+export async function handleProfilesDomain(
+  ctx: RouteContext,
+  kernel: ProfileRoutesTarget,
+  redactor: JsonRedactor | undefined,
+): Promise<Response> {
+  const matched = await dispatchProfileRoutes(kernel)(ctx, redactor)
+  if (matched !== undefined) return matched
   return errorResponse(redactor, 404, 'not_found', 'route not found')
 }

@@ -119,6 +119,12 @@ test('@helmx/protocol/browser: export declarations aligned with the root entry\'
     'validatePluginConfigFieldSchema',
     'validatePluginConfigFieldValue',
     'NODE_CORE_OPERATIONS',
+    'PROFILE_CORE_OPERATIONS',
+    'MODEL_CORE_OPERATIONS',
+    'PROVIDER_CORE_OPERATIONS',
+    'CREDENTIAL_CORE_OPERATIONS',
+    'AUTH_CORE_OPERATIONS',
+    'CORE_OPERATIONS',
   ] as const
 
   const browserRecord = browserExports as Record<string, unknown>

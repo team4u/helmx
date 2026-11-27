@@ -1,8 +1,20 @@
-/** Model commands: models list / default / providers / refresh / filter. */
-import type { ModelCatalog, ModelProviderSummary, ModelProvidersRefreshResult, SetModelFilterBody } from '@helmx/protocol'
+/**
+ * Model commands: models list / default / providers / refresh / filter.
+ * Driven by `@helmx/protocol` `MODEL_CORE_OPERATIONS` via `commandsFromOperations`, with
+ * composite `customHandlers` for `models default` (GET/PUT), `models refresh` (--providers CSV/JSON),
+ * and `models filter` (GET read / PUT write).
+ */
+import {
+  MODEL_CORE_OPERATIONS,
+  type ModelCatalog,
+  type ModelProviderSummary,
+  type ModelProvidersRefreshResult,
+  type SetModelFilterBody,
+} from '@helmx/protocol'
 import { flagValue, type FlagSpec } from '../args.js'
 import { CliError } from '../errors.js'
 import { printTableColumns } from '../output.js'
+import { commandsFromOperations } from './from-operations.js'
 import { assertNoExtraPositionals, printResult } from './shared.js'
 import type { CommandContext, CommandSpec } from './shared.js'
 
@@ -64,96 +76,148 @@ const FILTER_FLAGS: readonly FlagSpec[] = [
   { name: 'clear', type: 'boolean', help: 'clear the disabled list for that provider (with --provider; clears all if omitted)' },
 ]
 
+async function runModelsDefault(ctx: CommandContext): Promise<void> {
+  assertNoExtraPositionals(ctx.positionals, 0)
+  const hub = await ctx.hub()
+  const set = flagValue<string>(ctx.flags, 'set')
+  const thinking = flagValue<string>(ctx.flags, 'thinking')
+  const modelThinking = flagValue<string>(ctx.flags, 'model-thinking')
+  const compaction = flagValue<string>(ctx.flags, 'compaction')
+  const compactionThinking = flagValue<string>(ctx.flags, 'compaction-thinking')
+  // Parse `provider/model=level` once at the first `=` (modelId may contain slashes, never `=`).
+  const modelThinkingEntry =
+    modelThinking === undefined
+      ? undefined
+      : (() => {
+          const eq = modelThinking.indexOf('=')
+          if (eq <= 0) {
+            throw new CliError(
+              `--model-thinking expects provider/model=level (received '${modelThinking}')`,
+              'invalid_flag_value',
+            )
+          }
+          return { model: modelThinking.slice(0, eq), level: modelThinking.slice(eq + 1) }
+        })()
+  if (
+    set === undefined &&
+    thinking === undefined &&
+    modelThinkingEntry === undefined &&
+    compaction === undefined &&
+    compactionThinking === undefined
+  ) {
+    printResult(
+      ctx,
+      await hub.get<{
+        defaultModel: string
+        defaultThinkingLevel: string
+        modelThinkingLevels: Record<string, string>
+        defaultCompactionModel: string
+        defaultCompactionThinkingLevel: string
+      }>('/api/models/default'),
+    )
+    return
+  }
+  printResult(
+    ctx,
+    await hub.put<{
+      ok: boolean
+      defaultModel: string
+      defaultThinkingLevel: string
+      modelThinkingLevels: Record<string, string>
+      defaultCompactionModel: string
+      defaultCompactionThinkingLevel: string
+    }>(
+      '/api/models/default',
+      {
+        ...(set !== undefined ? { model: set } : {}),
+        ...(thinking !== undefined ? { thinkingLevel: thinking } : {}),
+        ...(modelThinkingEntry !== undefined
+          ? { modelThinking: modelThinkingEntry.model, modelThinkingLevel: modelThinkingEntry.level }
+          : {}),
+        ...(compaction !== undefined ? { compactionModel: compaction } : {}),
+        ...(compactionThinking !== undefined ? { compactionThinkingLevel: compactionThinking } : {}),
+      },
+    ),
+  )
+}
+
+async function runModelsRefresh(ctx: CommandContext): Promise<void> {
+  assertNoExtraPositionals(ctx.positionals, 0)
+  const provider = flagValue<string>(ctx.flags, 'provider')
+  const providersRaw = flagValue<string>(ctx.flags, 'providers')
+  const force = flagValue<boolean>(ctx.flags, 'force')
+  if (provider !== undefined && providersRaw !== undefined) {
+    throw new CliError('--provider and --providers are mutually exclusive', 'conflicting_flags')
+  }
+  if (provider !== undefined && provider.trim() === '') {
+    throw new CliError('--provider must be a non-empty string', 'invalid_flag_value')
+  }
+  const providers = providersRaw !== undefined ? parseProvidersFlag(providersRaw) : undefined
+  const hub = await ctx.hub()
+  const result = await hub.post<ModelProvidersRefreshResult>('/api/models/refresh', {
+    ...(provider !== undefined ? { provider: provider.trim() } : {}),
+    ...(providers !== undefined ? { providers } : {}),
+    ...(force !== undefined ? { force } : {}),
+  })
+  printResult(ctx, result)
+}
+
+async function runModelsFilter(ctx: CommandContext): Promise<void> {
+  assertNoExtraPositionals(ctx.positionals, 0)
+  const hub = await ctx.hub()
+  const provider = flagValue<string>(ctx.flags, 'provider')
+  const disable = (ctx.flags.get('disable') as string[] | undefined) ?? []
+  const clear = ctx.flags.get('clear') === true
+
+  // Read mode: without write flags (--disable / --clear), display disabled models (filtered by --provider if specified).
+  if (provider !== undefined && provider.trim() === '') {
+    throw new CliError('--provider must be a non-empty string', 'invalid_flag_value')
+  }
+  if (disable.length === 0 && !clear) {
+    const catalog = await hub.get<ModelCatalog>('/api/models')
+    if (ctx.json) {
+      printResult(
+        ctx,
+        provider === undefined
+          ? catalog
+          : { ...catalog, models: catalog.models.filter((m) => m.provider === provider) },
+      )
+      return
+    }
+    const disabled = catalog.models.filter(
+      (m) => m.disabled === true && (provider === undefined || m.provider === provider),
+    )
+    printResult(
+      ctx,
+      disabled.length === 0
+        ? 'no disabled models'
+        : disabled.map((m) => `${m.provider}/${m.modelId}`),
+    )
+    return
+  }
+
+  if (clear && disable.length > 0) {
+    throw new CliError('--clear and --disable are mutually exclusive', 'invalid_flag_value')
+  }
+  const body: SetModelFilterBody = clear
+    ? { ...(provider !== undefined ? { provider } : {}), disabledModels: [] }
+    : { ...(provider !== undefined ? { provider } : {}), disabledModels: disable }
+  if (provider === undefined && disable.length > 0) {
+    throw new CliError('without --provider, only clearing all disabled entries is supported (cannot pass --disable)', 'invalid_flag_value')
+  }
+  printResult(ctx, await hub.put<{ ok: boolean; catalog: ModelCatalog }>('/api/models/filter', body))
+}
+
 export function modelsCommands(): CommandSpec[] {
-  return [
-    {
-      path: ['models', 'list'],
-      description: 'List available models (GET /api/models)',
-      async run(ctx: CommandContext) {
-        assertNoExtraPositionals(ctx.positionals, 0)
-        const hub = await ctx.hub()
-        const catalog = await hub.get<ModelCatalog>('/api/models')
-        printResult(ctx, ctx.json ? catalog : catalog.models)
+  return commandsFromOperations(MODEL_CORE_OPERATIONS, {
+    formatHuman: {
+      'models.list': (ctx, result) => {
+        printResult(ctx, (result as ModelCatalog).models)
       },
-    },
-    {
-      path: ['models', 'default'],
-      description: 'View or set global default model, per-model thinking defaults, and compaction model (GET/PUT /api/models/default)',
-      flags: DEFAULT_FLAGS,
-      async run(ctx: CommandContext) {
-        assertNoExtraPositionals(ctx.positionals, 0)
-        const hub = await ctx.hub()
-        const set = flagValue<string>(ctx.flags, 'set')
-        const thinking = flagValue<string>(ctx.flags, 'thinking')
-        const modelThinking = flagValue<string>(ctx.flags, 'model-thinking')
-        const compaction = flagValue<string>(ctx.flags, 'compaction')
-        const compactionThinking = flagValue<string>(ctx.flags, 'compaction-thinking')
-        // Parse `provider/model=level` once at the first `=` (modelId may contain slashes, never `=`).
-        const modelThinkingEntry =
-          modelThinking === undefined
-            ? undefined
-            : (() => {
-                const eq = modelThinking.indexOf('=')
-                if (eq <= 0) {
-                  throw new CliError(
-                    `--model-thinking expects provider/model=level (received '${modelThinking}')`,
-                    'invalid_flag_value',
-                  )
-                }
-                return { model: modelThinking.slice(0, eq), level: modelThinking.slice(eq + 1) }
-              })()
-        if (
-          set === undefined &&
-          thinking === undefined &&
-          modelThinkingEntry === undefined &&
-          compaction === undefined &&
-          compactionThinking === undefined
-        ) {
-          printResult(
-            ctx,
-            await hub.get<{
-              defaultModel: string
-              defaultThinkingLevel: string
-              modelThinkingLevels: Record<string, string>
-              defaultCompactionModel: string
-              defaultCompactionThinkingLevel: string
-            }>('/api/models/default'),
-          )
-          return
-        }
-        printResult(
-          ctx,
-          await hub.put<{
-            ok: boolean
-            defaultModel: string
-            defaultThinkingLevel: string
-            modelThinkingLevels: Record<string, string>
-            defaultCompactionModel: string
-            defaultCompactionThinkingLevel: string
-          }>(
-            '/api/models/default',
-            {
-              ...(set !== undefined ? { model: set } : {}),
-              ...(thinking !== undefined ? { thinkingLevel: thinking } : {}),
-              ...(modelThinkingEntry !== undefined
-                ? { modelThinking: modelThinkingEntry.model, modelThinkingLevel: modelThinkingEntry.level }
-                : {}),
-              ...(compaction !== undefined ? { compactionModel: compaction } : {}),
-              ...(compactionThinking !== undefined ? { compactionThinkingLevel: compactionThinking } : {}),
-            },
-          ),
-        )
-      },
-    },
-    {
-      path: ['models', 'providers'],
-      description: 'List Pi providers and authentication methods (GET /api/models/providers)',
-      async run(ctx: CommandContext) {
-        assertNoExtraPositionals(ctx.positionals, 0)
-        const hub = await ctx.hub()
-        const providers = await hub.get<ModelProviderSummary[]>('/api/models/providers')
-        if (ctx.json || !Array.isArray(providers)) {
-          printResult(ctx, providers)
+      'models.providers': (ctx, result) => {
+        const providers = result as ModelProviderSummary[]
+        if (!Array.isArray(providers)) {
+          printResult(ctx, result)
           return
         }
         printTableColumns(ctx.io, providers, [
@@ -165,80 +229,24 @@ export function modelsCommands(): CommandSpec[] {
         ])
       },
     },
-    {
-      path: ['models', 'refresh'],
-      description: 'Refresh dynamic model catalog (POST /api/models/refresh; supports --provider, --providers, --force)',
-      flags: REFRESH_FLAGS,
-      async run(ctx: CommandContext) {
-        assertNoExtraPositionals(ctx.positionals, 0)
-        const provider = flagValue<string>(ctx.flags, 'provider')
-        const providersRaw = flagValue<string>(ctx.flags, 'providers')
-        const force = flagValue<boolean>(ctx.flags, 'force')
-        if (provider !== undefined && providersRaw !== undefined) {
-          throw new CliError('--provider and --providers are mutually exclusive', 'conflicting_flags')
-        }
-        if (provider !== undefined && provider.trim() === '') {
-          throw new CliError('--provider must be a non-empty string', 'invalid_flag_value')
-        }
-        const providers = providersRaw !== undefined ? parseProvidersFlag(providersRaw) : undefined
-        const hub = await ctx.hub()
-        const result = await hub.post<ModelProvidersRefreshResult>('/api/models/refresh', {
-          ...(provider !== undefined ? { provider: provider.trim() } : {}),
-          ...(providers !== undefined ? { providers } : {}),
-          ...(force !== undefined ? { force } : {}),
-        })
-        printResult(ctx, result)
+    customHandlers: {
+      'models default': {
+        description:
+          'View or set global default model, per-model thinking defaults, and compaction model (GET/PUT /api/models/default)',
+        flags: DEFAULT_FLAGS,
+        run: runModelsDefault,
+      },
+      'models refresh': {
+        description:
+          'Refresh dynamic model catalog (POST /api/models/refresh; supports --provider, --providers, --force)',
+        flags: REFRESH_FLAGS,
+        run: runModelsRefresh,
+      },
+      'models filter': {
+        description: 'View or set disabled models (GET/PUT /api/models/filter)',
+        flags: FILTER_FLAGS,
+        run: runModelsFilter,
       },
     },
-    {
-      path: ['models', 'filter'],
-      description: 'View or set disabled models (GET/PUT /api/models/filter)',
-      flags: FILTER_FLAGS,
-      async run(ctx: CommandContext) {
-        assertNoExtraPositionals(ctx.positionals, 0)
-        const hub = await ctx.hub()
-        const provider = flagValue<string>(ctx.flags, 'provider')
-        const disable = (ctx.flags.get('disable') as string[] | undefined) ?? []
-        const clear = ctx.flags.get('clear') === true
-
-        // Read mode: without write flags (--disable / --clear), display disabled models (filtered by --provider if specified).
-        if (provider !== undefined && provider.trim() === '') {
-          throw new CliError('--provider must be a non-empty string', 'invalid_flag_value')
-        }
-        if (disable.length === 0 && !clear) {
-          const catalog = await hub.get<ModelCatalog>('/api/models')
-          if (ctx.json) {
-            printResult(
-              ctx,
-              provider === undefined
-                ? catalog
-                : { ...catalog, models: catalog.models.filter((m) => m.provider === provider) },
-            )
-            return
-          }
-          const disabled = catalog.models.filter(
-            (m) => m.disabled === true && (provider === undefined || m.provider === provider),
-          )
-          printResult(
-            ctx,
-            disabled.length === 0
-              ? 'no disabled models'
-              : disabled.map((m) => `${m.provider}/${m.modelId}`),
-          )
-          return
-        }
-
-        if (clear && disable.length > 0) {
-          throw new CliError('--clear and --disable are mutually exclusive', 'invalid_flag_value')
-        }
-        const body: SetModelFilterBody = clear
-          ? { ...(provider !== undefined ? { provider } : {}), disabledModels: [] }
-          : { ...(provider !== undefined ? { provider } : {}), disabledModels: disable }
-        if (provider === undefined && disable.length > 0) {
-          throw new CliError('without --provider, only clearing all disabled entries is supported (cannot pass --disable)', 'invalid_flag_value')
-        }
-        printResult(ctx, await hub.put<{ ok: boolean; catalog: ModelCatalog }>('/api/models/filter', body))
-      },
-    },
-  ]
+  })
 }
