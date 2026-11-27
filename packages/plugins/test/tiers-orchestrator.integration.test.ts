@@ -235,29 +235,62 @@ test('machine invisibility: orchestrator tiers stay invisible in catalog, reject
       description: 'Human-only orchestrator',
     })
 
-    // 1. `<available_model_tiers>` shows single `tier/coder` and excludes `tier/claude-auto`
+    // 1. `<available_model_tiers>` appears on plain conversations (showing single `tier/coder`,
+    //    excluding `tier/claude-auto`), and is suppressed inside orchestrator conversations
     const conv = await kernel.conversations.createConversation({ title: 'human-orch', model: 'tier/claude-auto' })
     assert.equal(conv.model, 'faux/flagship')
     assert.equal(conv.modelTier, 'tier/claude-auto')
     assert.equal(conv.modelOverride, 'tier/claude-auto')
     assert.equal(conv.thinkingLevelOverride, undefined, 'orchestrator tier must not freeze thinkingLevelOverride')
 
-    const hookResult = await kernel.plugins.runHook('before_turn', {
-      conversation: kernel.conversations.getConversation(conv.id),
+    const plainConv = await kernel.conversations.createConversation({ title: 'plain-conv', model: 'faux/workhorse' })
+    const plainHook = await kernel.plugins.runHook('before_turn', {
+      conversation: kernel.conversations.getConversation(plainConv.id),
       inputs: [],
       messages: [],
       sections: [],
       tools: [],
     } as never)
     const injectedCatalog =
-      hookResult.action === 'transform'
-        ? (hookResult.value as { sections: Array<{ id: string; text: string }> }).sections.find(
+      plainHook.action === 'transform'
+        ? (plainHook.value as { sections: Array<{ id: string; text: string }> }).sections.find(
             (s) => s.id === 'tiers.catalog',
           )?.text
         : undefined
     assert.ok(injectedCatalog !== undefined)
     assert.match(injectedCatalog, /tier\/coder/)
     assert.doesNotMatch(injectedCatalog, /tier\/claude-auto/)
+
+    const orchHook = await kernel.plugins.runHook('before_turn', {
+      conversation: kernel.conversations.getConversation(conv.id),
+      inputs: [],
+      messages: [],
+      sections: [],
+      tools: [],
+    } as never)
+    const orchCatalog =
+      orchHook.action === 'transform'
+        ? (orchHook.value as { sections: Array<{ id: string; text: string }> }).sections.find(
+            (s) => s.id === 'tiers.catalog',
+          )?.text
+        : undefined
+    assert.equal(orchCatalog, undefined, 'orchestrator conversation must omit <available_model_tiers>')
+
+    // Auxiliary completeConversationText without explicit `model` unwraps to executorModel (`faux/fast`) rather than Planner
+    const observedTextModels: string[] = []
+    env.faux.setResponses([
+      (_ctx, _opts, _state, model) => {
+        observedTextModels.push(`${model.provider}/${model.id}`)
+        return fauxAssistantMessage('Short title')
+      },
+    ])
+    const generatedTitle = await kernel.conversations.completeConversationText({
+      conversationId: conv.id,
+      systemPrompt: 'Generate title',
+      text: 'User asked to refactor tiers',
+    })
+    assert.equal(generatedTitle, 'Short title')
+    assert.deepEqual(observedTextModels, ['faux/fast'])
 
     // 2. Explicit automation callers fail loudly with 400 orchestrator_tier_human_only / orchestrator_tier_not_borrowable
     await assertRejectsCode(
@@ -315,7 +348,6 @@ test('machine invisibility: orchestrator tiers stay invisible in catalog, reject
     assert.match(compactionMsg.errorMessage ?? '', /orchestrator tier restricted/i)
 
     // Borrow guards
-    const plainConv = await kernel.conversations.createConversation({ title: 'plain-conv', model: 'faux/workhorse' })
     await assertRejectsCode(
       () =>
         kernel.plugins.invokeAction(TIERS_PLUGIN_ID, 'set_borrow', {
@@ -742,6 +774,199 @@ test('maxExecutionSteps = 0 disables forced step-limit cutoff across multi-step 
     assert.equal(sdocSnapshots[2]?.executionStepCount, 2)
     assert.equal(sdocSnapshots[3]?.executionStepCount, 3)
     assert.equal(sdocSnapshots[3]?.maxExecutionSteps, 0)
+  } finally {
+    await env.close()
+  }
+})
+
+test('agent_spawn hook locks subagents, specialist Profiles, explicit overrides, resume, fork, and nested grandchildren to executorModel while suppressing tiers.catalog', { timeout: 60_000 }, async () => {
+  const env = await openOrchestratorEnv({ defaultModel: 'faux/workhorse' })
+  try {
+    const { kernel } = env.app
+    await kernel.plugins.invokeAction(TIERS_PLUGIN_ID, 'set', {
+      id: 'coder',
+      model: 'faux/workhorse',
+      description: 'Single coder tier',
+    })
+    await kernel.plugins.invokeAction(TIERS_PLUGIN_ID, 'set', {
+      id: 'auto-exec',
+      kind: 'orchestrator',
+      model: 'faux/flagship',
+      thinkingLevel: 'high',
+      executorModel: 'faux/fast',
+      executorThinkingLevel: 'low',
+    })
+    await kernel.plugins.invokeAction(TIERS_PLUGIN_ID, 'set', {
+      id: 'auto-no-effort',
+      kind: 'orchestrator',
+      model: 'faux/flagship',
+      executorModel: 'faux/fast',
+    })
+
+    const assistantProfile = await kernel.profiles.get('assistant')
+    assert.ok(assistantProfile !== undefined)
+    await kernel.profiles.save({
+      ...assistantProfile,
+      id: 'specialist',
+      name: 'Specialist',
+      model: 'faux/flagship',
+      thinkingLevel: 'high',
+    })
+
+    const rootConv = await kernel.conversations.createConversation({ title: 'orch-tree-root', model: 'tier/auto-exec' })
+    const rootNoEffort = await kernel.conversations.createConversation({
+      title: 'orch-tree-no-effort',
+      model: 'tier/auto-no-effort',
+    })
+
+    const spawnObserved: Array<{ modelId: string; reasoning: unknown; hasCatalog: boolean }> = []
+    const recordFaux = (replyText: string) =>
+      (context: TranscriptContext, options: SimpleStreamOptions | undefined, _state: unknown, model: Model<string>) => {
+        const sections = extractSystemSections(context.messages)
+        spawnObserved.push({
+          modelId: `${model.provider}/${model.id}`,
+          reasoning: options?.reasoning,
+          hasCatalog: Object.hasOwn(sections, 'tiers.catalog'),
+        })
+        return fauxAssistantMessage(replyText)
+      }
+
+    // Seed 1 planner turn on rootConv so fork:true also has a forkable anchor
+    env.faux.setResponses([
+      fauxAssistantMessage('seed root reply'),
+      recordFaux('plain-child'),
+      recordFaux('specialist-child'),
+      recordFaux('override-child'),
+      recordFaux('resumed-child'),
+      recordFaux('tier-override-child'),
+      recordFaux('grandchild'),
+      recordFaux('forked-child'),
+      recordFaux('no-effort-child'),
+    ])
+    await kernel.conversations.submitInput(rootConv.id, 'seed turn')
+    await kernel.conversations.waitForIdle(rootConv.id)
+
+    let plainChildId: number | undefined
+    let noEffortChildId: number | undefined
+
+    // a) Plain subagent (no model, allowing depth 2 so nested grandchild test can spawn under it) -> executorModel + executorThinkingLevel
+    await kernel.agentSpawn.spawnAgent({
+      parentConversationId: rootConv.id,
+      prompt: 'plain child task',
+      meta: { 'builtin:workflow': { maxSubagentDepth: 2 } },
+      onResolved: (info) => {
+        plainChildId = info.conversationId
+      },
+    })
+    assert.ok(plainChildId !== undefined)
+
+    // Verify before_turn hook directly on child omits tiers.catalog too
+    const childHook = await kernel.plugins.runHook('before_turn', {
+      conversation: kernel.conversations.getConversation(plainChildId!),
+      inputs: [],
+      messages: [],
+      sections: [],
+      tools: [],
+    } as never)
+    const childCatalog =
+      childHook.action === 'transform'
+        ? (childHook.value as { sections: Array<{ id: string; text: string }> }).sections.find(
+            (s) => s.id === 'tiers.catalog',
+          )?.text
+        : undefined
+    assert.equal(childCatalog, undefined, 'child under orchestrator tree must suppress <available_model_tiers>')
+
+    // b) Specialist Profile bound to flagship -> still locked to executorModel + executorThinkingLevel
+    await kernel.agentSpawn.spawnAgent({
+      parentConversationId: rootConv.id,
+      agentType: 'specialist',
+      prompt: 'specialist child task',
+    })
+
+    // c) Explicit flagship model + high effort AND resume -> locked to executorModel + executorThinkingLevel
+    await kernel.agentSpawn.spawnAgent({
+      parentConversationId: rootConv.id,
+      agentId: 'child-a',
+      model: 'faux/flagship',
+      effort: 'high',
+      prompt: 'explicit override attempt',
+    })
+    await kernel.agentSpawn.spawnAgent({
+      parentConversationId: rootConv.id,
+      resume: 'child-a',
+      model: 'faux/flagship',
+      effort: 'high',
+      prompt: 'resumed override attempt',
+    })
+
+    // d) Explicit single tier model -> locked to executorModel + executorThinkingLevel
+    await kernel.agentSpawn.spawnAgent({
+      parentConversationId: rootConv.id,
+      model: 'tier/coder',
+      prompt: 'tier coder override attempt',
+    })
+
+    // e) Nested grandchild spawned from child -> walks child -> rootConv -> still locked to executorModel
+    await kernel.agentSpawn.spawnAgent({
+      parentConversationId: plainChildId!,
+      model: 'faux/flagship',
+      effort: 'high',
+      prompt: 'nested grandchild task',
+    })
+
+    // f) Forked subagent under orchestrator root -> locked to executorModel + executorThinkingLevel
+    await kernel.agentSpawn.spawnAgent({
+      parentConversationId: rootConv.id,
+      fork: true,
+      model: 'faux/flagship',
+      effort: 'high',
+      prompt: 'forked child task',
+    })
+
+    assert.equal(spawnObserved.length, 7)
+    for (const [idx, call] of spawnObserved.entries()) {
+      assert.equal(call.modelId, 'faux/fast', `spawn call #${idx} must run on executorModel faux/fast`)
+      assert.equal(call.reasoning, 'low', `spawn call #${idx} must run on executorThinkingLevel low`)
+      assert.equal(call.hasCatalog, false, `spawn call #${idx} must suppress tiers.catalog`)
+    }
+
+    // g) Malformed ref & explicit orchestrator tier still fail honestly rather than being silently rewritten
+    await assertRejectsCode(
+      () =>
+        kernel.agentSpawn.spawnAgent({
+          parentConversationId: rootConv.id,
+          model: 'badref',
+          prompt: 'malformed model',
+        }),
+      'validation_error',
+    )
+    await assertRejectsCode(
+      () =>
+        kernel.agentSpawn.spawnAgent({
+          parentConversationId: rootConv.id,
+          model: 'tier/auto-exec',
+          prompt: 'orchestrator model not allowed',
+        }),
+      'orchestrator_tier_human_only',
+    )
+
+    // h) Orchestrator without executorThinkingLevel clears caller effort rather than leaking `high`
+    await kernel.agentSpawn.spawnAgent({
+      parentConversationId: rootNoEffort.id,
+      model: 'faux/flagship',
+      effort: 'high',
+      prompt: 'clear caller effort',
+      onResolved: (info) => {
+        noEffortChildId = info.conversationId
+      },
+    })
+    assert.ok(noEffortChildId !== undefined)
+    const noEffortChildSnap = kernel.conversations.getConversation(noEffortChildId!)
+    assert.equal(noEffortChildSnap.model, 'faux/fast')
+    assert.equal(noEffortChildSnap.thinkingLevelOverride, undefined)
+    assert.equal(spawnObserved.length, 8)
+    assert.equal(spawnObserved[7]?.modelId, 'faux/fast')
+    assert.notEqual(spawnObserved[7]?.reasoning, 'high')
   } finally {
     await env.close()
   }

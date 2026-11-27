@@ -316,12 +316,16 @@ export function createTiersPlugin(): PluginDefinition {
         if (!autoInjectEnabled()) return { action: 'continue' }
         const state = readState()
         if (Object.keys(state.tiers).length === 0) return { action: 'continue' }
+        if (orchestratorManager.isUnderOrchestratorTree(turn.conversation)) return { action: 'continue' }
         const text = renderModelTiersCatalogSection(projectTierEntries(state.tiers, await ctx.host.listModels()))
         return text ? { action: 'transform', value: { ...turn, sections: [...turn.sections, { id: 'tiers.catalog', text }] } } : { action: 'continue' }
       })
 
       // Run after builtin:plan (-50) so /plan retains precedence, and before profile (-100).
       ctx.hook.onBeforeTurn((turn) => orchestratorManager.handleBeforeTurn(turn), { priority: -60 })
+
+      // Synchronous transform after workflow (300) and worktree (200) so builtin:tiers never holds liveTasks open.
+      ctx.hook.onAgentSpawn((request) => orchestratorManager.handleAgentSpawn(request), { priority: 100 })
 
       ctx.hook.onTurnSettled(async (payload) => {
         await orchestratorManager.handleTurnSettled(payload.conversation.id)

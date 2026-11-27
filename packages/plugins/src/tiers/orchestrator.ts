@@ -70,7 +70,7 @@ export const ORCHESTRATOR_PLAN_SECTION = [
 export const ORCHESTRATOR_EXECUTE_SECTION = [
   '<orchestrator_execution_mode>',
   'You are in the Execution Phase of a dual-phase orchestrator session.',
-  '1. Implement the approved plan carefully using the available workspace tools and verify all changes thoroughly.',
+  '1. Implement the approved plan carefully using the available workspace tools and verify all changes thoroughly. Any subagents or workflows you spawn in this session automatically run on your Executor model—omit `model` overrides when calling them.',
   '2. Call `hand_back_to_planner({ reason, summary })` if you discover a blocking flaw in the plan, hit repeated verification failures requiring redesign, need user clarification / architectural arbitration, or finish an intermediate milestone needing planner review.',
   '</orchestrator_execution_mode>',
 ].join('\n')
@@ -108,6 +108,10 @@ export interface TierOrchestratorManager {
   reconcile(): Promise<void>
   inUseItems(): PluginInUseItem[]
   stop(): Promise<void>
+  isUnderOrchestratorTree(
+    conversation: Pick<ConversationSummary, 'parentConversationId' | 'ownedBy' | 'modelTier'>,
+  ): boolean
+  handleAgentSpawn(request: HookPayloadMap['agent_spawn']): HookResult<HookPayloadMap['agent_spawn']>
   handleInput(payload: HookPayloadMap['input']): HookResult<HookPayloadMap['input']> | Promise<HookResult<HookPayloadMap['input']>>
   handleBeforeTurn(payload: HookPayloadMap['before_turn']): HookResult<HookPayloadMap['before_turn']> | Promise<HookResult<HookPayloadMap['before_turn']>>
   handleTurnSettled(conversationId: number): Promise<void>
@@ -184,6 +188,27 @@ function resolveActiveOrchestrator(
     spec,
     executorModel: spec.executorModel,
   }
+}
+
+function resolveTreeOrchestrator(
+  host: HelmxPluginContext['host'],
+  conversationId: number,
+  tiersState: TiersStateDoc,
+): ActiveOrchestratorTier | undefined {
+  if (!Object.values(tiersState.tiers).some((spec) => isOrchestratorTier(spec))) {
+    return undefined
+  }
+  const visited = new Set<number>()
+  let cur: number | undefined = conversationId
+  while (cur !== undefined && !visited.has(cur)) {
+    visited.add(cur)
+    const conv = getConversationOrUndefined(host, cur)
+    if (conv === undefined) return undefined
+    const active = resolveActiveOrchestrator(conv, tiersState)
+    if (active !== undefined) return active
+    cur = conv.parentConversationId
+  }
+  return undefined
 }
 
 function isConversationBusy(
@@ -301,6 +326,55 @@ export function createTierOrchestratorManager(deps: {
     hydrate(): void {
       for (const record of store.listAllRecords()) {
         store.syncSessionDoc(record.conversationId, record)
+      }
+    },
+
+    isUnderOrchestratorTree(
+      conversation: Pick<ConversationSummary, 'parentConversationId' | 'ownedBy' | 'modelTier'>,
+    ): boolean {
+      const tiersState = readTiersState()
+      if (resolveActiveOrchestrator(conversation, tiersState) !== undefined) return true
+      if (conversation.parentConversationId === undefined) return false
+      return resolveTreeOrchestrator(ctx.host, conversation.parentConversationId, tiersState) !== undefined
+    },
+
+    handleAgentSpawn(request: HookPayloadMap['agent_spawn']): HookResult<HookPayloadMap['agent_spawn']> {
+      if (stopping || request.reattach !== undefined || (request.agentType ?? '').includes(':')) {
+        return { action: 'continue' }
+      }
+      const tiersState = readTiersState()
+      const active = resolveTreeOrchestrator(ctx.host, request.parentConversationId, tiersState)
+      if (active === undefined) {
+        return { action: 'continue' }
+      }
+      const rawModel = typeof request.model === 'string' ? request.model.trim() : ''
+      if (rawModel !== '') {
+        if (!rawModel.includes('/')) {
+          return { action: 'continue' }
+        }
+        const explicitTierId = parseModelTierRef(rawModel)
+        if (explicitTierId !== undefined && isOrchestratorTier(tiersState.tiers[explicitTierId])) {
+          throw new HelmxError(
+            'orchestrator_tier_human_only',
+            `Orchestrator model tier '${rawModel}' is restricted to top-level human conversations`,
+            400,
+            { model: rawModel, tierId: explicitTierId },
+          )
+        }
+      }
+      const nextRequest: HookPayloadMap['agent_spawn'] = {
+        ...request,
+        model: active.executorModel,
+      }
+      const execEffort = active.spec.executorThinkingLevel?.trim() ?? ''
+      if (execEffort !== '') {
+        nextRequest.effort = execEffort
+      } else {
+        delete nextRequest.effort
+      }
+      return {
+        action: 'transform',
+        value: nextRequest,
       }
     },
 

@@ -42,14 +42,13 @@ export async function completeConversationTextHelper(
     throw new HelmxError('not_found', `Conversation not found: ${input.conversationId}`, 404, { conversationId: input.conversationId })
   }
   const explicitModel = input.model?.trim()
-  const isTopLevelHuman = meta.parentConversationId === undefined && (meta.ownedBy ?? 'human') === 'human'
   const effective =
     explicitModel !== undefined && explicitModel !== ''
       ? explicitModel
       : await deps.conversations.resolveEffectiveModel(
           meta.modelOverride,
           meta.profileId,
-          isTopLevelHuman ? 'human_conversation' : 'subagent_inherit',
+          'subagent_inherit',
         )
   if (effective === undefined || effective === '') {
     throw new HelmxError('model_not_configured', `Conversation ${input.conversationId} has no effective model resolved; cannot run text completion`, 409, { conversationId: input.conversationId })
