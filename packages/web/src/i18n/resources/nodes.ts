@@ -51,6 +51,14 @@ export const nodesMessages = {
   'nodes.drawer.titleFallback': { en: 'Node details', 'zh-CN': '节点详情' },
   'nodes.drawer.invalidNodeId': { en: 'Enter a valid node ID', 'zh-CN': '请指定有效的节点 ID' },
   'nodes.drawer.noSelection': { en: 'No node selected', 'zh-CN': '未选择节点' },
+  'nodes.drawer.delete': { en: 'Delete node', 'zh-CN': '删除节点' },
+  'nodes.drawer.deleting': { en: 'Deleting…', 'zh-CN': '删除中…' },
+  'nodes.drawer.deleteConfirm.title': { en: 'Delete compute node', 'zh-CN': '删除计算节点' },
+  'nodes.drawer.deleteConfirm.body': {
+    en: 'Delete remote node "{name}" ({id})? Its access token will be revoked and any active connection will be disconnected immediately.',
+    'zh-CN': '确认删除远端节点「{name}」({id})？其接入令牌将立即失效并断开当前连接。',
+  },
+  'nodes.drawer.deleteConfirm.confirm': { en: 'Delete node', 'zh-CN': '确认删除' },
 
   // System overview section
   'nodes.drawer.overview': { en: 'System overview', 'zh-CN': '系统概览' },

@@ -470,6 +470,8 @@ test('DockTray SSR & DOM: renders shared .dock-tray vocabulary, optional classPr
         statusLabel: 'Running',
         title: 'deploy',
         idText: '#12',
+        live: e('span', { className: 'dock-tray-row-live' }, 'running tests'),
+        elapsed: '12s',
         onOpen: () => {},
         openAriaLabel: 'Open deploy',
       }),
@@ -478,6 +480,7 @@ test('DockTray SSR & DOM: renders shared .dock-tray vocabulary, optional classPr
   assert.ok(html.includes('dock-tray workflow-active-tray'), 'carries shared and prefixed container classes')
   assert.ok(html.includes('dock-tray-row workflow-active-tray-row'), 'row carries shared and prefixed classes')
   assert.ok(html.includes('deploy') && html.includes('#12'))
+  assert.ok(html.includes('12s') && html.indexOf('running tests') < html.indexOf('12s'), 'string elapsed renders after live')
   assert.doesNotMatch(html, /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u, 'zero emoji')
 
   const container = document.createElement('div')
@@ -501,6 +504,8 @@ test('DockTray SSR & DOM: renders shared .dock-tray vocabulary, optional classPr
         status: 'waiting',
         statusLabel: 'Waiting',
         title: 'review',
+        live: e('span', { className: 'dock-tray-row-live' }, 'checking diff'),
+        elapsed: e('span', { className: 'dock-tray-elapsed custom-elapsed' }, '45s'),
         onOpen: () => {
           clicked += 1
         },
@@ -515,6 +520,10 @@ test('DockTray SSR & DOM: renders shared .dock-tray vocabulary, optional classPr
   assert.ok(toggleBtn !== null && toggleBtn.getAttribute('aria-expanded') === 'true')
   const rowBtn = container.querySelector<HTMLButtonElement>('button.dock-tray-row-main')
   assert.ok(rowBtn !== null)
+  const rowChildren = [...rowBtn.children]
+  const liveIdx = rowChildren.findIndex((el) => el.classList.contains('dock-tray-row-live'))
+  const elapsedIdx = rowChildren.findIndex((el) => el.classList.contains('custom-elapsed'))
+  assert.ok(liveIdx >= 0 && elapsedIdx > liveIdx, 'ReactNode elapsed renders after live inside .dock-tray-row-main')
   await act(async () => {
     rowBtn.click()
   })

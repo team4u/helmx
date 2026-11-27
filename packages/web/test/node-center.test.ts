@@ -997,3 +997,161 @@ test('NodeDetailDrawer: interactive Hub address chips, More toggle, Custom URL i
     container.remove()
   }
 })
+
+test('NodeDetailDrawer: delete action is hidden for local node and isNew mode, shown for remote nodes', { timeout: 60_000 }, () => {
+  const nodes = mockNodes()
+  const store = makeTestStore({ locale: 'en', nodes: nodes as any })
+
+  const localHtml = renderToStaticMarkup(
+    e(
+      HostStoreProviders,
+      { value: store },
+      e(NodeDetailDrawer, {
+        node: nodes[0]!,
+        open: true,
+        inline: true,
+        onClose: () => {},
+      }),
+    ),
+  )
+  assert.equal(localHtml.includes('Delete node'), false, 'local node must never show Delete node')
+  assert.doesNotMatch(localHtml, EMOJI_REGEX)
+
+  const newHtml = renderToStaticMarkup(
+    e(
+      HostStoreProviders,
+      { value: store },
+      e(NodeDetailDrawer, {
+        node: null,
+        open: true,
+        isNew: true,
+        inline: true,
+        onClose: () => {},
+      }),
+    ),
+  )
+  assert.equal(newHtml.includes('Delete node'), false, 'isNew mode must not show Delete node')
+  assert.doesNotMatch(newHtml, EMOJI_REGEX)
+
+  const remoteHtml = renderToStaticMarkup(
+    e(
+      HostStoreProviders,
+      { value: store },
+      e(NodeDetailDrawer, {
+        node: nodes[1]!,
+        open: true,
+        inline: true,
+        onClose: () => {},
+      }),
+    ),
+  )
+  assert.equal(remoteHtml.includes('Delete node'), true, 'remote BYOM node renders Delete node button')
+  assert.doesNotMatch(remoteHtml, EMOJI_REGEX)
+})
+
+test('NodeDetailDrawer: delete confirms via ConfirmDialog, surfaces failures cleanly, and closes + refreshes on success', { timeout: 60_000 }, async () => {
+  resetHappyDom()
+  const originalRemove = nodesApi.remove
+  const removedCalls: string[] = []
+  let closeCount = 0
+  let refreshCount = 0
+  const remoteNode = mockNodes()[1]!
+  const store = makeTestStore({ locale: 'en', nodes: mockNodes() as any })
+
+  const container = document.createElement('div')
+  document.body.appendChild(container)
+  const root = ReactDOMClient.createRoot(container)
+
+  const findButton = (pattern: RegExp, rootEl: ParentNode = container) =>
+    Array.from(rootEl.querySelectorAll<HTMLButtonElement>('button')).find((b) =>
+      pattern.test(b.textContent ?? ''),
+    )
+
+  try {
+    await act(async () => {
+      root.render(
+        e(
+          HostStoreProviders,
+          { value: store },
+          e(NodeDetailDrawer, {
+            node: remoteNode,
+            open: true,
+            inline: true,
+            onClose: () => {
+              closeCount += 1
+            },
+            onRefresh: async () => {
+              refreshCount += 1
+            },
+          }),
+        ),
+      )
+    })
+
+    // 1. Clicking Delete opens ConfirmDialog; Cancel aborts without invoking nodesApi.remove
+    nodesApi.remove = async (nodeId: string) => {
+      removedCalls.push(nodeId)
+      return { ok: true }
+    }
+    const deleteBtn = findButton(/^Delete node$/)
+    assert.ok(deleteBtn !== undefined, 'Delete node button rendered in footer')
+    await act(async () => {
+      deleteBtn.click()
+    })
+    let alertDialog = container.querySelector('[role="alertdialog"]')
+    assert.ok(alertDialog !== null, 'clicking Delete opens ConfirmDialog')
+    assert.ok(alertDialog.textContent?.includes(remoteNode.id))
+    assert.equal(removedCalls.length, 0)
+
+    const cancelBtn = findButton(/^Cancel$/, alertDialog)
+    assert.ok(cancelBtn !== undefined)
+    await act(async () => {
+      cancelBtn.click()
+    })
+    assert.ok(container.querySelector('[role="alertdialog"]') === null, 'Cancel closes ConfirmDialog')
+    assert.equal(removedCalls.length, 0)
+
+    // 2. Failed removal keeps drawer open and surfaces error callout
+    nodesApi.remove = async () => {
+      throw new Error('delete permission denied')
+    }
+    await act(async () => {
+      findButton(/^Delete node$/)!.click()
+    })
+    alertDialog = container.querySelector('[role="alertdialog"]')
+    assert.ok(alertDialog !== null)
+    const confirmFailBtn = alertDialog.querySelector<HTMLButtonElement>('button.btn-danger')
+    assert.ok(confirmFailBtn !== null)
+    await act(async () => {
+      confirmFailBtn.click()
+    })
+    assert.equal(closeCount, 0, 'failed delete must not close drawer')
+    const errCallout = container.querySelector('.callout.callout-error')
+    assert.ok(errCallout !== null && errCallout.textContent?.includes('delete permission denied'))
+
+    // 3. Confirmed removal succeeds, closes drawer, and calls onRefresh
+    nodesApi.remove = async (nodeId: string) => {
+      removedCalls.push(nodeId)
+      return { ok: true }
+    }
+    await act(async () => {
+      findButton(/^Delete node$/)!.click()
+    })
+    alertDialog = container.querySelector('[role="alertdialog"]')
+    assert.ok(alertDialog !== null)
+    const confirmOkBtn = alertDialog.querySelector<HTMLButtonElement>('button.btn-danger')
+    assert.ok(confirmOkBtn !== null)
+    await act(async () => {
+      confirmOkBtn.click()
+    })
+    assert.deepEqual(removedCalls, [remoteNode.id])
+    assert.equal(closeCount, 1)
+    assert.equal(refreshCount, 1)
+  } finally {
+    nodesApi.remove = originalRemove
+    await act(async () => {
+      root.unmount()
+    })
+    container.remove()
+  }
+})

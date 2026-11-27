@@ -69,16 +69,18 @@ async function runCli(argv: string[], io: Partial<NodeCliIo> = {}): Promise<Capt
 interface HubFixture {
   url: string;
   registrations: { nodeId: string; token: string }[];
+  setExpectedToken(token: string): void;
   close(): Promise<void>;
 }
 
 async function startHubFixture(options: { expectedToken: string; reject?: boolean }): Promise<HubFixture> {
   const registrations: { nodeId: string; token: string }[] = [];
+  let expectedToken = options.expectedToken;
   const server = http.createServer((_req, res) => {
     res.writeHead(404).end();
   });
   const wss = new WebSocketServer({ noServer: true });
-  let pendingSocket: WebSocket | undefined;
+  const sockets = new Set<WebSocket>();
   server.on('upgrade', (req, socket, head) => {
     if (!(req.url ?? '').startsWith('/ws/node')) {
       socket.write('HTTP/1.1 404 Not Found\r\n\r\n');
@@ -86,14 +88,15 @@ async function startHubFixture(options: { expectedToken: string; reject?: boolea
       return;
     }
     wss.handleUpgrade(req, socket, head, (ws) => {
-      pendingSocket = ws;
+      sockets.add(ws);
+      ws.once('close', () => sockets.delete(ws));
       const local = {
         register(input: { nodeId: string; token: string }): { ok: boolean; heartbeatMs: number } {
           registrations.push({ nodeId: input.nodeId, token: input.token });
-          if (options.reject || input.token !== options.expectedToken) {
+          if (options.reject || input.token !== expectedToken) {
             setTimeout(() => {
-              if (pendingSocket !== undefined && pendingSocket.readyState === WebSocket.OPEN) {
-                pendingSocket.close(4003, 'invalid token');
+              if (ws.readyState === WebSocket.OPEN) {
+                ws.close(4003, 'invalid token');
               }
             }, 30);
             return { ok: false, heartbeatMs: 0 };
@@ -134,9 +137,12 @@ async function startHubFixture(options: { expectedToken: string; reject?: boolea
   return {
     url: `http://127.0.0.1:${address.port}`,
     registrations,
+    setExpectedToken(next: string) {
+      expectedToken = next;
+    },
     close: () =>
       new Promise<void>((resolve) => {
-        if (pendingSocket !== undefined) pendingSocket.close();
+        for (const ws of sockets) ws.close();
         wss.close(() => undefined);
         server.close(() => resolve());
       }),
@@ -284,6 +290,59 @@ test('restart: old instance exits cleanly over control channel and new instance 
   const statusPayload = JSON.parse(status.out) as { pid: number; state: string };
   assert.equal(statusPayload.pid, payload.pid);
   assert.equal(statusPayload.state, 'registered');
+});
+
+test('start -d --token and restart --token rotate credentials and replace verified running daemon', { timeout: 60_000 }, async (t) => {
+  const dir = await tempDir('helmx-review-rotate-');
+  t.after(async () => {
+    await runCli(['stop', '--data-dir', dir, '--json']).catch(() => undefined);
+    await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
+  }, { timeout: 60_000 });
+  const hub = await startHubFixture({ expectedToken: 'rot-node:tok-1' });
+  t.after(async () => {
+    await hub.close();
+  }, { timeout: 60_000 });
+
+  // 1. Initial start -d --hub --token binds and starts
+  const first = await runCli(['start', '-d', '--hub', hub.url, '--token', 'rot-node:tok-1', '--data-dir', dir, '--json']);
+  assert.equal(first.code, 0, first.err);
+  const firstPayload = JSON.parse(first.out) as { ok: boolean; pid: number; state: string };
+  assert.equal(firstPayload.ok, true);
+  assert.equal(firstPayload.state, 'registered');
+
+  // 2. Cross-nodeId token must fail before touching the live daemon
+  const crossNode = await runCli(['start', '-d', '--hub', hub.url, '--token', 'other-node:tok-x', '--data-dir', dir, '--json']);
+  assert.equal(crossNode.code, 1);
+  assert.ok(realIsAlive(firstPayload.pid), 'rejected cross-nodeId token bind must leave running daemon intact');
+
+  // 3. start -d --hub --token <newToken> replaces the running daemon seamlessly instead of failing with already_running
+  hub.setExpectedToken('rot-node:tok-2');
+  const rotatedStart = await runCli(['start', '-d', '--hub', hub.url, '--token', 'rot-node:tok-2', '--data-dir', dir, '--json']);
+  assert.equal(rotatedStart.code, 0, rotatedStart.err);
+  const rotatedStartPayload = JSON.parse(rotatedStart.out) as { ok: boolean; pid: number; previousPid?: number; state: string };
+  assert.equal(rotatedStartPayload.ok, true);
+  assert.equal(rotatedStartPayload.previousPid, firstPayload.pid);
+  assert.notEqual(rotatedStartPayload.pid, firstPayload.pid);
+  assert.equal(rotatedStartPayload.state, 'registered');
+  assert.equal(realIsAlive(firstPayload.pid), false, 'previous daemon must stop when token is rotated via start -d --token');
+  assert.ok(realIsAlive(rotatedStartPayload.pid));
+
+  // 4. restart --token <newToken> also rotates token while reusing bound hubUrl
+  hub.setExpectedToken('rot-node:tok-3');
+  const rotatedRestart = await runCli(['restart', '--token', 'rot-node:tok-3', '--data-dir', dir, '--json']);
+  assert.equal(rotatedRestart.code, 0, rotatedRestart.err);
+  const rotatedRestartPayload = JSON.parse(rotatedRestart.out) as { ok: boolean; pid: number; previousPid?: number; state: string };
+  assert.equal(rotatedRestartPayload.ok, true);
+  assert.equal(rotatedRestartPayload.previousPid, rotatedStartPayload.pid);
+  assert.notEqual(rotatedRestartPayload.pid, rotatedStartPayload.pid);
+  assert.equal(rotatedRestartPayload.state, 'registered');
+  assert.equal(realIsAlive(rotatedStartPayload.pid), false);
+  assert.ok(realIsAlive(rotatedRestartPayload.pid));
+
+  assert.deepEqual(
+    hub.registrations.map((r) => r.token),
+    ['rot-node:tok-1', 'rot-node:tok-2', 'rot-node:tok-3'],
+  );
 });
 
 test('start -d reports state=starting truthfully when Hub is unreachable without claiming registered', { timeout: 60_000 }, async (t) => {

@@ -4,6 +4,7 @@ import {
   Button,
   Callout,
   Card,
+  ConfirmDialog,
   DetailDrawer,
   EmptyState,
   Field,
@@ -96,11 +97,17 @@ export function NodeDetailDrawer({
   const [healthState, setHealthState] = useState<{ nodeId: string; result: NodeUpgradeCheckResult } | null>(null)
   const [healthErrorState, setHealthErrorState] = useState<{ nodeId: string; message: string } | null>(null)
 
+  const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false)
+  const [deleting, setDeleting] = useState(false)
+  const [deleteErrorState, setDeleteErrorState] = useState<{ nodeId: string; message: string } | null>(null)
+
   const mountedRef = useRef(true)
   const tokenGenerationRef = useRef(0)
   const healthGenerationRef = useRef(0)
+  const deleteGenerationRef = useRef(0)
 
   const isLocal = node ? isNodeLocal(node) : false
+  const canDelete = !isNew && !isLocal && node !== null
   const isOnline = node ? isNodeOnline(node) : false
   const displayName = isNew
     ? t('nodes.drawer.newTitle')
@@ -156,6 +163,10 @@ export function NodeDetailDrawer({
     open && !isNew && node?.id && healthErrorState !== null && healthErrorState.nodeId === node.id
       ? healthErrorState.message
       : null
+  const deleteError =
+    open && canDelete && node?.id && deleteErrorState !== null && deleteErrorState.nodeId === node.id
+      ? deleteErrorState.message
+      : null
 
   useEffect(() => {
     mountedRef.current = true
@@ -163,6 +174,7 @@ export function NodeDetailDrawer({
       mountedRef.current = false
       tokenGenerationRef.current += 1
       healthGenerationRef.current += 1
+      deleteGenerationRef.current += 1
     }
   }, [])
 
@@ -177,9 +189,13 @@ export function NodeDetailDrawer({
 
   useEffect(() => {
     healthGenerationRef.current += 1
+    deleteGenerationRef.current += 1
     setHealthState(null)
     setHealthErrorState(null)
     setCheckingHealth(false)
+    setConfirmDeleteOpen(false)
+    setDeleting(false)
+    setDeleteErrorState(null)
     setIssuedHubAccess(null)
     setSelectedEndpointUrl(null)
     setCustomMode(false)
@@ -263,6 +279,35 @@ export function NodeDetailDrawer({
     }
   }
 
+  const handleConfirmDelete = async () => {
+    const requestedNodeId = node?.id
+    if (!requestedNodeId || !canDelete || deleting) return
+    const generation = ++deleteGenerationRef.current
+    setDeleting(true)
+    setDeleteErrorState(null)
+
+    try {
+      await nodesApi.remove(requestedNodeId)
+      if (!mountedRef.current || deleteGenerationRef.current !== generation) return
+      setConfirmDeleteOpen(false)
+      onClose()
+      if (onRefresh) {
+        await onRefresh()
+      }
+    } catch (err) {
+      if (!mountedRef.current || deleteGenerationRef.current !== generation) return
+      setConfirmDeleteOpen(false)
+      setDeleteErrorState({
+        nodeId: requestedNodeId,
+        message: err instanceof Error ? err.message : String(err),
+      })
+    } finally {
+      if (mountedRef.current && deleteGenerationRef.current === generation) {
+        setDeleting(false)
+      }
+    }
+  }
+
   const health = node?.health
   const memUsage = health ? formatUsage(health.memFreeBytes, health.memTotalBytes, t) : null
   const diskUsage = health ? formatUsage(health.diskFreeBytes, health.diskTotalBytes, t) : null
@@ -276,7 +321,9 @@ export function NodeDetailDrawer({
     <DetailDrawer
       open={open}
       inline={inline}
-      onClose={onClose}
+      onClose={() => {
+        if (!deleting) onClose()
+      }}
       title={displayName}
       titleClassName="break-word"
       titleExtra={
@@ -305,15 +352,61 @@ export function NodeDetailDrawer({
       aria-label={displayName}
       closeLabel={t('common.close')}
       footer={
-        <Button size="sm" onClick={onClose}>
-          {t('common.close')}
-        </Button>
+        <Stack direction="horizontal" gap="sm" align="center" justify="between" className="flex-1">
+          <div>
+            {canDelete && (
+              <Button
+                variant="ghost"
+                size="sm"
+                icon="trash"
+                className="text-err"
+                disabled={deleting}
+                onClick={() => setConfirmDeleteOpen(true)}
+              >
+                {deleting ? t('nodes.drawer.deleting') : t('nodes.drawer.delete')}
+              </Button>
+            )}
+          </div>
+          <Button size="sm" disabled={deleting} onClick={() => { if (!deleting) onClose() }}>
+            {t('common.close')}
+          </Button>
+        </Stack>
+      }
+      aux={
+        canDelete && node ? (
+          <ConfirmDialog
+            open={confirmDeleteOpen}
+            inline={inline}
+            onOpenChange={(nextOpen) => {
+              if (!nextOpen && !deleting) setConfirmDeleteOpen(false)
+            }}
+            title={t('nodes.drawer.deleteConfirm.title')}
+            description={t('nodes.drawer.deleteConfirm.body', {
+              name: displayName,
+              id: node.id,
+            })}
+            confirmText={deleting ? t('nodes.drawer.deleting') : t('nodes.drawer.deleteConfirm.confirm')}
+            cancelText={t('common.cancel')}
+            danger
+            pending={deleting}
+            onConfirm={() => void handleConfirmDelete()}
+            onCancel={() => {
+              if (!deleting) setConfirmDeleteOpen(false)
+            }}
+          />
+        ) : undefined
       }
     >
       {!node && !isNew ? (
         <EmptyState title={t('nodes.drawer.noSelection')} />
       ) : (
         <>
+          {deleteError && (
+            <Callout tone="err">
+              <span className="callout-text" role="alert">{deleteError}</span>
+            </Callout>
+          )}
+
           {/* 1. Node system overview */}
           {!isNew && node && (
             <Card

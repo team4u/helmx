@@ -12,7 +12,7 @@ import type { NetworkInterfaceInfo } from 'node:os'
 import { test } from 'node:test'
 import { useTempDir } from '@helmx/test-kit/node'
 import { KernelRuntime } from '../src/runtime/index.js'
-import { buildHubAccessInfo } from '../src/runtime/hub-access.js'
+import { buildHubAccessInfo, isUsableFqdn, parseHostsFileForFqdn, resolveHostFqdn } from '../src/runtime/hub-access.js'
 import { startHub } from '../src/http/index.js'
 import { makeFauxModels } from './helpers.js'
 
@@ -272,4 +272,121 @@ test('startHub integration: GET /api/nodes local.hubAccess and POST /api/nodes/i
     await hub2.close()
     await kernel2.close()
   }
+})
+
+test('parseHostsFileForFqdn & resolveHostFqdn: discovers canonical FQDN via hosts/DNS/Win32 while rejecting stubs', { timeout: 60_000 }, async () => {
+  // 1. parseHostsFileForFqdn skips comments & loopback stubs, preferring `<shortHost>.<domain>`
+  const hosts = [
+    '127.0.0.1 localhost localhost.localdomain',
+    '# 127.0.1.1 ignored-comment.example.com code2',
+    '127.0.1.1 code2.fjay.top code2',
+  ].join('\n')
+  assert.equal(parseHostsFileForFqdn(hosts, 'code2'), 'code2.fjay.top')
+  assert.equal(parseHostsFileForFqdn('127.0.0.1 localhost localhost.localdomain\n', 'localhost'), undefined)
+  assert.equal(isUsableFqdn('dev-box.local'), true)
+  assert.equal(isUsableFqdn('localhost.localdomain'), false)
+  assert.equal(isUsableFqdn('node.localdomain.'), false)
+
+  // 2. os.hostname() already carrying an FQDN returns immediately without touching hosts/DNS
+  let dnsCalled = false
+  let hostsCalled = false
+  assert.equal(
+    await resolveHostFqdn({
+      osHostname: () => 'host.example.com.',
+      readHostsFile: async () => {
+        hostsCalled = true
+        return ''
+      },
+      lookup: async () => {
+        dnsCalled = true
+        return []
+      },
+    }),
+    'host.example.com',
+  )
+  assert.equal(hostsCalled, false)
+  assert.equal(dnsCalled, false)
+
+  // 3. /etc/hosts FQDN resolution wins over DNS
+  assert.equal(
+    await resolveHostFqdn({
+      platform: 'linux',
+      osHostname: () => 'code2',
+      readHostsFile: async () => '127.0.1.1 code2.fjay.top code2\n',
+      lookup: async () => {
+        throw new Error('DNS should not run when /etc/hosts already matched')
+      },
+    }),
+    'code2.fjay.top',
+  )
+
+  // 4. DNS lookup + lookupService canonical reverse resolution fallback
+  assert.equal(
+    await resolveHostFqdn({
+      platform: 'linux',
+      osHostname: () => 'code2',
+      readHostsFile: async () => '127.0.0.1 localhost\n',
+      lookup: async () => [{ address: '192.168.1.20', family: 4 }],
+      lookupService: async () => ({ hostname: 'code2.corp.internal.', service: '0' }),
+    }),
+    'code2.corp.internal',
+  )
+
+  // 5. Win32 USERDNSDOMAIN fallback
+  assert.equal(
+    await resolveHostFqdn({
+      platform: 'win32',
+      osHostname: () => 'workstation',
+      lookup: async () => [],
+      env: { USERDNSDOMAIN: 'office.example.net' },
+    }),
+    'workstation.office.example.net',
+  )
+
+  // 6. Bounded timeout on slow DNS lookup fails open to undefined without hanging
+  assert.equal(
+    await resolveHostFqdn({
+      platform: 'linux',
+      osHostname: () => 'slowbox',
+      readHostsFile: async () => '',
+      lookup: () => new Promise(() => undefined),
+      timeoutMs: 25,
+    }),
+    undefined,
+  )
+})
+
+test('buildHubAccessInfo hostFqdn: prefers valid FQDN over short osHostname and ignores loopback stubs', { timeout: 60_000 }, () => {
+  const wildcard = buildHubAccessInfo({
+    listen: { host: '0.0.0.0', port: 3202 },
+    interfaces: { eth0: [ipv4('192.168.1.10')] },
+    osHostname: 'code2',
+    hostFqdn: 'code2.fjay.top',
+  })
+  assert.deepEqual(
+    wildcard?.endpoints.filter((e) => e.kind === 'hostname'),
+    [{ url: 'http://code2.fjay.top:3202', host: 'code2.fjay.top', kind: 'hostname' }],
+  )
+
+  const specificIp = buildHubAccessInfo({
+    listen: { host: '192.168.1.10', port: 3202 },
+    interfaces: { eth0: [ipv4('192.168.1.10')] },
+    osHostname: 'code2',
+    hostFqdn: 'code2.fjay.top',
+  })
+  assert.deepEqual(
+    specificIp?.endpoints.filter((e) => e.kind === 'hostname'),
+    [{ url: 'http://code2.fjay.top:3202', host: 'code2.fjay.top', kind: 'hostname' }],
+  )
+
+  const stubRejected = buildHubAccessInfo({
+    listen: { host: '0.0.0.0', port: 3202 },
+    interfaces: { eth0: [ipv4('192.168.1.10')] },
+    osHostname: 'code2',
+    hostFqdn: 'localhost.localdomain',
+  })
+  assert.deepEqual(
+    stubRejected?.endpoints.filter((e) => e.kind === 'hostname'),
+    [{ url: 'http://code2:3202', host: 'code2', kind: 'hostname' }],
+  )
 })

@@ -4,7 +4,7 @@
 import { useMemo, useState, type ReactNode } from 'react'
 import type { ComposerScopeProps } from '@helmx/protocol/browser'
 import {
-  Badge, Button, DockTray, DockTrayRow, Tooltip, resolveLocalizedText,
+  Badge, Button, DockTray, DockTrayRow, IconButton, Tooltip, resolveLocalizedText,
   useConversation, useConversations, usePluginContext, usePluginDoc, usePluginLocale, usePluginSessionDoc,
 } from '@helmx/plugin-client'
 import { SWARM_WORKBENCH_PANEL_ID, type SwarmIndexDoc } from './models.ts'
@@ -50,7 +50,7 @@ function SwarmTrayRow(props: { item: SwarmTrayItem; nowMs: number | undefined; b
       statusLabel={C.memberLiveStateLabel(item.isBlocked ? 'blocked' : 'working', locale)}
       title={`@${item.name}`}
       idText={`#${item.conversationId}`}
-      badge={
+      elapsed={
         rowTiming ? (
           <Tooltip content={rowTiming.tooltip} className="sw-timing-tooltip">
             <span className={`dock-tray-elapsed sw-tray-row-elapsed tabular-nums${rowTiming.isWarn ? ' sw-tray-row-elapsed-warn' : ''}`}>{rowTiming.label}</span>
@@ -61,17 +61,15 @@ function SwarmTrayRow(props: { item: SwarmTrayItem; nowMs: number | undefined; b
       onOpen={() => ctx.openConversationDrawer(item.conversationId)}
       openAriaLabel={`@${item.name} — ${C.trayRowOpenLabel(item.name, locale)}`}
       actions={
-        <Button
-          variant="danger"
+        <IconButton
+          variant="ghost"
           size="xs"
           icon="square"
+          className="dock-tray-row-abort"
           disabled={props.busy}
-          title={resolveLocalizedText(C.ACTION_ABORT, locale)}
-          aria-label={resolveLocalizedText(C.ACTION_ABORT, locale)}
+          label={resolveLocalizedText(C.ACTION_ABORT, locale)}
           onClick={() => props.onAbort(`abort:${item.name}`, item.name)}
-        >
-          <span className="dock-tray-action-label">{resolveLocalizedText(C.ACTION_ABORT, locale)}</span>
-        </Button>
+        />
       }
     />
   )

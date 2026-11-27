@@ -139,8 +139,8 @@ export interface DockTrayRowProps {
   idText?: string
   /** Optional compact progress badge. */
   badge?: ReactNode
-  /** Optional elapsed duration text. */
-  elapsed?: string
+  /** Optional elapsed duration text or custom node (e.g. Tooltip-wrapped `.dock-tray-elapsed`). */
+  elapsed?: ReactNode
   /** Optional live activity inline snippet (fills remaining row width). */
   live?: ReactNode
   /** Optional row click handler; when provided the main body is a real `<button>`. */
@@ -186,12 +186,16 @@ export function DockTrayRow({
         </span>
       ) : null}
       {badge}
-      {elapsed !== undefined ? (
-        <span className={`${withPrefix('dock-tray-elapsed', classPrefix, '-elapsed')} tabular-nums`}>
-          {elapsed}
-        </span>
-      ) : null}
       {live}
+      {elapsed !== undefined && elapsed !== null && elapsed !== false ? (
+        typeof elapsed === 'string' ? (
+          <span className={`${withPrefix('dock-tray-elapsed', classPrefix, '-elapsed')} tabular-nums`}>
+            {elapsed}
+          </span>
+        ) : (
+          elapsed
+        )
+      ) : null}
     </>
   )
 
