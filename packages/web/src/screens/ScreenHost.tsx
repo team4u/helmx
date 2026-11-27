@@ -73,7 +73,7 @@ export function ScreenHost({ pluginId, screenId, isSplit, onCloseSplit }: Screen
 
   if (matched === undefined) {
     return (
-      <div className="helmx-pane">
+      <div className="helmx-pane screen-pane">
         <div className="pane-topbar">
           <div className="pane-title-group">
             <HelmxIcon name="alert-triangle" size={14} />
@@ -108,7 +108,7 @@ export function ScreenHost({ pluginId, screenId, isSplit, onCloseSplit }: Screen
   const spec = matched.spec as ScreenSpec
 
   return (
-    <div className="helmx-pane">
+    <div className="helmx-pane screen-pane">
       <div className="pane-topbar">
         <div className="pane-title-group">
           {spec.icon !== undefined && <HelmxIcon name={spec.icon} size={14} />}
@@ -120,7 +120,7 @@ export function ScreenHost({ pluginId, screenId, isSplit, onCloseSplit }: Screen
             <CloseSplitButton onCloseSplit={onCloseSplit} />
           ) : (
             <SplitToggleButton
-              isSplitActive={splitTarget !== null}
+              isSplitActive={isSplitActive}
               onToggleSplit={toggleSplit}
             />
           )}

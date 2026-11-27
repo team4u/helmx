@@ -382,7 +382,7 @@ describe("conversation-outline", () => {
       modeButtons.map((btn) => btn.textContent?.trim()),
       ['Conversation', 'Questions only', 'All'],
     )
-    assert.equal(modeButtons[0]?.getAttribute('aria-pressed'), 'true', '默认激活「对话」模式')
+    assert.equal(modeButtons[0]?.getAttribute('aria-selected'), 'true', '默认激活「对话」模式')
     const dialogueOptions = [...document.querySelectorAll<HTMLButtonElement>('.conversation-outline-item')]
     assert.deepEqual(
       dialogueOptions.map((btn) => btn.className.match(/conversation-outline-(human|assistant|heading|card|divider)/)?.[1]),
@@ -499,7 +499,7 @@ describe("conversation-outline", () => {
     })
     const toggleBtns = [...host.querySelectorAll<HTMLButtonElement>('.conversation-outline-mode .segmented-control-btn')]
     assert.deepEqual(toggleBtns.map((b) => b.textContent?.trim()), ['Conversation', 'Questions only', 'All'])
-    assert.equal(toggleBtns[0]?.getAttribute('aria-pressed'), 'true')
+    assert.equal(toggleBtns[0]?.getAttribute('aria-selected'), 'true')
 
     // 1. 默认「对话」：保留 人类第一问 + 一级结论 + divider（过滤 card 与 origin=agent 输入）
     const labels = (): string[] =>
@@ -513,7 +513,7 @@ describe("conversation-outline", () => {
     await act(async () => {
       toggleBtns[1]!.click()
     })
-    assert.equal(toggleBtns[1]?.getAttribute('aria-pressed'), 'true')
+    assert.equal(toggleBtns[1]?.getAttribute('aria-selected'), 'true')
     assert.equal(labels().length, 2)
     assert.match(labels()[0]!, /人类第一问/)
     assert.match(labels()[1]!, /Context compacted/)
@@ -522,7 +522,7 @@ describe("conversation-outline", () => {
     await act(async () => {
       toggleBtns[2]!.click()
     })
-    assert.equal(toggleBtns[2]?.getAttribute('aria-pressed'), 'true')
+    assert.equal(toggleBtns[2]?.getAttribute('aria-selected'), 'true')
     assert.equal(labels().length, 5)
     assert.ok(labels().some((t) => t.includes('subagent：执行巡检')))
     assert.ok(labels().some((t) => t.includes('后台代理触发输入')))

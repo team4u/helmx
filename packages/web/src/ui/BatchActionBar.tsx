@@ -71,7 +71,6 @@ export function BatchActionBar({
           <Button
             variant="danger"
             size="sm"
-            className="btn-danger-sm"
             pending={deleting}
             disabled={selectedCount === 0 || busy}
             onClick={onRequestDelete}

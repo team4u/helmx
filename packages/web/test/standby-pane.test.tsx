@@ -422,7 +422,9 @@ describe('standby-pane UX', () => {
     await flushMacrotask(0)
     const popover = document.querySelector<HTMLElement>('.agent-standby-profile-popover')!
     assert.ok(popover !== null)
-    const searchInput = popover.querySelector<HTMLInputElement>('input')!
+    const searchBox = popover.querySelector<HTMLElement>('.search-box.search-box-sm.composer-model-search-input')
+    assert.ok(searchBox !== null, '6+ profiles render SDK SearchBox(size="sm")')
+    const searchInput = searchBox.querySelector<HTMLInputElement>('input')!
     assert.ok(searchInput !== null, '6+ profiles show search box')
     await waitForCondition(() => document.activeElement === searchInput)
     assert.ok(document.activeElement === searchInput, 'desktop non-touch focuses search box on open')
@@ -592,8 +594,8 @@ describe('standby-pane UX', () => {
     }
     window.addEventListener(HELMX_SHORTCUT_EVENT, onShortcut)
     try {
-      const allBtn = strip.querySelector<HTMLButtonElement>('button.agent-standby-shortcuts-all')!
-      assert.ok(allBtn !== null)
+      const allBtn = strip.querySelector<HTMLButtonElement>('button.btn.btn-inline.agent-standby-shortcuts-all')!
+      assert.ok(allBtn !== null, 'All shortcuts control uses SDK Button(variant="inline")')
       assert.match(allBtn.textContent ?? '', /All shortcuts/)
       await act(async () => {
         allBtn.click()

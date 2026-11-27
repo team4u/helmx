@@ -984,10 +984,12 @@ test('ConversationOverview batch mode: card click toggles selection, helmx roots
     })
     const batchBar = mount.container.querySelector('.overview-batch-bar')
     assert.ok(batchBar !== null, 'entering batch mode renders the batch bar')
-    const scrollContainer = mount.container.querySelector('.overview-scroll')
-    const batchWrap = mount.container.querySelector('.overview-scroll > .overview-batch-bar-wrap')
-    const stage = mount.container.querySelector('.overview-scroll > .overview-sections, .overview-scroll > .overview-grid')
-    assert.ok(scrollContainer !== null && batchWrap !== null && stage !== null, 'batch bar and card stage share the same scroll container')
+    const scrollContainer = mount.container.querySelector('.screen-host-body[data-screen-host="true"]')
+    const screenContainer = scrollContainer?.querySelector('.screen-container') ?? null
+    const batchWrap = screenContainer?.querySelector(':scope > .overview-batch-bar-wrap') ?? null
+    const stage = screenContainer?.querySelector(':scope > .overview-sections, :scope > .overview-grid') ?? null
+    assert.ok(scrollContainer !== null && screenContainer !== null && batchWrap !== null && stage !== null, 'batch bar and card stage share the unified Screen scroll container')
+    assert.ok(mount.container.querySelector('.overview-scroll') === null, 'retired double-scroll .overview-scroll wrapper is gone')
     assert.ok(batchBar.parentElement === batchWrap, 'batch bar sits inside .overview-batch-bar-wrap for aligned outer gutters')
 
     const cards = [...mount.container.querySelectorAll<HTMLElement>('.overview-card')]
@@ -1183,7 +1185,13 @@ test('ConversationOverview search box narrows by title/summary and rides the q r
   const store = overviewScenarioStore()
   const mount = await mountOverview(store)
   try {
-    const input = mount.container.querySelector<HTMLInputElement>('.overview-search-box input')
+    assert.ok(mount.container.querySelector('.primary-center-topbar') === null, 'uses unified <Screen topbar> instead of retired .primary-center-topbar')
+    assert.ok(mount.container.querySelector('.pane-topbar .pane-actions .overview-newtopic-btn.btn-primary.btn-sm') !== null, 'New topic button is primary sm in topbar actions')
+    assert.ok(mount.container.querySelector('.screen-toolbar-bar .screen-toolbar.overview-toolbar .helmx-tabs-segmented.helmx-tabs-sm') !== null, 'bucket filter uses sm SegmentedControl inside unified ScreenToolbar')
+    assert.ok(mount.container.querySelector('.screen-toolbar-bar .overview-filter-select.helmx-select-sm') !== null, 'filter selects use sm tier')
+    const searchBox = mount.container.querySelector('.screen-toolbar-bar .screen-toolbar-actions .search-box-toolbar.search-box-sm.overview-search-box')
+    assert.ok(searchBox !== null, 'search box uses toolbar sm variant on the right side of ScreenToolbar')
+    const input = searchBox.querySelector<HTMLInputElement>('input')
     assert.ok(input !== null, 'the toolbar renders the search input')
     assert.equal(input.getAttribute('aria-label'), 'Search overview by title or summary')
     assert.equal(mount.container.querySelectorAll('.overview-card').length, 3)
@@ -1205,7 +1213,7 @@ test('ConversationOverview search box narrows by title/summary and rides the q r
       { kind: 'overview', params: { q: '调研' } },
       'the query persists into the q route param after debounce',
     )
-    const clear = mount.container.querySelector<HTMLButtonElement>('.overview-search-clear')
+    const clear = mount.container.querySelector<HTMLButtonElement>('.overview-search-box .search-box-clear')
     assert.ok(clear !== null, 'a non-empty query renders the clear button')
     await act(async () => {
       clear.click()
@@ -1827,7 +1835,7 @@ test('ConversationOverview section collapse hides cards, excludes them from batc
       'true',
     )
 
-    const clearBtn = mount.container.querySelector<HTMLButtonElement>('.overview-search-clear')
+    const clearBtn = mount.container.querySelector<HTMLButtonElement>('.overview-search-box .search-box-clear')
     await act(async () => {
       clearBtn?.click()
     })

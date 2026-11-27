@@ -3,45 +3,26 @@
  * 纵向分节可折叠，活跃卡饱满展示态势与后代芯片，安静卡降权收拢后代以消除
  * 网格参差；移动端筛选折行、网格单列化。 */
 
-/* 工具栏统一 10px 单一间距节奏（组间=组内）；筛选下拉与搜索框收敛至 28px 高，
- * 与分段器（28px）同量级，宽度由内容决定（104px 下限兜住占位文案 + chevron），
- * 不再用 132px 死宽度撑出空白带。 */
+/* 工具栏统一走 <ScreenToolbar> + 28px (sm) 尺码原语：左侧分段器与筛选下拉，
+ * 右侧 .screen-toolbar-actions 承接 SearchBox(variant="toolbar", size="sm") 与批量开关。 */
 .overview-toolbar {
-  flex-wrap: wrap;
-  gap: 10px;
+  gap: 8px 10px;
 }
 
 .overview-filter-selects {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   min-width: 0;
   flex-wrap: wrap;
-  /* Why 伸展吃满剩余宽度：搜索框 flex-basis(180px) 不参与本容器固有尺寸计算
-   * （按内容贡献约 176px），按内容定宽会比单行需求恒窄 4px，把行尾的分组
-   * 下拉挤到第二行（与视口宽度无关）；伸展后单行必然放下全部筛选。 */
-  flex: 1 1 auto;
 }
 
 .overview-filter-select {
   min-width: 104px;
 }
 
-.overview-filter-select .helmx-select-trigger {
-  height: 28px;
-}
-
-.overview-scroll {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-}
-
 .overview-sections {
   flex: 1 0 auto;
-  padding: 16px 20px;
   display: flex;
   flex-direction: column;
   gap: 18px;
@@ -165,7 +146,6 @@
 
 .overview-grid {
   flex: 1 0 auto;
-  padding: 16px 20px;
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(min(100%, 360px), 1fr));
   gap: 12px;
@@ -565,21 +545,6 @@
   background: var(--bg);
 }
 
-/* 工具栏搜索框：复用通用 .search-box 原语，仅收敛到筛选控件与分段器同量级
- * （28px 高、12.5px 字），宽度弹性限幅不挤占分段器。 */
-.overview-search-box {
-  height: 28px;
-  padding: 0 8px;
-  gap: 6px;
-  flex: 0 1 180px;
-  min-width: 120px;
-  font-size: 12.5px;
-}
-
-.overview-search-clear {
-  flex-shrink: 0;
-}
-
 .overview-empty {
   grid-column: 1 / -1;
   padding: 42px 16px;
@@ -597,42 +562,25 @@
   font-size: inherit;
 }
 
-/* 批量操作条：置入 .overview-scroll 同域吸顶容器，与下方 .overview-grid
- * 共享滚动宽度（含滚动条槽）及左右 20px（窄屏 12px）外边距，上下对称
- * 保持 12px（窄屏 10px）与网格行距一致；壳结构复用公共 .batch-bar 原语。 */
+/* 批量操作条：置入 .screen-host-body > .screen-container 同域吸顶容器，与下方
+ * .overview-sections / .overview-grid 共享滚动宽度与页面留白，壳结构复用公共 .batch-bar 原语。 */
 .overview-batch-bar-wrap {
   position: sticky;
   top: 0;
   z-index: var(--z-sticky);
-  padding: 12px 20px;
+  margin: -8px 0 0;
+  padding: 8px 0;
   background: var(--bg);
   flex-shrink: 0;
 }
 
-.overview-batch-bar-wrap + .overview-grid {
-  padding-top: 0;
-}
-
-.overview-batch-bar-wrap + .overview-sections {
-  padding-top: 0;
-}
-
 .overview-batch-bar {
-  /* 壳结构/中性底色复用公共 .batch-bar 原语；总览外间距由 .overview-batch-bar-wrap 统一承载 */
+  /* 壳结构/中性底色复用公共 .batch-bar 原语；吸顶留白由 .overview-batch-bar-wrap 统一承载 */
 }
 
-/* 工具栏右缘的批量管理开关（勾选方块图标，激活态 accent）。 */
+/* 工具栏右缘的批量管理开关（激活态走 SDK IconButton active/.btn-icon-sm.is-active）。 */
 .overview-batch-toggle {
-  margin-left: auto;
   flex-shrink: 0;
-}
-
-.overview-batch-toggle.is-active {
-  color: var(--accent);
-}
-
-.overview-automated-banner-wrap {
-  padding: 12px 20px 0;
 }
 
 .overview-automated-banner {
@@ -646,46 +594,72 @@
   flex-shrink: 0;
 }
 
-@media (max-width: 680px) {
-  .overview-automated-banner-wrap {
-    padding: 10px 12px 0;
+@container (max-width: 680px) {
+  .overview-toolbar {
+    gap: 8px;
+  }
+
+  .overview-filter-selects {
+    flex: 1 1 100%;
+  }
+
+  .overview-filter-select {
+    flex: 1 1 104px;
+    min-width: 104px;
+  }
+
+  .overview-toolbar .screen-toolbar-actions {
+    flex-wrap: nowrap;
+  }
+
+  .overview-toolbar .overview-search-box {
+    flex: 1 1 0;
+    width: auto;
+    min-width: 0;
+    max-width: none;
   }
 
   .overview-sections {
-    padding: 12px;
     gap: 14px;
   }
 
   .overview-grid {
     grid-template-columns: minmax(0, 1fr);
-    padding: 12px;
     gap: 10px;
   }
+}
 
-  .overview-section .overview-grid {
-    padding: 0;
-  }
-
+@media (max-width: 680px) {
   .overview-toolbar {
-    padding: 10px 12px;
     gap: 8px;
   }
 
-  .overview-filter-select {
-    flex: 1;
-    min-width: 104px;
-  }
-
-  .overview-search-box {
+  .overview-filter-selects {
     flex: 1 1 100%;
   }
 
-  .overview-batch-bar-wrap {
-    padding: 10px 12px;
+  .overview-filter-select {
+    flex: 1 1 104px;
+    min-width: 104px;
   }
 
-  .overview-batch-bar-wrap + .overview-grid,
-  .overview-batch-bar-wrap + .overview-sections {
-    padding-top: 0;
+  .overview-toolbar .screen-toolbar-actions {
+    flex-wrap: nowrap;
+  }
+
+  .overview-toolbar .overview-search-box {
+    flex: 1 1 0;
+    width: auto;
+    min-width: 0;
+    max-width: none;
+  }
+
+  .overview-sections {
+    gap: 14px;
+  }
+
+  .overview-grid {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 10px;
   }
 }

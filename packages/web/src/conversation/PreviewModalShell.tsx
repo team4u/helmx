@@ -108,7 +108,11 @@ export function PreviewModalShell({
                   </Button>
                 ) : null}
                 {copyText !== undefined && copyText !== null ? (
-                  <CopyButton text={copyText} label={isMobile ? undefined : t('conv.artifact.copy')} className="btn btn-sm" />
+                  <CopyButton
+                    text={copyText}
+                    label={isMobile ? undefined : t('conv.artifact.copy')}
+                    className={isMobile ? 'btn btn-secondary btn-icon-sm' : 'btn btn-secondary btn-sm'}
+                  />
                 ) : null}
                 {isMobile ? (
                   <IconButton

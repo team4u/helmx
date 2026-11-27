@@ -28,7 +28,6 @@ button, a, input, select, textarea { touch-action: manipulation; }
   /* 移动端顶栏左侧让位汉堡菜单后标题在更窄的剩余空间里垂直居中 */
   .conversation-topbar .pane-title { line-height: normal; align-self: center; }
   .conversation-topbar .pane-action-label,
-  .primary-center-topbar .pane-action-label,
   .pane-topbar .pane-action-label,
   .pane-action-label { display: none; }
   /* 手机仍保留远端身份：副标题切紧凑模式（仅 @node，本机不渲染），title 保留完整坐标 */
@@ -303,13 +302,11 @@ button, a, input, select, textarea { touch-action: manipulation; }
      叠加让位宽度，无插件快捷入口时顶栏与壳层顶部卡片左让位收敛至 48px。 */
   .version-banner,
   .helmx-panes > .helmx-pane > .pane-topbar,
-  .helmx-primary-pane .helmx-pane > .pane-topbar,
-  .primary-center-topbar {
+  .helmx-primary-pane .helmx-pane > .pane-topbar {
     padding-left: max(48px, calc(env(safe-area-inset-left) + 44px));
   }
   .helmx-panes > .helmx-pane:first-child > .pane-topbar,
-  .helmx-primary-pane .helmx-pane > .pane-topbar,
-  .primary-center-topbar {
+  .helmx-primary-pane .helmx-pane > .pane-topbar {
     min-height: calc(46px + env(safe-area-inset-top));
     height: calc(46px + env(safe-area-inset-top));
     padding-top: env(safe-area-inset-top);
@@ -325,8 +322,7 @@ button, a, input, select, textarea { touch-action: manipulation; }
   }
   .helmx-shell.mq-quick-on .version-banner,
   .helmx-shell.mq-quick-on .helmx-panes > .helmx-pane > .pane-topbar,
-  .helmx-shell.mq-quick-on .helmx-primary-pane .helmx-pane > .pane-topbar,
-  .helmx-shell.mq-quick-on .primary-center-topbar {
+  .helmx-shell.mq-quick-on .helmx-primary-pane .helmx-pane > .pane-topbar {
     padding-left: max(88px, calc(env(safe-area-inset-left) + 84px));
   }
   .helmx-shell.mq-quick-on .helmx-main-stage > .helmx-card.hub-update-card {

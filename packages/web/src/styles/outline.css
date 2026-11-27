@@ -43,19 +43,10 @@
 .conversation-outline-search {
   flex: 1;
   min-width: 0;
-  height: 28px;
-  padding: 0 8px;
 }
 
 .conversation-outline-mode {
   flex-shrink: 0;
-  height: 28px;
-}
-
-.conversation-outline-mode .segmented-control-btn {
-  height: 24px;
-  padding: 0 7px;
-  font-size: 11.5px;
 }
 
 .conversation-outline-earlier-bar {
@@ -101,7 +92,7 @@
 
 .conversation-outline-item {
   width: 100%;
-  min-height: 28px;
+  min-height: var(--control-h-sm);
   padding: 4px 8px;
   border: none;
   border-radius: var(--radius-xs, 5px);

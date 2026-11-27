@@ -12,6 +12,7 @@ import {
   Popover,
   PopoverContent,
   PopoverTrigger,
+  SearchBox,
   usePanelShortcut,
 } from '@helmx/plugin-client'
 import { useWebLocale } from '../i18n/use-web-locale.js'
@@ -209,18 +210,17 @@ export function StandbyProfilePicker({
           >
             {showSearch ? (
               <div className="composer-model-search-bar">
-                <div className="search-box composer-model-search-input">
-                  <HelmxIcon name="search" size={13} />
-                  <input
-                    ref={searchInputRef}
-                    type="text"
-                    className="input input-sm"
-                    aria-label={t('composer.standby.searchProfilesAria')}
-                    placeholder={t('composer.standby.searchProfilesPlaceholder')}
-                    value={query}
-                    onChange={(event) => setQuery(event.target.value)}
-                  />
-                </div>
+                <SearchBox
+                  size="sm"
+                  clearable={false}
+                  clearOnEscape={false}
+                  className="search-box composer-model-search-input"
+                  inputRef={searchInputRef}
+                  ariaLabel={t('composer.standby.searchProfilesAria')}
+                  placeholder={t('composer.standby.searchProfilesPlaceholder')}
+                  value={query}
+                  onChange={setQuery}
+                />
               </div>
             ) : null}
             <div className="popover-header">

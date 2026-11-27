@@ -194,11 +194,6 @@
   max-width: 240px;
 }
 
-.skill-file-select .helmx-select-trigger {
-  height: 28px;
-  font-size: 12.5px;
-}
-
 .skill-reader-file-label {
   display: inline-flex;
   align-items: center;
@@ -219,13 +214,6 @@
   align-items: center;
   gap: 8px;
   flex-shrink: 0;
-}
-
-.skill-reader-mode .segmented-control-btn {
-  height: 24px;
-  padding: 0 10px;
-  font-size: 12px;
-  gap: 4px;
 }
 
 .skill-reader-loading {

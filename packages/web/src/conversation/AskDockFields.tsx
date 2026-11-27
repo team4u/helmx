@@ -457,6 +457,8 @@ function AskModelField({
     : placeholder
   return (
     <ModelPickerControl
+      variant="field"
+      size="md"
       buttonId={fieldId}
       buttonAriaLabel={`${fieldLabel}: ${displayTitle}`}
       buttonTitle={displayTitle}
