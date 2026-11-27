@@ -595,4 +595,3 @@ export class EventHub {
     return assembleHelmxEvent(type, payload, (t) => this.redact(t))
   }
 }
-
