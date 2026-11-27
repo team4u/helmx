@@ -983,6 +983,15 @@ test('integration: builtin:tiers registers no /model command or menu slot, leave
       ),
       true,
     )
+    assert.equal(
+      tiersUi.some(
+        (u) =>
+          u.surface === 'plugin.slot' &&
+          (u.spec as { id?: string; target?: string }).target === 'builtin:composer/status' &&
+          (u.spec as { id?: string; target?: string }).id === 'tiers-orchestrator-status',
+      ),
+      true,
+    )
     assert.equal(tiersUi.some((u) => u.surface === 'tool.view'), true)
     const actionIds = kernel.plugins
       .listActions()

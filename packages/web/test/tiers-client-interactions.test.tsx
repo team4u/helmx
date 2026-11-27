@@ -15,12 +15,13 @@ import { waitFor } from '@helmx/test-kit'
 import * as React from 'react'
 import { act } from 'react'
 import type {
+  ComposerStatusSlotProps,
   ComposerToolbarSlotProps,
   ConversationSummary,
   PluginClientContext as PluginClientContextType,
   ToolViewProps,
 } from '@helmx/protocol'
-import { COMPOSER_TOOLBAR_SLOT } from '@helmx/protocol'
+import { COMPOSER_STATUS_SLOT, COMPOSER_TOOLBAR_SLOT } from '@helmx/protocol'
 import type { PluginSessionDocKey, PluginSessionDocState } from '@helmx/plugin-client'
 import {
   TIERS_BORROW_SESSION_DOC,
@@ -64,6 +65,7 @@ let rawTiersModule: Record<string, unknown>
 let TiersManagerScreen: (props: Record<string, unknown>) => React.ReactElement
 let TiersSettingsPanel: () => React.ReactElement
 let BorrowToolbarPill: (props: ComposerToolbarSlotProps) => React.ReactElement | null
+let OrchestratorStatusBadge: (props: ComposerStatusSlotProps) => React.ReactElement | null
 let SwitchModelToolRow: (props: ToolViewProps) => React.ReactElement
 describe("tiers-client-interactions", () => {
 
@@ -75,6 +77,7 @@ describe("tiers-client-interactions", () => {
     TiersManagerScreen = mod['TiersManagerScreen'] as (props: Record<string, unknown>) => React.ReactElement
     TiersSettingsPanel = mod['TiersSettingsPanel'] as () => React.ReactElement
     BorrowToolbarPill = mod['BorrowToolbarPill'] as (props: ComposerToolbarSlotProps) => React.ReactElement | null
+    OrchestratorStatusBadge = mod['OrchestratorStatusBadge'] as (props: ComposerStatusSlotProps) => React.ReactElement | null
     SwitchModelToolRow = mod['SwitchModelToolRow'] as (props: ToolViewProps) => React.ReactElement
   }, { timeout: 60_000 })
 
@@ -122,7 +125,7 @@ describe("tiers-client-interactions", () => {
     notifications: Array<{ message: string; tone: string }>
   }
 
-  function makeSpyCtx(): SpyCtx {
+  function makeSpyCtx(locale: 'en' | 'zh-CN' = 'en'): SpyCtx {
     const actionCalls: Array<{ actionId: string; input: unknown }> = []
     const openedScreens: string[] = []
     const notifications: Array<{ message: string; tone: string }> = []
@@ -148,8 +151,8 @@ describe("tiers-client-interactions", () => {
       getPluginDoc: async () => undefined,
       getPluginSessionDoc: async () => undefined,
       theme: 'dark',
-      locale: 'en',
-      translate: (text) => resolveLocalizedText(text, 'en'),
+      locale,
+      translate: (text) => resolveLocalizedText(text, locale),
     }
     return Object.assign(base, { actionCalls, openedScreens, notifications })
   }
@@ -713,6 +716,7 @@ describe("tiers-client-interactions", () => {
     const exportNames = Object.keys(rawTiersModule).filter((k) => k !== '__helmxClientCss').sort()
     assert.deepEqual(exportNames, [
       'BorrowToolbarPill',
+      'OrchestratorStatusBadge',
       'OrchestratorToolRow',
       'SwitchModelToolRow',
       'TiersManagerScreen',
@@ -725,6 +729,8 @@ describe("tiers-client-interactions", () => {
     const cssText = rawTiersModule['__helmxClientCss']
     assert.equal(typeof cssText, 'string')
     assert.match(cssText as string, /\.tiers-borrow-pill/)
+    assert.match(cssText as string, /\.tiers-orch-status-trigger/)
+    assert.match(cssText as string, /\.tiers-orch-popover/)
     assert.match(cssText as string, /\.tiers-trace-row/)
 
     for (const [key, entry] of Object.entries(TIERS_COPY)) {
@@ -1774,11 +1780,12 @@ describe("tiers-client-interactions", () => {
     }
   })
 
-  test('BorrowToolbarPill + OrchestratorToolRow: shows read-only phase pill, suppresses borrow mode on orchestrator conv, and renders transition trace rows', { timeout: 60_000 }, async () => {
+  test('OrchestratorStatusBadge + BorrowToolbarPill + OrchestratorToolRow: renders compact status-row indicator with detail popover, keeps toolbar free, suppresses on borrow/ineligible, and renders trace rows', { timeout: 60_000 }, async () => {
     const {
       parseTierOrchestratorSessionView,
       parseOrchestratorTransitionMeta,
-      formatOrchestratorPillModelLabel,
+      formatOrchestratorStepLabel,
+      formatOrchestratorActiveModelShort,
     } = await import('../../plugins/src/tiers/client/orchestrator-models.ts')
     assert.equal(parseTierOrchestratorSessionView(null), null)
     assert.equal(parseOrchestratorTransitionMeta({ tool: 'bogus' }), undefined)
@@ -1795,93 +1802,267 @@ describe("tiers-client-interactions", () => {
       })?.maxExecutionSteps,
       0,
     )
-    assert.equal(formatOrchestratorPillModelLabel('faux/workhorse', 'execution', 3, 0), 'workhorse (3)')
+    assert.equal(formatOrchestratorStepLabel('planning', 3, 10), '')
+    assert.equal(formatOrchestratorStepLabel('execution', 3, 10), '3/10')
+    assert.equal(formatOrchestratorStepLabel('execution', 3, 0), '3')
+    assert.equal(formatOrchestratorActiveModelShort('faux/workhorse'), 'workhorse')
+    assert.equal(formatOrchestratorActiveModelShort('tier/claude-auto'), 'tier/claude-auto')
 
     mountSharedPluginNamespaces({ realHooks: true })
     resetPluginClientCache()
+    seedPluginClientModule('builtin:tiers', 'BorrowToolbarPill.tsx', rawTiersModule)
+    seedPluginClientModule('builtin:tiers', 'OrchestratorStatusBadge.tsx', rawTiersModule)
+
     const OrchestratorToolRow = rawTiersModule['OrchestratorToolRow'] as (props: ToolViewProps) => React.ReactElement
-    const modeRegistry = createComposerModelPickerModeRegistry()
-    const orchConv = makeConv(77, { model: 'faux/workhorse', modelTier: 'tier/claude-auto', modelOverride: 'tier/claude-auto' })
-    const sessionHarness = createSessionDocHarness({
-      'builtin:tiers/orchestrator/77': {
-        value: {
-          tierId: 'claude-auto',
-          phase: 'execution',
-          activeModel: 'faux/workhorse',
-          plannerModel: 'faux/flagship',
-          executorModel: 'faux/workhorse',
-          executionStepCount: 3,
-          maxExecutionSteps: 10,
-          updatedAt: 1000,
-        },
-        hasValue: true,
-        deleted: false,
-        connected: true,
-      },
-    })
-    const ctx = makeSpyCtx()
-    try {
-      const orchIdleConv = makeConv(77, {
-        status: 'idle',
+    const ctxEn = makeSpyCtx('en')
+    const ctxZh = makeSpyCtx('zh-CN')
+    const orchTiers = [
+      ...TEST_TIERS,
+      {
+        id: 'claude-auto',
+        kind: 'orchestrator' as const,
         model: 'faux/flagship',
-        modelTier: 'tier/claude-auto',
-        modelOverride: 'tier/claude-auto',
-      })
-      const pillMount = await mountWithHost(
+        executorModel: 'faux/workhorse',
+        maxExecutionSteps: 10,
+        description: 'Dual-phase orchestrator',
+        available: true,
+        thinkingLevels: ['off', 'high', 'xhigh'],
+      },
+    ]
+
+    const tiersPluginSummary = {
+      id: 'builtin:tiers',
+      name: 'tiers',
+      version: '1.0.0',
+      locked: false,
+      enabled: true,
+      status: 'active' as const,
+      hooks: [],
+      actions: [],
+      tools: [],
+      clientHashes: {
+        'BorrowToolbarPill.tsx': 'seeded',
+        'OrchestratorStatusBadge.tsx': 'seeded',
+      },
+    }
+    const tiersSlotContributions = [
+      {
+        pluginId: 'builtin:tiers',
+        surface: 'plugin.slot' as const,
+        spec: {
+          id: 'tiers-orchestrator-status',
+          target: COMPOSER_STATUS_SLOT,
+          order: 5,
+          client: { module: 'OrchestratorStatusBadge.tsx', export: 'OrchestratorStatusBadge' },
+        },
+      },
+      {
+        pluginId: 'builtin:tiers',
+        surface: 'plugin.slot' as const,
+        spec: {
+          id: 'tiers-borrow-toolbar-pill',
+          target: COMPOSER_TOOLBAR_SLOT,
+          order: 15,
+          client: { module: 'BorrowToolbarPill.tsx', export: 'BorrowToolbarPill' },
+        },
+      },
+    ]
+
+    try {
+      // 1) Ineligible / non-orchestrator / standby mounts open ZERO sessionDoc subscriptions and render null
+      const ineligibleHarness = createSessionDocHarness()
+      const ineligibleMount = await mountWithHost(
         e(
           WithSessionDocOverride,
-          { harness: sessionHarness },
+          { harness: ineligibleHarness },
           e(
-            ComposerModelPickerModeContext.Provider,
-            { value: modeRegistry },
+            PluginClientContext.Provider,
+            { value: ctxEn },
             e(
-              PluginClientContext.Provider,
-              { value: ctx },
-              e(BorrowToolbarPill, { conversation: orchIdleConv }),
+              React.Fragment,
+              null,
+              e(OrchestratorStatusBadge, { conversation: makeConv(201, { model: 'faux/workhorse' }) }),
+              e(OrchestratorStatusBadge, {
+                conversation: makeConv(202, { parentConversationId: 1, modelTier: 'tier/claude-auto' }),
+              }),
+              e(OrchestratorStatusBadge, {
+                conversation: makeConv(203, { ownedBy: 'helmx', modelTier: 'tier/claude-auto' }),
+              }),
+              e(OrchestratorStatusBadge, { effectiveModel: 'tier/claude-auto', profileId: 'assistant' }),
             ),
           ),
         ),
+        { modelDefaults: { modelTiers: orchTiers } },
       )
       try {
-        const pill = pillMount.host.querySelector<HTMLElement>('.tiers-orchestrator-pill')
-        assert.ok(pill !== null, 'idle orchestrator tier conversation renders read-only phase pill when unarmed')
-        assert.equal(pill.getAttribute('data-tiers-orchestrator-phase'), 'execution')
-        assert.match(pill.textContent ?? '', /Executing:.*workhorse.*3\/10/)
-        assert.equal(modeRegistry.getModes().length, 1, 'idle orchestrator conversation still exposes tiers:one-turn borrow mode')
-        assert.equal(modeRegistry.getModes()[0]?.key, 'tiers:one-turn')
-        assert.equal(EMOJI_RE.test(pill.textContent ?? ''), false)
+        assert.equal(ineligibleMount.host.textContent, '')
+        assert.equal(
+          ineligibleHarness.subscribedKeys.length,
+          0,
+          'non-orchestrator, subagent, helmx-owned, and standby mounts must open zero sessionDoc subscriptions',
+        )
       } finally {
-        await pillMount.unmount()
+        await ineligibleMount.unmount()
       }
 
-      const busyOrchConv = makeConv(77, {
-        status: 'working',
+      // 2) Full Composer integration: toolbar stays free of orchestrator pill while status row renders trigger + popover
+      const orchIdleConv = makeConv(77, {
+        status: 'idle',
         model: 'faux/workhorse',
         modelTier: 'tier/claude-auto',
         modelOverride: 'tier/claude-auto',
       })
-      const busyPillMount = await mountWithHost(
-        e(
-          WithSessionDocOverride,
-          { harness: sessionHarness },
-          e(
-            ComposerModelPickerModeContext.Provider,
-            { value: modeRegistry },
+      const execHarness = createSessionDocHarness({
+        'builtin:tiers/orchestrator/77': {
+          value: {
+            tierId: 'claude-auto',
+            phase: 'execution',
+            activeModel: 'faux/workhorse',
+            plannerModel: 'faux/flagship',
+            executorModel: 'faux/workhorse',
+            executionStepCount: 3,
+            maxExecutionSteps: 10,
+            updatedAt: 1000,
+          },
+          hasValue: true,
+          deleted: false,
+          connected: true,
+        },
+      })
+      const composerHost = document.createElement('div')
+      document.body.appendChild(composerHost)
+      const composerRoot = createRoot(composerHost)
+      const renderComposer = async (convToRender: ConversationSummary, harness = execHarness) => {
+        const storeForRender = makeTestStore({
+          conversations: [convToRender],
+          models: TEST_MODELS,
+          modelDefaults: { modelTiers: orchTiers },
+          plugins: [tiersPluginSummary],
+          uiContributions: tiersSlotContributions,
+        })
+        await act(async () => {
+          composerRoot.render(
             e(
-              PluginClientContext.Provider,
-              { value: ctx },
-              e(BorrowToolbarPill, { conversation: busyOrchConv }),
+              HostStoreProviders,
+              { value: storeForRender },
+              e(
+                WithSessionDocOverride,
+                { harness },
+                e(Composer, { conversation: convToRender, prefill: null }),
+              ),
             ),
-          ),
-        ),
-      )
+          )
+        })
+      }
       try {
-        assert.equal(modeRegistry.getModes().length, 0, 'busy orchestrator conversation suppresses tiers:one-turn mode')
+        await renderComposer(orchIdleConv, execHarness)
+        const toolbarSlot = composerHost.querySelector('.composer-toolbar-slot')
+        assert.ok(toolbarSlot !== null)
+        assert.ok(toolbarSlot.querySelector('.tiers-borrow-pill') === null, 'idle orchestrator without borrow leaves toolbar empty')
+        assert.ok(toolbarSlot.querySelector('.tiers-orchestrator-pill') === null, 'orchestrator pill must no longer render in toolbar')
+        assert.equal(toolbarSlot.querySelectorAll('button').length, 0)
+
+        const trigger = composerHost.querySelector<HTMLButtonElement>('.composer-status-row .tiers-orch-status-trigger')
+        assert.ok(trigger !== null, 'status row renders OrchestratorStatusBadge trigger')
+        assert.equal(trigger.getAttribute('data-tiers-orchestrator-phase'), 'execution')
+        assert.equal(trigger.getAttribute('data-tiers-orchestrator-tier'), 'claude-auto')
+        assert.match(trigger.textContent ?? '', /Exec.*3\/10.*workhorse/)
+        assert.equal(EMOJI_RE.test(trigger.textContent ?? ''), false)
+
+        // Idle orchestrator conversation still exposes tiers:one-turn mode inside ModelPicker
+        const modelBtn = composerHost.querySelector<HTMLButtonElement>('button.composer-model-button')
+        assert.ok(modelBtn !== null)
+        await act(async () => {
+          modelBtn.click()
+        })
+        assert.ok(document.body.querySelector('.composer-model-mode-bar') !== null, 'idle orchestrator still exposes tiers:one-turn mode tab')
+        await act(async () => {
+          modelBtn.click()
+        })
+
+        // Click trigger -> opens Radix Popover with full tier & Planner/Executor details
+        await act(async () => {
+          trigger.click()
+        })
+        const popover = document.body.querySelector<HTMLElement>('.tiers-orch-popover')
+        assert.ok(popover !== null, 'clicking status badge opens detail popover')
+        const popText = popover.textContent ?? ''
+        assert.match(popText, /tier\/claude-auto/)
+        assert.match(popText, /Execution/)
+        assert.match(popText, /faux\/flagship/)
+        assert.match(popText, /faux\/workhorse/)
+        assert.match(popText, /3 \/ 10/)
+        const activeRow = popover.querySelector<HTMLElement>('.tiers-orch-popover-row[data-active="true"]')
+        assert.ok(activeRow !== null && (activeRow.textContent ?? '').includes('faux/workhorse'))
+        assert.equal(EMOJI_RE.test(popText), false)
+
+        const closeBtn = popover.querySelector<HTMLButtonElement>('button[aria-label="Close"]')
+        assert.ok(closeBtn !== null)
+        await act(async () => {
+          closeBtn.click()
+        })
+        assert.ok(document.body.querySelector('.tiers-orch-popover') === null)
+
+        // Busy orchestrator conversation: suppresses tiers:one-turn mode while keeping status badge visible
+        const busyOrchConv = makeConv(77, {
+          status: 'working',
+          model: 'faux/workhorse',
+          modelTier: 'tier/claude-auto',
+          modelOverride: 'tier/claude-auto',
+        })
+        await renderComposer(busyOrchConv, execHarness)
+        await act(async () => {
+          composerHost.querySelector<HTMLButtonElement>('button.composer-model-button')?.click()
+        })
+        assert.ok(document.body.querySelector('.composer-model-mode-bar') === null, 'busy orchestrator suppresses tiers:one-turn mode')
+        await act(async () => {
+          composerHost.querySelector<HTMLButtonElement>('button.composer-model-button')?.click()
+        })
+        assert.ok(
+          composerHost.querySelector('.composer-status-row .tiers-orch-status-trigger') !== null,
+          'status row badge stays visible while working',
+        )
+
+        // Armed one-turn borrow suppresses OrchestratorStatusBadge and renders BorrowToolbarPill in toolbar
+        const armedHarness = createSessionDocHarness({
+          'builtin:tiers/orchestrator/77': execHarness.getSessionDocState({
+            pluginId: 'builtin:tiers',
+            docName: 'orchestrator',
+            conversationId: 77,
+          }),
+          'builtin:tiers/borrow/77': {
+            value: {
+              phase: 'armed',
+              requestedRef: 'faux/fast',
+              targetModel: 'faux/fast',
+              targetConcreteModel: 'faux/fast',
+              targetLabel: 'fast',
+              restoreAfterTurn: true,
+              updatedAt: 1001,
+            },
+            hasValue: true,
+            deleted: false,
+            connected: true,
+          },
+        })
+        await renderComposer(orchIdleConv, armedHarness)
+        assert.ok(
+          composerHost.querySelector('.composer-toolbar-slot .tiers-borrow-pill[data-tiers-borrow-phase="armed"]') !== null,
+          'armed borrow pill renders in toolbar slot',
+        )
+        assert.ok(
+          composerHost.querySelector('.composer-status-row .tiers-orch-status-trigger') === null,
+          'armed borrow suppresses orchestrator status badge',
+        )
       } finally {
-        await busyPillMount.unmount()
+        await act(async () => {
+          composerRoot.unmount()
+        })
+        composerHost.remove()
       }
 
-      const armedBorrowHarness = createSessionDocHarness({
+      // 3) Planning phase, zh-CN locale, unlimited steps, and missing-doc fallback via hostModels
+      const planUnlimitedHarness = createSessionDocHarness({
         'builtin:tiers/orchestrator/77': {
           value: {
             tierId: 'claude-auto',
@@ -1890,59 +2071,154 @@ describe("tiers-client-interactions", () => {
             plannerModel: 'faux/flagship',
             executorModel: 'faux/workhorse',
             executionStepCount: 0,
-            maxExecutionSteps: 30,
+            maxExecutionSteps: 0,
             updatedAt: 1000,
           },
           hasValue: true,
           deleted: false,
           connected: true,
         },
-        'builtin:tiers/borrow/77': {
+      })
+      const zhMount = await mountWithHost(
+        e(
+          WithSessionDocOverride,
+          { harness: planUnlimitedHarness },
+          e(
+            PluginClientContext.Provider,
+            { value: ctxZh },
+            e(OrchestratorStatusBadge, {
+              conversation: makeConv(77, {
+                model: 'faux/flagship',
+                modelTier: 'tier/claude-auto',
+                modelOverride: 'tier/claude-auto',
+              }),
+            }),
+          ),
+        ),
+        { modelDefaults: { modelTiers: orchTiers } },
+      )
+      try {
+        const trigger = zhMount.host.querySelector<HTMLButtonElement>('.tiers-orch-status-trigger')
+        assert.ok(trigger !== null)
+        assert.equal(trigger.getAttribute('data-tiers-orchestrator-phase'), 'planning')
+        assert.match(trigger.textContent ?? '', /^规划·flagship$/)
+        assert.equal(EMOJI_RE.test(trigger.textContent ?? ''), false)
+
+        await act(async () => {
+          trigger.click()
+        })
+        const popover = document.body.querySelector<HTMLElement>('.tiers-orch-popover')
+        assert.ok(popover !== null)
+        const popText = popover.textContent ?? ''
+        assert.match(popText, /规划阶段/)
+        assert.match(popText, /规划模型/)
+        assert.match(popText, /执行模型/)
+        assert.match(popText, /0（不限）/)
+        assert.match(popText, /当前/)
+        await act(async () => {
+          popover.querySelector<HTMLButtonElement>('button[aria-label="关闭"]')?.click()
+        })
+      } finally {
+        await zhMount.unmount()
+      }
+
+      // Unlimited steps during execution (zh-CN + en)
+      const execUnlimitedHarness = createSessionDocHarness({
+        'builtin:tiers/orchestrator/78': {
           value: {
-            phase: 'armed',
-            requestedRef: 'faux/workhorse',
-            targetModel: 'faux/workhorse',
-            targetConcreteModel: 'faux/workhorse',
-            targetLabel: 'workhorse',
-            restoreAfterTurn: true,
-            updatedAt: 1001,
+            tierId: 'claude-auto',
+            phase: 'execution',
+            activeModel: 'faux/workhorse',
+            plannerModel: 'faux/flagship',
+            executorModel: 'faux/workhorse',
+            executionStepCount: 4,
+            maxExecutionSteps: 0,
+            updatedAt: 1000,
           },
           hasValue: true,
           deleted: false,
           connected: true,
         },
       })
-      const armedPillMount = await mountWithHost(
+      const zhExecMount = await mountWithHost(
         e(
           WithSessionDocOverride,
-          { harness: armedBorrowHarness },
+          { harness: execUnlimitedHarness },
           e(
-            ComposerModelPickerModeContext.Provider,
-            { value: modeRegistry },
-            e(
-              PluginClientContext.Provider,
-              { value: ctx },
-              e(BorrowToolbarPill, { conversation: orchIdleConv }),
-            ),
+            PluginClientContext.Provider,
+            { value: ctxZh },
+            e(OrchestratorStatusBadge, {
+              conversation: makeConv(78, {
+                model: 'faux/workhorse',
+                modelTier: 'tier/claude-auto',
+                modelOverride: 'tier/claude-auto',
+              }),
+            }),
           ),
         ),
+        { modelDefaults: { modelTiers: orchTiers } },
       )
       try {
-        const armedBorrowPill = armedPillMount.host.querySelector<HTMLElement>(
-          '.tiers-borrow-pill[data-tiers-borrow-phase="armed"]',
-        )
-        assert.ok(armedBorrowPill !== null, 'armed one-turn borrow pill renders instead of orchestrator pill')
-        assert.ok(armedPillMount.host.querySelector('.tiers-orchestrator-pill') === null)
-        assert.equal(modeRegistry.getModes().length, 1)
-        assert.equal(modeRegistry.getModes()[0]?.key, 'tiers:one-turn')
+        const trigger = zhExecMount.host.querySelector<HTMLButtonElement>('.tiers-orch-status-trigger')
+        assert.ok(trigger !== null)
+        assert.match(trigger.textContent ?? '', /执行4·workhorse/)
+        await act(async () => {
+          trigger.click()
+        })
+        const popover = document.body.querySelector<HTMLElement>('.tiers-orch-popover')
+        assert.ok(popover !== null)
+        assert.match(popover.textContent ?? '', /4（不限）/)
+        await act(async () => {
+          popover.querySelector<HTMLButtonElement>('button[aria-label="关闭"]')?.click()
+        })
       } finally {
-        await armedPillMount.unmount()
+        await zhExecMount.unmount()
       }
 
+      // Missing orchestrator sessionDoc falls back to hostModels.modelTiers for planner & executor
+      const emptyOrchHarness = createSessionDocHarness()
+      const fallbackMount = await mountWithHost(
+        e(
+          WithSessionDocOverride,
+          { harness: emptyOrchHarness },
+          e(
+            PluginClientContext.Provider,
+            { value: ctxEn },
+            e(OrchestratorStatusBadge, {
+              conversation: makeConv(79, {
+                model: 'faux/flagship',
+                modelTier: 'tier/claude-auto',
+                modelOverride: 'tier/claude-auto',
+              }),
+            }),
+          ),
+        ),
+        { modelDefaults: { modelTiers: orchTiers } },
+      )
+      try {
+        const trigger = fallbackMount.host.querySelector<HTMLButtonElement>('.tiers-orch-status-trigger')
+        assert.ok(trigger !== null)
+        assert.match(trigger.textContent ?? '', /Plan·flagship/)
+        await act(async () => {
+          trigger.click()
+        })
+        const popover = document.body.querySelector<HTMLElement>('.tiers-orch-popover')
+        assert.ok(popover !== null)
+        assert.match(popover.textContent ?? '', /faux\/flagship/)
+        assert.match(popover.textContent ?? '', /faux\/workhorse/)
+        assert.match(popover.textContent ?? '', /0 \/ 10/)
+        await act(async () => {
+          popover.querySelector<HTMLButtonElement>('button[aria-label="Close"]')?.click()
+        })
+      } finally {
+        await fallbackMount.unmount()
+      }
+
+      // 4) OrchestratorToolRow timeline rows
       const rowMount = await mountWithHost(
         e(
           PluginClientContext.Provider,
-          { value: ctx },
+          { value: ctxEn },
           e(
             React.Fragment,
             null,

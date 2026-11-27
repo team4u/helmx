@@ -122,8 +122,14 @@ export const TIERS_COPY = {
     en: 'Max execution steps must be an integer between 0 and 100 (0 = unlimited).',
     'zh-CN': '最大执行步数必须为 0 到 100 之间的整数（0 表示不限）。',
   },
-  orchestratorPillPlanning: { en: 'Planning:', 'zh-CN': '规划中:' },
-  orchestratorPillExecuting: { en: 'Executing:', 'zh-CN': '执行中:' },
+  orchestratorStatusPlan: { en: 'Plan', 'zh-CN': '规划' },
+  orchestratorStatusExec: { en: 'Exec', 'zh-CN': '执行' },
+  orchestratorPhasePlanning: { en: 'Planning', 'zh-CN': '规划阶段' },
+  orchestratorPhaseExecution: { en: 'Execution', 'zh-CN': '执行阶段' },
+  orchestratorPopoverPlanner: { en: 'Planner', 'zh-CN': '规划模型' },
+  orchestratorPopoverExecutor: { en: 'Executor', 'zh-CN': '执行模型' },
+  orchestratorPopoverSteps: { en: 'Execution steps', 'zh-CN': '执行步数' },
+  orchestratorPopoverActiveBadge: { en: 'Active', 'zh-CN': '当前' },
   toolExitPlanTitle: { en: 'Enter execution phase', 'zh-CN': '切换执行阶段' },
   toolHandBackTitle: { en: 'Hand back to planner', 'zh-CN': '交回规划阶段' },
   toolOrchPhaseExec: { en: 'Executor', 'zh-CN': '执行' },
@@ -193,7 +199,7 @@ export const switchModelSummaryLabel = (
   return locale === 'zh-CN' ? `永久切换到 ${target}` : `Permanently switched to ${target}`
 }
 
-export const orchestratorPillTitle = (
+export const orchestratorStatusTitle = (
   tierId: string,
   phase: 'planning' | 'execution',
   plannerModel: string,
@@ -218,6 +224,15 @@ export const orchestratorPillTitle = (
         : `Execution (step ${steps} · unlimited)`
       : 'Planning'
   return `Dual-phase tier/${tierId} · ${phaseLabel} (Planner: ${plannerModel} / Executor: ${executorModel})`
+}
+
+export const orchestratorPopoverStepsValue = (
+  steps: number,
+  maxSteps: number,
+  locale: HelmxLocale,
+): string => {
+  if (maxSteps > 0) return `${steps} / ${maxSteps}`
+  return locale === 'zh-CN' ? `${steps}（不限）` : `${steps} (unlimited)`
 }
 
 export const orchestratorTransitionSummary = (
