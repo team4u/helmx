@@ -53,10 +53,10 @@ pnpm build && pnpm typecheck && pnpm lint && pnpm check:hygiene && pnpm test:all
 - **跨包类型 / 接口 / 导出** → 先改所属包（通用 `@helmx/protocol`，插件业务 `@helmx/plugins`），再 `rg` 普查同步全仓。生产源码禁相对路径跨包或导他包私有 `src`；新增依赖须声明且无环。
 - **面向用户的 HTTP 接口** → 同步 `helmx` CLI（`packages/cli/src/commands/`，含 `--json`/`--current`）、`@helmx/protocol` 的 `CORE_CLI_COMMAND_PATHS` 与内核 `core:host` 的 `helmx-cli` 技能（`packages/kernel/src/runtime/core-skills/helmx-cli.ts`，`services.test.ts` 双向锁定）。
 - **插件业务能力** → 用 `ctx.action({ id, inputSchema, outputSchema })` 单点声明获五端映射：HTTP（`POST /api/actions/<pluginId>/<actionId>`）、CLI（`helmx <plugin> <action>`，剥 `builtin:`，`cli.command` 可覆写）、Tool（`exposeAsTool` 或 `run_action`）、Workflow `action()` 与 Web UI。
-- **Web 界面与插件 `client.tsx`** → 先读 `docs/conventions/web-frontend.md` 与 `web-navigation.md`，严守五条铁律：
+- **Web 界面与插件 `client.tsx`** → 先读唯一 UI 规范真源 [`.helmx/skills/helmx-ui/SKILL.md`](.helmx/skills/helmx-ui/SKILL.md)（含 `references/patterns.md`），再按需读宿主工程约束 `docs/conventions/web-frontend.md` 与 `docs/conventions/web-navigation.md`，严守五条铁律：
   1. **零 Emoji**：全界面文案与控件严禁 Emoji，图标统一 `lucide-react`（`HelmxIcon`）或纯文本；
-  2. **视图形态三级**：海量项 / 多维检索 / 管理与市场类用「全屏主舞台卡片网格 + 右侧 520~560px 详情抽屉」，严禁塞居中弹窗；
-  3. **Radix UI 唯一原语**：共享原语用 `@helmx/plugin-client` Radix 封装，Web 专有在 `packages/web/src/ui/`（禁原生 `<select>` 与手写浮层）；插件优先复用 SDK 原语与宿主类，禁大面积内联样式或复制通用 CSS；字号与移动端（≤680px）禁放大见 `web-frontend.md`；
+  2. **模式随业务多元，外壳与原子零件全站唯一**：全站核心页与插件共享唯一 `<Screen toolbar>` 外壳 + 右侧 `520~560px` `DetailDrawer`；按业务选 5 类主流形态（`List`/`ListRow`、`CardGrid`/`SelectCard`、分组态势看板、`DataTable`、`full-bleed` 画布）或扩展领域形态，严禁把目录/管理视图塞进居中弹窗；
+  3. **统一尺码与 Radix 原语**：全站锁定 `32/28/22px` 三档控件高度、5 变体 `Button`（默认 `secondary`，已废除 `default`），共享原语用 `@helmx/plugin-client` Radix 封装（全仓禁原生 `<select>`、禁 `<input type="search">` 与手写浮层），Web 专有在 `packages/web/src/ui/`；禁大面积内联样式或复制通用 CSS；级联层/SSR/移动端见 `web-frontend.md`；
   4. **唯一 Hash 导航**：由 `url-hash-model.ts` + `HelmxStoreProvider` 唯一管理（`#/c/<id>`、`#/a/<profileId>`、`#/overview`、`#/views/<pluginId>/<screenId>`、`#/settings/*`、`sp.*`/`ssp.*`、`split`；侧栏空间由主屏推导非独立 URL 状态）；统一调 `store.openTarget / setScreenParams / openSpace`，**新建对话进待命页、首次发送才落库**，禁平行路由或直调 `history.*`；
   5. **Fast Refresh**：`.tsx` 只导出组件与 TS 类型，纯函数/常量剥至独立 `.ts`。
 
@@ -106,5 +106,5 @@ pnpm build && pnpm typecheck && pnpm lint && pnpm check:hygiene && pnpm test:all
 - **架构机制**：`docs/architecture/overview.md` · `extension-points.md` · `envfabric.md` · `pi-durable.md`
 - **编排引擎**：`docs/workflows/dsl-guide.md` · `worktree-and-gate.md` · `journaling-recovery.md`
 - **插件生态**：`docs/plugins/overview.md` · `plugin-development.md` 及 16 插件同名文档：`profile / workflow / worktree / changes / swarm / memory / triggers / magpie / json-render / mermaid / token-speed / tiers / title / plan / steps / port-forward`
-- **Web 约定**：`docs/conventions/web-frontend.md` · `docs/conventions/web-navigation.md`
-- **工程排障**：`.helmx/skills/helmx-troubleshooting/SKILL.md`（长测试后台跑法、合并后 `HEAD^{tree}` 免重跑、happy-dom / Radix / TS 踩坑、fork `spawn_error` 恢复）——若当前环境未自动加载 `.helmx/skills/`，请按需主动读取
+- **Web 与 UI 规范**：`.helmx/skills/helmx-ui/SKILL.md` + `references/patterns.md`（全站唯一 UI HIG 真源，改 Web/插件前端必读）· `docs/conventions/web-frontend.md`（宿主工程约束）· `docs/conventions/web-navigation.md`（URL Hash 导航）
+- **工程排障**：`.helmx/skills/helmx-troubleshooting/SKILL.md`（长测试后台跑法、合并后 `HEAD^{tree}` 免重跑、happy-dom / Radix / TS 踩坑、fork `spawn_error` 恢复）——若当前环境未自动加载 `.helmx/skills/`，请按需主动读取上述两份技能
