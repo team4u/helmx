@@ -20,7 +20,7 @@
      - `'human_conversation'`：顶层人类会话（`parentConversationId === undefined && (ownedBy ?? 'human') === 'human'`）初始解析为 `Planner` 模型并投影 `modelTier`；
      - `'single_only'`（缺省安全模式）：显式传递到 `spawnAgent` / `workflow` / `swarm`、`defaultCompactionModel`、`completeText` 的显式 `model` 一律拒绝并报 `400 orchestrator_tier_human_only`；
      - `'subagent_inherit'`：当子代理、后台会话、`fork` 或旁路单次补全（如 `completeText` 生成标题/记忆整理）解析绑定了编排档位的 `Profile.model` / `modelOverride` / 全局 `defaultModel` 时，自动透明解包为具体 `executorModel` 且不带 `modelTier`（保证不因绑错 Profile 而阻断子代理启动，也避免旁路补全误用昂贵的 `Planner` 模型）。
-   - **会话树锁执行模型与目录隐身**：顶层人类会话激活 `kind: 'orchestrator'` 档位后，`agent_spawn` 钩子自动将整棵派生会话树（同步/后台 `subagent`、`SubagentWorkflow`、`fork: true` 及多层嵌套孙代理，除 `herdr:*` 外部运行时与 `reattach` 外）路由至当前编排档位的 `executorModel`（与 `executorThinkingLevel`），且整个编排会话树内跳过 `<available_model_tiers>` 目录注入；管理动作保持 `exposeToPrompt: false`；`switch_model` / `set_borrow` 拒绝指向编排档位（`400 orchestrator_tier_not_borrowable`），且在已启用编排档位的会话中禁用单轮借用（`409 orchestrator_tier_active`）。
+   - **会话树锁执行模型与目录隐身**：顶层人类会话激活 `kind: 'orchestrator'` 档位后，`agent_spawn` 钩子自动将整棵派生会话树（同步/后台 `subagent`、`SubagentWorkflow`、`fork: true` 及多层嵌套孙代理，除 `herdr:*` 外部运行时与 `reattach` 外）路由至当前编排档位的 `executorModel`（与 `executorThinkingLevel`），且整个编排会话树内跳过 `<available_model_tiers>` 目录注入；管理动作保持 `exposeToPrompt: false`；`switch_model` / `set_borrow` 拒绝以编排档位本身作为借用目标（`400 orchestrator_tier_not_borrowable`），且编排会话执行期间禁用模型侧 `switch_model` 工具（`409 orchestrator_tier_active`），但允许人类用户在空闲编排会话或待命页主动启用「仅下一轮」单模型借用（当轮按单模型执行，结束后自动恢复原编排档位与 `Planner`）。
    - **符号继承**：将 `Profile.model`、`defaultModel` 或 `defaultCompactionModel` 设为单模型 `tier/<id>` 时（`compactionModel` 禁设编排档位），保存的是符号引用；切换模板或改绑档位后，未设会话覆写的会话自动对齐到新模型。
    - **思考强度优先级**：显式传入（如 `effort` / `thinkingLevel`） > 档位预设 `tier.thinkingLevel` > 逐模型默认 `modelThinkingLevels` > `Profile.thinkingLevel` > 全局默认，并按底层模型实际能力裁剪（clamp）。
    - **诚实失败**：引用不存在的档位返回 `404 model_tier_not_found`（借用解析报 `404 tier_not_found`），目标模型被禁用返回 `409 model_disabled`，绝不静默回退到默认模型。
@@ -85,7 +85,7 @@
 - **模型档位主视图**（`#/s/builtin:tiers/main`）：管理激活档位（支持在单模型与双相编排 `Planner -> Executor` 模式间逐行切换、分别绑定规划/执行模型及思考强度、设置最大执行步数 0–100，默认 30，0 表示不限步数；支持一键填充推荐 5 档草稿骨架）、查看实时可用性状态、保存与一键切换自定义模板。
 - **插件详情设置面板**（`settingsPanel`）：展示当前激活档位数、模板数与生效模板名，提供快捷入口跳转主视图。
 - **Composer 集成**（`BorrowToolbarPill` + `useComposerModelPickerMode`）：
-  - 在配置了双相编排档位的顶层人类会话中，自动禁用「仅下一轮」借用标签并渲染只读阶段胶囊（展示当前处于规划中/执行中、实时底层模型名及执行步数 `step/max`）；
+  - 在配置了双相编排档位的顶层人类会话中，空闲且未激活单轮借用时同样可在模型选择器顶部切换「仅下一轮」标签并渲染只读阶段胶囊（展示当前处于规划中/执行中、实时底层模型名及执行步数 `step/max`）；当预装或正在执行单轮借用时优先展示对应借用胶囊，当轮结束后自动恢复回编排阶段胶囊；
   - 在可借用且非忙/非活跃态的顶层人类会话与待命页中，`BorrowToolbarPill` 通过 `useComposerModelPickerMode('tiers:one-turn', ...)` 向宿主 `ModelPickerControl` 顶部注册「仅下一轮」模式标签（选定即设下一轮借用且不改会话持久模型；每次点击底部按钮或 `Ctrl+L` 打开一律回到默认「切换模型」页防误触）；
   - 未预装且非借用中时工具栏返回 `null`（零占位 DOM、零 Tab 焦点位）；预装态展示紧凑 24px 胶囊 `[ 下一轮: <label> | × ]`（点击主体调 `openMode()` 直达「仅下一轮」标签，点击独立兄弟按钮 `×` 取消预装）；借用中展示 `[ 本轮借用: <label> | × ]`（主体禁用且不注册模式标签，点击 `×` 即使忙态也可取消自动恢复）；停用 `builtin:tiers` 后模式标签即时消失。
 - **时间线工具行**（`SwitchModelToolRow` & `OrchestratorToolRow`）：`toolView`（`replaceRow: true`）消费 `presentationMeta` 渲染 26px `.trace-row`，简洁区分「单轮自动恢复 / 持久切换」及「切换执行阶段 / 交回规划阶段」。

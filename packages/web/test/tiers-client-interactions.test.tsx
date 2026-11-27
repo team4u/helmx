@@ -1692,6 +1692,12 @@ describe("tiers-client-interactions", () => {
     })
     const ctx = makeSpyCtx()
     try {
+      const orchIdleConv = makeConv(77, {
+        status: 'idle',
+        model: 'faux/flagship',
+        modelTier: 'tier/claude-auto',
+        modelOverride: 'tier/claude-auto',
+      })
       const pillMount = await mountWithHost(
         e(
           WithSessionDocOverride,
@@ -1702,20 +1708,106 @@ describe("tiers-client-interactions", () => {
             e(
               PluginClientContext.Provider,
               { value: ctx },
-              e(BorrowToolbarPill, { conversation: orchConv }),
+              e(BorrowToolbarPill, { conversation: orchIdleConv }),
             ),
           ),
         ),
       )
       try {
         const pill = pillMount.host.querySelector<HTMLElement>('.tiers-orchestrator-pill')
-        assert.ok(pill !== null, 'orchestrator tier conversation renders read-only phase pill')
+        assert.ok(pill !== null, 'idle orchestrator tier conversation renders read-only phase pill when unarmed')
         assert.equal(pill.getAttribute('data-tiers-orchestrator-phase'), 'execution')
         assert.match(pill.textContent ?? '', /Executing:.*workhorse.*3\/10/)
-        assert.equal(modeRegistry.getModes().length, 0, 'tiers:one-turn borrow mode must be suppressed on orchestrator conversations')
+        assert.equal(modeRegistry.getModes().length, 1, 'idle orchestrator conversation still exposes tiers:one-turn borrow mode')
+        assert.equal(modeRegistry.getModes()[0]?.key, 'tiers:one-turn')
         assert.equal(EMOJI_RE.test(pill.textContent ?? ''), false)
       } finally {
         await pillMount.unmount()
+      }
+
+      const busyOrchConv = makeConv(77, {
+        status: 'working',
+        model: 'faux/workhorse',
+        modelTier: 'tier/claude-auto',
+        modelOverride: 'tier/claude-auto',
+      })
+      const busyPillMount = await mountWithHost(
+        e(
+          WithSessionDocOverride,
+          { harness: sessionHarness },
+          e(
+            ComposerModelPickerModeContext.Provider,
+            { value: modeRegistry },
+            e(
+              PluginClientContext.Provider,
+              { value: ctx },
+              e(BorrowToolbarPill, { conversation: busyOrchConv }),
+            ),
+          ),
+        ),
+      )
+      try {
+        assert.equal(modeRegistry.getModes().length, 0, 'busy orchestrator conversation suppresses tiers:one-turn mode')
+      } finally {
+        await busyPillMount.unmount()
+      }
+
+      const armedBorrowHarness = createSessionDocHarness({
+        'builtin:tiers/orchestrator/77': {
+          value: {
+            tierId: 'claude-auto',
+            phase: 'planning',
+            activeModel: 'faux/flagship',
+            plannerModel: 'faux/flagship',
+            executorModel: 'faux/workhorse',
+            executionStepCount: 0,
+            maxExecutionSteps: 30,
+            updatedAt: 1000,
+          },
+          hasValue: true,
+          deleted: false,
+          connected: true,
+        },
+        'builtin:tiers/borrow/77': {
+          value: {
+            phase: 'armed',
+            requestedRef: 'faux/workhorse',
+            targetModel: 'faux/workhorse',
+            targetConcreteModel: 'faux/workhorse',
+            targetLabel: 'workhorse',
+            restoreAfterTurn: true,
+            updatedAt: 1001,
+          },
+          hasValue: true,
+          deleted: false,
+          connected: true,
+        },
+      })
+      const armedPillMount = await mountWithHost(
+        e(
+          WithSessionDocOverride,
+          { harness: armedBorrowHarness },
+          e(
+            ComposerModelPickerModeContext.Provider,
+            { value: modeRegistry },
+            e(
+              PluginClientContext.Provider,
+              { value: ctx },
+              e(BorrowToolbarPill, { conversation: orchIdleConv }),
+            ),
+          ),
+        ),
+      )
+      try {
+        const armedBorrowPill = armedPillMount.host.querySelector<HTMLElement>(
+          '.tiers-borrow-pill[data-tiers-borrow-phase="armed"]',
+        )
+        assert.ok(armedBorrowPill !== null, 'armed one-turn borrow pill renders instead of orchestrator pill')
+        assert.ok(armedPillMount.host.querySelector('.tiers-orchestrator-pill') === null)
+        assert.equal(modeRegistry.getModes().length, 1)
+        assert.equal(modeRegistry.getModes()[0]?.key, 'tiers:one-turn')
+      } finally {
+        await armedPillMount.unmount()
       }
 
       const rowMount = await mountWithHost(

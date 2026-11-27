@@ -309,8 +309,8 @@ export function createTiersPlugin(): PluginDefinition {
         },
       })
 
-      ctx.hook.onInput((payload) => orchestratorManager.handleInput(payload), { priority: -150 })
-      ctx.hook.onInput((payload) => borrowManager.handleInput(payload), { priority: -200 })
+      ctx.hook.onInput((payload) => borrowManager.handleInput(payload), { priority: -180 })
+      ctx.hook.onInput((payload) => orchestratorManager.handleInput(payload), { priority: -200 })
 
       ctx.hook.onBeforeTurn(async (turn) => {
         if (!autoInjectEnabled()) return { action: 'continue' }
@@ -328,8 +328,8 @@ export function createTiersPlugin(): PluginDefinition {
       ctx.hook.onAgentSpawn((request) => orchestratorManager.handleAgentSpawn(request), { priority: 100 })
 
       ctx.hook.onTurnSettled(async (payload) => {
-        await orchestratorManager.handleTurnSettled(payload.conversation.id)
         await borrowManager.handleTurnSettled(payload.conversation.id)
+        await orchestratorManager.handleTurnSettled(payload.conversation.id)
       })
 
       ctx.host.onEvent('conversation.upsert', async (payload) => {

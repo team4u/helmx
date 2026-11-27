@@ -145,7 +145,7 @@ function BorrowToolbarPillConversation({
 
   const isActive = effectiveBorrow?.phase === 'active'
   const modeSpec: ComposerModelPickerModeSpec | null =
-    !hasOrchTier && !disabled && !busy && !isActive
+    !disabled && !busy && !isActive
       ? {
           id: 'tiers:one-turn',
           label: t(C.oneTurnTabLabel),
@@ -159,7 +159,10 @@ function BorrowToolbarPillConversation({
 
   const { openMode } = useComposerModelPickerMode('tiers:one-turn', modeSpec)
 
-  if (hasOrchTier) {
+  if (effectiveBorrow === null) {
+    if (!hasOrchTier) {
+      return null
+    }
     const phase = orchView?.phase ?? 'planning'
     const activeModel = orchView?.activeModel ?? (conversation.model || conversation.modelTier || '')
     const stepCount = orchView?.executionStepCount ?? 0
@@ -195,10 +198,6 @@ function BorrowToolbarPillConversation({
         </span>
       </span>
     )
-  }
-
-  if (effectiveBorrow === null) {
-    return null
   }
 
   const mainDisabled = disabled || busy || isActive || borrowAction.pending

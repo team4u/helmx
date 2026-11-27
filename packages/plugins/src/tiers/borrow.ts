@@ -443,14 +443,6 @@ async function armConversationBorrow(
     throw new HelmxError('plugin_stopping', 'builtin:tiers is stopping', 409, { conversationId })
   }
   let conv = requireEligibleConversation(ctx, conversationId)
-  if (conv.modelTier !== undefined) {
-    throw new HelmxError(
-      'orchestrator_tier_active',
-      `Conversation #${conv.id} uses orchestrator tier '${conv.modelTier}' and manages model switching automatically`,
-      409,
-      { conversationId: conv.id, modelTier: conv.modelTier },
-    )
-  }
   assertNotBusyForBorrow(
     conv,
     `Conversation #${conversationId} is busy; cannot arm a one-turn model while a turn is active`,
@@ -497,7 +489,7 @@ async function activateConversationBorrow(
     throw new HelmxError('plugin_stopping', 'builtin:tiers is stopping', 409, { conversationId })
   }
   const conv = requireEligibleConversation(ctx, conversationId)
-  if (conv.modelTier !== undefined) {
+  if (opts.source === 'tool' && conv.modelTier !== undefined) {
     throw new HelmxError(
       'orchestrator_tier_active',
       `Conversation #${conv.id} uses orchestrator tier '${conv.modelTier}' and manages model switching automatically`,

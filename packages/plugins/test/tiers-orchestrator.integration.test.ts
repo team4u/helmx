@@ -20,6 +20,7 @@ import { wrapModelsForCompaction } from '@helmx/kernel/testing'
 import { createPluginBuildProvider } from '@helmx/plugin-build'
 import { createHelmx } from '../../hub/src/app.js'
 import {
+  TIERS_BORROW_SESSION_DOC,
   TIERS_EXIT_PLAN_MODE_TOOL,
   TIERS_HAND_BACK_TOOL,
   TIERS_ORCHESTRATOR_SESSION_DOC,
@@ -347,7 +348,7 @@ test('machine invisibility: orchestrator tiers stay invisible in catalog, reject
     assert.equal(compactionMsg.stopReason, 'error')
     assert.match(compactionMsg.errorMessage ?? '', /orchestrator tier restricted/i)
 
-    // Borrow guards
+    // Borrow guards: targeting an orchestrator tier rejects cleanly, and in-turn `switch_model` tool remains blocked while active
     await assertRejectsCode(
       () =>
         kernel.plugins.invokeAction(TIERS_PLUGIN_ID, 'set_borrow', {
@@ -356,14 +357,13 @@ test('machine invisibility: orchestrator tiers stay invisible in catalog, reject
         }),
       'orchestrator_tier_not_borrowable',
     )
-    await assertRejectsCode(
-      () =>
-        kernel.plugins.invokeAction(TIERS_PLUGIN_ID, 'set_borrow', {
-          conversationId: conv.id,
-          model: 'faux/fast',
-        }),
-      'orchestrator_tier_active',
-    )
+    const switchToolBlocked = (await kernel.plugins.executeTool(
+      TIERS_SWITCH_MODEL_TOOL,
+      { model: 'faux/fast' },
+      { conversationId: conv.id },
+    )) as { isError?: boolean; output?: string }
+    assert.equal(switchToolBlocked.isError, true)
+    assert.match(switchToolBlocked.output ?? '', /orchestrator tier/i)
 
     // 3. `subagent_inherit`: Profile bound to orchestrator tier gives human conv planner+modelTier,
     //    while child subagent inherits concrete executorModel cleanly without `modelTier`
@@ -967,6 +967,121 @@ test('agent_spawn hook locks subagents, specialist Profiles, explicit overrides,
     assert.equal(spawnObserved.length, 8)
     assert.equal(spawnObserved[7]?.modelId, 'faux/fast')
     assert.notEqual(spawnObserved[7]?.reasoning, 'high')
+  } finally {
+    await env.close()
+  }
+})
+
+test('one-turn borrow works on orchestrator conversations (explicit override & inherited Profile) and auto-restores orchestrator planning mode after settle', { timeout: 60_000 }, async () => {
+  const env = await openOrchestratorEnv()
+  try {
+    const { kernel } = env.app
+    await kernel.plugins.invokeAction(TIERS_PLUGIN_ID, 'set', {
+      id: 'coder',
+      model: 'faux/workhorse',
+      description: 'Single coder',
+    })
+    await kernel.plugins.invokeAction(TIERS_PLUGIN_ID, 'set', {
+      id: 'claude-auto',
+      kind: 'orchestrator',
+      model: 'faux/flagship',
+      thinkingLevel: 'high',
+      executorModel: 'faux/fast',
+      executorThinkingLevel: 'low',
+    })
+
+    // 1. Explicit orchestrator conversation: arm one-turn borrow -> single-model turn -> auto-restore to Planner
+    const conv = await kernel.conversations.createConversation({ title: 'orch-borrow', model: 'tier/claude-auto' })
+    const armed = (await kernel.plugins.invokeAction(TIERS_PLUGIN_ID, 'set_borrow', {
+      conversationId: conv.id,
+      model: 'faux/workhorse',
+      effort: 'medium',
+    })) as { phase: string }
+    assert.equal(armed.phase, 'armed')
+
+    const observedExplicit: ObservedCall[] = []
+    env.faux.setResponses([
+      captureStep(observedExplicit, conv.id, () => fauxAssistantMessage('Borrowed single turn done.')),
+      captureStep(observedExplicit, conv.id, () => fauxAssistantMessage('Back in orchestrator planning phase.')),
+    ])
+
+    await kernel.conversations.submitInput(conv.id, 'Run a quick one-turn single-model check')
+    await kernel.conversations.waitForIdle(conv.id)
+    await waitFor(
+      async () =>
+        kernel.conversations.getConversation(conv.id).modelTier === 'tier/claude-auto' &&
+        kernel.plugins.getPublicSessionDoc(TIERS_PLUGIN_ID, TIERS_BORROW_SESSION_DOC, conv.id).value === null &&
+        (
+          kernel.plugins.getPublicSessionDoc(TIERS_PLUGIN_ID, TIERS_ORCHESTRATOR_SESSION_DOC, conv.id)
+            .value as TierOrchestratorSessionView | null
+        )?.phase === 'planning',
+      { timeoutMs: 5_000 },
+    )
+
+    assert.equal(observedExplicit.length, 1)
+    assert.equal(observedExplicit[0]?.modelId, 'faux/workhorse')
+    assert.equal(observedExplicit[0]?.reasoning, 'medium')
+    assert.ok(observedExplicit[0]?.toolNames.includes('write'), 'borrowed single turn must expose normal write tool')
+    assert.ok(!observedExplicit[0]?.toolNames.includes(TIERS_EXIT_PLAN_MODE_TOOL))
+    assert.ok(!observedExplicit[0]?.systemPrompt.includes(ORCHESTRATOR_PLAN_SECTION))
+    assert.ok(observedExplicit[0]?.systemPrompt.includes('tier/coder'), 'borrowed single turn should inject normal catalog')
+
+    const restoredConv = kernel.conversations.getConversation(conv.id)
+    assert.equal(restoredConv.model, 'faux/flagship')
+    assert.equal(restoredConv.modelTier, 'tier/claude-auto')
+    assert.equal(restoredConv.modelOverride, 'tier/claude-auto')
+    assert.equal(restoredConv.thinkingLevelOverride, undefined)
+
+    await kernel.conversations.submitInput(conv.id, 'Discuss next architecture step')
+    await kernel.conversations.waitForIdle(conv.id)
+    assert.equal(observedExplicit.length, 2)
+    assert.equal(observedExplicit[1]?.modelId, 'faux/flagship')
+    assert.equal(observedExplicit[1]?.reasoning, 'high')
+    assert.ok(observedExplicit[1]?.toolNames.includes(TIERS_EXIT_PLAN_MODE_TOOL))
+    assert.ok(!observedExplicit[1]?.toolNames.includes('write'))
+    assert.ok(observedExplicit[1]?.systemPrompt.includes(ORCHESTRATOR_PLAN_SECTION))
+
+    // 2. Standby first-message `meta['builtin:tiers']` borrow on Profile-inherited orchestrator conversation
+    const existingAssistant = await kernel.profiles.get('assistant')
+    assert.ok(existingAssistant !== undefined)
+    try {
+      await kernel.profiles.save({ ...existingAssistant, model: 'tier/claude-auto' })
+      const standbyConv = await kernel.conversations.createConversation({ title: 'standby-orch-borrow' })
+      assert.equal(standbyConv.modelTier, 'tier/claude-auto')
+      assert.equal(standbyConv.modelOverride, undefined)
+
+      const observedStandby: ObservedCall[] = []
+      env.faux.setResponses([
+        captureStep(observedStandby, standbyConv.id, () => fauxAssistantMessage('Standby borrowed turn done.')),
+      ])
+
+      await kernel.conversations.submitInput(standbyConv.id, 'Run standby borrowed turn', {
+        meta: { 'builtin:tiers': { borrowModel: 'faux/workhorse' } },
+      } as never)
+      await kernel.conversations.waitForIdle(standbyConv.id)
+      await waitFor(
+        async () =>
+          kernel.conversations.getConversation(standbyConv.id).modelTier === 'tier/claude-auto' &&
+          kernel.plugins.getPublicSessionDoc(TIERS_PLUGIN_ID, TIERS_BORROW_SESSION_DOC, standbyConv.id).value === null &&
+          (
+            kernel.plugins.getPublicSessionDoc(TIERS_PLUGIN_ID, TIERS_ORCHESTRATOR_SESSION_DOC, standbyConv.id)
+              .value as TierOrchestratorSessionView | null
+          )?.phase === 'planning',
+        { timeoutMs: 5_000 },
+      )
+
+      assert.equal(observedStandby.length, 1)
+      assert.equal(observedStandby[0]?.modelId, 'faux/workhorse')
+      assert.ok(observedStandby[0]?.toolNames.includes('write'))
+      assert.ok(!observedStandby[0]?.systemPrompt.includes(ORCHESTRATOR_PLAN_SECTION))
+
+      const restoredStandby = kernel.conversations.getConversation(standbyConv.id)
+      assert.equal(restoredStandby.modelOverride, undefined)
+      assert.equal(restoredStandby.modelTier, 'tier/claude-auto')
+      assert.equal(restoredStandby.model, 'faux/flagship')
+    } finally {
+      await kernel.profiles.save({ ...existingAssistant, model: undefined })
+    }
   } finally {
     await env.close()
   }
