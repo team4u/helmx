@@ -94,6 +94,14 @@
       "types": "./dist/plan/contracts.d.ts",
       "import": "./dist/plan/contracts.js"
     },
+    "./steps": {
+      "types": "./dist/steps.d.ts",
+      "import": "./dist/steps.js"
+    },
+    "./steps/contracts": {
+      "types": "./dist/steps/contracts.d.ts",
+      "import": "./dist/steps/contracts.js"
+    },
     "./port-forward": {
       "types": "./dist/port-forward.d.ts",
       "import": "./dist/port-forward.js"

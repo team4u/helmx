@@ -40,6 +40,8 @@ export const ORCHESTRATOR_PLAN_TOOL_WHITELIST: ReadonlySet<string> = new Set([
   'read_artifact',
   'load_skill',
   'ask_user',
+  // Side-effect-free live step tracking stays allowed in Planning Phase so planners can outline steps before handing off to Execution.
+  'update_steps',
   TIERS_ORCH_BASH_TOOL,
   TIERS_EXIT_PLAN_MODE_TOOL,
 ])

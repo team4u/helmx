@@ -14,6 +14,7 @@ import { createTokenSpeedPlugin } from '@helmx/plugins/token-speed';
 import { createTiersPlugin } from '@helmx/plugins/tiers';
 import { createTitlePlugin } from '@helmx/plugins/title';
 import { createPlanPlugin } from '@helmx/plugins/plan';
+import { createStepsPlugin } from '@helmx/plugins/steps';
 import { createPortForwardPlugin } from '@helmx/plugins/port-forward';
 import {
   NodeAutoUpgradeCoordinator,
@@ -101,7 +102,7 @@ export async function createHelmx(options: HelmxOptions = {}) {
   };
   offClose = kernel.onClose(disposeAutoUpgrade);
   try {
-    // Default-enabled (15): profile (locked), workflow, worktree, changes, swarm, memory, json-render, mermaid, triggers, magpie, token-speed, tiers, title, plan, port-forward.
+    // Default-enabled (16): profile (locked), workflow, worktree, changes, swarm, memory, json-render, mermaid, triggers, magpie, token-speed, tiers, title, plan, steps, port-forward.
     // Post-startup recovery ordering (workflow child-session convergence before worktree crashed-lease
     // reclamation) is enforced by PluginHost.reconcile() topological order via service.reconcileAfter,
     // independent of plugin registration order here.
@@ -119,6 +120,7 @@ export async function createHelmx(options: HelmxOptions = {}) {
     await kernel.plugins.register(createTiersPlugin());
     await kernel.plugins.register(createTitlePlugin());
     await kernel.plugins.register(createPlanPlugin());
+    await kernel.plugins.register(createStepsPlugin());
     await kernel.plugins.register(createPortForwardPlugin());
     await loadExternalPlugins(kernel.dataDir, kernel.plugins);
     // Run `prepare -> start` across all registered plugins before resuming the SDK scheduler.

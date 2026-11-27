@@ -1,0 +1,61 @@
+/* builtin:steps plugin-specific styles (.steps-* prefix; primitives & DockTray tokens inherited from host). */
+
+.steps-tray-row:has(.helmx-status-light-done) .steps-tray-row-title {
+  color: var(--fg-secondary);
+}
+
+.steps-tray-row:has(.helmx-status-light-idle) .steps-tray-row-title {
+  color: var(--fg-muted);
+  text-decoration: line-through;
+}
+
+.steps-tray-row:has(.helmx-status-light-failed) .steps-tray-row-title {
+  color: var(--err);
+}
+
+.steps-tray-row-tag {
+  height: 18px;
+  line-height: 16px;
+  padding: 0 5px;
+  font-size: 10.5px;
+  flex-shrink: 0;
+}
+
+.steps-tray-dismiss-btn {
+  color: var(--fg-muted);
+}
+
+@media (hover: hover) {
+  .steps-tray-dismiss-btn:hover:not(:disabled) {
+    color: var(--fg);
+  }
+}
+
+/* ---- Timeline 26px tool trace row ---- */
+.steps-trace-row {
+  width: 100%;
+  min-width: 0;
+}
+
+.steps-trace-name {
+  color: var(--fg-secondary);
+}
+
+.steps-trace-right {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
+.steps-trace-badge {
+  height: 18px;
+  line-height: 16px;
+  padding: 0 5px;
+  font-size: 10.5px;
+  flex-shrink: 0;
+}
+
+.steps-trace-error {
+  color: var(--err);
+}

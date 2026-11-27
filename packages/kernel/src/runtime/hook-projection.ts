@@ -163,7 +163,9 @@ export function withSections(
 }
 
 /**
- * Rewrite tool declarations: attach `toolsRemoved`/`toolsAdded` declarations to the leading system message.
+ * Rewrite tool declarations: attach `toolsRemoved`/`toolsAdded` declarations to the leading system message,
+ * and strip trailing `toolsAdded`/`toolsRemoved` deltas from later system messages so SDK mid-transcript
+ * tool reorder patches cannot resurrect tools stripped by `before_turn`.
  * Parsed on the model side by pi-ai replay (`getCurrentTools`), taking effect immediately on the next round.
  */
 export function withToolDeclarations(
@@ -179,7 +181,8 @@ export function withToolDeclarations(
     added.push({ ...tool })
   }
   if (messages.length === 0 || messages[0]!['role'] !== 'system') return [...messages]
-  const lead = messages[0]!
+  const out: Array<Record<string, unknown>> = [...messages]
+  const lead = out[0]!
   // Full redeclaration: remove stale declarations then add new set (equivalent replay, avoids order drift).
   const next: Record<string, unknown> = { ...lead }
   const sections = lead['sections']
@@ -189,7 +192,15 @@ export function withToolDeclarations(
       : {}
   next['toolsRemoved'] = currentToolNames(messages).filter((name) => declared.has(name) === false).map((name) => ({ name }))
   next['toolsAdded'] = added
-  return [{ ...next }, ...messages.slice(1)]
+  out[0] = next
+  for (let i = 1; i < out.length; i += 1) {
+    const message = out[i]!
+    if (message['role'] !== 'system') continue
+    if (message['toolsAdded'] === undefined && message['toolsRemoved'] === undefined) continue
+    const { toolsAdded: _added, toolsRemoved: _removed, ...rest } = message
+    out[i] = rest
+  }
+  return out
 }
 
 /** List current tool names from replay messages. */
