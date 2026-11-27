@@ -52,13 +52,24 @@ jobs:
       - name: Check test hygiene
         run: pnpm check:hygiene
 
+      # GitHub standard runners expose only 4 vCPUs. scripts/test-suites.mjs defaults to running as
+      # many test files in parallel as there are vCPUs, yet every file spawns its own Hub/git/node
+      # child processes, so the default 4-way fan-out oversubscribes the CPU on multi-turn chain tests
+      # (observed as CI timing jitter). 3 workers keeps the dynamic IPC scheduling path (2 would fall
+      # back to unbalanced static sharding) while leaving CPU headroom for the spawned child processes.
       - name: Run all tests on POSIX
         if: runner.os != 'Windows'
         run: pnpm test:all:run
+        env:
+          TEST_CONCURRENCY: '3'
 
+      # Same 4 vCPU budget as the POSIX step above: 3 workers leave CPU headroom for Hub/git/node
+      # child processes spawned by each test file (2 would fall back to static sharding).
       - name: Run unit tests on Windows
         if: runner.os == 'Windows'
         run: pnpm test:unit:run
+        env:
+          TEST_CONCURRENCY: '3'
 
       - name: Run cross-platform path regression tests on Windows
         if: runner.os == 'Windows'
