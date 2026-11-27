@@ -72,10 +72,10 @@ jobs:
       payload-present: ${{ steps.scan.outputs.payload-present }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: 24.12.0
 
@@ -151,15 +151,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v5
         with:
           version: 12.16.1
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: 24.12.0
           cache: pnpm
@@ -216,10 +216,10 @@ jobs:
       DIST_TAG: ${{ needs.verify.outputs.dist-tag }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v5
         with:
           version: 12.16.1
 
@@ -230,7 +230,7 @@ jobs:
       # npmjs.com per artifact must match this repository (team4u/helmx), this workflow filename
       # (release.yml), and leave the environment field unset.
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: 24.12.0
           cache: pnpm
@@ -573,12 +573,12 @@ jobs:
           exit 1
 
       - name: Checkout (full history for the changelog)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: 24.12.0
 
