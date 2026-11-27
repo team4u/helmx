@@ -4,7 +4,7 @@
 import { HelmxError, escapeXml, type LocalizedText } from '@helmx/protocol'
 import { truncate } from '../entry-text.js'
 import {
-  ACTIONABLE_WAKE_KINDS, COORDINATOR_ESCALATION_KINDS, swarmError, toGroupSummary,
+  COORDINATOR_ESCALATION_KINDS, swarmError, toGroupSummary,
   type BoardBadgeEntry, type BoardPost, type BoardPostKind, type BoardViewDoc, type BoardViewHeadline,
   type BoardViewMember, type CollabGroupRecord, type CollabGroupSummary, type GroupMemberState, type MemberLiveSnapshot,
 } from './contracts.js'
@@ -13,7 +13,7 @@ export const MAX_BOARD_VIEW_POST_BODY_CHARS = 4_000
 export const MAX_BOARD_VIEW_DOC_BYTES = 1_536 * 1024
 
 export const ANTI_ECHO_RULE_FOOTER =
-  'Anti-echo rule: If this batch is purely informational and requires no concrete action, end your turn immediately without posting pure acknowledgments or thank-yous; never treat partial member completion as full-group completion while activeWorkingMembers is non-empty.'
+  'Anti-echo rule: If this batch is purely informational and requires no concrete action, end your turn immediately without posting pure acknowledgments or thank-yous; while activeWorkingMembers is non-empty, you may still act on individual requests or start reviewing completed slices, but never treat partial member completion as full-group completion or close the group.'
 
 export interface BoardCallerIdentity { role: 'coordinator' | 'worker' | 'human' | 'system'; from: string }
 
@@ -110,15 +110,11 @@ export function shouldFlushCoordinatorReport(input: { group: CollabGroupRecord; 
   const { group, posts, busyMemberNames } = input
   if (group.status !== 'active' || group.coordinatorDetached === true || group.coordinatorPendingSeq <= group.coordinatorNotifiedSeq) return false
   if (busyMemberNames.size === 0) return true
-  const activeNames = new Set(group.members.filter((m) => m.lifecycle === 'active').map((m) => m.name))
   for (const post of selectPostsForCoordinatorReport(posts, group.coordinatorNotifiedSeq + 1, group.coordinatorPendingSeq)) {
     if (COORDINATOR_ESCALATION_KINDS.has(post.kind)) return true
-    if (
-      post.wake && ACTIONABLE_WAKE_KINDS.has(post.kind) &&
-      post.resolvedTargets.includes('coordinator') &&
-      !post.resolvedTargets.some((t) => t !== 'coordinator' && activeNames.has(t)) &&
-      !busyMemberNames.has(post.from)
-    ) return true
+    if (post.wake && post.resolvedTargets.includes('coordinator') && (post.kind !== 'done' || !busyMemberNames.has(post.from))) {
+      return true
+    }
   }
   return false
 }

@@ -101,7 +101,7 @@ export const boardPostInputSchema = S.obj(
     ),
     body: S.str({ minLength: 1, maxLength: MAX_BOARD_POST_BODY_CHARS }),
     wake: S.bool(
-      'Trigger a follow-up turn for target sessions (defaults to false for comment, true otherwise; busy peers receive coalesced wakeups on settle, and done posts to coordinator batch until all active workers are idle)',
+      'Trigger a follow-up turn for target sessions (defaults to false for comment, true otherwise; busy recipients receive coalesced wakeups on settle; non-done wake posts to coordinator flush immediately even while the sender keeps working, and done posts to coordinator flush as soon as that sender settles without waiting for other workers)',
     ),
     refs: S.arr(S.int(1)),
   },

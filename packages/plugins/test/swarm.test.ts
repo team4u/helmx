@@ -963,13 +963,13 @@ test('swarm-unit8: recovery metadata validation, authoritative classifyInflightI
   )
 })
 
-test('swarm-unit9: tiered coordinator flush gating, orthogonal done stall fallback, and idle catch-up anchor past comments', { timeout: 60_000 }, () => {
+test('swarm-unit9: orthogonal coordinator flush gating, done sender-settle wait, unwoken done stall fallback, and idle catch-up anchor past comments', { timeout: 60_000 }, () => {
   const twoMembers = [
     makeMember({ name: 'fast', conversationId: 11, readCursorSeq: 2, pendingWakeupSeq: 1, lastPostSeq: 2 }),
     makeMember({ name: 'slow', conversationId: 12, readCursorSeq: 1, pendingWakeupSeq: 1 }),
   ]
 
-  // 1) done waits for other busy workers (join point avoids coordinator turn storms)
+  // 1) done waits ONLY for sender settlement (prevents 50ms tail race), then flushes past other slow workers
   const doneGroup = makeGroup({
     headSeq: 2,
     coordinatorPendingSeq: 2,
@@ -981,29 +981,47 @@ test('swarm-unit9: tiered coordinator flush gating, orthogonal done stall fallba
     makePost(2, { from: 'fast', to: ['coordinator'], resolvedTargets: ['coordinator'], wake: true, kind: 'done' }),
   ]
   assert.equal(
-    shouldFlushCoordinatorReport({ group: doneGroup, posts: donePosts, busyMemberNames: new Set(['slow']) }),
+    shouldFlushCoordinatorReport({ group: doneGroup, posts: donePosts, busyMemberNames: new Set(['fast', 'slow']) }),
     false,
+  )
+  assert.equal(
+    shouldFlushCoordinatorReport({ group: doneGroup, posts: donePosts, busyMemberNames: new Set(['slow']) }),
+    true,
   )
   assert.equal(
     shouldFlushCoordinatorReport({ group: doneGroup, posts: donePosts, busyMemberNames: new Set() }),
     true,
   )
 
-  // 2) coordinator-only review/handoff/brief bypasses other busy workers once sender is idle,
-  //    but defers while sender itself is still finishing its turn; multi-target CC waits for peers
-  const reviewPosts = [
+  // 2) non-done wake=true posts addressing coordinator (review/handoff/brief/explicit comment) flush immediately
+  //    even while sender itself and unrelated peers are still working (#15); comment with wake=false does not
+  for (const kind of ['review', 'handoff', 'brief', 'comment'] as const) {
+    const wakePosts = [
+      makePost(1, { from: 'coordinator', to: ['fast'], resolvedTargets: ['fast'], wake: true, kind: 'brief' }),
+      makePost(2, { from: 'fast', to: ['coordinator'], resolvedTargets: ['coordinator'], wake: true, kind }),
+    ]
+    assert.equal(
+      shouldFlushCoordinatorReport({ group: doneGroup, posts: wakePosts, busyMemberNames: new Set(['fast', 'slow']) }),
+      true,
+      `${kind} with wake=true must flush immediately while sender and peer are busy`,
+    )
+    assert.equal(
+      shouldFlushCoordinatorReport({ group: doneGroup, posts: wakePosts, busyMemberNames: new Set(['slow']) }),
+      true,
+      `${kind} with wake=true must flush immediately while peer is busy`,
+    )
+  }
+  const passiveCommentPosts = [
     makePost(1, { from: 'coordinator', to: ['fast'], resolvedTargets: ['fast'], wake: true, kind: 'brief' }),
-    makePost(2, { from: 'fast', to: ['coordinator'], resolvedTargets: ['coordinator'], wake: true, kind: 'review' }),
+    makePost(2, { from: 'fast', to: ['coordinator'], resolvedTargets: ['coordinator'], wake: false, kind: 'comment' }),
   ]
   assert.equal(
-    shouldFlushCoordinatorReport({ group: doneGroup, posts: reviewPosts, busyMemberNames: new Set(['fast', 'slow']) }),
+    shouldFlushCoordinatorReport({ group: doneGroup, posts: passiveCommentPosts, busyMemberNames: new Set(['slow']) }),
     false,
   )
-  assert.equal(
-    shouldFlushCoordinatorReport({ group: doneGroup, posts: reviewPosts, busyMemberNames: new Set(['slow']) }),
-    true,
-  )
-  const ccPosts = [
+
+  // 3) multi-target to=['slow', 'coordinator'] with wake=true obeys orthogonal kind rules
+  const multiTargetHandoff = [
     makePost(1, { from: 'coordinator', to: ['fast'], resolvedTargets: ['fast'], wake: true, kind: 'brief' }),
     makePost(2, {
       from: 'fast',
@@ -1014,11 +1032,29 @@ test('swarm-unit9: tiered coordinator flush gating, orthogonal done stall fallba
     }),
   ]
   assert.equal(
-    shouldFlushCoordinatorReport({ group: doneGroup, posts: ccPosts, busyMemberNames: new Set(['slow']) }),
+    shouldFlushCoordinatorReport({ group: doneGroup, posts: multiTargetHandoff, busyMemberNames: new Set(['fast', 'slow']) }),
+    true,
+  )
+  const multiTargetDone = [
+    makePost(1, { from: 'coordinator', to: ['fast'], resolvedTargets: ['fast'], wake: true, kind: 'brief' }),
+    makePost(2, {
+      from: 'fast',
+      to: ['slow', 'coordinator'],
+      resolvedTargets: ['slow', 'coordinator'],
+      wake: true,
+      kind: 'done',
+    }),
+  ]
+  assert.equal(
+    shouldFlushCoordinatorReport({ group: doneGroup, posts: multiTargetDone, busyMemberNames: new Set(['fast', 'slow']) }),
     false,
   )
+  assert.equal(
+    shouldFlushCoordinatorReport({ group: doneGroup, posts: multiTargetDone, busyMemberNames: new Set(['slow']) }),
+    true,
+  )
 
-  // 3) blocker / stall bypass ALL busy workers (even sender)
+  // 4) blocker / stall bypass ALL busy workers (even sender)
   const blockerPosts = [
     makePost(1, { from: 'coordinator', to: ['fast'], resolvedTargets: ['fast'], wake: true, kind: 'brief' }),
     makePost(2, { from: 'fast', to: ['coordinator'], resolvedTargets: ['coordinator'], wake: false, kind: 'blocker' }),

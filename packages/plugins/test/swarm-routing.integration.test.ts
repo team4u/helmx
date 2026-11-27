@@ -623,10 +623,10 @@ describe('builtin:swarm board routing, settlement & self-healing', () => {
     }
   })
 
-  test('swarm-int15: coordinator-only review wakes past long-running worker, unwoken done triggers stall, authoritative inflightReport recovery, and persisted idle catch-up across restart', { timeout: 60_000 }, async (t) => {
+  test('swarm-int15: per-slice done wakes coordinator past slow worker, mid-flight review wakes while sender keeps working, unwoken done triggers stall, authoritative inflightReport recovery, and persisted idle catch-up across restart', { timeout: 60_000 }, async (t) => {
     const root = useTempDir(t, 'helmx-swarm-int15-')
 
-    // ---- Part 1 & 2: Long-running worker + done batching + coordinator-only review immediate wake + unwoken done stall ----
+    // ---- Part 1 & 2: Long-running worker + per-slice done wake + mid-flight review immediate wake while sender works + unwoken done stall ----
     const env1 = await openSwarmEnv(root, gitTemplate)
     let groupId = ''
     let coordId = 0
@@ -644,13 +644,16 @@ describe('builtin:swarm board routing, settlement & self-healing', () => {
 
       const slowEntered = deferred<void>()
       const slowRelease = deferred<void>()
+      const reviewerContinuedEntered = deferred<void>()
+      const reviewerRelease = deferred<void>()
+      const fastDoneCoordSeen = deferred<string>()
       const reviewCoordSeen = deferred<string>()
       let slowRound = 0
       let fastRound = 0
       let reviewerRound = 0
       try {
         env1.faux.setResponses(
-          Array.from({ length: 24 }, () => async (ctx: { messages: unknown[] }) => {
+          Array.from({ length: 32 }, () => async (ctx: { messages: unknown[] }) => {
             const meta = captureRequestMeta(ctx.messages as unknown as Record<string, unknown>[])
             const sec = meta.sectionsById['swarm.active_group'] ?? ''
             if (sec.includes('name="slow"')) {
@@ -683,6 +686,8 @@ describe('builtin:swarm board routing, settlement & self-healing', () => {
                   { stopReason: 'toolUse' },
                 )
               }
+              reviewerContinuedEntered.resolve()
+              await reviewerRelease.promise
               return fauxAssistantMessage('Reviewer settled.')
             }
             const userTexts = (ctx.messages as Array<{ role?: string; content?: unknown }>)
@@ -697,6 +702,9 @@ describe('builtin:swarm board routing, settlement & self-healing', () => {
                     : '',
               )
               .join('\n')
+            if (userTexts.includes('Fast slice done.')) {
+              fastDoneCoordSeen.resolve(userTexts)
+            }
             if (userTexts.includes('Need coordinator decision now.')) {
               reviewCoordSeen.resolve(userTexts)
             }
@@ -713,7 +721,7 @@ describe('builtin:swarm board routing, settlement & self-healing', () => {
         slowId = slow.workerConversationId
         await slowEntered.promise
 
-        // Dispatch fast -> posts done while slow is still working -> must NOT wake coordinator yet
+        // 1) Dispatch fast -> posts done while slow is still working -> wakes coordinator immediately once fast settles (past slow!)
         const fast = (await kernel.plugins.invokeAction(
           SWARM_PLUGIN_ID,
           'dispatch_worker',
@@ -722,31 +730,35 @@ describe('builtin:swarm board routing, settlement & self-healing', () => {
         )) as { workerConversationId: number }
         fastId = fast.workerConversationId
         await kernel.conversations.waitForIdle(fast.workerConversationId)
-        await new Promise((r) => setTimeout(r, 90))
-        const reportsAfterFastDone = (await kernel.conversations.getConversationDetail(coord.id, { limit: 30 })).entries.filter(
-          (e) => e.kind === 'helmx.input' && JSON.stringify(e.data ?? '').includes('swarm_board_report'),
-        )
-        assert.equal(reportsAfterFastDone.length, 0, 'done post must remain batched while another worker is still working')
+        const fastCoordText = await fastDoneCoordSeen.promise
+        await kernel.conversations.waitForIdle(coord.id)
+        assert.match(fastCoordText, /Fast slice done\./)
+        assert.match(fastCoordText, /activeWorkingMembers: @slow\n/)
 
-        // Dispatch reviewer -> posts coordinator-only review(wake=true) -> must wake coordinator immediately past slow!
+        const metaPath = join(env1.dataDir, 'plugins', 'builtin%3Aswarm', 'groups', groupId, 'meta.json')
+        const afterFastMeta = JSON.parse(readFileSync(metaPath, 'utf8')) as CollabGroupRecord
+        assert.equal(afterFastMeta.lastReportHadActiveWorkers, true, 'lastReportHadActiveWorkers must be persisted to meta.json after fast done report')
+
+        // 2) Dispatch reviewer -> posts review(wake=true) and keeps working in round 2 -> wakes coordinator immediately while both slow & reviewer are working!
         const reviewer = (await kernel.plugins.invokeAction(
           SWARM_PLUGIN_ID,
           'dispatch_worker',
-          { prompt: 'Review and ask coordinator.', name: 'reviewer' },
+          { prompt: 'Review and ask coordinator while continuing work.', name: 'reviewer' },
           { conversationId: coord.id },
         )) as { workerConversationId: number }
-        await kernel.conversations.waitForIdle(reviewer.workerConversationId)
-
+        await reviewerContinuedEntered.promise
         const coordReportText = await reviewCoordSeen.promise
         await kernel.conversations.waitForIdle(coord.id)
-        assert.match(coordReportText, /Fast slice done\./)
         assert.match(coordReportText, /Need coordinator decision now\./)
-        assert.match(coordReportText, /activeWorkingMembers: @slow\n/)
+        assert.match(coordReportText, /activeWorkingMembers:[^\n]*@slow/)
+        assert.match(coordReportText, /activeWorkingMembers:[^\n]*@reviewer/)
 
-        // Verify lastReportHadActiveWorkers was persisted to meta.json while slow is still running
-        const metaPath = join(env1.dataDir, 'plugins', 'builtin%3Aswarm', 'groups', groupId, 'meta.json')
         const midMeta = JSON.parse(readFileSync(metaPath, 'utf8')) as CollabGroupRecord
-        assert.equal(midMeta.lastReportHadActiveWorkers, true, 'lastReportHadActiveWorkers must be persisted to meta.json')
+        assert.equal(midMeta.lastReportHadActiveWorkers, true, 'lastReportHadActiveWorkers must remain persisted to meta.json')
+
+        // Release reviewer to settle normally while slow still runs, then release slow
+        reviewerRelease.resolve()
+        await kernel.conversations.waitForIdle(reviewer.workerConversationId)
 
         // Release slow -> finishes with passive comment -> all workers idle -> stall emits since latest non-comment is review (not done)
         slowRelease.resolve()
@@ -754,6 +766,7 @@ describe('builtin:swarm board routing, settlement & self-healing', () => {
         await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
         await kernel.conversations.waitForIdle(coord.id)
       } finally {
+        reviewerRelease.resolve()
         slowRelease.resolve()
       }
 
@@ -788,6 +801,46 @@ describe('builtin:swarm board routing, settlement & self-healing', () => {
       await kernel.conversations.waitForIdle(solo.workerConversationId)
       await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
       await kernel.conversations.waitForIdle(coord2.id)
+
+      // Final active worker posts done and settles; coordinator replies to user WITHOUT calling close_group -> exactly 1 report, zero swarm-report-idle
+      const coord3 = await kernel.conversations.createConversation({ title: 'No-Close Coord', profileId: 'assistant', cwd: env1.repoDir })
+      const g3 = (await kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'create_group', {
+        title: 'No-Close Squad',
+        conversationId: coord3.id,
+      })) as { groupId: string }
+      setSwarmRoleResponses(env1.faux, {
+        finisher: [
+          fauxAssistantMessage(
+            [fauxToolCall('swarm_board_post', { to: ['coordinator'], kind: 'done', body: 'All slices finished, awaiting human merge confirm.' })],
+            { stopReason: 'toolUse' },
+          ),
+          fauxAssistantMessage('Finisher settled.'),
+        ],
+        coordinator: [fauxAssistantMessage('Reported final slice to user without closing group.')],
+      })
+      const finisher = (await kernel.plugins.invokeAction(
+        SWARM_PLUGIN_ID,
+        'dispatch_worker',
+        { groupId: g3.groupId, prompt: 'Deliver final slice.', name: 'finisher' },
+        { conversationId: coord3.id },
+      )) as { workerConversationId: number }
+      await kernel.conversations.waitForIdle(finisher.workerConversationId)
+      await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
+      await kernel.conversations.waitForIdle(coord3.id)
+      await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
+
+      const coord3Reports = (await kernel.conversations.getConversationDetail(coord3.id, { limit: 30 })).entries.filter(
+        (e) => e.kind === 'helmx.input' && JSON.stringify(e.data ?? '').includes('swarm_board_report'),
+      )
+      assert.equal(coord3Reports.length, 1, 'final worker done without close_group must trigger exactly 1 coordinator report')
+      assert.equal(
+        coord3Reports.some((e) => (e.data as { id?: string } | undefined)?.id?.startsWith('swarm-report-idle:') === true),
+        false,
+        'must not emit duplicate swarm-report-idle after final done report',
+      )
+      const g3MetaPath = join(env1.dataDir, 'plugins', 'builtin%3Aswarm', 'groups', g3.groupId, 'meta.json')
+      const g3Meta = JSON.parse(readFileSync(g3MetaPath, 'utf8')) as CollabGroupRecord
+      assert.equal(g3Meta.lastReportHadActiveWorkers, undefined, 'lastReportHadActiveWorkers must stay undefined when final report had no active workers')
 
       // Seed an unrelated turn on coord1 so its completionSeq advances past the pre-crash inflightReport baseCompletionSeq
       env1.faux.setResponses([fauxAssistantMessage('Unrelated human reply.')])
