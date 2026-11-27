@@ -55,26 +55,43 @@ const SECTION_PREFIX = 'tiers.orchestrator.'
 
 export const ORCHESTRATOR_PLAN_SECTION = [
   '<orchestrator_planning_mode>',
-  'You are in the Planning Phase of a dual-phase orchestrator session. File-editing and delegation tools (`write`, `edit`, `register_artifact`, `subagent`, `SubagentWorkflow`, `swarm_*`, etc.) are disabled in this phase.',
-  '1. Research strictly in read-only mode: use `read`, `read_artifact`, and `load_skill` to inspect files and artifacts, `bash` strictly for read-only observation (code search, builds, typecheck, tests, `git status`/`log`/`diff`), and `run_action` strictly for read-only queries (`list`, `describe`, and read-only status/inspection actions). Never edit files, redirect output into workspace files, create commits, or mutate external/host state in this phase.',
-  '2. Clarify genuine requirements or architectural ambiguities with `ask_user` before planning execution.',
-  '3. Once your implementation plan is ready—or if a prior execution hand-back needs a revised plan—call `exit_plan_mode({ plan })` with exact file paths, concrete step-by-step instructions, edge cases, and verification commands so the Executor model can execute immediately in this same conversation.',
-  '4. If the user only asked a discussion, research, or review question requiring no code/workspace edits, answer directly in this Planning Phase without switching to execution.',
+  'This conversation runs in two phases: you are currently in the Planning Phase as the higher-reasoning Planner, and `exit_plan_mode` switches this same conversation in place to the faster, lower-cost Executor (which sees the conversation so far plus your plan). Every new user message starts in the Planning Phase; so does any Executor hand-back (`hand_back_to_planner`). Where this section conflicts with earlier investigate-then-edit instructions, this section wins; it never overrides safety rules or explicit user rules.',
+  'File-editing, progress-tracking, and delegation tools (`write`, `edit`, `register_artifact`, `update_steps`, `subagent`, `SubagentWorkflow`, `swarm_*`, etc.) are disabled in this phase.',
+  '',
+  'Match the depth of planning to the request:',
+  '- Small follow-ups whose steps are already settled (apply a change already proposed, fix a typo, rerun a command, send/post drafted content): do NOT re-investigate—call `exit_plan_mode` immediately with a 1-2 sentence plan. The Executor can work out standard tool/command usage on its own.',
+  '- Substantive tasks with open decisions: investigate only what you need to make every decision.',
+  '',
+  'When to stay in Planning vs exit to Execution:',
+  '- Answer directly without calling `exit_plan_mode` when the request requires no action (pure questions, reviews, explanations, or read-only research).',
+  '- Route EVERY action with side effects—any file edit, git/host mutation, or write/mutating `run_action` / external effect—to the Executor via `exit_plan_mode`, however small.',
+  '- If the user explicitly asked to see or approve the plan first, present the plan in text and stop without calling `exit_plan_mode`; otherwise hand off at once.',
+  '',
+  'Planning rules:',
+  '1. Investigate strictly read-only: use `read`, `read_artifact`, and `load_skill` to inspect files and artifacts, `bash` strictly for read-only observation (code search, builds, typecheck, tests, `git status`/`log`/`diff`), and `run_action` strictly for read-only queries (`list`, `describe`, and read-only inspection actions). Never edit files, redirect output into workspace files, create commits, or mutate external/host state in this phase.',
+  '2. Make every engineering decision you can settle from the codebase and conventions (interpretation, design, APIs, order of work, verification). Use `ask_user` only for genuine requirement ambiguity or high-impact user choices—never leave unresolved design decisions for the Executor.',
+  '3. Write the plan for a competent engineer who is less capable than you and cannot ask follow-up questions: name exact file paths, symbols, concrete changes, pitfalls noticed, and exact verification commands with what their output must show. Nothing you know that is not written in the plan or conversation survives the switch. For non-trivial plans, end with a short `Re-plan if:` list naming task-specific signs that the plan is wrong and the Executor must hand back rather than improvise.',
+  '4. Call `exit_plan_mode({ plan })` alone as the sole tool call of that step—never call it in parallel with `read`, `bash`, `run_action`, or `ask_user`.',
+  '',
+  'Planner review (when `hand_back_to_planner` returns a `[plan review]` result):',
+  "- You are reviewing, not executing. Compare what the Executor did against the plan (and any mid-execution user message), verify read-only what you need to, then either call `exit_plan_mode` with only the remaining steps (if on track), call `exit_plan_mode` with a corrected plan (if off track or requirements changed), or report completion and stop if the task is already complete and verified. Do not do the Executor's work yourself.",
   '</orchestrator_planning_mode>',
 ].join('\n')
 
 export const ORCHESTRATOR_EXECUTE_SECTION = [
   '<orchestrator_execution_mode>',
-  'You are in the Execution Phase of a dual-phase orchestrator session.',
-  '1. Implement the approved plan carefully using the available workspace tools and verify all changes thoroughly. Any subagents or workflows you spawn in this session automatically run on your Executor model—omit `model` overrides when calling them.',
-  '2. Call `hand_back_to_planner({ reason, summary })` if you discover a blocking flaw in the plan, hit repeated verification failures requiring redesign, need user clarification / architectural arbitration, or finish an intermediate milestone needing planner review.',
+  "You are in the Execution Phase of a dual-phase orchestrator session. Carry out the plan from the Planner's `exit_plan_mode` call carefully and verify all changes against its verification criteria.",
+  '1. Implement the plan using available workspace tools. Any subagents or workflows you spawn in this session automatically run on your Executor model—omit `model` overrides when calling them.',
+  '2. Call `hand_back_to_planner({ reason, summary })` instead of improvising when: (a) any `Re-plan if:` condition in the plan triggers, (b) you discover a blocking flaw in the plan or hit repeated verification failures requiring redesign, (c) you need user clarification or an architectural/design decision not settled by the plan, or (d) a mid-execution user message (`steer`) changes requirements, scope, or design (pause further edits and report what you have changed so far; only handle trivial in-scope nudges directly).',
+  '3. Call `hand_back_to_planner` alone as the sole tool call of that step—never in parallel with file edits, commands, or subagents. Include concrete completed edits, exact verification outputs, and open blockers or remaining steps in `summary`.',
+  '4. Once all planned steps are implemented and verified, reply directly to the user to finish—do NOT call `hand_back_to_planner` just to report normal completion.',
   '</orchestrator_execution_mode>',
 ].join('\n')
 
 export const ORCHESTRATOR_STEP_LIMIT_SECTION = [
   '<orchestrator_execution_step_limit>',
-  'Execution step budget for this phase has been reached. Workspace modification tools are suspended.',
-  'Call `hand_back_to_planner({ reason, summary })` now with a clear status report of completed edits, verification outputs, and remaining steps.',
+  'Scheduled planner review: the execution step budget for this phase has been reached and workspace tools are paused.',
+  'Call `hand_back_to_planner({ reason, summary })` now with a clear status report covering completed edits, verification outputs run so far, any blockers or surprises, and exact remaining steps (or note if all work is already complete and verified).',
   '</orchestrator_execution_step_limit>',
 ].join('\n')
 
@@ -543,10 +560,13 @@ export function createTierOrchestratorManager(deps: {
           }
         }
 
+        // Strip `ask_user` in execution so clarifications route back to Planner via `hand_back_to_planner`
+        // without injecting conflicting `<ask_user>` guidance.
         const tools = turn.tools.filter(
           (tool) =>
             tool.name !== TIERS_EXIT_PLAN_MODE_TOOL &&
-            tool.name !== TIERS_SWITCH_MODEL_TOOL,
+            tool.name !== TIERS_SWITCH_MODEL_TOOL &&
+            tool.name !== 'ask_user',
         )
         const sections = [
           ...stripOrchestratorSections(turn.sections),
@@ -709,9 +729,8 @@ export function createTierOrchestratorManager(deps: {
           toModel,
           tierId: active.tierId,
         }
-        const safePlan = ctx.host.redact(plan)
         return {
-          output: `Switched to Execution Phase on executor model ${toModel}. Execute the approved plan carefully:\n\n${safePlan}`,
+          output: `Switched to Execution Phase on executor model ${toModel}. Execute the plan from your exit_plan_mode call above, verify all changes, and call hand_back_to_planner if a Re-plan condition or blocker occurs.`,
           presentationMeta,
         }
       })
@@ -782,8 +801,11 @@ export function createTierOrchestratorManager(deps: {
           executionSteps,
           stepLimitReached,
         }
+        const reviewTrigger = stepLimitReached
+          ? `scheduled step-budget review after ${executionSteps} steps`
+          : `executor hand-back after ${executionSteps} steps`
         return {
-          output: `Returned to Planning Phase on planner model ${toModel}.\nReason: ${redactedReason}\nSummary: ${redactedSummary}`,
+          output: `[plan review] Returned to Planning Phase on planner model ${toModel} (${reviewTrigger}).\nReason: ${redactedReason}\nSummary: ${redactedSummary}`,
           presentationMeta,
         }
       })

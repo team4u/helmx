@@ -351,9 +351,9 @@ export function createTiersPlugin(): PluginDefinition {
       ctx.tool<ExitPlanModeToolInput>({
         name: TIERS_EXIT_PLAN_MODE_TOOL,
         description:
-          'Finish planning in an orchestrator tier session and switch this conversation in place to the Executor model with workspace write access.',
+          'Exit the Planning Phase and switch this conversation in place to the Executor model (which sees the conversation so far plus this plan). Call once the plan is ready, alone as the sole tool call of the step.',
         promptGuidelines: [
-          'In an orchestrator tier Planning Phase, call exit_plan_mode({ plan }) once you are ready to implement code changes so control transfers to the Executor model.',
+          'Call exit_plan_mode({ plan }) alone (never in parallel with other tools) for any task requiring edits or side-effect actions—use 1-2 sentences for trivial settled follow-ups, or a complete plan with verification criteria and a Re-plan if: list for substantive work. Skip it for pure questions or when the user asked to approve the plan first.',
         ],
         scope: TIERS_BORROW_ELIGIBLE_SCOPE,
         inputSchema: {
@@ -364,7 +364,8 @@ export function createTiersPlugin(): PluginDefinition {
             plan: {
               type: 'string',
               minLength: 1,
-              description: 'Concrete implementation plan (exact file paths, symbols, steps, and verification commands)',
+              description:
+                'Complete hand-off plan for the Executor: 1-2 sentences for trivial follow-ups; for substantive work include ordered steps, exact file paths/symbols, concrete changes, verification commands and expected outputs, pitfalls, and a short Re-plan if: list. Nothing omitted from the plan or conversation survives the switch.',
             },
           },
         },
@@ -375,9 +376,9 @@ export function createTiersPlugin(): PluginDefinition {
       ctx.tool<HandBackToPlannerToolInput>({
         name: TIERS_HAND_BACK_TOOL,
         description:
-          'Return control from the Executor model back to the Planner model inside an orchestrator tier session for replanning or final review.',
+          'Return control from the Executor model back to the Planner model inside an orchestrator tier session for replanning, unresolved decisions, or scheduled step-budget review. Call alone as the sole tool call of the step.',
         promptGuidelines: [
-          'In an orchestrator tier Execution Phase, call hand_back_to_planner({ reason, summary }) when blocked, discovering a design flaw, needing architectural arbitration, or reaching the execution step budget.',
+          'Call hand_back_to_planner({ reason, summary }) alone (never in parallel with other tools) when a Re-plan if: condition triggers, a blocking flaw/clarification/scope-changing user steer occurs, or the execution step budget is reached. Do NOT call it on normal verified completion—reply directly to the user instead.',
         ],
         scope: TIERS_BORROW_ELIGIBLE_SCOPE,
         inputSchema: {
@@ -386,7 +387,12 @@ export function createTiersPlugin(): PluginDefinition {
           additionalProperties: false,
           properties: {
             reason: { type: 'string', minLength: 1, description: 'Concise reason for returning to the planner' },
-            summary: { type: 'string', minLength: 1, description: 'Summary of edits completed, verification outputs, and open issues' },
+            summary: {
+              type: 'string',
+              minLength: 1,
+              description:
+                'Structured status report: edits completed, exact verification outputs, blockers/decisions needed, and remaining steps',
+            },
           },
         },
         presentationMetaSchema: ORCHESTRATOR_TRANSITION_META_SCHEMA,

@@ -502,6 +502,7 @@ test('full planner -> native bash & read-only run_action -> exit_plan_mode -> ex
     assert.ok(observed[0]?.toolNames.every((name) => ORCHESTRATOR_PLAN_TOOL_WHITELIST.has(name)))
     assert.ok(observed[0]?.toolNames.includes('bash'))
     assert.ok(observed[0]?.toolNames.includes('run_action'))
+    assert.ok(observed[0]?.toolNames.includes('ask_user'))
     assert.ok(observed[0]?.toolNames.includes(TIERS_EXIT_PLAN_MODE_TOOL))
     assert.ok(!observed[0]?.toolNames.includes('update_steps'))
     assert.ok(!observed[0]?.toolNames.includes('write'))
@@ -525,6 +526,8 @@ test('full planner -> native bash & read-only run_action -> exit_plan_mode -> ex
     assert.ok(observed[2]?.toolNames.includes('run_action'))
     assert.ok(observed[2]?.toolNames.includes('update_steps'))
     assert.ok(observed[2]?.toolNames.includes(TIERS_HAND_BACK_TOOL))
+    assert.ok(!observed[2]?.toolNames.includes('ask_user'), 'execution phase must strip ask_user so clarifications route back to planner')
+    assert.ok(!observed[2]?.systemPrompt.includes('<ask_user>'), 'execution phase must not inject <ask_user> prompt snippet')
     assert.ok(!observed[2]?.toolNames.includes(TIERS_EXIT_PLAN_MODE_TOOL))
     assert.ok(!observed[2]?.toolNames.includes(TIERS_SWITCH_MODEL_TOOL))
     assert.ok(observed[2]?.systemPrompt.includes(ORCHESTRATOR_EXECUTE_SECTION))
@@ -567,14 +570,24 @@ test('full planner -> native bash & read-only run_action -> exit_plan_mode -> ex
     assert.ok(tiersListResult !== undefined, 'read-only run_action builtin:tiers.list must succeed in orchestrator planning phase')
     assert.ok((tiersListResult.content?.[0]?.text ?? '').includes('auto-main'))
 
-    const exitMeta = toolResults.find((m) => m.toolName === TIERS_EXIT_PLAN_MODE_TOOL)?.details
+    const exitResult = toolResults.find((m) => m.toolName === TIERS_EXIT_PLAN_MODE_TOOL)
+    const exitText = exitResult?.content?.[0]?.text ?? ''
+    assert.ok(exitText.includes('faux/workhorse'))
+    assert.ok(!exitText.includes('Step 1: check files'), 'exit_plan_mode toolResult must not duplicate full plan body')
+    const exitMeta = exitResult?.details
     assert.equal(exitMeta?.['tool'], TIERS_EXIT_PLAN_MODE_TOOL)
     assert.equal(exitMeta?.['fromPhase'], 'planning')
     assert.equal(exitMeta?.['toPhase'], 'execution')
     assert.equal(exitMeta?.['fromModel'], 'faux/flagship')
     assert.equal(exitMeta?.['toModel'], 'faux/workhorse')
 
-    const handBackMeta = toolResults.find((m) => m.toolName === TIERS_HAND_BACK_TOOL)?.details
+    const handBackResult = toolResults.find((m) => m.toolName === TIERS_HAND_BACK_TOOL)
+    const handBackText = handBackResult?.content?.[0]?.text ?? ''
+    assert.ok(handBackText.startsWith('[plan review]'))
+    assert.ok(handBackText.includes('scheduled step-budget review after 1 steps'))
+    assert.ok(handBackText.includes('Step budget reached'))
+    assert.ok(handBackText.includes('Checked files and awaiting planner decision.'))
+    const handBackMeta = handBackResult?.details
     assert.equal(handBackMeta?.['tool'], TIERS_HAND_BACK_TOOL)
     assert.equal(handBackMeta?.['fromPhase'], 'execution')
     assert.equal(handBackMeta?.['toPhase'], 'planning')
