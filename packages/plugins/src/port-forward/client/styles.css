@@ -1,21 +1,198 @@
 /**
  * `builtin:port-forward` plugin styles.
  *
- * Generic layout/forms/tables/drawers reuse host design-system primitives.
+ * Generic layout/forms/cards/drawers reuse host design-system primitives.
  * All `:hover` rules stay strictly inside `@media (hover: hover)`.
  */
-.pf-row {
-  cursor: pointer;
+.pf-screen {
+  gap: 0;
 }
 
-.pf-row:focus-visible td,
-.pf-row.is-selected td {
+.pf-screen > .screen-header {
+  padding: 16px 20px 0;
+}
+
+.pf-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px 12px;
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+  flex-wrap: wrap;
+}
+
+.pf-toolbar-main {
+  display: flex;
+  align-items: center;
+  gap: 10px 12px;
+  flex: 1 1 auto;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.pf-toolbar-main .search-box-toolbar {
+  flex: 1 1 220px;
+  max-width: 340px;
+}
+
+.pf-toolbar-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.pf-stage {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 20px;
+  flex: 1 0 auto;
+  min-width: 0;
+}
+
+.pf-card {
+  min-height: 144px;
+}
+
+.pf-card-title-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+
+.pf-card-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.pf-card-node-line {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11.5px;
+  color: var(--fg-muted);
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.pf-route-box {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border-radius: var(--radius-xs);
+  border: 1px solid var(--border);
   background: var(--bg-subtle);
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.pf-card.is-stopped .pf-route-box {
+  opacity: 0.72;
+}
+
+.pf-route-listen {
+  min-width: 0;
+}
+
+.pf-route-listen .helmx-mono-id-code {
+  background: transparent;
+  border: none;
+  padding: 0;
+  color: var(--fg);
+  font-weight: 500;
+}
+
+.pf-route-arrow {
+  color: var(--fg-subtle);
+  flex-shrink: 0;
+}
+
+.pf-route-target {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--fg-secondary);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pf-card-error {
+  font-size: 11.5px;
+  color: var(--err);
+  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+
+.pf-error-text {
+  color: var(--err);
+  overflow-wrap: anywhere;
+}
+
+.pf-card-meta-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  color: var(--fg-muted);
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.pf-card-status.pf-status-active_traffic {
+  color: var(--accent);
+  font-weight: 500;
+}
+
+.pf-card-status.pf-status-listening {
+  color: var(--ok);
+}
+
+.pf-card-status.pf-status-waiting_node {
+  color: var(--warn);
+}
+
+.pf-card-status.pf-status-error {
+  color: var(--err);
+  font-weight: 500;
+}
+
+.pf-card-dot {
+  color: var(--fg-subtle);
+}
+
+.pf-card-conns {
+  color: var(--fg-subtle);
 }
 
 @media (hover: hover) {
-  .pf-row:hover td {
-    background: var(--bg-subtle);
+  .pf-card .pf-card-delete-btn {
+    opacity: 0.55;
+    transition: opacity var(--dur-fast) ease, color var(--dur-fast) ease, background-color var(--dur-fast) ease;
+  }
+
+  .pf-card:hover .pf-card-delete-btn,
+  .pf-card:focus-within .pf-card-delete-btn {
+    opacity: 1;
+  }
+
+  .pf-card .pf-card-delete-btn:hover {
+    color: var(--err);
   }
 }
 
@@ -23,13 +200,6 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
-}
-
-.pf-node-cell {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
 }
 
 .pf-slot-list {
@@ -75,74 +245,20 @@
 }
 
 @media (max-width: 680px) {
+  .pf-toolbar {
+    padding: 10px 14px;
+  }
+
+  .pf-stage {
+    padding: 14px;
+  }
+
+  .pf-toolbar-main .search-box-toolbar {
+    max-width: none;
+    flex: 1 1 100%;
+  }
+
   .pf-form-pair {
     grid-template-columns: 1fr;
-  }
-
-  .pf-table-wrap .helmx-table-wrap {
-    border: none;
-    background: transparent;
-    overflow: visible;
-  }
-
-  .pf-table-wrap .helmx-table,
-  .pf-table-wrap .helmx-table tbody,
-  .pf-table-wrap .helmx-table tr {
-    display: block;
-    width: 100%;
-    min-width: 0;
-  }
-
-  .pf-table-wrap .helmx-table thead {
-    display: none;
-  }
-
-  .pf-table-wrap .helmx-table tbody {
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-  }
-
-  .pf-table-wrap .helmx-table tr {
-    padding: 10px 12px;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-md);
-    background: var(--bg-elevated);
-    box-sizing: border-box;
-  }
-
-  .pf-table-wrap .helmx-table td {
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 10px;
-    padding: 4px 0;
-    border: none;
-    max-width: none;
-    min-width: 0;
-    white-space: normal;
-    word-break: break-word;
-    text-align: right;
-  }
-
-  .pf-table-wrap .helmx-table td[colspan] {
-    display: block;
-    text-align: center;
-    padding: 12px 4px;
-  }
-
-  .pf-table-wrap .helmx-table td[data-label]:not([colspan])::before {
-    content: attr(data-label);
-    flex-shrink: 0;
-    color: var(--fg-subtle);
-    font-size: 11px;
-    text-align: left;
-  }
-
-  .pf-table-wrap .helmx-table td.cell-actions {
-    padding-top: 8px;
-    margin-top: 4px;
-    border-top: 1px solid var(--border);
-    align-items: center;
   }
 }

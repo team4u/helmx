@@ -1,11 +1,12 @@
 /**
  * `builtin:port-forward` compiled client TSX interactive DOM tests:
- * - Loading & empty states, zero Emoji check;
- * - StatusLight 5-state synthesis (`working` / `done` / `blocked` / `failed` / `idle`);
- * - SearchBox + SegmentedControl filtering + URL `params.node` filter pill;
- * - DetailDrawer (`create=1` / `edit=<id>`): `nodes === undefined` disabled Select,
- *   unknown bound node preservation, non-loopback `Callout` security warning,
- *   client-side validation & `create` submission, `ConfirmDialog` delete flow;
+ * - Loading & empty states (single top-right New mapping CTA, zero `.screen-subtitle`,
+ *   zero main-stage `.kv-grid`, zero Emoji);
+ * - SelectCard grid + StatusLight 5-state synthesis (`working` / `done` / `blocked` / `failed` / `idle`);
+ * - Pill tabs with inline counts + SearchBox + Reset filters + URL `params.node` filter pill;
+ * - Instant Switch toggle (`start`/`stop`), overflow DropdownMenu bulk actions, ConfirmDialog delete;
+ * - DetailDrawer (`create=1` / `edit=<id>`): runtime KvGrid in edit drawer, `nodes === undefined` disabled
+ *   Select, unknown bound node preservation, non-loopback `Callout` security warning, valid create submit;
  * - `NodePortForwardsSection` slot filtering & deep-link `openScreen` targets;
  * - `PortForwardSettingsPanel` summary KV & navigation.
  */
@@ -74,6 +75,12 @@ describe('port-forward-client-interactions', () => {
         actionCalls.push({ actionId, input })
         if (actionId === 'create') {
           return { item: { id: 'new-1', name: (input as { name?: string })?.name ?? 'created-rule' } }
+        }
+        if (actionId === 'pause_runtime') {
+          return { stoppedListeners: 3, closedConnections: 2 }
+        }
+        if (actionId === 'stop_all') {
+          return { stopped: 4 }
         }
         return {}
       },
@@ -214,7 +221,7 @@ describe('port-forward-client-interactions', () => {
     },
   }
 
-  test('manager screen: loading, empty state, and zero Emoji', TIMEOUT, async () => {
+  test('manager screen: loading, single-CTA empty state, no subtitle, no stage kv-grid, and zero Emoji', TIMEOUT, async () => {
     const spy = makeSpyCtx()
     setBuiltinClientStub({ docs: {}, hostNodes: SAMPLE_NODES })
     const loadingMount = await mount(
@@ -230,6 +237,7 @@ describe('port-forward-client-interactions', () => {
     )
     try {
       assert.match(loadingMount.host.textContent ?? '', /Loading port-forward rules/i)
+      assert.equal(loadingMount.host.querySelector('.screen-subtitle') === null, true)
       assert.equal(EMOJI_RE.test(loadingMount.host.textContent ?? ''), false)
     } finally {
       loadingMount.unmount()
@@ -249,13 +257,29 @@ describe('port-forward-client-interactions', () => {
     )
     try {
       assert.match(emptyMount.host.textContent ?? '', /No port-forward rules yet/i)
+      assert.equal(emptyMount.host.querySelector('.screen-subtitle') === null, true, 'must not render screen subtitle')
+      assert.equal(emptyMount.host.querySelectorAll('.kv-grid').length, 0, 'must not render vertical stats kv-grid')
+      const newButtons = [...emptyMount.host.querySelectorAll('button')].filter((b) =>
+        /New mapping/i.test(b.textContent ?? ''),
+      )
+      assert.equal(newButtons.length, 1, 'must render only one New mapping button (top-right toolbar)')
+      assert.equal(
+        emptyMount.host.querySelectorAll('.empty-state button').length,
+        0,
+        'empty state must not duplicate the New mapping CTA button',
+      )
+      assert.equal(
+        emptyMount.host.querySelector('button[aria-label="More actions"]') === null,
+        true,
+        'overflow bulk menu is hidden when there are zero rules',
+      )
       assert.equal(EMOJI_RE.test(emptyMount.host.textContent ?? ''), false)
     } finally {
       emptyMount.unmount()
     }
   })
 
-  test('manager screen: StatusLight tones, search & segmented filters, and ConfirmDialog delete', TIMEOUT, async () => {
+  test('manager screen: SelectCard grid, StatusLight tones, pill counts, search & reset, Switch toggle, DropdownMenu bulk actions, and ConfirmDialog delete', TIMEOUT, async () => {
     const spy = makeSpyCtx()
     setBuiltinClientStub({
       docs: { rules: SAMPLE_RULES, runtime: SAMPLE_RUNTIME },
@@ -263,6 +287,7 @@ describe('port-forward-client-interactions', () => {
       config: { allowPublicBind: false },
     })
 
+    const paramPatches: Array<Record<string, string | undefined>> = []
     const { host, unmount } = await mount(
       spy,
       e(components.PortForwardManagerScreen, {
@@ -270,31 +295,44 @@ describe('port-forward-client-interactions', () => {
         screenId: 'main',
         isSplit: false,
         params: {},
-        setParams: () => {},
+        setParams: (patch) => paramPatches.push(patch),
         inlineDrawer: true,
       }),
     )
     try {
       const text = host.textContent ?? ''
       assert.equal(EMOJI_RE.test(text), false, 'UI must contain zero Emoji')
+      assert.equal(host.querySelector('.screen-subtitle') === null, true)
+      assert.equal(host.querySelectorAll('.kv-grid').length, 0, 'main stage must not render vertical kv-grid')
       assert.match(text, /vllm-api/)
       assert.match(text, /EADDRINUSE: already in use/)
+      assert.match(text, /2 active/)
+
+      const cards = host.querySelectorAll('.helmx-select-card')
+      assert.equal(cards.length, 5)
 
       const tones = [...host.querySelectorAll('.helmx-status-light')].map((el) => el.getAttribute('data-tone'))
       assert.deepEqual(tones, ['working', 'done', 'blocked', 'failed', 'idle'])
 
-      // SegmentedControl filter -> Error only
-      const errorTab = [...host.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Error')
+      // Pill tabs with inline counts
+      const tabs = [...host.querySelectorAll<HTMLButtonElement>('[role="tab"]')]
+      assert.equal(tabs.length, 4)
+      assert.deepEqual(
+        tabs.map((tab) => tab.textContent?.replace(/\s+/g, '')),
+        ['All5', 'Listening3', 'Stopped1', 'Error1'],
+      )
+
+      const errorTab = tabs.find((tab) => tab.textContent?.includes('Error'))
       assert.ok(errorTab !== undefined)
       await act(async () => {
         errorTab.click()
       })
-      const filteredRows = host.querySelectorAll('tbody tr')
-      assert.equal(filteredRows.length, 1)
-      assert.match(filteredRows[0]?.textContent ?? '', /broken-port/)
+      const filteredCards = host.querySelectorAll('.helmx-select-card')
+      assert.equal(filteredCards.length, 1)
+      assert.match(filteredCards[0]?.textContent ?? '', /broken-port/)
 
-      // Back to All + SearchBox query
-      const allTab = [...host.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'All')
+      // Back to All + SearchBox query + unmatched Reset filters
+      const allTab = tabs.find((tab) => tab.textContent?.includes('All'))
       assert.ok(allTab !== undefined)
       await act(async () => {
         allTab.click()
@@ -302,10 +340,64 @@ describe('port-forward-client-interactions', () => {
       const searchInput = host.querySelector<HTMLInputElement>('.search-box input')
       assert.ok(searchInput !== null)
       await act(async () => {
+        setInputValue(searchInput, 'zzz-no-match')
+      })
+      assert.equal(host.querySelectorAll('.helmx-select-card').length, 0)
+      const resetBtn = [...host.querySelectorAll('button')].find((b) =>
+        b.textContent?.includes('Reset filters'),
+      )
+      assert.ok(resetBtn !== undefined)
+      await act(async () => {
+        resetBtn.click()
+      })
+      assert.equal(host.querySelectorAll('.helmx-select-card').length, 5)
+
+      await act(async () => {
         setInputValue(searchInput, '18000')
       })
-      assert.equal(host.querySelectorAll('tbody tr').length, 1)
-      assert.match(host.querySelector('tbody tr')?.textContent ?? '', /vllm-api/)
+      assert.equal(host.querySelectorAll('.helmx-select-card').length, 1)
+      assert.match(host.querySelector('.helmx-select-card')?.textContent ?? '', /vllm-api/)
+
+      // Switch toggle calls stop action without opening drawer
+      const switchBtn = host.querySelector<HTMLButtonElement>('.helmx-select-card [role="switch"]')
+      assert.ok(switchBtn !== null)
+      await act(async () => {
+        switchBtn.click()
+      })
+      assert.deepEqual(spy.actionCalls[0], { actionId: 'stop', input: { id: 'r-working' } })
+      assert.equal(paramPatches.length, 0)
+
+      // Overflow DropdownMenu bulk action -> pause_runtime via ConfirmDialog
+      const moreTrigger = host.querySelector<HTMLButtonElement>('button[aria-label="More actions"]')
+      assert.ok(moreTrigger !== null)
+      await act(async () => {
+        moreTrigger.dispatchEvent(new PointerEvent('pointerdown', { button: 0, bubbles: true, cancelable: true }))
+      })
+      const pauseItem = [...host.querySelectorAll<HTMLElement>('[role="menuitem"]')].find((el) =>
+        el.textContent?.includes('Pause & disconnect all'),
+      )
+      assert.ok(pauseItem !== undefined, 'More actions menu renders Pause & disconnect all')
+      await act(async () => {
+        pauseItem.click()
+      })
+      const pauseDialog = host.querySelector('[role="alertdialog"]')
+      assert.ok(pauseDialog !== null, 'Bulk action opens ConfirmDialog')
+      const pauseConfirmBtn = [...pauseDialog.querySelectorAll('button')].find((b) =>
+        b.textContent?.includes('Pause & disconnect all'),
+      )
+      assert.ok(pauseConfirmBtn !== undefined)
+      await act(async () => {
+        pauseConfirmBtn.click()
+      })
+      assert.deepEqual(spy.actionCalls[1], { actionId: 'pause_runtime', input: {} })
+
+      // Clicking card primary trigger requests edit drawer via setParams
+      const cardTrigger = host.querySelector<HTMLButtonElement>('.helmx-select-card-trigger')
+      assert.ok(cardTrigger !== null)
+      await act(async () => {
+        cardTrigger.click()
+      })
+      assert.deepEqual(paramPatches.at(-1), { edit: 'r-working', create: undefined })
 
       // Delete flow via ConfirmDialog (Cancel first, then Confirm)
       const deleteBtn = host.querySelector<HTMLButtonElement>('button[aria-label="Delete"]')
@@ -320,7 +412,7 @@ describe('port-forward-client-interactions', () => {
       await act(async () => {
         cancelBtn.click()
       })
-      assert.equal(spy.actionCalls.length, 0)
+      assert.equal(spy.actionCalls.length, 2)
 
       await act(async () => {
         deleteBtn.click()
@@ -334,16 +426,16 @@ describe('port-forward-client-interactions', () => {
       await act(async () => {
         confirmBtn.click()
       })
-      assert.deepEqual(spy.actionCalls[0], { actionId: 'delete', input: { id: 'r-working' } })
+      assert.deepEqual(spy.actionCalls[2], { actionId: 'delete', input: { id: 'r-working' } })
     } finally {
       unmount()
     }
   })
 
-  test('drawer form: nodes undefined disables Select, unknown node preserved, non-loopback warns & blocks when disallowed, valid create submits', TIMEOUT, async () => {
+  test('drawer form: edit runtime KvGrid, nodes undefined disables Select, unknown node preserved, non-loopback warns & blocks when disallowed, valid create submits', TIMEOUT, async () => {
     const spy = makeSpyCtx()
 
-    // 1. nodes === undefined while editing rule bound to 'deleted-node' -> Select must be disabled
+    // 1. nodes === undefined while editing rule bound to 'deleted-node' -> Select must be disabled + runtime KvGrid shown
     setBuiltinClientStub({
       docs: { rules: SAMPLE_RULES, runtime: SAMPLE_RUNTIME },
       hostNodes: undefined,
@@ -355,13 +447,17 @@ describe('port-forward-client-interactions', () => {
         pluginId: 'builtin:port-forward',
         screenId: 'main',
         isSplit: false,
-        params: { edit: 'r-stopped' },
+        params: { edit: 'r-error' },
         setParams: () => {},
         inlineDrawer: true,
       }),
     )
     try {
-      const selectTrigger = loadingNodesMount.host.querySelector<HTMLButtonElement>('.helmx-select-trigger')
+      const drawer = loadingNodesMount.host.querySelector('[role="dialog"]')
+      assert.ok(drawer !== null)
+      assert.ok(drawer.querySelector('.kv-grid') !== null, 'edit drawer shows compact runtime KvGrid')
+      assert.match(drawer.textContent ?? '', /EADDRINUSE: already in use/)
+      const selectTrigger = drawer.querySelector<HTMLButtonElement>('.helmx-select-trigger')
       assert.ok(selectTrigger !== null)
       assert.equal(selectTrigger.disabled, true, 'Select must be disabled while nodes === undefined')
     } finally {
@@ -410,6 +506,7 @@ describe('port-forward-client-interactions', () => {
     try {
       const drawer = createMount.host.querySelector('[role="dialog"]')
       assert.ok(drawer !== null)
+      assert.equal(drawer.querySelector('.kv-grid') === null, true, 'create drawer has no runtime KvGrid')
       const listenHostInput = drawer.querySelector<HTMLInputElement>('input[placeholder="127.0.0.1"]')
       const listenPortInput = drawer.querySelector<HTMLInputElement>('input[placeholder="8080"]')
       const targetPortInput = drawer.querySelector<HTMLInputElement>('input[placeholder="3000"]')
