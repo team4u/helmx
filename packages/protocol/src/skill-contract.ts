@@ -48,28 +48,24 @@ function stripQuotedScalar(value: string): string {
   return inner.replace(/''/g, "'")
 }
 
-/** Parsed SKILL.md frontmatter fields. */
-export interface SkillFrontmatter {
-  name: string
-  description: string
-  managedByPlugin?: string
+/** One `key: value` field of SKILL.md frontmatter in original YAML order (duplicate keys are kept). */
+export interface SkillFrontmatterField {
+  key: string
+  value: string
 }
 
 /**
- * Parse top YAML frontmatter name/description/managedByPlugin from SKILL.md (defaults to id/empty when omitted).
- * Only accepts the current field name managedByPlugin (no legacy aliases); a present key with an empty value is invalid
- * and throws explicitly rather than fabricating ownerless data (honest failure, no silent fallback).
- * Supports the minimal YAML subset used by pi ecosystem shared skills (~/.agents/skills): single-line scalars
- * (stripping symmetric outer quotes) and block scalars—folded > / >- (trims consecutive indented lines and joins
- * with spaces for long single-line descriptions) and literal | / |- (strips common indent and joins with newlines);
- * advanced YAML syntax (anchors/lists/nesting, etc.) is unsupported.
+ * Parse frontmatter lines into ordered fields; the single value-syntax reader shared by the kernel catalog
+ * (parseSkillFrontmatter) and the Web skill reader, so both always see the same text. Supports the minimal YAML
+ * subset used by pi ecosystem shared skills (~/.agents/skills): single-line scalars (stripping symmetric outer
+ * quotes) and block scalars—folded > / >- (trims consecutive indented lines and joins with spaces for long
+ * single-line descriptions) and literal | / |- (strips common indent and joins with newlines); advanced YAML
+ * syntax (anchors/lists/nesting, etc.) is unsupported. A block scalar ends at the first line indented less than
+ * its first non-empty line and never runs past the given lines, so callers bound `lines` to the fence body to
+ * keep the closing fence out of a value. Lines matching no key (comments, blanks) are skipped.
  */
-export function parseSkillFrontmatter(text: string): SkillFrontmatter {
-  const match = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text)
-  if (match === null) return { name: '', description: '' }
-  const body = match[1] ?? ''
-  const fields = new Map<string, string>()
-  const lines = body.split(/\r?\n/)
+export function parseSkillFrontmatterLines(lines: readonly string[]): SkillFrontmatterField[] {
+  const fields: SkillFrontmatterField[] = []
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]!
     const m = /^([A-Za-z_][A-Za-z0-9_-]*):\s*(.*)$/.exec(line)
@@ -96,10 +92,33 @@ export function parseSkillFrontmatter(text: string): SkillFrontmatter {
       const value = inline.startsWith('>')
         ? block.map((l) => l.trim()).filter((l) => l !== '').join(' ')
         : block.join('\n')
-      fields.set(key, value.trim())
+      fields.push({ key, value: value.trim() })
       continue
     }
-    fields.set(key, stripQuotedScalar(inline))
+    fields.push({ key, value: stripQuotedScalar(inline) })
+  }
+  return fields
+}
+
+/** Parsed SKILL.md frontmatter fields. */
+export interface SkillFrontmatter {
+  name: string
+  description: string
+  managedByPlugin?: string
+}
+
+/**
+ * Parse top YAML frontmatter name/description/managedByPlugin from SKILL.md (defaults to id/empty when omitted);
+ * values follow parseSkillFrontmatterLines and duplicate keys keep the last occurrence.
+ * Only accepts the current field name managedByPlugin (no legacy aliases); a present key with an empty value is invalid
+ * and throws explicitly rather than fabricating ownerless data (honest failure, no silent fallback).
+ */
+export function parseSkillFrontmatter(text: string): SkillFrontmatter {
+  const match = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text)
+  if (match === null) return { name: '', description: '' }
+  const fields = new Map<string, string>()
+  for (const field of parseSkillFrontmatterLines((match[1] ?? '').split(/\r?\n/))) {
+    fields.set(field.key, field.value)
   }
   const managedRaw = fields.get('managedByPlugin')
   if (managedRaw !== undefined && managedRaw === '') {

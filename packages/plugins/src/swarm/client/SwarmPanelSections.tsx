@@ -15,6 +15,7 @@ import type { PostPeekState } from './model-post-nav.ts'
 import * as C from './copy.ts'
 import { PostBodyText } from './PostBodyText.tsx'
 import { SwarmPostPeekPopover } from './SwarmPostPeekPopover.tsx'
+import { PostRefButtons, PostWorktreeLine } from './SwarmPostFragments.tsx'
 import { shouldCollapsePostBody, type BoardViewDoc } from './board-model.ts'
 
 const LIVE_STATE_LIGHT: Record<string, StatusLightTone> = {
@@ -272,27 +273,8 @@ export function SwarmBoardPostsSection(props: SwarmBoardPostsSectionProps): Reac
                   conversationId={resolvePostConversationId(post)}
                   onRefClick={(refSeq, el) => onOpenPeek(post.seq, refSeq, el)}
                 />
-                {refs.length > 0 ? (
-                  <div className="sw-panel-post-refs">
-                    {refs.map((refSeq) => (
-                      <button
-                        key={refSeq}
-                        type="button"
-                        className="sw-panel-post-ref mono tabular-nums"
-                        aria-label={C.panelRefJumpLabel(refSeq, locale)}
-                        onClick={(e) => onOpenPeek(post.seq, refSeq, e.currentTarget)}
-                      >
-                        {`#${refSeq}`}
-                      </button>
-                    ))}
-                  </div>
-                ) : null}
-                {post.worktreeSnapshot ? (
-                  <div className="sw-panel-post-worktree">
-                    <HelmxIcon name="git-branch" size={11} />
-                    <span>{C.panelWorktreeSummary(post.worktreeSnapshot, locale)}</span>
-                  </div>
-                ) : null}
+                <PostRefButtons refs={refs} locale={locale} onPick={(refSeq, anchor) => onOpenPeek(post.seq, refSeq, anchor)} />
+                <PostWorktreeLine snapshot={post.worktreeSnapshot} locale={locale} />
               </li>
             )
           })}

@@ -35,7 +35,7 @@ export {
   type KernelDiagnosticInput,
   type KernelDiagnosticSink,
 } from './diagnostics.js'
-export { HelmxStore, convStatusOf, summaryOf, type ConvMeta } from './store.js'
+export { HelmxStore, convStatusOf, summaryOf, type ConvMeta, type ConversationSummaryInput } from './store.js'
 export { runShell, runGate, createBashTool, createReadTool, createWriteTool, createEditTool, createReadArtifactTool, createRegisterArtifactTool, type ShellRunResult } from './tools.js'
 export { runNativeSpawn, type NativeSpawnDeps } from './spawn.js'
 export { validateJsonSchema } from './structured-output.js'

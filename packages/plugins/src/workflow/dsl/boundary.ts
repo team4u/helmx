@@ -238,15 +238,23 @@ export function applySchema(result: WorkflowSpawnResult, compiled: CompiledSchem
   }
 }
 
-export async function applyGate(
-  result: WorkflowSpawnResult,
-  command: string,
-  agentId: string,
-  runGate: NonNullable<WorkflowHost['runGate']> | undefined,
-  reported?: WorkflowGateResult,
-  gateTimeoutMs?: number,
-  effectiveCwd?: string,
-): Promise<WorkflowSpawnResult> {
+export interface ApplyGateInput {
+  result: WorkflowSpawnResult
+  command: string
+  agentId: string
+  runGate: NonNullable<WorkflowHost['runGate']> | undefined
+  /** Gate verdict the agent already reported; the host command is skipped when present. */
+  reported?: WorkflowGateResult
+  gateTimeoutMs?: number
+  effectiveCwd?: string
+}
+
+/**
+ * Evaluates the gate of an otherwise successful agent result: a reported verdict wins, otherwise the
+ * host runs `command`; a failed gate turns the result into a failure carrying the gate verdict.
+ */
+export async function applyGate(input: ApplyGateInput): Promise<WorkflowSpawnResult> {
+  const { result, command, agentId, runGate, reported, gateTimeoutMs, effectiveCwd } = input
   let outcome = reported ?? result.gate
   if (outcome === undefined) {
     if (runGate === undefined) {

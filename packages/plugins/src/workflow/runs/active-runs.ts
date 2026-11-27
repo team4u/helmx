@@ -212,99 +212,127 @@ export class RunCoordinatorCore {
   }
 
   async executeSettlement(run: ActiveRun, spec: RunSettlementSpec): Promise<void> {
-    let suspending = false
-    const recordError = (e: unknown): void => {
-      if (run.settleError === undefined) run.settleError = e
-    }
+    // `suspending` must survive a later throw: the settle notifications are skipped for a suspending run.
+    const settlement = { suspending: false }
     try {
-      if (run.pendingEventTimer !== undefined) {
-        clearTimeout(run.pendingEventTimer)
-        run.pendingEventTimer = undefined
-      }
-      const hostClosing = this.isHostClosing()
-      const applied = await spec.applyOutcome(hostClosing)
-      suspending = applied.suspending
+      await this.applyTerminalOutcome(run, spec, settlement)
+    } catch (error) {
+      this.recordSettleError(run, error)
+    } finally {
+      await this.finishSettlement(run, spec, settlement.suspending)
+    }
+  }
 
-      if (run.childConversations.size > 0) {
-        run.header.childConversationIds = [...run.childConversations]
-      }
-      if (!suspending && hostClosing && run.header.status !== 'completed' && childIdsOfHeader(run.header).length > 0) {
-        run.header.phase = 'cleanup_pending'
-      }
-      const now = Date.now()
-      run.header.updatedAt = now
-      if (!suspending && run.header.status !== 'running' && run.header.settledAt === undefined) {
-        run.header.settledAt = now
-      }
+  /** Applies the terminal outcome to header/summary and persists them, recording whether the run is only suspending. */
+  private async applyTerminalOutcome(
+    run: ActiveRun,
+    spec: RunSettlementSpec,
+    settlement: { suspending: boolean },
+  ): Promise<void> {
+    if (run.pendingEventTimer !== undefined) {
+      clearTimeout(run.pendingEventTimer)
+      run.pendingEventTimer = undefined
+    }
+    const hostClosing = this.isHostClosing()
+    const suspending = (await spec.applyOutcome(hostClosing)).suspending
+    settlement.suspending = suspending
+    if (run.childConversations.size > 0) {
+      run.header.childConversationIds = [...run.childConversations]
+    }
+    if (!suspending && hostClosing && run.header.status !== 'completed' && childIdsOfHeader(run.header).length > 0) {
+      run.header.phase = 'cleanup_pending'
+    }
+    const now = Date.now()
+    run.header.updatedAt = now
+    if (!suspending && run.header.status !== 'running' && run.header.settledAt === undefined) {
+      run.header.settledAt = now
+    }
+    run.summary = this.deps.repo.fullSummaryOf(run.header, run.detail)
+    await this.persistTerminalState(run)
+  }
+
+  private async persistTerminalState(run: ActiveRun): Promise<void> {
+    try {
+      await this.deps.repo.saveDetail(run.conversationId, run.detail)
+      this.deps.repo.saveHeader(run.header)
+      await this.deps.repo.flush()
+    } catch (persistError) {
+      writeRedactedStderr(this.deps.redact, `workflow ${run.runId}: terminal persist failed`, persistError)
+      this.recordSettleError(run, persistError)
+    }
+  }
+
+  private recordSettleError(run: ActiveRun, error: unknown): void {
+    if (run.settleError === undefined) run.settleError = error
+  }
+
+  /** Releases the run's resources, then runs the settle notifications; `run.done` resolves last. */
+  private async finishSettlement(run: ActiveRun, spec: RunSettlementSpec, suspending: boolean): Promise<void> {
+    if (run.writer !== undefined) {
+      await run.writer.close().catch(() => {})
+    }
+    run.abort.abort()
+    if (run.pendingExecs.size > 0) await Promise.allSettled([...run.pendingExecs])
+    // Transition active -> settling BEFORE removing from active so `listActiveRuns()` excludes this run
+    // during settlement callbacks while `suspend()`/`close()`/`wait()` still drain until `run.done` resolves.
+    this.settling.set(run.runId, run)
+    this.active.delete(run.runId)
+    try {
+      if (run.pendingAborts.size > 0) await Promise.allSettled([...run.pendingAborts])
+      if (!suspending) await this.notifyRunSettled(run, spec)
+      this.emitEventSafe('workflow.updated', { run: { ...run.summary } })
+    } finally {
+      this.resolveActiveDone(run)
+    }
+  }
+
+  /** Host `onRunSettled` hook, then the background parent notification when this run owes one. */
+  private async notifyRunSettled(run: ActiveRun, spec: RunSettlementSpec): Promise<void> {
+    const { onRunSettled, onBackgroundAgentSettled } = this.deps.host
+    if (onRunSettled !== undefined) await this.invokeOnRunSettled(run, onRunSettled)
+    if (
+      !this.closed &&
+      !this.isHostClosing() &&
+      run.header.notifyParentOnSettle === true &&
+      run.header.notifiedAt === undefined &&
+      onBackgroundAgentSettled !== undefined
+    ) {
+      await this.notifyBackgroundParent(run, spec, onBackgroundAgentSettled)
+    }
+  }
+
+  private async invokeOnRunSettled(run: ActiveRun, onRunSettled: NonNullable<WorkflowServiceHost['onRunSettled']>): Promise<void> {
+    try {
+      await onRunSettled({ ...run.summary })
+    } catch (settledError) {
+      const rawMsg = `onRunSettled failed: ${errorMessage(settledError)}`
+      const fallbackCode = settledError instanceof HelmxError && settledError.code !== '' ? settledError.code : 'unknown'
+      const diag = safeRedactDiagnostic(this.deps.redact, rawMsg, `onRunSettled failed (${fallbackCode})`)
+      process.stderr.write(`workflow ${run.runId}: ${diag}\n`)
+      run.header.error = run.header.error ? `${run.header.error}\n${diag}` : diag
       run.summary = this.deps.repo.fullSummaryOf(run.header, run.detail)
-
       try {
-        await this.deps.repo.saveDetail(run.conversationId, run.detail)
         this.deps.repo.saveHeader(run.header)
         await this.deps.repo.flush()
-      } catch (persistError) {
-        writeRedactedStderr(this.deps.redact, `workflow ${run.runId}: terminal persist failed`, persistError)
-        recordError(persistError)
+      } catch {
+        // Best-effort diagnostic persistence; original settledError takes precedence.
       }
-    } catch (error) {
-      recordError(error)
-    } finally {
-      if (run.writer !== undefined) {
-        await run.writer.close().catch(() => {})
-      }
-      run.abort.abort()
-      if (run.pendingExecs.size > 0) await Promise.allSettled([...run.pendingExecs])
-      // Transition active -> settling BEFORE removing from active so `listActiveRuns()` excludes this run
-      // during settlement callbacks while `suspend()`/`close()`/`wait()` still drain until `run.done` resolves.
-      this.settling.set(run.runId, run)
-      this.active.delete(run.runId)
-      try {
-        if (run.pendingAborts.size > 0) await Promise.allSettled([...run.pendingAborts])
+      this.recordSettleError(run, settledError)
+    }
+  }
 
-        if (!suspending && this.deps.host.onRunSettled !== undefined) {
-          try {
-            await this.deps.host.onRunSettled({ ...run.summary })
-          } catch (settledError) {
-            const rawMsg = `onRunSettled failed: ${errorMessage(settledError)}`
-            const fallbackCode = settledError instanceof HelmxError && settledError.code !== '' ? settledError.code : 'unknown'
-            const diag = safeRedactDiagnostic(this.deps.redact, rawMsg, `onRunSettled failed (${fallbackCode})`)
-            process.stderr.write(`workflow ${run.runId}: ${diag}\n`)
-            run.header.error = run.header.error ? `${run.header.error}\n${diag}` : diag
-            run.summary = this.deps.repo.fullSummaryOf(run.header, run.detail)
-            try {
-              this.deps.repo.saveHeader(run.header)
-              await this.deps.repo.flush()
-            } catch {
-              // Best-effort diagnostic persistence; original settledError takes precedence.
-            }
-            recordError(settledError)
-          }
-        }
-        if (
-          !suspending &&
-          !this.closed &&
-          !this.isHostClosing() &&
-          run.header.notifyParentOnSettle === true &&
-          run.header.notifiedAt === undefined &&
-          this.deps.host.onBackgroundAgentSettled !== undefined
-        ) {
-          try {
-            await this.deps.host.onBackgroundAgentSettled({ ...run.summary }, spec.getNotifyInfo())
-            run.header.notifiedAt = Date.now()
-            this.deps.repo.saveHeader(run.header)
-            await this.deps.repo.flush()
-          } catch (notifyError) {
-            writeRedactedStderr(
-              this.deps.redact,
-              `workflow ${run.runId}: onBackgroundAgentSettled failed`,
-              notifyError,
-            )
-          }
-        }
-        this.emitEventSafe('workflow.updated', { run: { ...run.summary } })
-      } finally {
-        this.resolveActiveDone(run)
-      }
+  private async notifyBackgroundParent(
+    run: ActiveRun,
+    spec: RunSettlementSpec,
+    onBackgroundAgentSettled: NonNullable<WorkflowServiceHost['onBackgroundAgentSettled']>,
+  ): Promise<void> {
+    try {
+      await onBackgroundAgentSettled({ ...run.summary }, spec.getNotifyInfo())
+      run.header.notifiedAt = Date.now()
+      this.deps.repo.saveHeader(run.header)
+      await this.deps.repo.flush()
+    } catch (notifyError) {
+      writeRedactedStderr(this.deps.redact, `workflow ${run.runId}: onBackgroundAgentSettled failed`, notifyError)
     }
   }
 }

@@ -5,7 +5,7 @@
  * without contacting Hub and without destructively modifying existing `tsconfig.json`.
  */
 import { randomUUID } from 'node:crypto'
-import { readdirSync, statSync } from 'node:fs'
+import { readdirSync, statSync, type Dirent } from 'node:fs'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -13,7 +13,7 @@ import { inflateRawSync } from 'node:zlib'
 import { CliError } from '../errors.js'
 import { HELMX_SDK_TSCONFIG_PATHS } from './scaffold-templates.js'
 import type { CommandContext, CommandSpec } from './shared.js'
-import { assertNoExtraPositionals, isOutsideDir, printResult } from './shared.js'
+import { isOutsideDir, printResult, resolveDirArgument } from './shared.js'
 
 export const SDK_TYPES_SUBDIR = '.helmx/types'
 
@@ -98,9 +98,22 @@ async function removeDirIfPresent(dirPath: string): Promise<void> {
   }
 }
 
+/** `mtimeMs` of a TypeScript source file; a file vanishing mid-scan yields `+Infinity` so the snapshot is treated as stale. */
+function tsFileMtimeMs(filePath: string): number {
+  try {
+    return statSync(filePath).mtimeMs
+  } catch (err) {
+    if (isNotFoundErrno(err)) return Number.POSITIVE_INFINITY
+    throw new CliError(
+      `failed to stat SDK source file (${filePath}): ${err instanceof Error ? err.message : String(err)}`,
+      'read_failed',
+    )
+  }
+}
+
+/** Newest `.ts`/`.tsx` mtime under `dirPath` (skipping `node_modules`/`dist`); `+Infinity` when the scan cannot be trusted. */
 function maxTsMtimeMs(dirPath: string): number {
-  let max = 0
-  let entries
+  let entries: Dirent[]
   try {
     entries = readdirSync(dirPath, { withFileTypes: true })
   } catch (err) {
@@ -110,23 +123,14 @@ function maxTsMtimeMs(dirPath: string): number {
       'read_failed',
     )
   }
+  let max = 0
   for (const ent of entries) {
     if (ent.name === 'node_modules' || ent.name === 'dist') continue
     const full = path.join(dirPath, ent.name)
     if (ent.isDirectory()) {
-      const sub = maxTsMtimeMs(full)
-      if (sub > max) max = sub
+      max = Math.max(max, maxTsMtimeMs(full))
     } else if (ent.isFile() && /\.(?:ts|tsx)$/.test(ent.name)) {
-      try {
-        const m = statSync(full).mtimeMs
-        if (m > max) max = m
-      } catch (err) {
-        if (isNotFoundErrno(err)) return Number.POSITIVE_INFINITY
-        throw new CliError(
-          `failed to stat SDK source file (${full}): ${err instanceof Error ? err.message : String(err)}`,
-          'read_failed',
-        )
-      }
+      max = Math.max(max, tsFileMtimeMs(full))
     }
   }
   return max
@@ -391,13 +395,86 @@ async function renameWithWindowsRetry(src: string, dest: string): Promise<void> 
   }
 }
 
+type RenameFn = (src: string, dest: string) => Promise<void>
+
+/** Materialize `files` (posix-relative paths, pre-sorted) under `stagingDir`, creating each parent directory once. */
+async function writeBundleFiles(
+  stagingDir: string,
+  files: Readonly<Record<string, string>>,
+  sortedRelPaths: readonly string[],
+): Promise<void> {
+  const createdDirs = new Set<string>([stagingDir])
+  for (const rel of sortedRelPaths) {
+    const dest = path.join(stagingDir, ...rel.split('/'))
+    const parent = path.dirname(dest)
+    if (!createdDirs.has(parent)) {
+      await fsp.mkdir(parent, { recursive: true })
+      createdDirs.add(parent)
+    }
+    await fsp.writeFile(dest, files[rel]!, 'utf8')
+  }
+}
+
+/** Rename `from` to `to`; reports `false` when `from` does not exist and rethrows anything else. */
+async function renameIfPresent(doRename: RenameFn, from: string, to: string): Promise<boolean> {
+  try {
+    await doRename(from, to)
+    return true
+  } catch (err) {
+    if (!isNotFoundErrno(err)) throw err
+    return false
+  }
+}
+
+/** Put the parked previous tree back after a failed swap; a failed restore is reported alongside the swap error. */
+async function restoreBackupOrThrow(doRename: RenameFn, typesDir: string, backupDir: string, swapErr: unknown): Promise<void> {
+  try {
+    await doRename(backupDir, typesDir)
+  } catch (restoreErr) {
+    throw new CliError(
+      `failed to replace SDK types in ${typesDir} (${swapErr instanceof Error ? swapErr.message : String(swapErr)}) and failed to restore backup at ${backupDir} (${restoreErr instanceof Error ? restoreErr.message : String(restoreErr)})`,
+      'write_failed',
+    )
+  }
+}
+
+/**
+ * Swap `stagingDir` into place as `typesDir`: park the previous tree at `backupDir`, move the staging
+ * tree in, and put the backup back if that move fails (the previous tree is never left half-replaced).
+ */
+async function swapStagingIntoPlace(doRename: RenameFn, stagingDir: string, typesDir: string, backupDir: string): Promise<void> {
+  const backedUp = await renameIfPresent(doRename, typesDir, backupDir)
+  try {
+    await doRename(stagingDir, typesDir)
+  } catch (swapErr) {
+    if (backedUp) await restoreBackupOrThrow(doRename, typesDir, backupDir, swapErr)
+    throw swapErr
+  }
+  if (backedUp) await removeDirIfPresent(backupDir)
+}
+
+/** Remove the staging tree, then surface the failure with any cleanup failure attached as a diagnostic. */
+async function wrapStagingFailure(err: unknown, stagingDir: string, typesDir: string): Promise<Error> {
+  let cleanupDiagnostic = ''
+  try {
+    await removeDirIfPresent(stagingDir)
+  } catch (cleanupErr) {
+    cleanupDiagnostic = ` (staging cleanup also failed: ${cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr)})`
+  }
+  if (err instanceof CliError) return err
+  return new CliError(
+    `failed to write SDK types into ${typesDir}: ${err instanceof Error ? err.message : String(err)}${cleanupDiagnostic}`,
+    'write_failed',
+  )
+}
+
 /**
  * Write or refresh `.helmx/types/` inside `pluginDir` from the embedded SDK declaration bundle.
  * Never modifies existing `tsconfig.json`; inspects it read-only and reports status + snippet.
  */
 export async function writeSdkTypesToDir(
   pluginDir: string,
-  ops?: { rename?: (src: string, dest: string) => Promise<void> },
+  ops?: { rename?: RenameFn },
 ): Promise<SyncPluginTypesResult> {
   const doRename = ops?.rename ?? renameWithWindowsRetry
   const resolvedDir = path.resolve(pluginDir)
@@ -428,55 +505,11 @@ export async function writeSdkTypesToDir(
   const stagingDir = path.join(helmxDir, `.types-staging-${runSuffix}`)
   const backupDir = path.join(helmxDir, `.types-backup-${runSuffix}`)
   await fsp.mkdir(stagingDir, { recursive: true })
-  let backedUp = false
   try {
-    const createdDirs = new Set<string>([stagingDir])
-    for (const rel of sortedRelPaths) {
-      const dest = path.join(stagingDir, ...rel.split('/'))
-      const parent = path.dirname(dest)
-      if (!createdDirs.has(parent)) {
-        await fsp.mkdir(parent, { recursive: true })
-        createdDirs.add(parent)
-      }
-      await fsp.writeFile(dest, bundle.files[rel]!, 'utf8')
-    }
-    try {
-      await doRename(typesDir, backupDir)
-      backedUp = true
-    } catch (err) {
-      if (!isNotFoundErrno(err)) throw err
-    }
-    try {
-      await doRename(stagingDir, typesDir)
-    } catch (swapErr) {
-      if (backedUp) {
-        try {
-          await doRename(backupDir, typesDir)
-          backedUp = false
-        } catch (restoreErr) {
-          throw new CliError(
-            `failed to replace SDK types in ${typesDir} (${swapErr instanceof Error ? swapErr.message : String(swapErr)}) and failed to restore backup at ${backupDir} (${restoreErr instanceof Error ? restoreErr.message : String(restoreErr)})`,
-            'write_failed',
-          )
-        }
-      }
-      throw swapErr
-    }
-    if (backedUp) {
-      await removeDirIfPresent(backupDir)
-    }
+    await writeBundleFiles(stagingDir, bundle.files, sortedRelPaths)
+    await swapStagingIntoPlace(doRename, stagingDir, typesDir, backupDir)
   } catch (err) {
-    let cleanupDiagnostic = ''
-    try {
-      await removeDirIfPresent(stagingDir)
-    } catch (cleanupErr) {
-      cleanupDiagnostic = ` (staging cleanup also failed: ${cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr)})`
-    }
-    if (err instanceof CliError) throw err
-    throw new CliError(
-      `failed to write SDK types into ${typesDir}: ${err instanceof Error ? err.message : String(err)}${cleanupDiagnostic}`,
-      'write_failed',
-    )
+    throw await wrapStagingFailure(err, stagingDir, typesDir)
   }
 
   const tsconfigPath = path.join(resolvedDir, 'tsconfig.json')
@@ -498,18 +531,7 @@ export async function writeSdkTypesToDir(
 }
 
 async function runPluginsTypes(ctx: CommandContext): Promise<void> {
-  const dirFlag = ctx.flags.get('dir')
-  const positionalDir = ctx.positionals[0]
-  if (typeof dirFlag === 'string' && dirFlag.length > 0 && positionalDir !== undefined) {
-    throw new CliError('--dir and positional <dir> are mutually exclusive', 'conflicting_flags')
-  }
-  assertNoExtraPositionals(ctx.positionals, positionalDir !== undefined ? 1 : 0)
-
-  const rawDir =
-    typeof dirFlag === 'string' && dirFlag.length > 0
-      ? dirFlag
-      : positionalDir ?? ctx.cwd
-  const targetDir = path.resolve(ctx.cwd, rawDir)
+  const targetDir = resolveDirArgument(ctx)
 
   const result = await writeSdkTypesToDir(targetDir)
   if (ctx.json) {

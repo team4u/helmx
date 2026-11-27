@@ -4,7 +4,6 @@ import {
   Button,
   Callout,
   Card,
-  CopyButton,
   DetailDrawer,
   EmptyState,
   Field,
@@ -31,6 +30,7 @@ import {
   type NodeInfo,
 } from './node-center-model.js'
 import { NODE_DETAIL_SECTION_SLOT, type NodeUpgradeCheckResult } from '@helmx/protocol/browser'
+import { CopyableCommandRow, MonoValue, NodeSectionTitle } from './node-detail/NodeDetailPrimitives.js'
 
 export interface NodeDetailDrawerProps {
   node: NodeInfo | null
@@ -266,46 +266,37 @@ export function NodeDetailDrawer({
           {!isNew && node && (
             <Card
               variant="subtle"
-              title={
-                <Stack direction="horizontal" gap="xs" align="center" inline>
-                  <HelmxIcon name="cpu" size={13} />
-                  <span>{t('nodes.drawer.overview')}</span>
-                </Stack>
-              }
+              title={<NodeSectionTitle icon="cpu" label={t('nodes.drawer.overview')} />}
             >
               <KvGrid
                 items={[
                   {
                     key: t('nodes.drawer.os'),
-                    value: <span className="mono selectable">{node.os || node.platform || '--'}</span>,
+                    value: <MonoValue>{node.os || node.platform || '--'}</MonoValue>,
                   },
                   {
                     key: t('nodes.drawer.arch'),
-                    value: <span className="mono selectable">{node.arch || '--'}</span>,
+                    value: <MonoValue>{node.arch || '--'}</MonoValue>,
                   },
                   {
                     key: t('nodes.drawer.version'),
-                    value: <span className="mono selectable">{node.version || '--'}</span>,
+                    value: <MonoValue>{node.version || '--'}</MonoValue>,
                   },
                   {
                     key: t('nodes.drawer.hostname'),
-                    value: <span className="mono selectable">{node.hostname || '--'}</span>,
+                    value: <MonoValue>{node.hostname || '--'}</MonoValue>,
                   },
                   {
                     key: t('nodes.drawer.cwd'),
-                    value: <span className="mono selectable">{node.cwd || '--'}</span>,
+                    value: <MonoValue>{node.cwd || '--'}</MonoValue>,
                   },
                   {
                     key: t('nodes.drawer.channel'),
-                    value: (
-                      <span className="mono selectable">
-                        {node.hubUrl || (isLocal ? t('nodes.drawer.localIpc') : '--')}
-                      </span>
-                    ),
+                    value: <MonoValue>{node.hubUrl || (isLocal ? t('nodes.drawer.localIpc') : '--')}</MonoValue>,
                   },
                   {
                     key: t('nodes.drawer.uptime'),
-                    value: <span className="mono selectable">{uptime}</span>,
+                    value: <MonoValue>{uptime}</MonoValue>,
                   },
                 ]}
               />
@@ -330,12 +321,7 @@ export function NodeDetailDrawer({
           {!isNew && node && (
             <Card
               variant="subtle"
-              title={
-                <Stack direction="horizontal" gap="xs" align="center" inline>
-                  <HelmxIcon name="activity" size={13} />
-                  <span>{t('nodes.drawer.healthSection')}</span>
-                </Stack>
-              }
+              title={<NodeSectionTitle icon="activity" label={t('nodes.drawer.healthSection')} />}
               actions={
                 <Button
                   size="sm"
@@ -352,45 +338,45 @@ export function NodeDetailDrawer({
                   {
                     key: t('nodes.drawer.cpuUsage'),
                     value: (
-                      <span className="mono selectable">
+                      <MonoValue>
                         {health?.cpuUsagePercent !== undefined
                           ? `${health.cpuUsagePercent}%`
                           : '--'}
-                      </span>
+                      </MonoValue>
                     ),
                   },
                   {
                     key: t('nodes.drawer.systemLoad'),
                     value: (
-                      <span className="mono selectable">
+                      <MonoValue>
                         {health?.loadAvg
                           ? `${health.loadAvg[0]?.toFixed(2) ?? '--'} / ${health.loadAvg[1]?.toFixed(2) ?? '--'} / ${health.loadAvg[2]?.toFixed(2) ?? '--'}`
                           : health?.load1 !== undefined
                             ? `${health.load1} / ${health.load5 ?? '--'} / ${health.load15 ?? '--'}`
                             : '--'}
-                      </span>
+                      </MonoValue>
                     ),
                   },
                   {
                     key: t('nodes.drawer.memUsage'),
                     value: (
-                      <span className="mono selectable">
+                      <MonoValue>
                         {memUsage?.label ??
                           (health?.memTotalBytes !== undefined
                             ? formatBytes(health.memTotalBytes)
                             : '--')}
-                      </span>
+                      </MonoValue>
                     ),
                   },
                   {
                     key: t('nodes.drawer.diskSpace'),
                     value: (
-                      <span className="mono selectable">
+                      <MonoValue>
                         {diskUsage?.label ??
                           (health?.diskTotalBytes !== undefined
                             ? formatBytes(health.diskTotalBytes)
                             : '--')}
-                      </span>
+                      </MonoValue>
                     ),
                   },
                 ]}
@@ -419,12 +405,7 @@ export function NodeDetailDrawer({
             <Card
               variant="subtle"
               className="border-accent"
-              title={
-                <Stack direction="horizontal" gap="xs" align="center" inline>
-                  <HelmxIcon name="key" size={13} />
-                  <span>{t('nodes.drawer.enrollSection')}</span>
-                </Stack>
-              }
+              title={<NodeSectionTitle icon="key" label={t('nodes.drawer.enrollSection')} />}
             >
               {isNew && (
                 <Field
@@ -464,40 +445,20 @@ export function NodeDetailDrawer({
               {issuedToken && (
                 <Stack direction="vertical" gap="xs">
                   <div className="text-subtle">{t('nodes.drawer.tokenLabel')}</div>
-                  <Stack direction="horizontal" gap="sm" align="center" wrap>
-                    <code className="code-box selectable flex-1 mono">
-                      {issuedToken}
-                    </code>
-                    <CopyButton text={issuedToken} label={t('nodes.drawer.copyToken')} />
-                  </Stack>
+                  <CopyableCommandRow text={issuedToken} label={t('nodes.drawer.copyToken')} />
                 </Stack>
               )}
 
               {guide && (
                 <Stack direction="vertical" gap="xs">
                   <div className="text-subtle">{t('nodes.drawer.oneLineLabel')}</div>
-                  <Stack direction="horizontal" gap="sm" align="center" wrap>
-                    <code className="code-box selectable flex-1 mono">
-                      {guide.oneLineCommand}
-                    </code>
-                    <CopyButton text={guide.oneLineCommand} label={t('nodes.drawer.copyCommand')} />
-                  </Stack>
+                  <CopyableCommandRow text={guide.oneLineCommand} label={t('nodes.drawer.copyCommand')} />
 
                   <div className="text-subtle">
                     {t('nodes.drawer.maintenanceLabel')}
                   </div>
-                  <Stack direction="horizontal" gap="sm" align="center" wrap>
-                    <code className="code-box selectable flex-1 mono">
-                      {guide.startDaemonCommand}
-                    </code>
-                    <CopyButton text={guide.startDaemonCommand} />
-                  </Stack>
-                  <Stack direction="horizontal" gap="sm" align="center" wrap>
-                    <code className="code-box selectable flex-1 mono">
-                      {guide.doctorCommand}
-                    </code>
-                    <CopyButton text={guide.doctorCommand} />
-                  </Stack>
+                  <CopyableCommandRow text={guide.startDaemonCommand} />
+                  <CopyableCommandRow text={guide.doctorCommand} />
                 </Stack>
               )}
             </Card>
@@ -507,12 +468,7 @@ export function NodeDetailDrawer({
           {!isNew && (
             <Card
               variant="subtle"
-              title={
-                <Stack direction="horizontal" gap="xs" align="center" inline>
-                  <HelmxIcon name="wrench" size={13} />
-                  <span>{t('nodes.drawer.toolsSection')}</span>
-                </Stack>
-              }
+              title={<NodeSectionTitle icon="wrench" label={t('nodes.drawer.toolsSection')} />}
             >
               <Stack direction="horizontal" gap="xs" align="center" wrap className="primary-card-pills">
                 {tools.map((tool) => (

@@ -139,41 +139,37 @@ export function filterSkills(
   })
 }
 
+/**
+ * The one category a skill is counted under (the count tabs partition the list, so every skill must land
+ * in exactly one): discovery sources win over managed owners, then the owner namespace decides; a skill
+ * that matches none — e.g. managedByPlugin set to a reserved name that is not a valid owner — counts as
+ * workspace.
+ */
+function skillCountCategory(skill: SkillSummary): Exclude<SkillCategoryTab, 'all'> {
+  if (isNodeSourceSkill(skill)) return 'node'
+  if (isSkillAgents(skill)) return 'agents'
+  if (isSkillCore(skill)) return 'core'
+  if (isSkillBuiltin(skill)) return 'builtin'
+  if (isSkillPlugin(skill)) return 'plugins'
+  return 'workspace'
+}
+
 /** Count skills per category tab. */
 export function buildSkillCategoryCounts(skills: SkillSummary[]): Record<SkillCategoryTab, number> {
   const list = Array.isArray(skills) ? skills : []
-  let core = 0
-  let builtin = 0
-  let workspace = 0
-  let plugins = 0
-  let agents = 0
-  let node = 0
-
-  for (const s of list) {
-    if (isNodeSourceSkill(s)) {
-      node++
-    } else if (isSkillAgents(s)) {
-      agents++
-    } else if (isSkillCore(s)) {
-      core++
-    } else if (isSkillBuiltin(s)) {
-      builtin++
-    } else if (isSkillPlugin(s)) {
-      plugins++
-    } else {
-      workspace++
-    }
-  }
-
-  return {
+  const counts: Record<SkillCategoryTab, number> = {
     all: list.length,
-    core,
-    builtin,
-    workspace,
-    plugins,
-    agents,
-    node,
+    core: 0,
+    builtin: 0,
+    workspace: 0,
+    plugins: 0,
+    agents: 0,
+    node: 0,
   }
+  for (const skill of list) {
+    counts[skillCountCategory(skill)] += 1
+  }
+  return counts
 }
 
 /** Summarize skill metrics. */

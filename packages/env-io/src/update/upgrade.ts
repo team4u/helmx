@@ -27,6 +27,7 @@ import {
   writeBlockedRelease,
   writeCurrentRelease,
   type BlockedReleaseRecord,
+  type CurrentReleaseRecord,
 } from './state.js';
 import { stageRelease, type ReleaseLayout, type StageExtractor, type StagedRelease } from './staging.js';
 
@@ -174,6 +175,190 @@ export async function withUpdateLock<T>(
   });
 }
 
+/** Everything one activation attempt needs, resolved once while holding the update lock. */
+interface UpgradeAttempt {
+  readonly stateDir: string;
+  readonly spec: UpdateSpec;
+  readonly options: PerformUpdateOptions;
+  /** Required lifecycle hook, proven present before the attempt is built. */
+  readonly prepareReplacement: NonNullable<PerformUpdateOptions['prepareReplacement']>;
+  readonly attemptId: string;
+  readonly previousVersion: string;
+  readonly targetVersion: string;
+  /** `current.json` as it was before staging; restored verbatim when commit fails (`null` = it was absent). */
+  readonly previousRelease: CurrentReleaseRecord | null;
+}
+
+/** The replacement has taken over activation; this process must stay drained until it exits. */
+interface Activation {
+  readonly pid: number;
+  /** Set when the replacement was activated but its commit confirmation was lost (never rolled back). */
+  readonly unconfirmed?: UpgradeCommitUnconfirmedError;
+}
+
+/** Explicit `targetVersion` when given, otherwise the version the registry dist-tag points at. */
+async function resolveTargetVersion(
+  stateDir: string,
+  spec: UpdateSpec,
+  options: PerformUpdateOptions,
+  previousVersion: string,
+): Promise<string> {
+  if (options.targetVersion !== undefined && options.targetVersion !== '') {
+    return normalizeTargetVersion(options.targetVersion);
+  }
+  const check = await checkForUpdate(stateDir, spec, {
+    registryUrl: options.registryUrl,
+    currentVersion: previousVersion,
+    fetchFn: options.fetchFn,
+    tag: options.tag,
+  });
+  return check.latestVersion;
+}
+
+/** Reject downgrades and versions in failure cooldown (both overridable with `force`). */
+async function assertTargetAllowed(
+  stateDir: string,
+  options: PerformUpdateOptions,
+  targetVersion: string,
+  previousVersion: string,
+): Promise<void> {
+  if (!options.force && compareSemver(targetVersion, previousVersion) < 0) {
+    throw new UpgradeRejectedError(
+      `refusing downgrade from ${previousVersion} to ${targetVersion} (pass force=true to downgrade)`,
+    );
+  }
+  const blocked = await readBlockedRelease(stateDir);
+  if (!options.force && isBlockedVersionActive(blocked, targetVersion, new Date(), resolveBlockedCooldownMs())) {
+    throw new UpgradeRejectedError(
+      `version ${targetVersion} is in failure cooldown, rejecting retry: ${blocked!.reason} (blocked at ${blocked!.at})`,
+    );
+  }
+}
+
+/** Keep draining until the in-flight count reaches zero; a spent drain budget aborts with no changes. */
+async function drainInFlight(options: PerformUpdateOptions): Promise<void> {
+  const getActiveExecCount = options.getActiveExecCount ?? (() => 0);
+  const drainTimeoutMs = options.drainTimeoutMs ?? DEFAULT_DRAIN_TIMEOUT_MS;
+  const drainStart = Date.now();
+  while (getActiveExecCount() > 0) {
+    if (Date.now() - drainStart > drainTimeoutMs) {
+      throw new Error(
+        `timed out draining in-flight operations (${drainTimeoutMs}ms, ${getActiveExecCount()} remaining); upgrade aborted with no changes`,
+      );
+    }
+    await new Promise((resolve) => setTimeout(resolve, DRAIN_POLL_INTERVAL_MS));
+  }
+}
+
+/** Record the failure cooldown; a failure here is reported inline instead of masking the original error. */
+async function recordBlockedAttempt(attempt: UpgradeAttempt, reason: string): Promise<string> {
+  try {
+    await writeBlockedRelease(attempt.stateDir, { version: attempt.targetVersion, reason, at: new Date().toISOString() });
+    return `recorded blocked release for ${attempt.targetVersion}`;
+  } catch (blockedError) {
+    return `write blocked record failed (manual cleanup required): ${blockedError instanceof Error ? blockedError.message : String(blockedError)}`;
+  }
+}
+
+/** Prepare the replacement, or abort with the current release untouched and a cooldown block recorded. */
+async function prepareReplacementOrFail(attempt: UpgradeAttempt, staged: StagedRelease): Promise<PreparedReplacement> {
+  const { attemptId, previousVersion, targetVersion } = attempt;
+  try {
+    return await attempt.prepareReplacement(staged, { attemptId, previousVersion, targetVersion });
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    const blockedNote = await recordBlockedAttempt(attempt, reason);
+    throw new Error(
+      `failed to prepare replacement (upgrade to ${targetVersion} aborted; current unchanged, previous process remains active): ${reason}; ${blockedNote}`,
+    );
+  }
+}
+
+/** Put `current.json` back exactly as it was before staging (deleting it when it was absent). */
+async function restorePreviousRelease(attempt: UpgradeAttempt): Promise<string> {
+  try {
+    if (attempt.previousRelease) {
+      await writeCurrentRelease(attempt.stateDir, attempt.previousRelease);
+      return `current.json restored to ${attempt.previousRelease.version}`;
+    }
+    await deleteCurrentRelease(attempt.stateDir);
+    return 'current.json deleted (was absent)';
+  } catch (restoreError) {
+    return `current.json restore failed: ${restoreError instanceof Error ? restoreError.message : String(restoreError)}`;
+  }
+}
+
+/** Undo a failed commit (abort the replacement, restore the previous pointer, record the cooldown) and build the error to surface. */
+async function rollbackReplacement(attempt: UpgradeAttempt, replacement: PreparedReplacement, reason: string): Promise<Error> {
+  const rollbackNotes: string[] = [];
+  try {
+    await replacement.abort();
+    rollbackNotes.push('replacement aborted');
+  } catch (abortError) {
+    rollbackNotes.push(`replacement abort failed: ${abortError instanceof Error ? abortError.message : String(abortError)}`);
+  }
+  rollbackNotes.push(await restorePreviousRelease(attempt));
+  rollbackNotes.push(await recordBlockedAttempt(attempt, reason));
+  return new Error(
+    `upgrade to ${attempt.targetVersion} commit failed and rolled back to ${attempt.previousVersion}: ${reason}; rollback details: ${rollbackNotes.join('; ')}`,
+  );
+}
+
+/**
+ * Point `current.json` at the staged release and let the replacement confirm activation. Returns once
+ * the replacement took over (confirmed, or unconfirmed — which is never rolled back); any other
+ * commit failure rolls the pointer back and throws.
+ */
+async function activateReplacement(attempt: UpgradeAttempt, staged: StagedRelease): Promise<Activation> {
+  const replacement = await prepareReplacementOrFail(attempt, staged);
+  const { stateDir, targetVersion } = attempt;
+  try {
+    await writeCurrentRelease(stateDir, {
+      version: targetVersion,
+      entries: staged.entries,
+      updatedAt: new Date().toISOString(),
+    });
+    await clearBlockedRelease(stateDir);
+    await replacement.commit();
+    return { pid: replacement.pid };
+  } catch (error) {
+    if (error instanceof UpgradeCommitUnconfirmedError) return { pid: replacement.pid, unconfirmed: error };
+    throw await rollbackReplacement(attempt, replacement, error instanceof Error ? error.message : String(error));
+  }
+}
+
+/** Stage, drain, and activate. The drain gate reopens unless the replacement took over this process. */
+async function runActivation(attempt: UpgradeAttempt): Promise<UpdateResult> {
+  const { options, spec, stateDir, targetVersion } = attempt;
+  let reopenGate = true;
+  try {
+    const staged = await stageRelease(stateDir, targetVersion, spec.layout, {
+      registryUrl: options.registryUrl,
+      fetchFn: options.fetchFn,
+      npmInstallArgs: options.npmInstallArgs,
+      force: options.force,
+      stageExtractor: options.stageExtractor,
+    });
+
+    options.setDraining?.(true);
+    await drainInFlight(options);
+
+    const activation = await activateReplacement(attempt, staged);
+    // From here on the replacement owns draining (confirmed or not): stay drained until this process exits.
+    reopenGate = false;
+    options.onScheduleShutdown?.(activation.pid);
+    if (activation.unconfirmed !== undefined) {
+      throw new Error(
+        `upgrade to ${targetVersion}: replacement was activated, but confirmation was unconfirmed (${activation.unconfirmed.message}); not rolling back (current.json points to ${targetVersion}, candidate will retry commit idempotently, previous process scheduled to exit)`,
+        { cause: activation.unconfirmed },
+      );
+    }
+    return { ok: true, previousVersion: attempt.previousVersion, targetVersion, upgraded: true, pid: activation.pid };
+  } finally {
+    if (reopenGate) await options.setDraining?.(false);
+  }
+}
+
 /**
  * Perform a full update: resolve the target, stage it, drain in-flight work, activate
  * the replacement, and commit or roll back. See the module header for the commit
@@ -191,145 +376,24 @@ export async function performUpdate(
       );
     }
 
-    const previousVersion = await resolveCurrentVersion(stateDir, spec, options?.currentVersion, 'performUpdate');
+    const previousVersion = await resolveCurrentVersion(stateDir, spec, options.currentVersion, 'performUpdate');
+    const targetVersion = await resolveTargetVersion(stateDir, spec, options, previousVersion);
 
-    let targetVersion: string;
-    if (options?.targetVersion !== undefined && options.targetVersion !== '') {
-      targetVersion = normalizeTargetVersion(options.targetVersion);
-    } else {
-      const check = await checkForUpdate(stateDir, spec, {
-        registryUrl: options?.registryUrl,
-        currentVersion: previousVersion,
-        fetchFn: options?.fetchFn,
-        tag: options?.tag,
-      });
-      targetVersion = check.latestVersion;
-    }
-
-    if (!options?.force && targetVersion === previousVersion) {
+    if (!options.force && targetVersion === previousVersion) {
       return { ok: true, previousVersion, targetVersion, upgraded: false };
     }
+    await assertTargetAllowed(stateDir, options, targetVersion, previousVersion);
 
-    if (!options?.force && compareSemver(targetVersion, previousVersion) < 0) {
-      throw new UpgradeRejectedError(
-        `refusing downgrade from ${previousVersion} to ${targetVersion} (pass force=true to downgrade)`,
-      );
-    }
-
-    const blocked = await readBlockedRelease(stateDir);
-    if (
-      !options?.force &&
-      isBlockedVersionActive(blocked, targetVersion, new Date(), resolveBlockedCooldownMs())
-    ) {
-      throw new UpgradeRejectedError(
-        `version ${targetVersion} is in failure cooldown, rejecting retry: ${blocked!.reason} (blocked at ${blocked!.at})`,
-      );
-    }
-
-    const existingCurrent = await readCurrentRelease(stateDir);
-
-    const attemptId = options?.attemptId ?? randomUUID();
-    let committed = false;
-    let keepGate = false;
-    let gateReleased = false;
-    const releaseGate = async () => {
-      if (gateReleased) return;
-      gateReleased = true;
-      options?.setDraining?.(false);
+    const attempt: UpgradeAttempt = {
+      stateDir,
+      spec,
+      options,
+      prepareReplacement: options.prepareReplacement,
+      attemptId: options.attemptId ?? randomUUID(),
+      previousVersion,
+      targetVersion,
+      previousRelease: await readCurrentRelease(stateDir),
     };
-    const writeBlockedOrFail = async (reason: string): Promise<string> => {
-      try {
-        await writeBlockedRelease(stateDir, { version: targetVersion, reason, at: new Date().toISOString() });
-        return `recorded blocked release for ${targetVersion}`;
-      } catch (blockedError) {
-        return `write blocked record failed (manual cleanup required): ${blockedError instanceof Error ? blockedError.message : String(blockedError)}`;
-      }
-    };
-
-    try {
-      const staged = await stageRelease(stateDir, targetVersion, spec.layout, {
-        registryUrl: options?.registryUrl,
-        fetchFn: options?.fetchFn,
-        npmInstallArgs: options?.npmInstallArgs,
-        force: options?.force,
-        stageExtractor: options?.stageExtractor,
-      });
-
-      options?.setDraining?.(true);
-
-      const getActiveExecCount = options?.getActiveExecCount ?? (() => 0);
-      const drainTimeoutMs = options?.drainTimeoutMs ?? DEFAULT_DRAIN_TIMEOUT_MS;
-      const drainStart = Date.now();
-      while (getActiveExecCount() > 0) {
-        if (Date.now() - drainStart > drainTimeoutMs) {
-          throw new Error(
-            `timed out draining in-flight operations (${drainTimeoutMs}ms, ${getActiveExecCount()} remaining); upgrade aborted with no changes`,
-          );
-        }
-        await new Promise((resolve) => setTimeout(resolve, DRAIN_POLL_INTERVAL_MS));
-      }
-
-      let replacement: PreparedReplacement;
-      try {
-        replacement = await options.prepareReplacement(staged, { attemptId, previousVersion, targetVersion });
-      } catch (error) {
-        const reason = error instanceof Error ? error.message : String(error);
-        const blockedNote = await writeBlockedOrFail(reason);
-        throw new Error(
-          `failed to prepare replacement (upgrade to ${targetVersion} aborted; current unchanged, previous process remains active): ${reason}; ${blockedNote}`,
-        );
-      }
-
-      try {
-        await writeCurrentRelease(stateDir, {
-          version: targetVersion,
-          entries: staged.entries,
-          updatedAt: new Date().toISOString(),
-        });
-        await clearBlockedRelease(stateDir);
-        await replacement.commit();
-      } catch (error) {
-        if (error instanceof UpgradeCommitUnconfirmedError) {
-          options?.onScheduleShutdown?.(replacement.pid);
-          keepGate = true;
-          throw new Error(
-            `upgrade to ${targetVersion}: replacement was activated, but confirmation was unconfirmed (${error.message}); not rolling back (current.json points to ${targetVersion}, candidate will retry commit idempotently, previous process scheduled to exit)`,
-            { cause: error },
-          );
-        }
-        const reason = error instanceof Error ? error.message : String(error);
-        const rollbackNotes: string[] = [];
-        try {
-          await replacement.abort();
-          rollbackNotes.push('replacement aborted');
-        } catch (abortError) {
-          rollbackNotes.push(`replacement abort failed: ${abortError instanceof Error ? abortError.message : String(abortError)}`);
-        }
-        try {
-          if (existingCurrent) {
-            await writeCurrentRelease(stateDir, existingCurrent);
-            rollbackNotes.push(`current.json restored to ${existingCurrent.version}`);
-          } else {
-            await deleteCurrentRelease(stateDir);
-            rollbackNotes.push('current.json deleted (was absent)');
-          }
-        } catch (restoreError) {
-          rollbackNotes.push(
-            `current.json restore failed: ${restoreError instanceof Error ? restoreError.message : String(restoreError)}`,
-          );
-        }
-        rollbackNotes.push(await writeBlockedOrFail(reason));
-        throw new Error(
-          `upgrade to ${targetVersion} commit failed and rolled back to ${previousVersion}: ${reason}; rollback details: ${rollbackNotes.join('; ')}`,
-        );
-      }
-
-      committed = true;
-      options?.onScheduleShutdown?.(replacement.pid);
-
-      return { ok: true, previousVersion, targetVersion, upgraded: true, pid: replacement.pid };
-    } finally {
-      if (!committed && !keepGate) await releaseGate();
-    }
+    return await runActivation(attempt);
   });
 }

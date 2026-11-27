@@ -18,6 +18,7 @@ import type { ConversationTracker } from './conversations.js'
 import type { EventHub } from './events.js'
 import type { ConversationOwnership } from './runtime-ownership.js'
 import { requireConv } from './conversation-require.js'
+import { assertGuardedMutationTarget } from './conversation-service/guarded-mutations.js'
 import {
   THINKING_LEVELS,
   clampThinkingLevelForModel,
@@ -369,35 +370,14 @@ export class ConversationLifecycleService {
         }
       }
       for (const target of subtree) {
-        const assertTargetOwned = (): void => {
-          const ownedBy = this.host.ownershipOf(target)
-          if (ownedBy === 'human' || (guard.expectedOwnership !== undefined && ownedBy !== guard.expectedOwnership)) {
-            throw new HelmxError(
-              'ownership_conflict',
-              `conversation ${target} is currently owned by ${ownedBy}; refusing automated deletion (human-ownership invariant)`,
-              409,
-              {
-                conversationId: target,
-                currentOwnership: ownedBy,
-                ...(guard.expectedOwnership !== undefined ? { expectedOwnership: guard.expectedOwnership } : {}),
-              },
-            )
-          }
-          if (target === id && guard.expectedStateSeq !== undefined) {
-            const meta = this.host.store.getConv(id)
-            if (meta === undefined || this.host.store.isDeleted(id)) {
-              throw new HelmxError('not_found', `conversation not found: ${id}`, 404, { conversationId: id })
-            }
-            if (meta.stateChangeSeq !== guard.expectedStateSeq) {
-              throw new HelmxError(
-                'state_seq_conflict',
-                `conversation ${id} authoritative watermark ${meta.stateChangeSeq} does not match expected ${guard.expectedStateSeq} (stale probe snapshot; must not act on newer turn)`,
-                409,
-                { conversationId: id, currentSeq: meta.stateChangeSeq, expectedSeq: guard.expectedStateSeq },
-              )
-            }
-          }
-        }
+        // Derived targets re-check ownership only; the CAS watermark applies to the requested conversation alone.
+        // Shared primitive (single source of the red line): conversation-service/guarded-mutations.ts.
+        const targetGuard: GuardedMutationExpectation = target === id ? guard : { expectedOwnership: guard.expectedOwnership }
+        const assertTargetOwned = (): void =>
+          assertGuardedMutationTarget(this.host, target, targetGuard, {
+            action: 'deletion',
+            ...(target !== id ? { requestedConversationId: id } : {}),
+          })
         assertTargetOwned()
         await this.deleteOneConversation(target, assertTargetOwned)
       }

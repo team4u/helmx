@@ -27,6 +27,81 @@ function streamAbortError(): Error {
   return err
 }
 
+/**
+ * Parse one SSE event block (the text between two `\n\n` boundaries, CRs already normalized to `\n`):
+ * `event:` sets the name (default `message`) and every `data:` line is joined with `\n`.
+ * Returns `undefined` for blocks without data lines so they never reach onFrame.
+ */
+function parseSseBlock(block: string): { event: string; data: string } | undefined {
+  let event = 'message'
+  const dataLines: string[] = []
+  let lineStart = 0
+  while (lineStart <= block.length) {
+    const nl = block.indexOf('\n', lineStart)
+    const line = nl === -1 ? block.slice(lineStart) : block.slice(lineStart, nl)
+    if (line.startsWith('event:')) event = line.slice(6).trim()
+    else if (line.startsWith('data:')) dataLines.push(line.slice(5).trimStart())
+    if (nl === -1) break
+    lineStart = nl + 1
+  }
+  return dataLines.length > 0 ? { event, data: dataLines.join('\n') } : undefined
+}
+
+/**
+ * SSE frame assembler: turns decoded text chunks into complete `\n\n`-delimited frames.
+ * Why a dedicated unit: CR line endings may straddle chunk boundaries (a chunk ending in `\r` must wait
+ * for the next chunk to tell `\r\n` from a lone `\r`), and the frame-size limit must hold for dispatched
+ * blocks and for the unconsumed remainder alike.
+ */
+class SseFrameAssembler {
+  private buffer = ''
+  private pendingCr = false
+
+  constructor(
+    private readonly onFrame: (frame: { event: string; data: string }) => void,
+    private readonly callerAborted: () => boolean,
+  ) {}
+
+  /** Append a decoded chunk; a trailing `\r` is held back until the next chunk (or `flush`) resolves it. */
+  push(text: string): void {
+    if (text.length === 0) return
+    const joined = this.pendingCr ? `\r${text}` : text
+    this.pendingCr = joined.endsWith('\r')
+    this.append(this.pendingCr ? joined.slice(0, -1) : joined)
+  }
+
+  /** End of stream: the held `\r` can never be completed, so it is emitted as-is; an unterminated final frame stays discarded. */
+  flush(tail: string): void {
+    const text = this.pendingCr ? `\r${tail}` : tail
+    this.pendingCr = false
+    this.append(text)
+  }
+
+  private append(text: string): void {
+    if (text.length === 0) return
+    this.buffer += text.includes('\r') ? text.replaceAll('\r\n', '\n').replaceAll('\r', '\n') : text
+    let cursor = 0
+    let boundary = this.buffer.indexOf('\n\n', cursor)
+    while (boundary !== -1) {
+      const block = this.buffer.slice(cursor, boundary)
+      cursor = boundary + 2
+      if (exceedsStreamFrameLimit(block)) {
+        throw new CliError('Hub SSE frame exceeded maximum size limit', 'invalid_response')
+      }
+      const frame = parseSseBlock(block)
+      if (frame !== undefined) {
+        this.onFrame(frame)
+        if (this.callerAborted()) throw new CliError('cancelled', 'aborted')
+      }
+      boundary = this.buffer.indexOf('\n\n', cursor)
+    }
+    if (cursor > 0) this.buffer = cursor < this.buffer.length ? this.buffer.slice(cursor) : ''
+    if (exceedsStreamFrameLimit(this.buffer)) {
+      throw new CliError('Hub SSE frame exceeded maximum size limit', 'invalid_response')
+    }
+  }
+}
+
 export interface HubEndpoint {
   baseUrl: string
   token?: string
@@ -441,73 +516,15 @@ export class HubClient {
     }
     const reader = (response.body as ReadableStream<Uint8Array>).getReader()
     const decoder = new TextDecoder('utf-8', { fatal: true })
-    let buffer = ''
-    let pendingCr = false
-    const processBufferFrames = (): void => {
-      let cursor = 0
-      let boundary = buffer.indexOf('\n\n', cursor)
-      while (boundary !== -1) {
-        const block = buffer.slice(cursor, boundary)
-        cursor = boundary + 2
-        if (exceedsStreamFrameLimit(block)) {
-          throw new CliError('Hub SSE frame exceeded maximum size limit', 'invalid_response')
-        }
-        let event = 'message'
-        const dataLines: string[] = []
-        let lineStart = 0
-        while (lineStart <= block.length) {
-          const nl = block.indexOf('\n', lineStart)
-          const line = nl === -1 ? block.slice(lineStart) : block.slice(lineStart, nl)
-          if (line.startsWith('event:')) event = line.slice(6).trim()
-          else if (line.startsWith('data:')) dataLines.push(line.slice(5).trimStart())
-          if (nl === -1) break
-          lineStart = nl + 1
-        }
-        if (dataLines.length > 0) {
-          listeners.onFrame({ event, data: dataLines.join('\n') })
-          if (callerAborted()) throw new CliError('cancelled', 'aborted')
-        }
-        boundary = buffer.indexOf('\n\n', cursor)
-      }
-      if (cursor > 0) {
-        buffer = cursor < buffer.length ? buffer.slice(cursor) : ''
-      }
-      if (exceedsStreamFrameLimit(buffer)) {
-        throw new CliError('Hub SSE frame exceeded maximum size limit', 'invalid_response')
-      }
-    }
+    const frames = new SseFrameAssembler(listeners.onFrame, callerAborted)
     try {
       for (;;) {
         const { done, value } = await this.readChunkWithAbort(reader, listeners.signal)
         if (done) {
-          let tail = decoder.decode()
-          if (pendingCr) {
-            tail = `\r${tail}`
-            pendingCr = false
-          }
-          if (tail.length > 0) {
-            if (tail.includes('\r')) tail = tail.replaceAll('\r\n', '\n').replaceAll('\r', '\n')
-            buffer += tail
-            processBufferFrames()
-          }
+          frames.flush(decoder.decode())
           break
         }
-        let chunkText = decoder.decode(value, { stream: true })
-        if (chunkText.length === 0) continue
-        if (pendingCr) {
-          chunkText = `\r${chunkText}`
-          pendingCr = false
-        }
-        if (chunkText.charCodeAt(chunkText.length - 1) === 13) {
-          pendingCr = true
-          chunkText = chunkText.slice(0, -1)
-        }
-        if (chunkText.length === 0) continue
-        if (chunkText.includes('\r')) {
-          chunkText = chunkText.replaceAll('\r\n', '\n').replaceAll('\r', '\n')
-        }
-        buffer += chunkText
-        processBufferFrames()
+        frames.push(decoder.decode(value, { stream: true }))
       }
     } catch (err) {
       if (err instanceof Error && err.name === 'AbortError') {

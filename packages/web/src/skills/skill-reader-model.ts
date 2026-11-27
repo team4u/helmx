@@ -6,6 +6,7 @@
  * table conversion and syntax language derivation. Follows the web Fast
  * Refresh rule: pure functions and constants live here, never in components.
  */
+import { parseSkillFrontmatterLines, type SkillFrontmatterField } from '@helmx/protocol/browser'
 import { detectLanguage } from '../conversation/code-language.js'
 import type { WebMessageTranslator } from '../i18n/catalog.js'
 
@@ -65,78 +66,24 @@ export function isSkillMarkdownFile(path: string): boolean {
   return ext === 'md' || ext === 'markdown'
 }
 
-/** One parsed frontmatter field (key and scalar value), kept in original YAML order. */
-export interface SkillFrontmatterField {
-  key: string
-  value: string
-}
-
 /** Parsed top frontmatter of SKILL.md: the field sequence and the body after the fence. */
 export interface SkillFrontmatterDoc {
   fields: SkillFrontmatterField[]
   body: string
 }
 
-/** Strip symmetric leading/trailing single/double quotes from a YAML single-line
- * scalar (double quotes restore \" and \\ escapes, single quotes restore ''
- * escapes; asymmetric quotes stay verbatim — never fabricate a parse).
- * Semantics match stripQuotedScalar of the @helmx/protocol parseSkillFrontmatter. */
-function stripQuotedScalar(value: string): string {
-  if (value.length < 2) return value
-  const first = value[0]
-  const last = value[value.length - 1]
-  if ((first !== '"' || last !== '"') && (first !== "'" || last !== "'")) return value
-  const inner = value.slice(1, -1)
-  if (first === '"') return inner.replace(/\\"/g, '"').replace(/\\\\/g, '\\')
-  return inner.replace(/''/g, "'")
-}
-
 /** Parse the top YAML frontmatter of SKILL.md (--- ... --- / ... fences) into a
- * field sequence and body. Value syntax aligns with the minimal set of the
- * @helmx/protocol parseSkillFrontmatter: single-line scalars (symmetric quotes
- * stripped) and block scalars — folded > / >- (trimmed consecutive indented
- * lines joined by spaces) and literal | / |- (common indent removed, lines
- * joined by newlines); lines not matching the key pattern (comments, blanks)
- * are skipped. Returns null when the fence is missing or unclosed; callers
- * fall back to the raw text — the body is never truncated. */
+ * field sequence and body. Field values come from the @helmx/protocol
+ * parseSkillFrontmatterLines reader (the same rules as the kernel catalog),
+ * bounded to the fence body so the closing fence never leaks into a value.
+ * Returns null when the fence is missing or unclosed; callers fall back to the
+ * raw text — the body is never truncated. */
 export function extractSkillFrontmatter(text: string): SkillFrontmatterDoc | null {
   const lines = text.split(/\r?\n/)
   if (lines[0] === undefined || lines[0]!.trim() !== '---') return null
   const end = lines.findIndex((line, i) => i > 0 && (line.trim() === '---' || line.trim() === '...'))
   if (end === -1) return null
-  const fields: SkillFrontmatterField[] = []
-  for (let i = 1; i < end; i++) {
-    const line = lines[i]!
-    const m = /^([A-Za-z_][A-Za-z0-9_-]*):\s*(.*)$/.exec(line)
-    if (m === null || m[1] === undefined) continue
-    const key = m[1]
-    const inline = (m[2] ?? '').trim()
-    // Block scalar: > / >- / | / |- followed by consecutive indented lines
-    // (the block ends at the first line indented shallower than the first non-empty line)
-    if (inline === '>' || inline === '>-' || inline === '|' || inline === '|-') {
-      const block: string[] = []
-      let indent = -1
-      for (let j = i + 1; j < end; j++) {
-        const raw = lines[j]!
-        if (raw.trim() === '') {
-          block.push('')
-          continue
-        }
-        const leading = raw.length - raw.trimStart().length
-        if (indent === -1) indent = leading
-        if (leading < indent) break
-        block.push(raw.slice(indent))
-        i = j
-      }
-      while (block.length > 0 && block[block.length - 1] === '') block.pop()
-      const value = inline.startsWith('>')
-        ? block.map((l) => l.trim()).filter((l) => l !== '').join(' ')
-        : block.join('\n')
-      fields.push({ key, value: value.trim() })
-      continue
-    }
-    fields.push({ key, value: stripQuotedScalar(inline) })
-  }
+  const fields = parseSkillFrontmatterLines(lines.slice(1, end))
   const rest = lines.slice(end + 1)
   while (rest.length > 0 && rest[0]!.trim() === '') rest.shift()
   return { fields, body: rest.join('\n') }

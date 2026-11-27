@@ -33,6 +33,7 @@ export {
   WORKFLOW_NESTED_CAP,
   WORKFLOW_TIMELINE_CAP,
   WorkflowRuntimeError,
+  type ApplyGateInput,
 } from './boundary.js'
 export {
   actionJournalKey,

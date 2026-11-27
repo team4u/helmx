@@ -6,6 +6,7 @@
  * contracts; run history is projected directly from live store conversations
  * tagged `cron:<id>` / `webhook:<id>` (zero double-writing in plugin docs).
  */
+import type { KeyboardEvent } from 'react'
 import type { ConversationSummary } from '@helmx/protocol/browser'
 import { DEFAULT_HELMX_LOCALE, resolveLocalizedText, type HelmxLocale } from '@helmx/plugin-client'
 import {
@@ -125,6 +126,37 @@ export function summarizeTriggerRunHealth(runs: ReadonlyArray<ConversationSummar
           ? 'done'
           : null
   return { count: runs.length, status }
+}
+
+/** 需要在 ID 列常显状态灯的运行态（其余状态不显示灯）。 */
+export type AlertingRunStatus = Extract<TriggerRunHealth['status'], 'error' | 'blocked' | 'working'>
+
+export function asAlertingRunStatus(status: TriggerRunHealth['status']): AlertingRunStatus | undefined {
+  return status === 'error' || status === 'blocked' || status === 'working' ? status : undefined
+}
+
+/** 可选中表格行的属性（点击 / Enter / Space 选中；`key` 由调用方显式设置）。 */
+export function selectableRowProps(
+  id: string,
+  selectedId: string | undefined,
+  onSelect: (id: string) => void,
+): {
+  className: string
+  tabIndex: 0
+  onClick: () => void
+  onKeyDown: (event: KeyboardEvent<HTMLElement>) => void
+} {
+  return {
+    className: selectedId === id ? 'tg-row is-selected' : 'tg-row',
+    tabIndex: 0,
+    onClick: () => onSelect(id),
+    onKeyDown: (event) => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault()
+        onSelect(id)
+      }
+    },
+  }
 }
 
 /** Localized accessible label for a conversation status light. */

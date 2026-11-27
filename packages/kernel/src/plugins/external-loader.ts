@@ -656,61 +656,20 @@ export async function reloadExternalPlugin(
   await options.doctor?.(sourceDir);
 
   // Obtain a fresh cache-busting generation for the actual reload import.
-  let entryPath: string;
-  try {
-    entryPath = await resolvePluginEntry(sourceDir);
-  } catch (err) {
-    throw new HelmxError(
-      'plugin_reload_failed',
-      `plugin entrypoint became unavailable during reload (source changed between preflight and swap): ${sourceDir} (${err instanceof Error ? err.message : String(err)})`,
-      500,
-      { pluginId, sourceDir },
-    );
-  }
+  const entryPath = await resolveReloadEntryPath(sourceDir, pluginId);
   const releaseTsRoot = registerPluginTsRoot(sourceDir, { transform: tsTransformOf(plugins) });
   try {
     const generation = nextPluginGeneration(sourceDir);
-    const definition = normalizeDefinition(
-      await importPluginDefinition(sourceDir, entryPath, { generation }),
-      sourceDir,
-    );
-    if (definition.id !== pluginId) {
-      throw new HelmxError(
-        'plugin_reload_failed',
-        `plugin id changed during reload (preflight ${pluginId} -> actual ${definition.id}); aborting swap`,
-        409,
-        { pluginId, actualId: definition.id, sourceDir },
-      );
-    }
+    const definition = await importReloadedDefinition(sourceDir, entryPath, pluginId, generation);
     await plugins.unregister(pluginId);
-    try {
-      await plugins.register(definition, { enabled: wasEnabled });
-    } catch (err) {
-      // Swap failed: attempt best-effort rollback to the pre-reload definition without masking the root error.
-      let rollbackError: unknown;
-      try {
-        await plugins.register(normalizeDefinition(rollbackDefinition, sourceDir), {
-          enabled: wasEnabled,
-        });
-      } catch (rollbackErr) {
-        rollbackError = rollbackErr;
-      }
-      throw new HelmxError(
-        'plugin_reload_failed',
-        `re-registration failed during reload ${rollbackError === undefined ? '(rolled back to pre-reload instance; previous definition remains active)' : '(rollback also failed; plugin is currently unregistered — fix manually and retry)'}: ${err instanceof Error ? err.message : String(err)}`,
-        500,
-        {
-          pluginId,
-          sourceDir,
-          generation,
-          rolledBack: rollbackError === undefined,
-          ...(rollbackError !== undefined
-            ? { rollbackError: rollbackError instanceof Error ? { message: rollbackError.message, stack: rollbackError.stack } : String(rollbackError) }
-            : {}),
-          cause: err instanceof Error ? { message: err.message, stack: err.stack } : undefined,
-        },
-      );
-    }
+    await registerReloadedDefinition(plugins, {
+      pluginId,
+      sourceDir,
+      wasEnabled,
+      generation,
+      definition,
+      rollbackDefinition,
+    });
     const after = (await plugins.list()).find((s) => s.id === pluginId);
     if (!after) {
       throw new HelmxError(
@@ -724,4 +683,86 @@ export async function reloadExternalPlugin(
   } finally {
     releaseTsRoot();
   }
+}
+
+/** Resolve the source entrypoint for the swap import; a failure here means the source changed after preflight. */
+async function resolveReloadEntryPath(sourceDir: string, pluginId: string): Promise<string> {
+  try {
+    return await resolvePluginEntry(sourceDir);
+  } catch (err) {
+    throw new HelmxError(
+      'plugin_reload_failed',
+      `plugin entrypoint became unavailable during reload (source changed between preflight and swap): ${sourceDir} (${err instanceof Error ? err.message : String(err)})`,
+      500,
+      { pluginId, sourceDir },
+    );
+  }
+}
+
+/** Fresh cache-busting import for the swap; a changed plugin id aborts before the live instance is touched. */
+async function importReloadedDefinition(
+  sourceDir: string,
+  entryPath: string,
+  pluginId: string,
+  generation: number,
+): Promise<PluginDefinition> {
+  const definition = normalizeDefinition(
+    await importPluginDefinition(sourceDir, entryPath, { generation }),
+    sourceDir,
+  );
+  if (definition.id !== pluginId) {
+    throw new HelmxError(
+      'plugin_reload_failed',
+      `plugin id changed during reload (preflight ${pluginId} -> actual ${definition.id}); aborting swap`,
+      409,
+      { pluginId, actualId: definition.id, sourceDir },
+    );
+  }
+  return definition;
+}
+
+/** Everything the swap needs to register the reloaded definition and to roll back to the pre-reload one. */
+interface ReloadSwap {
+  readonly pluginId: string;
+  readonly sourceDir: string;
+  readonly wasEnabled: boolean;
+  readonly generation: number;
+  readonly definition: PluginDefinition;
+  readonly rollbackDefinition: PluginDefinition;
+}
+
+/** Register the reloaded definition; on failure roll back to the pre-reload definition without masking the root error. */
+async function registerReloadedDefinition(plugins: ReloadablePluginHost, swap: ReloadSwap): Promise<void> {
+  try {
+    await plugins.register(swap.definition, { enabled: swap.wasEnabled });
+  } catch (err) {
+    const rollbackError = await rollbackReload(plugins, swap);
+    throw new HelmxError(
+      'plugin_reload_failed',
+      `re-registration failed during reload ${rollbackError === undefined ? '(rolled back to pre-reload instance; previous definition remains active)' : '(rollback also failed; plugin is currently unregistered — fix manually and retry)'}: ${err instanceof Error ? err.message : String(err)}`,
+      500,
+      {
+        pluginId: swap.pluginId,
+        sourceDir: swap.sourceDir,
+        generation: swap.generation,
+        rolledBack: rollbackError === undefined,
+        ...(rollbackError !== undefined
+          ? { rollbackError: rollbackError instanceof Error ? { message: rollbackError.message, stack: rollbackError.stack } : String(rollbackError) }
+          : {}),
+        cause: err instanceof Error ? { message: err.message, stack: err.stack } : undefined,
+      },
+    );
+  }
+}
+
+/** Best-effort rollback to the pre-reload definition; resolves to the rollback failure, or `undefined` once the previous instance is active again. */
+async function rollbackReload(plugins: ReloadablePluginHost, swap: ReloadSwap): Promise<unknown> {
+  try {
+    await plugins.register(normalizeDefinition(swap.rollbackDefinition, swap.sourceDir), {
+      enabled: swap.wasEnabled,
+    });
+  } catch (rollbackErr) {
+    return rollbackErr;
+  }
+  return undefined;
 }

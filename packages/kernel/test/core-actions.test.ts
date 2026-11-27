@@ -22,6 +22,7 @@ import {
   validateOrThrow,
   type ActionManifest,
   type ConversationSummary,
+  type JsonSchema,
 } from '@helmx/protocol'
 import { handleApi } from '../src/http/routes.js'
 import { actionCliCommand } from '../src/runtime/action-prompts.js'
@@ -1745,6 +1746,103 @@ describe('Core actions (core:*) parity, discovery, and security invariants', { t
       })
       assert.equal(getConflict.status, 400)
       assert.equal(getConflict.code, 'validation_error')
+    } finally {
+      await kernel.close()
+    }
+  })
+
+  it('core:conversations mutations keep their shared target request schema, registration order, CLI mapping, prompt hiding and output schemas', { timeout: 60_000 }, async () => {
+    const kernel = await openRuntime(join(root, 'mutation-manifests'))
+    try {
+      const manifests = kernel.plugins.listActions().filter((m) => m.pluginId === 'core:conversations')
+      assert.deepEqual(
+        manifests.map((m) => m.id),
+        ['search', 'list', 'get', 'entry', 'create', 'update', 'send', 'withdraw', 'abort', 'reset', 'compact', 'fork', 'delete'],
+      )
+
+      const safePositiveInt: JsonSchema = { type: 'integer', minimum: 1, maximum: Number.MAX_SAFE_INTEGER }
+      const safeNonNegativeInt: JsonSchema = { type: 'integer', minimum: 0, maximum: Number.MAX_SAFE_INTEGER }
+      const okOutput: JsonSchema = { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'] }
+      const objectOutput: JsonSchema = { type: 'object' }
+      const expectations: Record<
+        string,
+        {
+          cli: string[]
+          outputSchema: JsonSchema
+          /** Required request fields: the target id first, then the domain body's own required fields. */
+          required: string[]
+          /** Control properties declared between the target id and the CAS watermark. */
+          controls?: Record<string, JsonSchema>
+          /** Minimal valid body for the domain request (target fields added by the test). */
+          body?: Record<string, unknown>
+        }
+      > = {
+        update: { cli: ['conversations', 'update'], outputSchema: objectOutput, required: ['conversationId'] },
+        send: {
+          cli: ['send'],
+          outputSchema: { type: 'object', properties: { submissionId: { type: 'string' } }, required: ['submissionId'] },
+          required: ['conversationId', 'text'],
+          controls: { wait: { type: 'boolean' } },
+          body: { text: 'hello' },
+        },
+        withdraw: {
+          cli: ['conversations', 'withdraw'],
+          outputSchema: objectOutput,
+          required: ['conversationId', 'submissionId'],
+          body: { submissionId: 1 },
+        },
+        abort: { cli: ['abort'], outputSchema: okOutput, required: ['conversationId'] },
+        reset: { cli: ['conversations', 'reset'], outputSchema: objectOutput, required: ['conversationId'] },
+        compact: { cli: ['conversations', 'compact'], outputSchema: objectOutput, required: ['conversationId'] },
+        delete: { cli: ['conversations', 'delete'], outputSchema: okOutput, required: ['conversationId'] },
+      }
+      for (const [actionId, expected] of Object.entries(expectations)) {
+        const manifest = manifests.find((m) => m.id === actionId)
+        assert.ok(manifest !== undefined, `core:conversations.${actionId} must be registered`)
+        const label = `core:conversations.${actionId}`
+        assert.equal(manifest.exposeToPrompt, false, `${label} must stay out of the prompt catalog`)
+        assert.deepEqual(manifest.cli?.command, expected.cli, `${label} CLI mapping`)
+        assert.deepEqual(manifest.outputSchema, expected.outputSchema, `${label} output schema`)
+        assert.equal(manifest.inputSchema.type, 'object', `${label} request schema type`)
+        assert.deepEqual(manifest.inputSchema.required, expected.required, `${label} required request fields`)
+        assert.equal(manifest.inputSchema.additionalProperties, false, `${label} rejects unknown request fields`)
+        const properties = manifest.inputSchema.properties as Record<string, JsonSchema>
+        assert.deepEqual(properties.conversationId, safePositiveInt, `${label} conversationId`)
+        assert.deepEqual(properties.expectedStateSeq, safeNonNegativeInt, `${label} expectedStateSeq`)
+        const controls = Object.keys(expected.controls ?? {})
+        assert.deepEqual(
+          Object.keys(properties).slice(0, 2 + controls.length),
+          ['conversationId', ...controls, 'expectedStateSeq'],
+          `${label} declares the target id, its controls and the CAS watermark first`,
+        )
+        for (const [key, schema] of Object.entries(expected.controls ?? {})) {
+          assert.deepEqual(properties[key], schema, `${label} ${key}`)
+        }
+        if (actionId === 'abort' || actionId === 'delete') {
+          assert.deepEqual(
+            properties,
+            { conversationId: safePositiveInt, expectedStateSeq: safeNonNegativeInt },
+            `${label} carries no body`,
+          )
+        }
+        assertSchemaCompilable(manifest.inputSchema)
+        const body = expected.body ?? {}
+        validateOrThrow(manifest.inputSchema, { ...body, conversationId: 1 }, label)
+        validateOrThrow(manifest.inputSchema, { ...body, conversationId: 1, expectedStateSeq: 0 }, label)
+        for (const invalid of [
+          { ...body },
+          { ...body, conversationId: 0 },
+          { ...body, conversationId: 1, expectedStateSeq: -1 },
+          { ...body, conversationId: 1, expectedStateSeq: 1.5 },
+          { ...body, conversationId: 1, unexpected: true },
+        ]) {
+          assert.throws(
+            () => validateOrThrow(manifest.inputSchema, invalid, label),
+            (err: unknown) => err instanceof HelmxError && err.code === 'validation_error' && err.status === 400,
+            `${label} must reject ${JSON.stringify(invalid)}`,
+          )
+        }
+      }
     } finally {
       await kernel.close()
     }

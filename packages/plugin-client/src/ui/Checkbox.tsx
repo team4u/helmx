@@ -1,6 +1,6 @@
-import React, { useId } from 'react'
+import React from 'react'
 import { HelmxIcon } from '../icons.js'
-import { mergeAriaDescribedBy, useFieldContext } from './field-context.js'
+import { useToggleControl } from './toggle-control.js'
 
 export interface CheckboxProps {
   checked: boolean
@@ -42,61 +42,47 @@ export function Checkbox({
   'aria-label': ariaLabel,
   'aria-describedby': ariaDescribedBy,
 }: CheckboxProps) {
-  const generatedId = useId()
-  const field = useFieldContext()
-  const hasOwnLabel = label !== undefined && label !== null && label !== ''
-  const checkboxId = id ?? (hasOwnLabel ? generatedId : (field?.controlId ?? generatedId))
-  const resolvedInvalid = invalid ?? field?.invalid ?? false
-  const resolvedRequired = required ?? (field?.required === true ? true : undefined)
-  const resolvedDescribedBy = mergeAriaDescribedBy(ariaDescribedBy, field?.describedBy)
-
-  const handleClick = () => {
-    if (!disabled) {
-      onChange(!checked)
-    }
-  }
-
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (disabled) return
-    if (e.key === ' ' || e.key === 'Enter') {
-      e.preventDefault()
-      onChange(!checked)
-    }
-  }
+  const control = useToggleControl({
+    checked,
+    onChange,
+    disabled,
+    invalid,
+    required,
+    label,
+    id,
+    'aria-label': ariaLabel,
+    'aria-describedby': ariaDescribedBy,
+  })
 
   const wrapClass = ['helmx-checkbox-wrap', disabled && 'is-disabled', className].filter(Boolean).join(' ')
   const buttonClass = ['helmx-checkbox', checked && 'is-checked', indeterminate && 'is-indeterminate'].filter(Boolean).join(' ')
 
-  const checkboxBox = (
-    <button
-      type="button"
-      role="checkbox"
-      id={checkboxId}
-      name={name}
-      aria-checked={indeterminate ? 'mixed' : checked}
-      aria-label={ariaLabel ?? (typeof label === 'string' ? label : undefined)}
-      aria-invalid={resolvedInvalid ? true : undefined}
-      aria-required={resolvedRequired}
-      aria-describedby={resolvedDescribedBy}
-      disabled={disabled}
-      className={buttonClass}
-      onClick={handleClick}
-      onKeyDown={handleKeyDown}
-      title={title}
-    >
-      {indeterminate ? (
-        <HelmxIcon name="minus" size={10} className="helmx-checkbox-icon" />
-      ) : checked ? (
-        <HelmxIcon name="check" size={10} className="helmx-checkbox-icon" />
-      ) : null}
-    </button>
-  )
-
   return (
     <span className={wrapClass} style={style} title={title}>
-      {checkboxBox}
-      {hasOwnLabel ? (
-        <label htmlFor={checkboxId} className="helmx-checkbox-label">
+      <button
+        type="button"
+        role="checkbox"
+        id={control.controlId}
+        name={name}
+        aria-checked={indeterminate ? 'mixed' : checked}
+        aria-label={control.ariaLabel}
+        aria-invalid={control.ariaInvalid}
+        aria-required={control.ariaRequired}
+        aria-describedby={control.ariaDescribedBy}
+        disabled={disabled}
+        className={buttonClass}
+        onClick={control.onClick}
+        onKeyDown={control.onKeyDown}
+        title={title}
+      >
+        {indeterminate ? (
+          <HelmxIcon name="minus" size={10} className="helmx-checkbox-icon" />
+        ) : checked ? (
+          <HelmxIcon name="check" size={10} className="helmx-checkbox-icon" />
+        ) : null}
+      </button>
+      {control.hasOwnLabel ? (
+        <label htmlFor={control.controlId} className="helmx-checkbox-label">
           {label}
         </label>
       ) : null}

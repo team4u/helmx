@@ -35,6 +35,7 @@ import {
   useConversations,
   useStoreActions,
   useThemePreferencesState,
+  type HelmxStoreActions,
 } from '../lib/store-context.js'
 import {
   composeTreeBlockedNotification,
@@ -43,6 +44,7 @@ import {
   resolveActivitySnapshot,
   resolveNotificationRootId,
   shouldDeliverQuietNotification,
+  type QuietNotificationDraft,
   type RootTreeActivity,
 } from './quiet-notify-model.js'
 
@@ -129,6 +131,38 @@ function hasUnacknowledgedBlocked(
     if (handledWatermarks.get(id) !== getBlockedWatermark(conv)) return true
   }
   return false
+}
+
+/** 投递当刻逐项现场复核（认证、偏好、权限、连接、页面非前台）后才真正弹出，点击跳转主会话。 */
+function deliverTreeNotification(
+  rootId: number,
+  draft: QuietNotificationDraft | null,
+  flags: { authenticated: boolean; quietNotifyEnabled: boolean; sseConnected: boolean },
+  openTarget: HelmxStoreActions['openTarget'],
+): void {
+  if (draft === null) return
+  if (
+    !shouldDeliverQuietNotification({
+      authenticated: flags.authenticated,
+      preferenceEnabled: flags.quietNotifyEnabled,
+      permission: readBrowserNotificationPermission(),
+      connected: flags.sseConnected,
+      pageActive: isPageActive(),
+    })
+  ) {
+    return
+  }
+  const primaryConversationId = draft.primaryConversationId
+  showBrowserNotification({
+    title: draft.title,
+    body: draft.body,
+    tag: treeNotificationTag(rootId),
+    url: primaryConversationId === null ? undefined : `/#/c/${primaryConversationId}`,
+    onClick:
+      primaryConversationId === null
+        ? undefined
+        : () => openTarget({ kind: 'conversation', conversationId: primaryConversationId }),
+  })
 }
 
 export function useQuietNotifier(): void {
@@ -255,29 +289,7 @@ export function useQuietNotifier(): void {
         t: createWebTranslator(localeRef.current),
       })
       pruneTreeCycleIfEmpty(currentState.trees, rootId)
-      if (draft === null) return
-      if (
-        !shouldDeliverQuietNotification({
-          authenticated: currentFlags.authenticated,
-          preferenceEnabled: currentFlags.quietNotifyEnabled,
-          permission: readBrowserNotificationPermission(),
-          connected: currentFlags.sseConnected,
-          pageActive: isPageActive(),
-        })
-      ) {
-        return
-      }
-      const primaryConversationId = draft.primaryConversationId
-      showBrowserNotification({
-        title: draft.title,
-        body: draft.body,
-        tag: treeNotificationTag(rootId),
-        url: primaryConversationId === null ? undefined : `/#/c/${primaryConversationId}`,
-        onClick:
-          primaryConversationId === null
-            ? undefined
-            : () => openTarget({ kind: 'conversation', conversationId: primaryConversationId }),
-      })
+      deliverTreeNotification(rootId, draft, currentFlags, openTarget)
     }
 
     settleBlockedRef.current = (rootId: number) => {
@@ -321,29 +333,7 @@ export function useQuietNotifier(): void {
         cycle.holdForReconnect = false
         pruneTreeCycleIfEmpty(currentState.trees, rootId)
       }
-      if (draft === null) return
-      if (
-        !shouldDeliverQuietNotification({
-          authenticated: currentFlags.authenticated,
-          preferenceEnabled: currentFlags.quietNotifyEnabled,
-          permission: readBrowserNotificationPermission(),
-          connected: currentFlags.sseConnected,
-          pageActive: isPageActive(),
-        })
-      ) {
-        return
-      }
-      const primaryConversationId = draft.primaryConversationId
-      showBrowserNotification({
-        title: draft.title,
-        body: draft.body,
-        tag: treeNotificationTag(rootId),
-        url: primaryConversationId === null ? undefined : `/#/c/${primaryConversationId}`,
-        onClick:
-          primaryConversationId === null
-            ? undefined
-            : () => openTarget({ kind: 'conversation', conversationId: primaryConversationId }),
-      })
+      deliverTreeNotification(rootId, draft, currentFlags, openTarget)
     }
   }, [snapshot, conversations, authenticated, quietNotifyEnabled, sseConnected, locale, openTarget])
 

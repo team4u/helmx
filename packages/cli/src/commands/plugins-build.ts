@@ -15,7 +15,7 @@ import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { CliError } from '../errors.js'
 import type { CommandContext, CommandSpec } from './shared.js'
-import { assertNoExtraPositionals, isOutsideDir, printResult, repeatedValues } from './shared.js'
+import { isOutsideDir, printResult, repeatedValues, resolveDirArgument } from './shared.js'
 
 async function readOptionalManifestObject(
   filePath: string,
@@ -151,18 +151,7 @@ async function loadPluginBuildCompiler(
 }
 
 async function runPluginsBuild(ctx: CommandContext): Promise<void> {
-  const dirFlag = ctx.flags.get('dir')
-  const positionalDir = ctx.positionals[0]
-  if (typeof dirFlag === 'string' && dirFlag.length > 0 && positionalDir !== undefined) {
-    throw new CliError('--dir and positional <dir> are mutually exclusive', 'conflicting_flags')
-  }
-  assertNoExtraPositionals(ctx.positionals, positionalDir !== undefined ? 1 : 0)
-
-  const rawDir =
-    typeof dirFlag === 'string' && dirFlag.length > 0
-      ? dirFlag
-      : positionalDir ?? ctx.cwd
-  const pluginDir = path.resolve(ctx.cwd, rawDir)
+  const pluginDir = resolveDirArgument(ctx)
 
   let dirStat
   try {

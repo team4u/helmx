@@ -297,6 +297,14 @@ interface BorrowStore {
   saveRecord(conversationId: number, record: TierBorrowRecord | undefined): Promise<void>
 }
 
+/** 借用生命周期函数共用的运行时句柄（宿主、持久层、tier 状态读取与停止标志）。 */
+interface BorrowRuntime {
+  ctx: HelmxPluginContext
+  store: BorrowStore
+  readTiersState: () => TiersStateDoc
+  isStopping: () => boolean
+}
+
 interface ActivatedBorrowOutcome {
   fromModel: string
   updated: ConversationSummary
@@ -365,12 +373,8 @@ function assertNotBusyForBorrow(conv: ConversationSummary, message: string): voi
   }
 }
 
-async function restoreActiveBorrow(
-  ctx: HelmxPluginContext,
-  store: BorrowStore,
-  conversationId: number,
-  isStopping: () => boolean,
-): Promise<void> {
+async function restoreActiveBorrow(rt: BorrowRuntime, conversationId: number): Promise<void> {
+  const { ctx, store, isStopping } = rt
   if (isStopping()) return
   const record = store.get(conversationId)
   if (record === undefined || record.phase !== 'active') return
@@ -420,14 +424,12 @@ async function restoreActiveBorrow(
 }
 
 async function armConversationBorrow(
-  ctx: HelmxPluginContext,
-  store: BorrowStore,
-  readTiersState: () => TiersStateDoc,
-  isStopping: () => boolean,
+  rt: BorrowRuntime,
   conversationId: number,
   targetRef: string,
   opts: { effort?: string; source: TierBorrowSource },
 ): Promise<TierBorrowSessionView> {
+  const { ctx, store, readTiersState, isStopping } = rt
   if (isStopping()) {
     throw new HelmxError('plugin_stopping', 'builtin:tiers is stopping', 409, { conversationId })
   }
@@ -437,7 +439,7 @@ async function armConversationBorrow(
     `Conversation #${conversationId} is busy; cannot arm a one-turn model while a turn is active`,
   )
   if (store.get(conversationId)?.phase === 'active') {
-    await restoreActiveBorrow(ctx, store, conversationId, isStopping)
+    await restoreActiveBorrow(rt, conversationId)
     conv = requireEligibleConversation(ctx, conversationId)
   }
   const catalog = await ctx.host.listModels()
@@ -463,10 +465,7 @@ async function armConversationBorrow(
 }
 
 async function activateConversationBorrow(
-  ctx: HelmxPluginContext,
-  store: BorrowStore,
-  readTiersState: () => TiersStateDoc,
-  isStopping: () => boolean,
+  rt: BorrowRuntime,
   conversationId: number,
   targetRef: string,
   opts: {
@@ -476,6 +475,7 @@ async function activateConversationBorrow(
     allowWhileBusy?: boolean
   },
 ): Promise<ActivatedBorrowOutcome> {
+  const { ctx, store, readTiersState, isStopping } = rt
   if (isStopping()) {
     throw new HelmxError('plugin_stopping', 'builtin:tiers is stopping', 409, { conversationId })
   }
@@ -585,6 +585,7 @@ export function createTierBorrowManager(deps: {
   const isStopping = (): boolean => stopping
   const convQueue = createKeyedQueue<number>()
   const store = createBorrowStore(kv, borrowDoc)
+  const rt: BorrowRuntime = { ctx, store, readTiersState, isStopping }
 
   return {
     setStopping(value: boolean): void {
@@ -608,7 +609,7 @@ export function createTierBorrowManager(deps: {
             return
           }
           if (latest.phase === 'active') {
-            await restoreActiveBorrow(ctx, store, record.conversationId, isStopping)
+            await restoreActiveBorrow(rt, record.conversationId)
           } else {
             store.syncSessionDoc(record.conversationId, latest)
           }
@@ -645,7 +646,7 @@ export function createTierBorrowManager(deps: {
       input: { model: string; effort?: string; source?: TierBorrowSource },
     ): Promise<TierBorrowSessionView> {
       return convQueue.enqueue(conversationId, () =>
-        armConversationBorrow(ctx, store, readTiersState, isStopping, conversationId, input.model, {
+        armConversationBorrow(rt, conversationId, input.model, {
           effort: input.effort,
           source: input.source ?? 'ui',
         }),
@@ -690,7 +691,7 @@ export function createTierBorrowManager(deps: {
 
         const currentRecord = store.get(conv.id)
         if (currentRecord?.phase === 'active' && !isConversationBusy(conv)) {
-          await restoreActiveBorrow(ctx, store, conv.id, isStopping)
+          await restoreActiveBorrow(rt, conv.id)
           conv = getConversationOrUndefined(ctx.host, conv.id)
           if (conv === undefined) return { action: 'continue' }
         }
@@ -699,7 +700,7 @@ export function createTierBorrowManager(deps: {
           if (!parsedMeta.valid) return { action: 'block', reason: parsedMeta.reason }
           if (isConversationBusy(conv)) return { action: 'continue' }
           try {
-            await activateConversationBorrow(ctx, store, readTiersState, isStopping, conv.id, parsedMeta.borrowModel, {
+            await activateConversationBorrow(rt, conv.id, parsedMeta.borrowModel, {
               effort: parsedMeta.effort,
               source: 'meta',
               restoreAfterTurn: true,
@@ -714,7 +715,7 @@ export function createTierBorrowManager(deps: {
         if (armed !== undefined && armed.phase === 'armed') {
           if (isConversationBusy(conv)) return { action: 'continue' }
           try {
-            await activateConversationBorrow(ctx, store, readTiersState, isStopping, conv.id, armed.targetModel, {
+            await activateConversationBorrow(rt, conv.id, armed.targetModel, {
               effort: armed.appliedEffort,
               source: armed.source,
               restoreAfterTurn: true,
@@ -734,7 +735,7 @@ export function createTierBorrowManager(deps: {
 
     handleTurnSettled(conversationId: number): Promise<void> {
       return convQueue.enqueue(conversationId, () =>
-        restoreActiveBorrow(ctx, store, conversationId, isStopping),
+        restoreActiveBorrow(rt, conversationId),
       )
     },
 
@@ -774,7 +775,7 @@ export function createTierBorrowManager(deps: {
           return { output: 'builtin:tiers is stopping; cannot switch model.', isError: true }
         }
         try {
-          const outcome = await activateConversationBorrow(ctx, store, readTiersState, isStopping, conversationId, input.model, {
+          const outcome = await activateConversationBorrow(rt, conversationId, input.model, {
             effort: input.effort,
             source: 'tool',
             restoreAfterTurn: input.restoreAfterTurn,

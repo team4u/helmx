@@ -72,6 +72,28 @@ function collectBusyActiveMemberNames(
   return busy
 }
 
+/** 幂等重放已有帖子时需重新触发的投递副作用（与首次投递的唤醒/通知判定一致）。 */
+interface DeliverySideEffects {
+  membersToWake: string[]
+  shouldNotifyCoordinator: boolean
+}
+
+function replayDeliveryEffects(group: CollabGroupRecord, post: BoardPost): DeliverySideEffects {
+  if (group.status !== 'active') return { membersToWake: [], shouldNotifyCoordinator: false }
+  const membersToWake: string[] = []
+  if (post.wake) {
+    for (const target of post.resolvedTargets) {
+      const member = target !== 'coordinator' ? group.members.find((i) => i.name === target && i.lifecycle === 'active') : undefined
+      if (member && hasPendingDeliverableWakeup(member)) membersToWake.push(member.name)
+    }
+  }
+  const shouldNotifyCoordinator =
+    post.from !== 'coordinator' &&
+    ((post.resolvedTargets.includes('coordinator') && post.wake) || COORDINATOR_ESCALATION_KINDS.has(post.kind)) &&
+    group.coordinatorPendingSeq > group.coordinatorNotifiedSeq
+  return { membersToWake, shouldNotifyCoordinator }
+}
+
 function createManagedWorkerRegistry(
   ctx: HelmxPluginContext,
   getCoordinator: () => SwarmCoordinator,
@@ -318,24 +340,12 @@ export function createCollabGroupRuntime(
       coordinatorConversationId = current.coordinatorConversationId
 
       if (draft.idempotencyKey !== undefined) {
-        const existing = (postsByGroup.get(validId) ?? []).find((p) => p.idempotencyKey === draft.idempotencyKey)
-        if (existing) {
-          if (current.status === 'active') {
-            if (existing.wake) {
-              for (const target of existing.resolvedTargets) {
-                const m = target !== 'coordinator' ? current.members.find((i) => i.name === target && i.lifecycle === 'active') : undefined
-                if (m && hasPendingDeliverableWakeup(m)) membersToWake.push(m.name)
-              }
-            }
-            if (
-              existing.from !== 'coordinator' &&
-              ((existing.resolvedTargets.includes('coordinator') && existing.wake) || COORDINATOR_ESCALATION_KINDS.has(existing.kind)) &&
-              current.coordinatorPendingSeq > current.coordinatorNotifiedSeq
-            ) {
-              shouldNotifyCoordinator = true
-            }
-          }
-          return existing
+        const replayed = (postsByGroup.get(validId) ?? []).find((p) => p.idempotencyKey === draft.idempotencyKey)
+        if (replayed) {
+          const replayedEffects = replayDeliveryEffects(current, replayed)
+          membersToWake = replayedEffects.membersToWake
+          shouldNotifyCoordinator = replayedEffects.shouldNotifyCoordinator
+          return replayed
         }
       }
 

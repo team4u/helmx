@@ -37,6 +37,28 @@ interface AssetReloaderOptions {
 const WATCHED_SUBDIRS = ['profiles', 'skills'] as const
 type WatchedSubdir = (typeof WATCHED_SUBDIRS)[number]
 
+/** Asset kinds the reloader reacts to, classified from the first path segment of a changed path. */
+type AssetKind = 'providers' | 'credentials' | 'config' | 'profiles' | 'skills'
+
+/** Map (not object literal) so inherited keys such as `constructor` are never mistaken for an asset kind. */
+const ASSET_KIND_BY_HEAD: ReadonlyMap<string, AssetKind> = new Map([
+  ['providers.json', 'providers'],
+  ['credentials.json', 'credentials'],
+  ['config.json', 'config'],
+  ['profiles', 'profiles'],
+  ['skills', 'skills'],
+])
+
+/** Classify changed paths by their first path segment; paths outside the watched assets are ignored. */
+function touchedAssetKinds(changedPaths: readonly string[]): ReadonlySet<AssetKind> {
+  const touched = new Set<AssetKind>()
+  for (const rel of changedPaths) {
+    const kind = ASSET_KIND_BY_HEAD.get(rel.split('/')[0]!)
+    if (kind !== undefined) touched.add(kind)
+  }
+  return touched
+}
+
 function isExistingDirectory(dir: string): boolean {
   try {
     return statSync(dir).isDirectory()
@@ -123,37 +145,29 @@ export class AssetReloader {
   /** Dispatch changed asset paths. */
   onAssetsChanged(changedPaths: string[]): void {
     if (this.closed) return
-    let providersTouched = false
-    let credentialsTouched = false
-    let configTouched = false
-    let profilesTouched = false
-    let skillsTouched = false
-    for (const rel of changedPaths) {
-      const [head] = rel.split('/')
-      if (head === 'providers.json') providersTouched = true
-      else if (head === 'credentials.json') credentialsTouched = true
-      else if (head === 'config.json') configTouched = true
-      else if (head === 'profiles') profilesTouched = true
-      else if (head === 'skills') skillsTouched = true
-    }
-    if (profilesTouched) {
+    const touched = touchedAssetKinds(changedPaths)
+    if (touched.has('profiles')) {
       this.options.invalidateProfiles?.()
       if (this.watcher !== undefined) this.ensureSubdirWatcher('profiles')
     }
-    if (skillsTouched && this.watcher !== undefined) {
+    if (touched.has('skills') && this.watcher !== undefined) {
       this.ensureSubdirWatcher('skills')
     }
-    if (configTouched) {
-      // Refresh plugin config mirror (explicitly notify on read failure rather than swallowing).
-      this.reloadConfigChain = this.reloadConfigChain
-        .then(() => (this.closed ? Promise.resolve() : this.options.reloadPluginConfig()))
-        .catch((error) => {
-          this.options.notifyError('Plugin config hot reload failed', error)
-        })
+    if (touched.has('config')) {
+      this.reloadPluginConfigMirror()
     }
-    if (providersTouched || credentialsTouched) {
+    if (touched.has('providers') || touched.has('credentials')) {
       this.scheduleReloadModels()
     }
+  }
+
+  /** Refresh the plugin config mirror on its serialized chain (explicitly notify on read failure rather than swallowing). */
+  private reloadPluginConfigMirror(): void {
+    this.reloadConfigChain = this.reloadConfigChain
+      .then(() => (this.closed ? Promise.resolve() : this.options.reloadPluginConfig()))
+      .catch((error) => {
+        this.options.notifyError('Plugin config hot reload failed', error)
+      })
   }
 
   /** Debounce + serialize `reloadModels` (no-op when `Models` is externally injected). */

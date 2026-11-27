@@ -251,15 +251,26 @@ export function convStatusOf(
   return meta.unread ? 'done' : 'idle'
 }
 
-export function summaryOf(
-  meta: ConvMeta,
-  status: ConversationStatus,
-  pendingAskCount: number,
-  doing?: string,
-  lastError?: string,
-  lastEntryId?: number,
-  pendingAskSince?: number,
-): ConversationSummary {
+/** Inputs of `summaryOf`: store meta plus the live-derived status fields (optional fields are omitted from the summary when unset or empty). */
+export interface ConversationSummaryInput {
+  meta: ConvMeta
+  status: ConversationStatus
+  pendingAskCount: number
+  doing?: string
+  lastError?: string
+  lastEntryId?: number
+  pendingAskSince?: number
+}
+
+export function summaryOf({
+  meta,
+  status,
+  pendingAskCount,
+  doing,
+  lastError,
+  lastEntryId,
+  pendingAskSince,
+}: ConversationSummaryInput): ConversationSummary {
   return {
     id: meta.id,
     title: meta.title,

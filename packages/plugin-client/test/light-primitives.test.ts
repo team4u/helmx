@@ -1449,3 +1449,67 @@ test('Field: label htmlFor resolves to the exact nested Input DOM element', { ti
     container.remove()
   }
 })
+
+test('Switch / Checkbox: Space and Enter toggle once with preventDefault, other keys pass through, disabled blocks click and keys, and a string label backs aria-label', { timeout: 60_000 }, async () => {
+  const container = document.createElement('div')
+  document.body.appendChild(container)
+  const root = createRoot(container)
+  const switchChanges: boolean[] = []
+  const checkboxChanges: boolean[] = []
+  const disabledChanges: boolean[] = []
+
+  try {
+    await act(async () => {
+      root.render(
+        e(
+          'div',
+          null,
+          e(Switch, { checked: false, onChange: (v: boolean) => { switchChanges.push(v) }, label: 'Active' }),
+          e(Checkbox, { checked: true, onChange: (v: boolean) => { checkboxChanges.push(v) }, 'aria-label': 'Pick' }),
+          e(Switch, { checked: false, disabled: true, onChange: (v: boolean) => { disabledChanges.push(v) } }),
+          e(Checkbox, { checked: false, disabled: true, onChange: (v: boolean) => { disabledChanges.push(v) } }),
+        ),
+      )
+    })
+
+    const [switchBtn, checkboxBtn, disabledSwitchBtn, disabledCheckboxBtn] = [
+      ...container.querySelectorAll<HTMLButtonElement>('[role="switch"], [role="checkbox"]'),
+    ]
+    assert.ok(switchBtn !== undefined && checkboxBtn !== undefined)
+    assert.ok(disabledSwitchBtn !== undefined && disabledCheckboxBtn !== undefined)
+    assert.equal(switchBtn.getAttribute('aria-label'), 'Active', 'a string label backs aria-label when no explicit aria-label is given')
+    assert.equal(checkboxBtn.getAttribute('aria-label'), 'Pick', 'an explicit aria-label wins over the label')
+
+    const press = async (target: HTMLElement, key: string): Promise<boolean> => {
+      const event = new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true })
+      await act(async () => {
+        target.dispatchEvent(event)
+      })
+      return event.defaultPrevented
+    }
+
+    assert.equal(await press(switchBtn, ' '), true, 'Space is consumed so the page never scrolls')
+    assert.equal(await press(switchBtn, 'Enter'), true, 'Enter toggles like Space')
+    assert.equal(await press(switchBtn, 'a'), false, 'unrelated keys pass through untouched')
+    assert.equal(await press(checkboxBtn, 'Enter'), true)
+    assert.deepEqual(switchChanges, [true, true], 'each Space / Enter press reports the next state exactly once')
+    assert.deepEqual(checkboxChanges, [false])
+
+    await act(async () => {
+      switchBtn.click()
+      checkboxBtn.click()
+      disabledSwitchBtn.click()
+      disabledCheckboxBtn.click()
+    })
+    await press(disabledSwitchBtn, ' ')
+    await press(disabledCheckboxBtn, 'Enter')
+    assert.deepEqual(switchChanges, [true, true, true], 'click toggles once')
+    assert.deepEqual(checkboxChanges, [false, false])
+    assert.deepEqual(disabledChanges, [], 'disabled controls never emit onChange')
+  } finally {
+    await act(async () => {
+      root.unmount()
+    })
+    container.remove()
+  }
+})

@@ -36,6 +36,25 @@ interface ReadWorkspaceFileDeps {
   signal?: AbortSignal
 }
 
+/** Lexically resolved read target shared by the local and remote readers (containment is re-verified canonically). */
+interface WorkspaceReadTarget {
+  /** Node the conversation is bound to (`'local'` or a registry node id). */
+  nodeId: string
+  /** Conversation cwd as bound (remote lookup key for `envFabric.envFor`). */
+  cwd: string
+  /** Path exactly as requested (used verbatim in diagnostics). */
+  rawPath: string
+  cwdNorm: string
+  lexicalAbs: string
+  lexicalShape: 'posix' | 'win32' | undefined
+  signal?: AbortSignal
+}
+
+interface WorkspaceFileBytes {
+  rawBytes: Uint8Array
+  resolvedPath: string
+}
+
 function assertNotAborted(signal?: AbortSignal): void {
   if (signal?.aborted) {
     throw new HelmxError('aborted', 'workspace file read cancelled', 499)
@@ -92,13 +111,8 @@ function mapRemoteFileError(error: FileError, rawPath: string): HelmxError {
   return new HelmxError('file_read_failed', error.message, 502)
 }
 
-async function readLocalWorkspaceFile(
-  rawPath: string,
-  cwdNorm: string,
-  lexicalAbs: string,
-  lexicalShape: 'posix' | 'win32' | undefined,
-  signal?: AbortSignal,
-): Promise<{ rawBytes: Uint8Array; resolvedPath: string }> {
+async function readLocalWorkspaceFile(target: WorkspaceReadTarget): Promise<WorkspaceFileBytes> {
+  const { rawPath, cwdNorm, lexicalAbs, lexicalShape, signal } = target
   assertNotAborted(signal)
   let cwdReal: string
   try {
@@ -163,14 +177,9 @@ async function readLocalWorkspaceFile(
 
 async function readRemoteWorkspaceFile(
   envFabric: EnvFabric | undefined,
-  nodeId: string,
-  cwd: string,
-  rawPath: string,
-  cwdNorm: string,
-  lexicalAbs: string,
-  lexicalShape: 'posix' | 'win32' | undefined,
-  signal?: AbortSignal,
-): Promise<{ rawBytes: Uint8Array; resolvedPath: string }> {
+  target: WorkspaceReadTarget,
+): Promise<WorkspaceFileBytes> {
+  const { nodeId, cwd, rawPath, cwdNorm, lexicalAbs, lexicalShape, signal } = target
   if (envFabric === undefined) {
     throw new HelmxError(
       'env_fabric_missing',
@@ -278,10 +287,11 @@ export async function readWorkspaceFile(deps: ReadWorkspaceFileDeps): Promise<Co
     throw new HelmxError('invalid_path', 'requested path must not resolve to conversation workspace root', 400)
   }
 
+  const target: WorkspaceReadTarget = { nodeId, cwd, rawPath, cwdNorm, lexicalAbs, lexicalShape, signal }
   const { rawBytes, resolvedPath } =
     nodeId === 'local'
-      ? await readLocalWorkspaceFile(rawPath, cwdNorm, lexicalAbs, lexicalShape, signal)
-      : await readRemoteWorkspaceFile(envFabric, nodeId, cwd, rawPath, cwdNorm, lexicalAbs, lexicalShape, signal)
+      ? await readLocalWorkspaceFile(target)
+      : await readRemoteWorkspaceFile(envFabric, target)
 
   const name = basenameForShape(resolvedPath)
   const detected = detectWorkspaceFileMime(name, rawBytes)
