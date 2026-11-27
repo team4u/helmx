@@ -186,10 +186,16 @@ async function withStartLock<T>(dataDir: string, fn: () => Promise<T>): Promise<
     new Error(
       `concurrent start conflict: ${file} already exists${ownerPid !== undefined ? ` (held by pid ${ownerPid})` : ''} (another helmx-node start is in progress, or a previous start crashed); confirm no start is running and remove the lock file before retrying`,
     );
+  // Recovery in progress leaves a break marker rather than a lock file, so `busyError`'s advice would be wrong here.
+  const recoveringError = (_file: string, markers: string[]): Error =>
+    new Error(
+      `stale start lock is being recovered (${markers.join(', ')}): another helmx-node start is clearing a dead owner's lock; retry shortly; if no start is running, remove the stale marker file(s)`,
+    );
   return await withCrossProcessFileLock(lockPath, fn, {
     waitMs: 0,
     onBusy: busyError,
     onCorrupt: (file) => busyError(file),
+    onRecovering: recoveringError,
   });
 }
 

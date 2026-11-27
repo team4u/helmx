@@ -163,11 +163,17 @@ export async function withUpdateLock<T>(
     new UpgradeRejectedError(
       `upgrade already in progress (${ownerPid !== undefined ? `held by pid ${ownerPid}, ` : ''}lock file exists: ${file})`,
     );
+  // Recovery in progress leaves a break marker rather than a lock file, so `busyError`'s wording would be wrong here.
+  const recoveringError = (_file: string, markers: string[]): Error =>
+    new UpgradeRejectedError(
+      `stale upgrade lock is being recovered (${markers.join(', ')}): another upgrade is clearing a dead owner's lock; retry shortly; if no upgrade is running, remove the stale marker file(s)`,
+    );
   return withCrossProcessFileLock(lockPath, fn, {
     waitMs: 0,
     ...(options?.isAlive !== undefined ? { isAlive: options.isAlive } : {}),
     onBusy: busyError,
     onCorrupt: (file) => busyError(file),
+    onRecovering: recoveringError,
     onError: (file, error, phase) =>
       new Error(
         `failed to ${phase} upgrade lock (${file}): ${(error as NodeJS.ErrnoException)?.code ?? (error instanceof Error ? error.message : String(error))}`,

@@ -23,17 +23,27 @@ const DEFAULT_LOG_READ_MAX_BYTES = 1_000_000;
 const MAX_STALE_BREAK_ATTEMPTS = 8;
 const MAX_OWNERSHIP_RETRIES = 8;
 const BREAK_MARKER_SUFFIX = '.stale';
+/** Bounded backoff for lock-file deletions hitting transient file locks (same code set as `atomic-write.ts`). */
+const REMOVE_BUSY_TOTAL_MS = 500;
+const REMOVE_BUSY_INITIAL_POLL_MS = 5;
+const REMOVE_BUSY_MAX_POLL_MS = 50;
+const RETRYABLE_REMOVE_CODES = new Set(['EPERM', 'EACCES', 'EBUSY']);
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
-/** Return true if `pid` exists (treating `EPERM` as alive so cross-user PIDs are never declared dead). */
+/**
+ * Return true if `pid` exists. Fail-closed on purpose: only `ESRCH` (no such process) proves death;
+ * any other outcome (`EPERM` for cross-user PIDs, `EIO`, unknown codes) counts as alive. Why: a live
+ * process wrongly declared dead lets a stale-lock breaker delete that process's lock, so the only
+ * acceptable false verdict is "alive".
+ */
 export function isProcessAlive(pid: number): boolean {
   if (!Number.isInteger(pid) || pid <= 0) return false;
   try {
     process.kill(pid, 0);
     return true;
   } catch (error) {
-    return (error as NodeJS.ErrnoException).code === 'EPERM';
+    return (error as NodeJS.ErrnoException).code !== 'ESRCH';
   }
 }
 
@@ -211,11 +221,18 @@ export async function readLogFrom(
 }
 
 export interface CrossProcessFileLockOptions {
-  /** Max time to wait when another live process holds the lock (`0` fails immediately; default `0`). */
+  /**
+   * Max time to wait when another live process holds the lock (`0` never waits for a live holder; but
+   * after a successful publish an in-flight stale recovery still gets `settleGraceMs` to settle, see
+   * `onRecovering`; default `0`).
+   */
   waitMs?: number;
   /** Poll interval while waiting for a live holder (default `25ms`). */
   pollMs?: number;
-  /** Grace window for empty/half-written lock files when `waitMs > 0` (default `2000ms`). */
+  /**
+   * Grace window for empty/half-written lock files when `waitMs > 0` (default `2000ms`); also bounds the
+   * post-publish wait for break markers when `waitMs === 0`.
+   */
   settleGraceMs?: number;
   /** Break lock files whose recorded numeric PID is confirmed dead (default `true`). */
   staleRecovery?: boolean;
@@ -225,6 +242,12 @@ export interface CrossProcessFileLockOptions {
   onBusy?: (lockPath: string, ownerPid?: number) => Error;
   /** Custom error when lock file has non-numeric/corrupt contents (file is preserved, never deleted). */
   onCorrupt?: (lockPath: string) => Error;
+  /**
+   * Custom error when the wait budget expires while stale-lock recovery is still in progress (live
+   * break markers remain; `markers` are described as `<path> (pid N, 3h old)`). Falls back to
+   * `onBusy(lockPath, undefined)`, then to the built-in message.
+   */
+  onRecovering?: (lockPath: string, markers: string[]) => Error;
   /** Custom error on unexpected create/read I/O failures (file is preserved). */
   onError?: (lockPath: string, error: unknown, phase: 'create' | 'read') => Error;
   /**
@@ -262,6 +285,49 @@ function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/** Append `diagnostic` to `error.message` in place (original object, errno `code` and subclass kept; never throws). */
+function annotateError(error: unknown, diagnostic: string): void {
+  if (!(error instanceof Error)) return;
+  try {
+    error.message = `${error.message}${diagnostic}`;
+  } catch {
+    /* read-only message: keep the original error untouched */
+  }
+}
+
+/**
+ * Remove `file` (a missing file counts as removed), retrying transient lock codes with bounded backoff
+ * (5 -> 50ms, ~500ms total). Returns the last error instead of throwing so each caller decides whether a
+ * leftover is fatal (break marker) or best-effort (own lock after use).
+ */
+async function removeFileWithRetry(file: string): Promise<Error | undefined> {
+  const startedAt = Date.now();
+  for (let retries = 0; ; retries += 1) {
+    try {
+      await fsp.rm(file, { force: true });
+      return undefined;
+    } catch (error) {
+      if (!(error instanceof Error)) return new Error(describeError(error));
+      const { code } = error as NodeJS.ErrnoException;
+      if (typeof code !== 'string' || !RETRYABLE_REMOVE_CODES.has(code)) return error;
+      if (Date.now() - startedAt >= REMOVE_BUSY_TOTAL_MS) {
+        annotateError(error, ` (transiently locked; still failed after ${retries} retries / ${Date.now() - startedAt}ms)`);
+        return error;
+      }
+      await sleep(Math.min(REMOVE_BUSY_MAX_POLL_MS, REMOVE_BUSY_INITIAL_POLL_MS * 2 ** retries));
+    }
+  }
+}
+
+/** Coarse human age for diagnostics: `120ms`, `45s`, `5m`, `3h`, `2d`. */
+function describeAge(ageMs: number): string {
+  if (ageMs < 1_000) return `${Math.max(0, Math.round(ageMs))}ms`;
+  if (ageMs < 60_000) return `${Math.round(ageMs / 1_000)}s`;
+  if (ageMs < 3_600_000) return `${Math.round(ageMs / 60_000)}m`;
+  if (ageMs < 86_400_000) return `${Math.round(ageMs / 3_600_000)}h`;
+  return `${Math.round(ageMs / 86_400_000)}d`;
+}
+
 function lockIoError(attempt: LockAttempt, error: unknown, phase: 'create' | 'read', fallbackMessage: string): Error {
   return attempt.hooks.onError ? attempt.hooks.onError(attempt.lockPath, error, phase) : new Error(fallbackMessage);
 }
@@ -276,6 +342,15 @@ function lockCorruptError(attempt: LockAttempt): Error {
   if (onCorrupt) return onCorrupt(attempt.lockPath);
   if (onBusy) return onBusy(attempt.lockPath);
   return new Error(`lock file is corrupt or unowned (${attempt.lockPath}): cannot determine owner`);
+}
+
+/**
+ * Recovery-still-in-progress verdict: `onRecovering`, else `onBusy(lockPath, undefined)`, else the built-in
+ * message. `markers` are operator-facing descriptions (path + pid + age) so the error can be acted upon.
+ */
+function lockRecoveringError(attempt: LockAttempt, markers: string[]): Error {
+  if (attempt.hooks.onRecovering) return attempt.hooks.onRecovering(attempt.lockPath, markers);
+  return lockBusyError(attempt, undefined, `stale-lock recovery is in progress (${markers.join(', ')})`);
 }
 
 /**
@@ -333,7 +408,7 @@ async function tryPublishLock(attempt: LockAttempt): Promise<boolean> {
  * Publish-and-confirm loop: returns once this process owns the lock and no in-flight stale recovery can
  * still delete it; throws when it cannot get it. A publish displaced by a concurrent stale recovery
  * re-contends (bounded). Every failure after a successful publish releases the lock first so a lock file
- * carrying this live PID is never orphaned.
+ * carrying this live PID is never orphaned; a release that itself fails is appended to the thrown error.
  */
 async function acquireLock(attempt: LockAttempt): Promise<void> {
   for (;;) {
@@ -341,7 +416,13 @@ async function acquireLock(attempt: LockAttempt): Promise<void> {
       try {
         if (await confirmLockOwnership(attempt)) return;
       } catch (error) {
-        await releaseLock(attempt);
+        const releaseFailure = await releaseLock(attempt);
+        if (releaseFailure !== undefined) {
+          annotateError(
+            error,
+            `; releasing the published lock also failed (${attempt.lockPath} still carries pid ${process.pid}: ${describeError(releaseFailure)})`,
+          );
+        }
         throw error;
       }
       attempt.ownershipRetries += 1;
@@ -390,19 +471,43 @@ async function waitForBreakMarkersToClear(attempt: LockAttempt): Promise<void> {
   for (;;) {
     const blockers = await listLiveBreakMarkers(attempt);
     if (blockers.length === 0) return;
-    if (Date.now() >= until) {
-      throw lockBusyError(attempt, undefined, `stale-lock recovery is in progress (${blockers.join(', ')})`);
-    }
+    if (Date.now() >= until) throw lockRecoveringError(attempt, await describeBreakMarkers(blockers));
     await sleep(attempt.pollMs);
   }
+}
+
+/** A break marker whose breaker PID is still alive. */
+interface LiveBreakMarker {
+  readonly markerPath: string;
+  readonly pid: number;
+}
+
+/**
+ * Operator-facing marker descriptions `<path> (pid N, 3h old)`; the age (marker mtime, only stat'ed here
+ * on the error path) tells an in-progress break (milliseconds) from a crashed leftover (hours).
+ * A marker that cannot be stat'ed is described by its path alone.
+ */
+async function describeBreakMarkers(markers: LiveBreakMarker[]): Promise<string[]> {
+  return Promise.all(
+    markers.map(async ({ markerPath, pid }) => {
+      try {
+        const { mtimeMs } = await fsp.stat(markerPath);
+        return `${markerPath} (pid ${pid}, ${describeAge(Date.now() - mtimeMs)} old)`;
+      } catch {
+        return markerPath;
+      }
+    }),
+  );
 }
 
 /**
  * Break markers (`<lock>.<pid>.<uuid>.stale`) in the lock directory whose breaker PID is still alive.
  * Markers of dead breakers are ignored and never deleted: their owner can no longer act, and removing
- * them would race a live breaker's own marker cleanup.
+ * them would race a live breaker's own marker cleanup. A crashed breaker whose PID later gets reused
+ * therefore stays "live" until that PID exits or someone removes the marker by hand: acquirers then
+ * fail explicitly naming it (see `onRecovering`) instead of ever entering on a lock that may be deleted.
  */
-async function listLiveBreakMarkers(attempt: LockAttempt): Promise<string[]> {
+async function listLiveBreakMarkers(attempt: LockAttempt): Promise<LiveBreakMarker[]> {
   const dir = path.dirname(attempt.lockPath);
   const prefix = `${path.basename(attempt.lockPath)}.`;
   let names: string[];
@@ -412,11 +517,11 @@ async function listLiveBreakMarkers(attempt: LockAttempt): Promise<string[]> {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []; // Directory gone: nothing to protect; the token re-read that follows is the verdict.
     throw lockIoError(attempt, error, 'read', `failed to list the lock directory (${dir}): ${describeError(error)}`);
   }
-  const live: string[] = [];
+  const live: LiveBreakMarker[] = [];
   for (const name of names) {
     if (!name.startsWith(prefix) || !name.endsWith(BREAK_MARKER_SUFFIX)) continue;
     const pid = Number(name.slice(prefix.length, -BREAK_MARKER_SUFFIX.length).split('.')[0]);
-    if (Number.isSafeInteger(pid) && pid > 0 && attempt.isAlive(pid)) live.push(path.join(dir, name));
+    if (Number.isSafeInteger(pid) && pid > 0 && attempt.isAlive(pid)) live.push({ markerPath: path.join(dir, name), pid });
   }
   return live;
 }
@@ -488,6 +593,9 @@ function breakMarkerPath(lockPath: string): string {
  * marker from before the re-examining read until after the deletion: concurrent holders see the marker
  * and refuse to enter on a lock published meanwhile (see `confirmLockOwnership`). Under the marker the
  * file is re-read: gone -> retry now; live or not provably dead -> leave it alone and wait.
+ * Marker hygiene is never silent: a create failure cleans up the partial file (or says it could not),
+ * and the marker is removed after the body settles whatever its outcome, with a removal failure turned
+ * into an explicit error naming the marker (a leftover live-PID marker blocks every acquirer).
  */
 async function breakStaleLock(attempt: LockAttempt, pid: number): Promise<LockDecision> {
   attempt.staleBreaks += 1;
@@ -503,40 +611,81 @@ async function breakStaleLock(attempt: LockAttempt, pid: number): Promise<LockDe
   try {
     await fsp.writeFile(marker, `${attempt.owner}\n`, { flag: 'wx', mode: 0o600 });
   } catch (error) {
-    throw lockIoError(attempt, error, 'create', `failed to create stale-lock break marker (${marker}): ${describeError(error)}`);
+    // `wx` may have created the file before failing (ENOSPC on write, EIO on close). The marker is
+    // uniquely ours; a leaked one with our live PID would make every acquirer wait for it and fail.
+    const cleanupFailure = await removeFileWithRetry(marker);
+    if (cleanupFailure !== undefined) {
+      annotateError(
+        error,
+        `; removing the partially created break marker also failed (${marker}: ${describeError(cleanupFailure)}); acquirers will keep waiting for that marker while pid ${process.pid} is alive, remove it manually`,
+      );
+    }
+    throw lockIoError(
+      attempt,
+      error,
+      'create',
+      `failed to create stale-lock break marker (${marker}): ${describeError(error)}${
+        cleanupFailure === undefined ? ' (no marker left behind)' : ''
+      }`,
+    );
   }
+  let staleRemoved = false;
+  let decision: LockDecision = RETRY_NOW;
+  let bodyError: unknown;
   try {
     const raw = await readLockFile(attempt);
-    if (raw === undefined) return RETRY_NOW;
-    const head = raw.trim().split(/\s+/)[0] ?? '';
-    const currentPid = /^\d+$/.test(head) ? Number(head) : NaN;
-    if (!(Number.isSafeInteger(currentPid) && currentPid > 0 && !attempt.isAlive(currentPid))) {
-      return { kind: 'wait', delayMs: attempt.pollMs };
+    if (raw !== undefined) {
+      const head = raw.trim().split(/\s+/)[0] ?? '';
+      const currentPid = /^\d+$/.test(head) ? Number(head) : NaN;
+      if (!(Number.isSafeInteger(currentPid) && currentPid > 0 && !attempt.isAlive(currentPid))) {
+        decision = { kind: 'wait', delayMs: attempt.pollMs };
+      } else {
+        await attempt.hooks.beforeStaleRemoval?.(attempt.lockPath, currentPid);
+        try {
+          await fsp.rm(attempt.lockPath, { force: true });
+        } catch (error) {
+          throw lockIoError(attempt, error, 'create', `failed to clear stale lock (${attempt.lockPath}): ${describeError(error)}`);
+        }
+        staleRemoved = true;
+      }
     }
-    await attempt.hooks.beforeStaleRemoval?.(attempt.lockPath, currentPid);
-    try {
-      await fsp.rm(attempt.lockPath, { force: true });
-    } catch (error) {
-      throw lockIoError(attempt, error, 'create', `failed to clear stale lock (${attempt.lockPath}): ${describeError(error)}`);
-    }
-  } finally {
-    await fsp.rm(marker, { force: true }).catch(() => undefined);
+  } catch (error) {
+    bodyError = error;
   }
-  return RETRY_NOW;
+  // The marker must outlive the deletion above; a leftover is never silent: holders would wait for it.
+  const markerFailure = await removeFileWithRetry(marker);
+  if (markerFailure !== undefined) {
+    const consequence = `acquirers will keep waiting for it while pid ${process.pid} is alive; remove it manually`;
+    if (bodyError !== undefined) {
+      annotateError(bodyError, `; removing the break marker also failed (${marker}: ${describeError(markerFailure)}); ${consequence}`);
+    } else {
+      bodyError = lockIoError(
+        attempt,
+        markerFailure,
+        'create',
+        `${staleRemoved ? 'stale lock removed but the' : 'the'} break marker cannot be deleted (${marker}: ${describeError(markerFailure)}); ${consequence}`,
+      );
+    }
+  }
+  if (bodyError !== undefined) throw bodyError;
+  return decision;
 }
 
 /**
  * Owner-checked release: remove the lock file only while it still carries our owner token. After
  * ownership confirmation no other process can delete or replace it while this PID lives (see
- * `confirmLockOwnership`), so the read/compare/remove sequence has no concurrent deleter.
+ * `confirmLockOwnership`), so the read/compare/remove sequence has no concurrent deleter. Returns the
+ * removal error (after bounded retries) for callers to surface; never throws.
  */
-async function releaseLock(attempt: LockAttempt): Promise<void> {
+async function releaseLock(attempt: LockAttempt): Promise<Error | undefined> {
   try {
     const current = await fsp.readFile(attempt.lockPath, 'utf8');
-    if (current.trim() === attempt.owner) await fsp.rm(attempt.lockPath, { force: true });
+    if (current.trim() !== attempt.owner) return undefined;
   } catch {
-    // If release fails, dead-PID stale detection cleans it up after this process exits.
+    // Missing or unreadable: nothing of ours is left to remove.
+    return undefined;
   }
+  return await removeFileWithRetry(attempt.lockPath);
 }
 
 /**
@@ -552,6 +701,11 @@ async function releaseLock(attempt: LockAttempt): Promise<void> {
  * - Never leaves a lock file carrying this live PID behind when acquisition fails after publishing;
  * - Never silently deletes an empty/corrupt lock file (preserves it and surfaces `onCorrupt` / `onBusy`);
  * - Never deletes another process's break marker (dead-PID markers are ignored, not removed);
+ * - Never leaves a break marker of this process behind silently: a removal failure (after bounded
+ *   retries) is reported on the thrown error, because a live-PID marker blocks every acquirer;
+ * - Break markers carry only a PID: a breaker that crashes inside its window and whose PID is later
+ *   reused keeps a "live" marker until that PID exits or the marker is removed by hand; acquirers then
+ *   fail explicitly naming it (`onRecovering`). Deliberate fail-closed, never auto-deleted;
  * - Never ignores non-`ENOENT` read errors such as `EACCES`.
  */
 export async function withCrossProcessFileLock<T>(
@@ -579,6 +733,8 @@ export async function withCrossProcessFileLock<T>(
   try {
     return await fn();
   } finally {
+    // Not thrown: a lock file left here still carries this live PID (so nobody enters) and dead-PID
+    // stale recovery cleans it up after this process exits; the critical section's own result wins.
     await releaseLock(attempt);
   }
 }

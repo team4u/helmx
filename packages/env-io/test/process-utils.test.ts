@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
-import { test } from 'node:test';
+import { test, type TestContext } from 'node:test';
 import { deferred, sleep } from '@helmx/test-kit';
 import { useTempDir } from '@helmx/test-kit/node';
 import {
@@ -49,6 +49,30 @@ test('isProcessAlive / waitForPidExit / readProcessStartTime work on current pro
   } else {
     assert.equal(start, null);
   }
+});
+
+test('isProcessAlive fails closed: only ESRCH counts as dead', { timeout: 60_000 }, (t) => {
+  const realKill = process.kill;
+  t.after(() => {
+    process.kill = realKill;
+  }, { timeout: 60_000 });
+  const killThrows = (code: string | undefined): void => {
+    process.kill = (() => {
+      throw Object.assign(new Error(code === undefined ? 'stubbed failure without errno code' : `${code}: stubbed`), code === undefined ? {} : { code });
+    }) as typeof process.kill;
+  };
+
+  killThrows('EIO');
+  assert.equal(isProcessAlive(process.pid), true, 'EIO must count as alive');
+  killThrows('EPERM');
+  assert.equal(isProcessAlive(process.pid), true, 'EPERM (cross-user pid) must count as alive');
+  killThrows(undefined);
+  assert.equal(isProcessAlive(process.pid), true, 'an error without an errno code must count as alive');
+  killThrows('ESRCH');
+  assert.equal(isProcessAlive(process.pid), false, 'ESRCH is the only proof of death');
+
+  process.kill = realKill;
+  assert.equal(isProcessAlive(process.pid), true, 'restored: own pid is alive');
 });
 
 test('readLogTailBounded caps bytes and preserves UTF-8 across mid-file boundaries', { timeout: 60_000 }, async (t) => {
@@ -234,7 +258,173 @@ test('withCrossProcessFileLock holder displaced by a stalled stale breaker waits
   assert.deepEqual((await fsp.readdir(dir)).filter((name) => name.includes('stalled.lock')), [], 'no lock, marker or temp leftovers');
 });
 
-test('withCrossProcessFileLock ignores dead-PID break markers forever and bounds waiting on live ones by settleGraceMs when waitMs is 0', { timeout: 60_000 }, async (t) => {
+const escapeRegExp = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/** Stub `fsp.rm` so deletes of paths accepted by `fail` throw `code`; returns the restore function (also registered via `t.after`). */
+function stubRmFailures(t: TestContext, fail: (file: string) => boolean, code: string): () => void {
+  const realRm = fsp.rm;
+  fsp.rm = (async (file: Parameters<typeof fsp.rm>[0], options?: Parameters<typeof fsp.rm>[1]) => {
+    if (fail(String(file))) throw Object.assign(new Error(`${code}: stubbed unlink failure`), { code });
+    await realRm(file, options);
+  }) as typeof fsp.rm;
+  const restore = (): void => {
+    fsp.rm = realRm;
+  };
+  t.after(restore, { timeout: 60_000 });
+  return restore;
+}
+
+/** Stub `fsp.writeFile` so marker writes land on disk and then fail with `ENOSPC`; returns the restore function. */
+function stubMarkerWriteEnospc(t: TestContext): () => void {
+  const realWriteFile = fsp.writeFile;
+  fsp.writeFile = (async (file: Parameters<typeof fsp.writeFile>[0], data: Parameters<typeof fsp.writeFile>[1], options?: Parameters<typeof fsp.writeFile>[2]) => {
+    await realWriteFile(file, data, options);
+    if (String(file).endsWith('.stale')) throw Object.assign(new Error('ENOSPC: no space left on device, write'), { code: 'ENOSPC' });
+  }) as typeof fsp.writeFile;
+  const restore = (): void => {
+    fsp.writeFile = realWriteFile;
+  };
+  t.after(restore, { timeout: 60_000 });
+  return restore;
+}
+
+test('withCrossProcessFileLock never leaves its own break marker or published lock behind silently', { timeout: 60_000 }, async (t) => {
+  const dir = useTempDir(t, 'helmx-env-io-lock-marker-hygiene-');
+  const lockPath = path.join(dir, 'hygiene.lock');
+  const deadOwner = '424242 dead-owner\n';
+  const isAlive = (pid: number): boolean => pid === process.pid;
+  const exists = async (file: string): Promise<boolean> => fsp.stat(file).then(() => true, () => false);
+  const staleLeftovers = async (): Promise<string[]> => (await fsp.readdir(dir)).filter((name) => name.endsWith('.stale'));
+  const removeLeftovers = async (): Promise<void> => {
+    for (const name of await staleLeftovers()) await fsp.rm(path.join(dir, name), { force: true });
+  };
+
+  // 1. Marker create fails after the file landed (ENOSPC on write): the partial marker is removed and the
+  //    failure is reported under phase `create` with the original errno kept on the error object.
+  await fsp.writeFile(lockPath, deadOwner, 'utf8');
+  const restoreWrite = stubMarkerWriteEnospc(t);
+  await assert.rejects(
+    withCrossProcessFileLock(lockPath, async () => 'never', { waitMs: 0, isAlive }),
+    (error: unknown) => {
+      assert.ok(error instanceof Error);
+      assert.match(error.message, /failed to create stale-lock break marker \(.*\.stale\): ENOSPC: no space left on device, write \(no marker left behind\)$/);
+      return true;
+    },
+  );
+  assert.deepEqual(await staleLeftovers(), [], 'partially created marker removed');
+  assert.equal(await fsp.readFile(lockPath, 'utf8'), deadOwner, 'stale lock untouched when its break cannot be protected');
+  await assert.rejects(
+    withCrossProcessFileLock(lockPath, async () => 'never', {
+      waitMs: 0,
+      isAlive,
+      onError: (file, error, phase) => new Error(`${phase}:${(error as NodeJS.ErrnoException).code}:${path.basename(file)}`),
+    }),
+    (error: unknown) => {
+      assert.ok(error instanceof Error);
+      assert.equal(error.message, 'create:ENOSPC:hygiene.lock');
+      return true;
+    },
+  );
+  assert.deepEqual(await staleLeftovers(), [], 'no marker left behind when onError customizes the error either');
+
+  // 2. Create fails and the partial marker cannot be removed either: said explicitly on the (annotated)
+  //    original error, because a marker with our live pid makes every acquirer wait and then fail.
+  //    (`onError` here hands the original object through unchanged, as callers reading `code` rely on.)
+  const restoreRm2 = stubRmFailures(t, (file) => file.endsWith('.stale'), 'EBUSY');
+  await assert.rejects(
+    withCrossProcessFileLock(lockPath, async () => 'never', { waitMs: 0, isAlive, onError: (_file, error) => error as Error }),
+    (error: unknown) => {
+      assert.ok(error instanceof Error);
+      assert.equal((error as NodeJS.ErrnoException).code, 'ENOSPC', 'annotation keeps the original errno code');
+      assert.match(error.message, /^ENOSPC: no space left on device, write/);
+      assert.match(error.message, /removing the partially created break marker also failed \(.*\.stale: EBUSY: stubbed unlink failure/);
+      assert.match(error.message, new RegExp(`acquirers will keep waiting for that marker while pid ${process.pid} is alive, remove it manually$`));
+      return true;
+    },
+  );
+  assert.equal((await staleLeftovers()).length, 1, 'the unremovable marker is exactly the one reported');
+  restoreWrite();
+  restoreRm2();
+  await removeLeftovers();
+
+  // 3. The stale lock was removed but the marker cannot be deleted: explicit failure naming the marker.
+  const restoreRm3 = stubRmFailures(t, (file) => file.endsWith('.stale'), 'EBUSY');
+  await assert.rejects(
+    withCrossProcessFileLock(lockPath, async () => 'never', { waitMs: 0, isAlive }),
+    (error: unknown) => {
+      assert.ok(error instanceof Error);
+      assert.match(error.message, /^stale lock removed but the break marker cannot be deleted \(.*\.stale: EBUSY: stubbed unlink failure/);
+      assert.match(error.message, new RegExp(`acquirers will keep waiting for it while pid ${process.pid} is alive; remove it manually$`));
+      return true;
+    },
+  );
+  assert.equal(await exists(lockPath), false, 'stale lock was removed');
+  assert.equal((await staleLeftovers()).length, 1, 'the unremovable marker is exactly the one reported');
+  await fsp.writeFile(lockPath, deadOwner, 'utf8');
+  await assert.rejects(
+    withCrossProcessFileLock(lockPath, async () => 'never', {
+      waitMs: 0,
+      isAlive,
+      onError: (file, error, phase) => new Error(`${phase}:${(error as NodeJS.ErrnoException).code}:${path.basename(file)}`),
+    }),
+    (error: unknown) => {
+      assert.ok(error instanceof Error);
+      assert.equal(error.message, 'create:EBUSY:hygiene.lock');
+      return true;
+    },
+  );
+  restoreRm3();
+  await removeLeftovers();
+
+  // 4. Body failure plus marker removal failure: both diagnostics travel on the original error.
+  await fsp.writeFile(lockPath, deadOwner, 'utf8');
+  const restoreRm4 = stubRmFailures(t, (file) => file.endsWith('.stale'), 'EBUSY');
+  await assert.rejects(
+    withCrossProcessFileLock(lockPath, async () => 'never', {
+      waitMs: 0,
+      isAlive,
+      beforeStaleRemoval: async () => {
+        throw new Error('hook exploded');
+      },
+    }),
+    (error: unknown) => {
+      assert.ok(error instanceof Error);
+      assert.match(
+        error.message,
+        new RegExp(
+          `^hook exploded; removing the break marker also failed \\(.*\\.stale: EBUSY: stubbed unlink failure \\(transiently locked; still failed after \\d+ retries / \\d+ms\\)\\); ` +
+            `acquirers will keep waiting for it while pid ${process.pid} is alive; remove it manually$`,
+        ),
+      );
+      return true;
+    },
+  );
+  assert.equal(await fsp.readFile(lockPath, 'utf8'), deadOwner, 'stale lock untouched when the hook failed');
+  restoreRm4();
+  await removeLeftovers();
+
+  // 5. A failed post-publish confirmation releases our lock; when that release fails too, the thrown error
+  //    says the lock file still carries our pid instead of leaving the orphan unmentioned.
+  await fsp.rm(lockPath, { force: true });
+  const liveMarker = `${lockPath}.${process.pid}.live-uuid.stale`;
+  await fsp.writeFile(liveMarker, `${process.pid} busy\n`, 'utf8');
+  const restoreRm5 = stubRmFailures(t, (file) => file === lockPath, 'EBUSY');
+  await assert.rejects(
+    withCrossProcessFileLock(lockPath, async () => 'never', { waitMs: 0, pollMs: 5, settleGraceMs: 80, isAlive }),
+    (error: unknown) => {
+      assert.ok(error instanceof Error);
+      assert.match(error.message, /^stale-lock recovery is in progress \(.*live-uuid\.stale \(pid \d+, \d+(ms|s|m|h|d) old\)\)/);
+      assert.match(error.message, new RegExp(`; releasing the published lock also failed \\(${escapeRegExp(lockPath)} still carries pid ${process.pid}: EBUSY: stubbed unlink failure`));
+      return true;
+    },
+  );
+  const orphan = await fsp.readFile(lockPath, 'utf8');
+  assert.ok(orphan.startsWith(`${process.pid} `), 'the reported unremovable lock is our own published lock');
+  restoreRm5();
+  await fsp.rm(liveMarker, { force: true });
+});
+
+test('withCrossProcessFileLock ignores dead-PID break markers forever, bounds waiting on live ones by settleGraceMs when waitMs is 0, and reports them via onRecovering', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helmx-env-io-lock-markers-');
   const lockPath = path.join(dir, 'markers.lock');
   const deadMarker = `${lockPath}.424242.dead-uuid.stale`;
@@ -249,21 +439,41 @@ test('withCrossProcessFileLock ignores dead-PID break markers forever and bounds
   await fsp.rm(deadMarker);
 
   // 2. A live marker blocks entry for at most settleGraceMs (there is no wait budget when waitMs is 0),
-  //    then fails explicitly, releases our own lock, and leaves the foreign marker alone.
+  //    then fails explicitly, releases our own lock, and leaves the foreign marker alone. The built-in
+  //    verdict describes each marker with its breaker pid and age (in-progress = milliseconds, crash = hours).
   await fsp.writeFile(liveMarker, `${process.pid} busy\n`, 'utf8');
+  const escapedLiveMarker = path.basename(liveMarker).replace(/\./g, '\\.');
   const startedAt = Date.now();
   await assert.rejects(
     withCrossProcessFileLock(lockPath, async () => 'never', { waitMs: 0, pollMs: 5, settleGraceMs: 80, isAlive }),
     (error: unknown) => {
       assert.ok(error instanceof Error, 'busy verdict must be an Error');
       assert.match(error.message, /stale-lock recovery is in progress \(/);
-      assert.ok(error.message.includes(path.basename(liveMarker)), `verdict names the blocking marker: ${error.message}`);
+      assert.match(error.message, new RegExp(`${escapedLiveMarker} \\(pid ${process.pid}, \\d+(ms|s|m|h|d) old\\)`));
       return true;
     },
   );
   assert.ok(Date.now() - startedAt >= 70, 'must wait out the settle window before declaring stale recovery stuck');
   assert.equal(await fsp.stat(lockPath).then(() => true, () => false), false, 'own lock is released when acquisition fails');
   assert.equal(await fsp.readFile(liveMarker, 'utf8'), `${process.pid} busy\n`, 'foreign live marker is never deleted');
+
+  // 3. `onRecovering` customizes that verdict (and wins over `onBusy`) with the described marker list.
+  await assert.rejects(
+    withCrossProcessFileLock(lockPath, async () => 'never', {
+      waitMs: 0,
+      pollMs: 5,
+      settleGraceMs: 80,
+      isAlive,
+      onBusy: () => new Error('busy fallback must not win over onRecovering'),
+      onRecovering: (file, markers) => new Error(`recovering:${path.basename(file)}:${markers.join('|')}`),
+    }),
+    (error: unknown) => {
+      assert.ok(error instanceof Error);
+      assert.match(error.message, new RegExp(`^recovering:markers\\.lock:${escapeRegExp(liveMarker)} \\(pid ${process.pid}, \\d+(ms|s|m|h|d) old\\)$`));
+      return true;
+    },
+  );
+  assert.equal(await fsp.stat(lockPath).then(() => true, () => false), false, 'own lock is released when acquisition fails');
 });
 
 test('withCrossProcessFileLock waits out the settle window for a fresh unowned lock before surfacing it as corrupt', { timeout: 60_000 }, async (t) => {
