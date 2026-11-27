@@ -46,7 +46,12 @@ export async function handleNodeDomain(
     // it again because the token is registered for outbound redaction). Bypass the standard redactor here
     // and serialize only the contract fields manually so it isn't masked as [REDACTED].
     return new Response(
-      JSON.stringify({ nodeId: issued.nodeId, token: issued.token, createdAt: issued.createdAt }),
+      JSON.stringify({
+        nodeId: issued.nodeId,
+        token: issued.token,
+        createdAt: issued.createdAt,
+        ...(issued.hubAccess !== undefined ? { hubAccess: issued.hubAccess } : {}),
+      }),
       {
         status: 201,
         headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' },

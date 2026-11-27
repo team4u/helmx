@@ -16,6 +16,7 @@ import type {
 } from '../services/index.js'
 import type { AskService } from './asks.js'
 import type { ConversationService } from './conversation-service.js'
+import type { HubListenInfo } from './hub-access.js'
 import type { ModelRegistry } from './model-registry.js'
 import type { NodeManager } from './node-manager.js'
 import type { RuntimeAgentSpawn } from './runtime-agent-spawn.js'
@@ -25,6 +26,7 @@ import type { RuntimeTriggerDispatcher } from './runtime-triggers.js'
 /** Minimal runtime surface required by `assembleRuntimeServices` (`runtime-services.ts`). */
 export interface RuntimeServicesHost {
   readonly hubUrl: string
+  readonly hubListenInfo?: HubListenInfo
   readonly isClosing: boolean
   readonly started: boolean
   readonly processToken: string | undefined

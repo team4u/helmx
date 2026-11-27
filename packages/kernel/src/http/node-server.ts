@@ -18,10 +18,12 @@ import { describeError } from './http-utils.js'
 import { createStaticServe } from './static.js'
 import { HelmxError } from '@helmx/protocol'
 import { attachNodeWsGateway, attachNodeTunnelGateway, type EnvFabric, type NodeWsGateway } from '../env/index.js'
+import { formatUrlHost, type HubListenInfo } from '../runtime/hub-access.js'
 
 export type NodeServerKernelTarget = KernelHttpTarget & {
   readonly envFabric?: Pick<EnvFabric, 'registry'>
   setHubUrl?(url: string): void
+  setHubListenInfo?(info: HubListenInfo): void
 }
 
 export interface StartHubOptions {
@@ -232,11 +234,16 @@ export async function startHub(options: StartHubOptions): Promise<NodeHubHandle>
 
   const address = server.address() as AddressInfo
   const actualPort = address.port
-  const url = `http://${hostname}:${actualPort}`
+  const url = `http://${formatUrlHost(hostname)}:${actualPort}`
 
   // Write the actual listening URL back to runtime (so `port: 0` tool endpoints / CLI point to the real port).
   // Skipped if runtime omits the port; rethrow callback failures rather than swallowing them.
   kernel.setHubUrl?.(url)
+  kernel.setHubListenInfo?.({
+    host: hostname,
+    ...(address.address && address.address !== hostname ? { resolvedAddress: address.address } : {}),
+    port: actualPort,
+  })
 
   return {
     url,

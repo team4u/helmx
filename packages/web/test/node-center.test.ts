@@ -3,8 +3,8 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import React, { act } from 'react'
 import { renderToStaticMarkup, renderToString } from 'react-dom/server'
-import type { HelmxLocale } from '@helmx/protocol/browser'
-import { ensureHappyDom } from './helpers/dom-harness.js'
+import type { HelmxLocale, HubAccessInfo } from '@helmx/protocol/browser'
+import { ensureHappyDom, resetHappyDom, typeIntoControl } from './helpers/dom-harness.js'
 
 ensureHappyDom()
 const ReactDOMClient = await import('react-dom/client')
@@ -26,6 +26,7 @@ import {
 import { NodeCard } from '../src/nodes/NodeCard.js'
 import { NodeDetailDrawer } from '../src/nodes/NodeDetailDrawer.js'
 import { NodeCenter } from '../src/nodes/NodeCenter.js'
+import { resolveHubEndpointOptions } from '../src/modals/nodes-modal-model.js'
 import { nodesApi } from '../src/lib/api.js'
 import { createWebTranslator } from '../src/i18n/catalog.js'
 import { makeTestStore } from './helpers/store.js'
@@ -794,6 +795,202 @@ test('NodeDetailDrawer: binds one-time token to nodeId, clears on switch/close/i
   } finally {
     nodesApi.issueToken = originalIssueToken
     nodesApi.checkUpgrade = originalCheckUpgrade
+    await act(async () => {
+      root.unmount()
+    })
+    container.remove()
+  }
+})
+
+test('resolveHubEndpointOptions: handles wildcard, current proxy origin, specific IP, and loopback-only modes', { timeout: 60_000 }, () => {
+  const wildcardAccess: HubAccessInfo = {
+    listenHost: '0.0.0.0',
+    listenPort: 3202,
+    wildcard: true,
+    loopbackOnly: false,
+    endpoints: [
+      { url: 'http://192.168.1.10:3202', host: '192.168.1.10', kind: 'lan', interface: 'eth0' },
+      { url: 'http://100.88.1.5:3202', host: '100.88.1.5', kind: 'vpn', interface: 'tailscale0' },
+      { url: 'http://dev-box.local:3202', host: 'dev-box.local', kind: 'hostname' },
+      { url: 'http://172.17.0.1:3202', host: '172.17.0.1', kind: 'virtual', interface: 'docker0' },
+      { url: 'http://127.0.0.1:3202', host: '127.0.0.1', kind: 'loopback' },
+    ],
+  }
+
+  // 1. Browser on localhost + wildcard 0.0.0.0: picks LAN IP first, folds virtual/loopback into more
+  const fromLocal = resolveHubEndpointOptions({
+    hubAccess: wildcardAccess,
+    browserOrigin: 'http://127.0.0.1:3202',
+  })
+  assert.equal(fromLocal.defaultUrl, 'http://192.168.1.10:3202')
+  assert.equal(fromLocal.loopbackWarning, false)
+  assert.equal(fromLocal.listenSummary, '0.0.0.0:3202')
+  assert.deepEqual(fromLocal.primary.map((o) => o.url), [
+    'http://192.168.1.10:3202',
+    'http://100.88.1.5:3202',
+    'http://dev-box.local:3202',
+  ])
+  assert.deepEqual(fromLocal.more.map((o) => o.url), [
+    'http://172.17.0.1:3202',
+    'http://127.0.0.1:3202',
+  ])
+
+  // 2. Non-loopback proxy browser origin wins as `current` and inherits matching interface
+  const fromProxy = resolveHubEndpointOptions({
+    hubAccess: wildcardAccess,
+    browserOrigin: 'https://hub.example.com/',
+  })
+  assert.equal(fromProxy.defaultUrl, 'https://hub.example.com')
+  assert.equal(fromProxy.primary[0]?.kind, 'current')
+  assert.equal(fromProxy.primary[0]?.displayLabel, 'https://hub.example.com')
+
+  const fromSameLan = resolveHubEndpointOptions({
+    hubAccess: wildcardAccess,
+    browserOrigin: 'http://192.168.1.10:3202',
+  })
+  assert.equal(fromSameLan.primary[0]?.kind, 'current')
+  assert.equal(fromSameLan.primary[0]?.interface, 'eth0')
+  assert.equal(fromSameLan.all.filter((o) => o.url === 'http://192.168.1.10:3202').length, 1)
+
+  // 3. Loopback-only listener warns explicitly
+  const loopbackOnly = resolveHubEndpointOptions({
+    hubAccess: {
+      listenHost: '127.0.0.1',
+      listenPort: 3202,
+      wildcard: false,
+      loopbackOnly: true,
+      endpoints: [{ url: 'http://127.0.0.1:3202', host: '127.0.0.1', kind: 'loopback' }],
+    },
+    browserOrigin: 'http://127.0.0.1:3202',
+  })
+  assert.equal(loopbackOnly.defaultUrl, 'http://127.0.0.1:3202')
+  assert.equal(loopbackOnly.loopbackWarning, true)
+})
+
+test('NodeDetailDrawer: interactive Hub address chips, More toggle, Custom URL input, and loopback warning', { timeout: 60_000 }, async () => {
+  resetHappyDom()
+  const wildcardAccess: HubAccessInfo = {
+    listenHost: '0.0.0.0',
+    listenPort: 3202,
+    wildcard: true,
+    loopbackOnly: false,
+    endpoints: [
+      { url: 'http://192.168.1.10:3202', host: '192.168.1.10', kind: 'lan', interface: 'eth0' },
+      { url: 'http://100.88.1.5:3202', host: '100.88.1.5', kind: 'vpn', interface: 'tailscale0' },
+      { url: 'http://dev-box.local:3202', host: 'dev-box.local', kind: 'hostname' },
+      { url: 'http://172.17.0.1:3202', host: '172.17.0.1', kind: 'virtual', interface: 'docker0' },
+      { url: 'http://127.0.0.1:3202', host: '127.0.0.1', kind: 'loopback' },
+    ],
+  }
+  const store = makeTestStore({
+    locale: 'en',
+    nodes: [
+      { id: 'local', kind: 'local', online: true, hubAccess: wildcardAccess },
+      { id: 'worker-gpu-1', kind: 'byom', online: true, platform: 'linux' },
+    ],
+  })
+  const remoteNode: NodeInfo = { id: 'worker-gpu-1', kind: 'byom', online: true, os: 'linux', arch: 'arm64' }
+
+  const container = document.createElement('div')
+  document.body.appendChild(container)
+  const root = ReactDOMClient.createRoot(container)
+
+  const renderWith = (hubAccessOverride?: HubAccessInfo) =>
+    e(
+      HostStoreProviders,
+      { value: store },
+      e(NodeDetailDrawer, {
+        node: remoteNode,
+        open: true,
+        inline: true,
+        onClose: () => {},
+        ...(hubAccessOverride !== undefined ? { hubAccess: hubAccessOverride } : {}),
+      }),
+    )
+
+  try {
+    await act(async () => {
+      root.render(renderWith())
+    })
+
+    // Primary chips visible; LAN selected by default; virtual/loopback hidden until expanded
+    assert.ok(container.textContent?.includes('listening on 0.0.0.0:3202'))
+    assert.ok(container.textContent?.includes('helmx-node start -d --hub http://192.168.1.10:3202 --token <TOKEN>'))
+    assert.equal(container.textContent?.includes('172.17.0.1:3202'), false)
+    assert.equal(container.textContent?.includes('127.0.0.1:3202'), false)
+    assert.doesNotMatch(container.textContent ?? '', EMOJI_REGEX)
+
+    // Switch to hostname chip
+    const hostChip = Array.from(container.querySelectorAll<HTMLButtonElement>('.node-endpoint-chip')).find((b) =>
+      b.textContent?.includes('dev-box.local:3202'),
+    )
+    assert.ok(hostChip !== undefined)
+    await act(async () => {
+      hostChip.click()
+    })
+    assert.ok(container.textContent?.includes('helmx-node start -d --hub http://dev-box.local:3202 --token <TOKEN>'))
+
+    // Expand More -> reveals docker0 virtual chip and loopback chip
+    const moreBtn = Array.from(container.querySelectorAll<HTMLButtonElement>('.node-endpoint-chip')).find((b) =>
+      /More \(\d+\)/.test(b.textContent ?? ''),
+    )
+    assert.ok(moreBtn !== undefined)
+    await act(async () => {
+      moreBtn.click()
+    })
+    assert.ok(container.textContent?.includes('172.17.0.1:3202'))
+    assert.ok(container.textContent?.includes('127.0.0.1:3202'))
+
+    // Selecting 127.0.0.1 updates command and displays loopback selected warning
+    const loChip = Array.from(container.querySelectorAll<HTMLButtonElement>('.node-endpoint-chip')).find((b) =>
+      b.textContent?.includes('127.0.0.1:3202'),
+    )
+    assert.ok(loChip !== undefined)
+    await act(async () => {
+      loChip.click()
+    })
+    assert.ok(container.textContent?.includes('helmx-node start -d --hub http://127.0.0.1:3202 --token <TOKEN>'))
+    assert.ok(container.textContent?.includes('Loopback address is selected'))
+
+    // Custom mode updates command live and clears loopback warning
+    const customBtn = Array.from(container.querySelectorAll<HTMLButtonElement>('.node-endpoint-chip')).find((b) =>
+      b.textContent?.includes('Custom'),
+    )
+    assert.ok(customBtn !== undefined)
+    await act(async () => {
+      customBtn.click()
+    })
+    const customInput = container.querySelector<HTMLInputElement>('input[aria-label="Custom Hub URL"]')
+    assert.ok(customInput !== null)
+    await act(async () => {
+      typeIntoControl(customInput, 'https://hub.example.com')
+    })
+    assert.ok(container.textContent?.includes('helmx-node start -d --hub https://hub.example.com --token <TOKEN>'))
+    assert.equal(container.textContent?.includes('Loopback address is selected'), false)
+
+    // Loopback-only hubAccess displays loopback-only warning
+    await act(async () => {
+      root.render(
+        renderWith({
+          listenHost: '127.0.0.1',
+          listenPort: 3202,
+          wildcard: false,
+          loopbackOnly: true,
+          endpoints: [{ url: 'http://127.0.0.1:3202', host: '127.0.0.1', kind: 'loopback' }],
+        }),
+      )
+    })
+    // Wait/reset: customMode stays active only until node/open changes; toggle off custom or check via fresh node switch
+    const loOnlyChip = Array.from(container.querySelectorAll<HTMLButtonElement>('.node-endpoint-chip')).find((b) =>
+      b.textContent?.includes('127.0.0.1:3202'),
+    )
+    assert.ok(loOnlyChip !== undefined)
+    await act(async () => {
+      loOnlyChip.click()
+    })
+    assert.ok(container.textContent?.includes('Hub is listening on loopback only'))
+    assert.doesNotMatch(container.textContent ?? '', EMOJI_REGEX)
+  } finally {
     await act(async () => {
       root.unmount()
     })
