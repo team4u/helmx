@@ -734,6 +734,7 @@ describe("tiers-client-interactions", () => {
     assert.equal(typeof cssText, 'string')
     assert.match(cssText as string, /\.tiers-borrow-pill/)
     assert.match(cssText as string, /\.tiers-orch-status-trigger/)
+    assert.doesNotMatch(cssText as string, /\.tiers-orch-status-icon/)
     assert.match(cssText as string, /\.tiers-orch-popover/)
     assert.match(cssText as string, /\.tiers-trace-row/)
 
@@ -1968,6 +1969,7 @@ describe("tiers-client-interactions", () => {
 
         const trigger = composerHost.querySelector<HTMLButtonElement>('.composer-status-row .tiers-orch-status-trigger')
         assert.ok(trigger !== null, 'status row renders OrchestratorStatusBadge trigger')
+        assert.ok(trigger.querySelector('svg') === null, 'status-row trigger stays pure quiet text without pill icon')
         assert.equal(trigger.getAttribute('data-tiers-orchestrator-phase'), 'execution')
         assert.equal(trigger.getAttribute('data-tiers-orchestrator-tier'), 'claude-auto')
         assert.match(trigger.textContent ?? '', /Exec.*3\/10.*workhorse/)

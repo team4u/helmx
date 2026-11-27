@@ -897,78 +897,59 @@
   color: var(--err);
 }
 
-/* ---- Composer status-row orchestrator phase badge & popover ---- */
+/* ---- Composer status-row orchestrator phase indicator & popover ---- */
 .tiers-orch-status-trigger {
   appearance: none;
+  position: relative;
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: 5px;
   min-width: 0;
   max-width: 100%;
-  height: 20px;
   margin: 0;
-  padding: 0 7px;
-  border: 1px solid transparent;
-  border-radius: var(--radius-pill, 999px);
+  padding: 1px 4px;
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--fg-muted);
   font-family: inherit;
-  font-size: 11px;
-  font-weight: 500;
-  line-height: 1;
+  font-size: 11.5px;
+  font-weight: 400;
+  line-height: 1.4;
   white-space: nowrap;
   cursor: pointer;
-  transition: background-color var(--dur-fast) ease, border-color var(--dur-fast) ease, color var(--dur-fast) ease;
+  transition: background-color var(--dur-fast) ease, color var(--dur-fast) ease;
 }
 
-.tiers-orch-status-trigger--planning {
-  background: color-mix(in srgb, var(--accent) 10%, transparent);
-  border-color: color-mix(in srgb, var(--accent) 26%, transparent);
-  color: var(--accent);
-}
-
-.tiers-orch-status-trigger--planning[data-state='open'] {
-  background: color-mix(in srgb, var(--accent) 15%, transparent);
-  border-color: color-mix(in srgb, var(--accent) 44%, transparent);
-}
-
-@media (hover: hover) {
-  .tiers-orch-status-trigger--planning:hover {
-    background: color-mix(in srgb, var(--accent) 15%, transparent);
-    border-color: color-mix(in srgb, var(--accent) 44%, transparent);
-  }
-}
-
-.tiers-orch-status-trigger--execution {
-  background: color-mix(in srgb, var(--warn) 10%, transparent);
-  border-color: color-mix(in srgb, var(--warn) 28%, transparent);
-  color: var(--warn);
-}
-
-.tiers-orch-status-trigger--execution[data-state='open'] {
-  background: color-mix(in srgb, var(--warn) 15%, transparent);
-  border-color: color-mix(in srgb, var(--warn) 46%, transparent);
-}
-
-@media (hover: hover) {
-  .tiers-orch-status-trigger--execution:hover {
-    background: color-mix(in srgb, var(--warn) 15%, transparent);
-    border-color: color-mix(in srgb, var(--warn) 46%, transparent);
-  }
-}
-
+.tiers-orch-status-trigger[data-state='open'],
 .tiers-orch-status-trigger:focus-visible {
+  background: var(--bg-hover);
+  color: var(--fg);
   outline: none;
-  box-shadow: 0 0 0 2px var(--focus-ring);
+  box-shadow: none;
 }
 
-.tiers-orch-status-icon,
+@media (hover: hover) {
+  .tiers-orch-status-trigger:hover {
+    background: var(--bg-hover);
+    color: var(--fg);
+  }
+}
+
 .tiers-orch-status-phase,
 .tiers-orch-status-steps,
 .tiers-orch-status-sep {
   flex-shrink: 0;
 }
 
+.tiers-orch-status-trigger--execution .tiers-orch-status-phase,
+.tiers-orch-status-trigger--execution .tiers-orch-status-steps {
+  color: var(--warn);
+  font-weight: 500;
+}
+
 .tiers-orch-status-sep {
-  opacity: 0.55;
+  opacity: 0.45;
 }
 
 .tiers-orch-status-model {
@@ -1064,21 +1045,15 @@
 }
 
 @media (max-width: 680px) {
-  .tiers-orch-status-trigger {
-    min-height: 24px;
-    height: auto;
-    padding: 2px 8px;
-  }
-
   .tiers-orch-popover {
     width: calc(100vw - 24px);
   }
 }
 
 @media (pointer: coarse) {
-  .tiers-orch-status-trigger {
-    min-height: 24px;
-    height: auto;
-    padding: 2px 8px;
+  .tiers-orch-status-trigger::after {
+    content: '';
+    position: absolute;
+    inset: -5px -2px;
   }
 }

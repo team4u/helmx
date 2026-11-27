@@ -15,7 +15,6 @@ import { useCallback, useEffect, useState, type ReactNode } from 'react'
 import type { ComposerStatusSlotProps, ConversationSummary } from '@helmx/protocol/browser'
 import {
   Badge,
-  HelmxIcon,
   IconButton,
   Popover,
   PopoverClose,
@@ -111,7 +110,6 @@ function OrchestratorStatusBadgeConversation({
           aria-label={statusTitle}
           title={statusTitle}
         >
-          <HelmxIcon name="workflow" size={11.5} className="tiers-orch-status-icon" />
           <span className="tiers-orch-status-phase">{phaseLabel}</span>
           {stepLabel !== '' ? (
             <span className="tiers-orch-status-steps mono tabular-nums">{stepLabel}</span>
