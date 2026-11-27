@@ -1106,6 +1106,8 @@ test('scripts/typecheck.mjs & scripts/verify.mjs: TYPECHECK_TARGETS, parseVerify
     TYPECHECK_TARGETS.map((t) => t.project),
     [
       'tsconfig.check.json',
+      'packages/ui/tsconfig.json',
+      'packages/ui/tsconfig.test.json',
       'packages/plugin-client/tsconfig.json',
       'packages/plugins/tsconfig.client.json',
       'packages/web/tsconfig.json',

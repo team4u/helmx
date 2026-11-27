@@ -1,6 +1,6 @@
 # Canonical JSX Patterns (Helmx UI HIG)
 
-All recipes below compile against `@helmx/plugin-client` with zero private stylesheet, zero `variant="default"`, zero retired legacy container/modal/tab/kbd classes, zero Emoji, and full SSR (`renderToString`) and Fast Refresh compliance.
+All recipes below compile against `@helmx/ui` and `@helmx/plugin-client` with zero private stylesheet, zero `variant="default"`, zero retired legacy container/modal/tab/kbd classes, zero Emoji, and full SSR (`renderToString`) and Fast Refresh compliance.
 
 ## 1. Management Screen with Hairline Roster List
 
@@ -27,6 +27,8 @@ import {
   Tabs,
   TabsList,
   TabsTrigger,
+} from '@helmx/ui'
+import {
   usePluginAction,
   usePluginContext,
   usePluginDoc,
@@ -245,7 +247,7 @@ import {
   Tabs,
   TabsList,
   TabsTrigger,
-} from '@helmx/plugin-client'
+} from '@helmx/ui'
 
 interface CatalogEntry {
   id: string
@@ -400,11 +402,11 @@ import {
   DetailDrawer,
   Field,
   Input,
-  ModelPickerControl,
   SegmentedControl,
   Stack,
   Textarea,
-} from '@helmx/plugin-client'
+} from '@helmx/ui'
+import { ModelPickerControl } from '@helmx/plugin-client'
 
 interface TierDraft {
   id: string
@@ -572,7 +574,7 @@ import {
   Stack,
   StatusLight,
   Switch,
-} from '@helmx/plugin-client'
+} from '@helmx/ui'
 
 interface TunnelEntry {
   id: string
@@ -683,7 +685,7 @@ import {
   Tabs,
   TabsList,
   TabsTrigger,
-} from '@helmx/plugin-client'
+} from '@helmx/ui'
 
 interface SavePresetModalProps {
   open: boolean

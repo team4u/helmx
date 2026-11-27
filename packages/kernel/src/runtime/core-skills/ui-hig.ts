@@ -18,7 +18,7 @@ export const HELMX_UI_HIG_BODY_MD = `# Helmx UI Human Interface Guidelines (HIG)
 > **Diverse list and stage patterns by domain; single unified shell, atoms, and interaction grammar across core and plugins.**
 > （模式随业务多元，外壳与原子零件全站唯一。）
 
-Core \`@helmx/web\` views (Five System Centers, Conversation Overview, workbench, modals) and all plugins (built-in and external micro-apps) share **100% of the same \`@helmx/plugin-client\` primitives, geometry tokens, and interaction grammar**. Never create parallel page shells, legacy aliases, or per-page form/button restyles.
+Core \`@helmx/web\` views (Five System Centers, Conversation Overview, workbench, modals) and all plugins (built-in and external micro-apps) share **100% of the same \`@helmx/ui\` primitives, geometry tokens, and interaction grammar** (with plugin runtime hooks, slots, and host-coupled widgets such as \`ModelPickerControl\` provided by \`@helmx/plugin-client\`). Never create parallel page shells, legacy aliases, or per-page form/button restyles.
 
 ## 1. Quiet Surface Visual Principles
 
@@ -155,7 +155,7 @@ Core System Centers, Conversation Overview, and Plugin Screens share ONE \`<Scre
 
 export const HELMX_UI_HIG_PATTERNS_MD = `# Canonical JSX Patterns (Helmx UI HIG)
 
-All recipes below compile against \`@helmx/plugin-client\` with zero private stylesheet, zero \`variant="default"\`, zero retired legacy container/modal/tab/kbd classes, zero Emoji, and full SSR (\`renderToString\`) and Fast Refresh compliance.
+All recipes below compile against \`@helmx/ui\` and \`@helmx/plugin-client\` with zero private stylesheet, zero \`variant="default"\`, zero retired legacy container/modal/tab/kbd classes, zero Emoji, and full SSR (\`renderToString\`) and Fast Refresh compliance.
 
 ## 1. Management Screen with Hairline Roster List
 
@@ -182,6 +182,8 @@ import {
   Tabs,
   TabsList,
   TabsTrigger,
+} from '@helmx/ui'
+import {
   usePluginAction,
   usePluginContext,
   usePluginDoc,
@@ -400,7 +402,7 @@ import {
   Tabs,
   TabsList,
   TabsTrigger,
-} from '@helmx/plugin-client'
+} from '@helmx/ui'
 
 interface CatalogEntry {
   id: string
@@ -555,11 +557,11 @@ import {
   DetailDrawer,
   Field,
   Input,
-  ModelPickerControl,
   SegmentedControl,
   Stack,
   Textarea,
-} from '@helmx/plugin-client'
+} from '@helmx/ui'
+import { ModelPickerControl } from '@helmx/plugin-client'
 
 interface TierDraft {
   id: string
@@ -727,7 +729,7 @@ import {
   Stack,
   StatusLight,
   Switch,
-} from '@helmx/plugin-client'
+} from '@helmx/ui'
 
 interface TunnelEntry {
   id: string
@@ -838,7 +840,7 @@ import {
   Tabs,
   TabsList,
   TabsTrigger,
-} from '@helmx/plugin-client'
+} from '@helmx/ui'
 
 interface SavePresetModalProps {
   open: boolean

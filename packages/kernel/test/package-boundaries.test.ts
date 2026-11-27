@@ -311,6 +311,12 @@ test('browser sources and @helmx/protocol/browser transitive closure never impor
       if (specifier === '@helmx/protocol') {
         violations.push(`${relative(packagesDir, file)}: must import from @helmx/protocol/browser rather than @helmx/protocol`)
       }
+      if (specifier === 'react-markdown' || specifier === 'remark-gfm') {
+        violations.push(`${relative(packagesDir, file)}: standalone @helmx/ui must not depend on markdown renderer ${specifier}`)
+      }
+      if (specifier.endsWith('.css')) {
+        violations.push(`${relative(packagesDir, file)}: @helmx/ui TS/TSX must not import CSS directly (keeps tsx --test and SSR loader-free)`)
+      }
     }
   }
 
@@ -392,7 +398,7 @@ test('all workspace packages/*/src contain zero any types and zero TS suppressio
 test('sibling package tests never import ../../kernel/src/ across package boundaries', { timeout: 60_000 }, () => {
   const violations: string[] = []
   const kernelSrcRoot = resolve(packagesDir, 'kernel/src')
-  for (const pkgName of ['plugins', 'hub', 'cli', 'web']) {
+  for (const pkgName of ['plugins', 'hub', 'cli', 'web', 'ui', 'plugin-client']) {
     const pkgTestDir = join(packagesDir, pkgName, 'test')
     for (const file of sourceFiles(pkgTestDir)) {
       const rawText = readCachedText(file)

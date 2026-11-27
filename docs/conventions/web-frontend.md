@@ -5,16 +5,17 @@
 
 ## CSS 级联层与宿主/SDK 边界
 
-Web 主控台基于 React 19 + Vite 6（`packages/web`），`src/styles.css` 显式声明三层 CSS 级联顺序：
+Web 主控台基于 React 19 + Vite 6（`packages/web`），`src/styles.css` 显式声明四层 CSS 级联顺序：
 
 ```css
-@layer host-base, host-components, plugin-ui;
+@layer ui-base, ui-primitives, host-components, plugin-ui;
 ```
 
-- **`host-base`**：`src/styles/tokens.css`（亮暗语义色、间距 `--space-1..6`、控件尺码 `--control-h-md/sm/xs`、圆角与 z-index 阶梯）与 `base.css`；
-- **`host-components`**：`src/styles/*.css`、`src/responsive.css`（`main.tsx` 在 `styles.css` 之后引入，仍归入 `host-components`）及位于层尾的 `utilities.css`；
-- **`plugin-ui`**：插件注入的样式由宿主以零优先级 `:where([data-plugin-id="<pluginId>"])` 作用域化并放进 `@layer plugin-ui`，无需 `!important` 即可可预测覆盖宿主默认原语，停用或重载时随生命周期回收；
-- **单向包依赖**：`@helmx/plugin-client` 绝不反向依赖 `@helmx/web`（不导入 Web store、路由或宿主渲染实现）；`HelmxStoreProvider` 经 `PluginClientHostContext` 注入真实数据与宿主能力，核心页面与插件共享同一运行时 SDK 实例；外部插件严禁导入 `@helmx/plugin-client/pure`。
+- **`ui-base`**：`@helmx/ui/tokens.css`（亮暗语义色、间距 `--space-1..6`、控件尺码 `--control-h-md/sm/xs`、圆角与 z-index 阶梯）与 `@helmx/ui/base.css`；
+- **`ui-primitives`**：`@helmx/ui/styles.css`（按组件就近拆分的原语样式，如 `Button.css` / `Select.css` / `Screen.css` / `DetailDrawer.css` / `Utilities.css` 等，仅由 CSS 入口引入，TS/TSX 绝不直接 import CSS 以保持 SSR 与 `tsx --test` 零 loader）；
+- **`host-components`**：`packages/web/src/styles/*.css` 与 `src/responsive.css`（`main.tsx` 在 `styles.css` 之后引入，仍归入 `host-components`）；
+- **`plugin-ui`**：插件注入的样式由宿主以零优先级 `:where([data-plugin-id="<pluginId>"])` 作用域化并放进 `@layer plugin-ui`，无需 `!important` 即可可预测覆盖设计系统原语与宿主默认样式，停用或重载时随生命周期回收；
+- **单向包依赖**：`@helmx/ui` 是零插件运行时依赖的独立 Quiet Surface 设计系统包；`@helmx/plugin-client` 依赖 `@helmx/ui` 与 `@helmx/protocol/browser`，承载插件运行时上下文、Hooks、插槽与宿主耦合组件（`ModelPickerControl` / `Markdown*` / `ToolCallDetails`），绝不反向依赖 `@helmx/web`；`HelmxStoreProvider` 挂载 `globalThis.__helmx_shared_ui` 与 `globalThis.__helmx_shared_plugin_client` 并经 `UiLocaleProvider` / `PluginClientHostContext` 注入真实数据与宿主能力，核心页面与插件共享同一运行时实例；外部插件严禁导入 `@helmx/ui/pure` 或 `@helmx/plugin-client/pure`。
 
 ## SSR 与单测防破裂契约
 
@@ -69,10 +70,11 @@ Web 主控台基于 React 19 + Vite 6（`packages/web`），`src/styles.css` 显
 | UI HIG 唯一真源 | `.helmx/skills/helmx-ui/SKILL.md`、`references/patterns.md` |
 | Web 应用入口与路由装配 | `packages/web/src/App.tsx`、`main.tsx` |
 | Web 专有 UI 组件 | `packages/web/src/ui/` |
-| 共享 SDK 原语 | `packages/plugin-client/src/ui/`、`primitives.tsx` |
-| 样式分片与响应式 | `packages/web/src/styles/`、`responsive.css` |
+| 共享 UI 设计系统原语与样式 | `packages/ui/src/`（`tokens.css`、`base.css`、`styles.css`、`primitives/`、`primitives.tsx`） |
+| 共享插件运行时 SDK 与宿主耦合组件 | `packages/plugin-client/src/`（Hooks、`PluginSlot`、`PluginScope`、`ModelPicker.tsx`、`markdown*`、`tool-details.tsx`） |
+| 宿主业务样式分片与响应式 | `packages/web/src/styles/`、`responsive.css` |
 | 浏览器验收服务 | `scripts/web-acceptance.mjs` |
-| 前端单测 | `packages/web/test/*.test.ts(x)`、`packages/plugin-client/test/` |
+| 前端单测 | `packages/web/test/*.test.ts(x)`、`packages/ui/test/`、`packages/plugin-client/test/` |
 
 ## 相关文档
 

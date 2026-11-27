@@ -58,7 +58,7 @@ export type HookName =
 
 ## 前端：全界面扩展点（client.tsx 单轨）
 
-视图类扩展点统一采用 `client.tsx` React 组件单轨：`UiSpecBase` 只接受 `client: ClientComponentRef`（模块相对路径 + 具名导出），不接受声明式 JSON Spec——JSON 渲染能力由 `builtin:json-render` 插件经 `markdownCodeBlock` 提供。组件与宿主共享同一份 React 运行时（`@helmx/plugin-client` 虚拟化为全局命名空间，不打包第二份 React）。输入补全（`composerCompleter`）是纯数据声明，不涉及组件。
+视图类扩展点统一采用 `client.tsx` React 组件单轨：`UiSpecBase` 只接受 `client: ClientComponentRef`（模块相对路径 + 具名导出），不接受声明式 JSON Spec——JSON 渲染能力由 `builtin:json-render` 插件经 `markdownCodeBlock` 提供。组件与宿主共享同一份 React 运行时（`@helmx/ui` 与 `@helmx/plugin-client` 分别虚拟化为宿主全局命名空间，不打包第二份 React）。输入补全（`composerCompleter`）是纯数据声明，不涉及组件。
 
 `ctx.ui` 全部 10 个注册方法（与 `PLUGIN_UI_METHOD_NAMES` 双向锁定）：
 
@@ -97,7 +97,7 @@ export type HookName =
 
 Screen 组件接收 `ScreenProps`：`pluginId / screenId / isSplit / params / setParams`。主屏参数在 URL Hash 中编码为 `sp.<key>`，分屏参数编码为 `ssp.<key>`——两边展示同一 Screen 时参数互相独立。`setParams(patch)` 默认替换历史记录，值为 `undefined` 删除对应键，`{ push: true }` 新增历史记录；组件不得直接操作 `history` 或自建路由。
 
-屏内嵌套组件（不接收 slotProps）可从共享 SDK 的 `useScreenParams()` 读取同一 scope：宿主 `ScreenHost` 在挂载的全屏视图外层建立 `ScreenParamsScope`（`params / setParams / isSplit`，与 `ScreenProps` 同一实现、绑定同一 pane，URL Hash 仍是唯一真相）；不在全屏屏内（如 settings.panel 复用嵌入）时返回 `null`——诚实缺席，绝不伪造 no-op scope。全屏页面壳统一复用 `@helmx/plugin-client` 的布局原语：`Screen`（页面容器+页头；挂载于 `ScreenHost` 时 `actions` 经宿主顶栏动作槽 `headerActionsSlot` 落入 `.pane-actions`，与五大中心页头动作同位）、`ScreenSection`（分节）、`ScreenToolbar`（页头与正文之间的搜索/筛选/动作工具栏行，宿主公共类 `.screen-toolbar` / `.screen-toolbar-actions`）、`DataTable`、`KvGrid`；宿主样式绝不点名插件私有类名（`host-styles-boundary` 门禁锁定）。
+屏内嵌套组件（不接收 slotProps）可从 `@helmx/plugin-client` 的 `useScreenParams()` 读取同一 scope：宿主 `ScreenHost` 在挂载的全屏视图外层建立 `ScreenParamsScope`（`params / setParams / isSplit`，与 `ScreenProps` 同一实现、绑定同一 pane，URL Hash 仍是唯一真相）；不在全屏屏内（如 settings.panel 复用嵌入）时返回 `null`——诚实缺席，绝不伪造 no-op scope。全屏页面壳统一复用 `@helmx/ui` 的布局原语：`Screen`（页面容器+页头；挂载于 `ScreenHost` 时 `actions` 经宿主顶栏动作槽 `headerActionsSlot` 落入 `.pane-actions`，与五大中心页头动作同位）、`ScreenSection`（分节）、`ScreenToolbar`（页头与正文之间的搜索/筛选/动作工具栏行，宿主公共类 `.screen-toolbar` / `.screen-toolbar-actions`）、`DataTable`、`KvGrid`；宿主样式绝不点名插件私有类名（`host-styles-boundary` 门禁锁定）。
 
 输入区组件通过 `ComposerScopeProps.composer` 获得受控句柄：
 

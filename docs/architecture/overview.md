@@ -74,10 +74,14 @@ flowchart TD
     Hub --> Build["@helmx/plugin-build 构建实现"]
     Kernel --> Protocol["@helmx/protocol 通用契约"]
     Plugins --> Protocol
-    Plugins --> Client["@helmx/plugin-client 浏览器 SDK"]
+    Plugins --> Ui["@helmx/ui 设计系统"]
+    Plugins --> Client["@helmx/plugin-client 插件运行时 SDK"]
     Build --> Protocol
+    Client --> Ui
     Client --> Protocol
-    Web["@helmx/web 应用"] --> Client
+    Ui --> Protocol
+    Web["@helmx/web 应用"] --> Ui
+    Web --> Client
     Web --> Protocol
     Cli["@helmx/cli"] --> Protocol
     Node["@helmx/node"] --> Protocol
@@ -89,7 +93,7 @@ flowchart TD
 
 - `@helmx/protocol` 只放通用跨包契约（会话、RPC、插件契约类型、错误码与 `CORE_CLI_COMMAND_PATHS`），零运行时重依赖；工作流、工作树等插件业务契约归属 `@helmx/plugins`。
 - 内核不得依赖插件或组合根；生产源码不得通过相对路径跨包或导入其他包的私有 `src`；新增依赖必须声明，包依赖图必须无环。
-- `@helmx/plugin-client` 是独立浏览器 SDK，不反向依赖 Web 应用；插件 client.tsx 与宿主共享同一份 React 运行时。
+- `@helmx/ui` 是零插件运行时依赖的独立 Quiet Surface 设计系统包；`@helmx/plugin-client` 是独立浏览器插件运行时 SDK（依赖 `@helmx/ui` 与 `@helmx/protocol/browser`），均不反向依赖 Web 应用；插件 client.tsx 与宿主经全局虚拟化共享同一份 React、`@helmx/ui` 与 `@helmx/plugin-client` 实例。
 - `@helmx/plugin-build` 提供构建实现，由产品层通过端口注入宿主；内核自身不携带 esbuild，未注入端口时对 client UI 与 TS 插件显式拒绝。
 
 | 包 | 可执行 | 职责 |
@@ -97,7 +101,8 @@ flowchart TD
 | `@helmx/protocol` | — | 通用类型、Schema、错误码与 `CORE_CLI_COMMAND_PATHS` |
 | `@helmx/kernel` | — | 持久会话、EnvFabric、Model/Auth、PluginHost 与 HTTP 服务机制 |
 | `@helmx/plugins` | — | 官方插件、插件业务契约、客户端视图与技能资产 |
-| `@helmx/plugin-client` | — | 共享 UI 原语、上下文、Hooks 与宿主接入端口 |
+| `@helmx/ui` | — | 独立 Quiet Surface 设计系统（tokens/base/组件样式、Radix 原语、布局外壳、图标与格式化纯函数） |
+| `@helmx/plugin-client` | — | 插件运行时上下文、Hooks、宿主接入端口、插件间插槽与宿主耦合组件（`ModelPickerControl` / `Markdown*` / `ToolCallDetails`） |
 | `@helmx/plugin-build` | — | 插件源码构建实现，由产品组合根注入宿主 |
 | `@helmx/env-io` | — | 执行侧共享 I/O 与共享自更新引擎（路径进程占用扫描；更新引擎位于 `src/update/`；控制通道与 OS 服务安装从包根导出；payload staging 经 `./hub-payload` 子路径导出，`tar` 依赖不进 node bundle 四外部契约） |
 | `@helmx/hub` | `helmx-hub` | 默认插件注册、构建实现接线、服务进程启动与关闭、进程内控制通道（`hub-control.json`）与后台更新检查器（静默备包 + `/api/hub-update` 一键切换） |
