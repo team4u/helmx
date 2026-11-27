@@ -1,0 +1,635 @@
+# Canonical JSX Patterns (Helmx UI HIG)
+
+All recipes below compile against `@helmx/plugin-client` with zero private stylesheet, zero `variant="default"`, zero Emoji, and full SSR (`renderToString`) and Fast Refresh compliance.
+
+## 1. Management Screen with Hairline Roster List
+
+Use for rules, port mappings, scheduled triggers, workflow libraries, run logs, templates, and tier rosters.
+
+```tsx
+import { useMemo, useState, type ReactNode } from 'react'
+import type { ScreenProps } from '@helmx/protocol/browser'
+import {
+  Badge,
+  Button,
+  ConfirmDialog,
+  EmptyState,
+  IconButton,
+  List,
+  ListRow,
+  LoadingState,
+  Screen,
+  ScreenToolbar,
+  SearchBox,
+  SegmentedControl,
+  StatusLight,
+  TabCount,
+  Tabs,
+  TabsList,
+  TabsTrigger,
+  usePluginAction,
+  usePluginContext,
+  usePluginDoc,
+  useScreenDrawer,
+} from '@helmx/plugin-client'
+
+interface RuleItem {
+  id: string
+  name: string
+  kind: 'cron' | 'webhook'
+  schedule: string
+  description?: string
+  enabled: boolean
+}
+
+export function RulesManagerScreen(props: Partial<ScreenProps>): ReactNode {
+  const ctx = usePluginContext()
+  const doc = usePluginDoc<{ rules: RuleItem[] }>('state')
+  const actions = usePluginAction()
+  const drawer = useScreenDrawer({ param: 'edit', createParam: 'create', scope: props })
+
+  const [view, setView] = useState<'rules' | 'history'>('rules')
+  const [kind, setKind] = useState<'all' | 'cron' | 'webhook'>('all')
+  const [query, setQuery] = useState('')
+  const [pendingDelete, setPendingDelete] = useState<RuleItem | null>(null)
+
+  const rules = doc?.rules ?? []
+  const filtered = useMemo(
+    () =>
+      rules.filter((item) => {
+        if (kind !== 'all' && item.kind !== kind) return false
+        if (query.trim() === '') return true
+        const q = query.trim().toLowerCase()
+        return item.name.toLowerCase().includes(q) || item.schedule.toLowerCase().includes(q)
+      }),
+    [rules, kind, query],
+  )
+
+  const resetFilters = (): void => {
+    setKind('all')
+    setQuery('')
+  }
+
+  const handleConfirmDelete = (): void => {
+    if (pendingDelete === null) return
+    const target = pendingDelete
+    setPendingDelete(null)
+    void actions.run('delete_rule', { id: target.id }, {
+      key: `delete:${target.id}`,
+      onSuccess: () => ctx.notify(`Deleted ${target.name}`),
+    })
+  }
+
+  const handleDeleteOpenChange = (open: boolean): void => {
+    if (!open) setPendingDelete(null)
+  }
+
+  return (
+    <Screen
+      layout="contained"
+      title="Automation Rules"
+      actions={
+        <>
+          <Button
+            variant="secondary"
+            size="sm"
+            icon="refresh-cw"
+            pending={actions.pendingKey === 'refresh'}
+            onClick={() => void actions.run('refresh', {}, { key: 'refresh' })}
+          >
+            <span className="pane-action-label">Refresh</span>
+          </Button>
+          <Button
+            variant="primary"
+            size="sm"
+            icon="plus"
+            disabled={actions.pending}
+            onClick={() => drawer.openCreate()}
+          >
+            <span className="pane-action-label">New Rule</span>
+          </Button>
+        </>
+      }
+      toolbar={
+        <ScreenToolbar
+          label="Rule filters"
+          actions={
+            <SearchBox
+              variant="toolbar"
+              size="sm"
+              value={query}
+              onChange={setQuery}
+              placeholder="Filter rules..."
+              ariaLabel="Filter rules"
+            />
+          }
+        >
+          <SegmentedControl
+            size="sm"
+            aria-label="View mode"
+            value={view}
+            onValueChange={(next) => setView(next === 'history' ? 'history' : 'rules')}
+            items={[
+              { value: 'rules', label: 'Rules' },
+              { value: 'history', label: 'History' },
+            ]}
+          />
+          {view === 'rules' && (
+            <Tabs
+              value={kind}
+              onValueChange={(next) => setKind(next as 'all' | 'cron' | 'webhook')}
+              variant="pills"
+              size="sm"
+            >
+              <TabsList aria-label="Rule kind">
+                <TabsTrigger value="all">
+                  <span>All</span>
+                  <TabCount>{rules.length}</TabCount>
+                </TabsTrigger>
+                <TabsTrigger value="cron">
+                  <span>Cron</span>
+                  <TabCount>{rules.filter((r) => r.kind === 'cron').length}</TabCount>
+                </TabsTrigger>
+                <TabsTrigger value="webhook">
+                  <span>Webhook</span>
+                  <TabCount>{rules.filter((r) => r.kind === 'webhook').length}</TabCount>
+                </TabsTrigger>
+              </TabsList>
+            </Tabs>
+          )}
+        </ScreenToolbar>
+      }
+    >
+      {doc === undefined ? (
+        <LoadingState label="Loading rules..." />
+      ) : filtered.length === 0 ? (
+        <EmptyState
+          icon={rules.length === 0 ? 'zap' : 'search'}
+          title={rules.length === 0 ? 'No rules yet' : 'No matching rules'}
+          hint={rules.length === 0 ? 'Create a cron or webhook rule to get started.' : undefined}
+          hintSubtle
+          action={
+            rules.length === 0 ? (
+              <Button variant="primary" size="sm" icon="plus" onClick={() => drawer.openCreate()}>
+                New Rule
+              </Button>
+            ) : (
+              <Button variant="secondary" size="sm" icon="rotate-ccw" onClick={resetFilters}>
+                Reset Filters
+              </Button>
+            )
+          }
+        />
+      ) : (
+        <List label="Automation rules">
+          {filtered.map((item) => (
+            <ListRow
+              key={item.id}
+              selected={drawer.itemId === item.id}
+              tone={item.enabled ? 'default' : 'warn'}
+              leading={<StatusLight tone={item.enabled ? 'done' : 'blocked'} label={item.enabled ? 'Active' : 'Paused'} />}
+              title={<span className="mono">{item.name}</span>}
+              meta={<code className="mono">{item.schedule}</code>}
+              description={item.description}
+              trailing={<Badge tone={item.enabled ? 'ok' : 'neutral'}>{item.kind}</Badge>}
+              actions={
+                <IconButton
+                  icon="trash-2"
+                  size="xs"
+                  variant="ghost"
+                  label={`Delete ${item.name}`}
+                  pending={actions.pendingKey === `delete:${item.id}`}
+                  onClick={() => setPendingDelete(item)}
+                />
+              }
+              onSelect={() => drawer.openItem(item.id)}
+            />
+          ))}
+        </List>
+      )}
+
+      <ConfirmDialog
+        open={pendingDelete !== null}
+        onOpenChange={handleDeleteOpenChange}
+        title="Delete rule"
+        description={pendingDelete ? `Delete "${pendingDelete.name}"? This cannot be undone.` : ''}
+        confirmText="Delete"
+        cancelText="Cancel"
+        danger
+        onConfirm={handleConfirmDelete}
+        onCancel={() => setPendingDelete(null)}
+      />
+    </Screen>
+  )
+}
+```
+
+## 2. Catalog Screen with Object Card Grid
+
+Use for browsable asset or marketplace catalogs (Profiles, Model Providers, Plugins, Skills, Nodes) that benefit from a `32x32` icon box, inline badges, and a 2-line clamped description.
+
+```tsx
+import { useMemo, useState, type ReactNode } from 'react'
+import {
+  Badge,
+  Button,
+  CardGrid,
+  EmptyState,
+  Screen,
+  ScreenToolbar,
+  SearchBox,
+  Select,
+  SelectCard,
+  TabCount,
+  Tabs,
+  TabsList,
+  TabsTrigger,
+} from '@helmx/plugin-client'
+
+interface CatalogEntry {
+  id: string
+  name: string
+  category: 'core' | 'community'
+  scope: string
+  icon: string
+  description: string
+  enabled: boolean
+}
+
+interface CatalogScreenProps {
+  entries: ReadonlyArray<CatalogEntry>
+  selectedId?: string
+  onSelect: (id: string) => void
+  onInstall: () => void
+}
+
+export function CatalogScreen({ entries, selectedId, onSelect, onInstall }: CatalogScreenProps): ReactNode {
+  const [category, setCategory] = useState<'all' | 'core' | 'community'>('all')
+  const [scope, setScope] = useState('all')
+  const [query, setQuery] = useState('')
+
+  const visible = useMemo(
+    () =>
+      entries.filter((entry) => {
+        if (category !== 'all' && entry.category !== category) return false
+        if (scope !== 'all' && entry.scope !== scope) return false
+        if (query.trim() === '') return true
+        const q = query.trim().toLowerCase()
+        return entry.name.toLowerCase().includes(q) || entry.description.toLowerCase().includes(q)
+      }),
+    [entries, category, scope, query],
+  )
+
+  return (
+    <Screen
+      layout="contained"
+      title="Extensions"
+      actions={
+        <Button variant="primary" size="sm" icon="plus" onClick={onInstall}>
+          <span className="pane-action-label">Install</span>
+        </Button>
+      }
+      toolbar={
+        <ScreenToolbar
+          label="Extension filters"
+          actions={
+            <SearchBox
+              variant="toolbar"
+              size="sm"
+              value={query}
+              onChange={setQuery}
+              placeholder="Search extensions..."
+              ariaLabel="Search extensions"
+            />
+          }
+        >
+          <Tabs
+            value={category}
+            onValueChange={(next) => setCategory(next as 'all' | 'core' | 'community')}
+            variant="pills"
+            size="sm"
+          >
+            <TabsList aria-label="Category">
+              <TabsTrigger value="all">
+                <span>All</span>
+                <TabCount>{entries.length}</TabCount>
+              </TabsTrigger>
+              <TabsTrigger value="core">
+                <span>Core</span>
+                <TabCount>{entries.filter((e) => e.category === 'core').length}</TabCount>
+              </TabsTrigger>
+              <TabsTrigger value="community">
+                <span>Community</span>
+                <TabCount>{entries.filter((e) => e.category === 'community').length}</TabCount>
+              </TabsTrigger>
+            </TabsList>
+          </Tabs>
+          <Select
+            size="sm"
+            aria-label="Scope"
+            value={scope}
+            onChange={(e) => setScope(e.target.value)}
+            options={[
+              { value: 'all', label: 'All scopes' },
+              { value: 'global', label: 'Global' },
+              { value: 'workspace', label: 'Workspace' },
+            ]}
+          />
+        </ScreenToolbar>
+      }
+    >
+      {visible.length === 0 ? (
+        <EmptyState icon="package" title="No matching extensions" prominent />
+      ) : (
+        <CardGrid minWidth="md" gap="md">
+          {visible.map((entry) => (
+            <SelectCard
+              key={entry.id}
+              icon={entry.icon}
+              title={entry.name}
+              subtitle={entry.id}
+              badges={<Badge tone={entry.enabled ? 'ok' : 'neutral'}>{entry.enabled ? 'Active' : 'Disabled'}</Badge>}
+              description={entry.description}
+              selected={selectedId === entry.id}
+              onSelect={() => onSelect(entry.id)}
+              footer={<span className="text-muted mono">{entry.scope}</span>}
+            />
+          ))}
+        </CardGrid>
+      )}
+    </Screen>
+  )
+}
+```
+
+## 3. Right-Side `DetailDrawer` Form
+
+Pair with `useScreenDrawer` for URL-hash and Back-stack integration. Form fields use `md (32px)` height parity, `Input` native `prefix`/`suffix`, `ModelPickerControl variant="field"`, `Cmd/Ctrl + Enter` submission, dirty-state gating, and the canonical left-danger / right-cancel / rightmost-primary footer.
+
+```tsx
+import type { KeyboardEvent, ReactNode } from 'react'
+import {
+  Badge,
+  Button,
+  Callout,
+  DetailDrawer,
+  Field,
+  Input,
+  ModelPickerControl,
+  SegmentedControl,
+  Stack,
+  Textarea,
+} from '@helmx/plugin-client'
+
+interface TierDraft {
+  id: string
+  mode: 'single' | 'orchestrator'
+  model: string
+  thinkingLevel: string
+  timeoutSec: string
+  description: string
+}
+
+interface TierFormDrawerProps {
+  open: boolean
+  mode: 'create' | 'edit'
+  draft: TierDraft
+  dirty: boolean
+  saving: boolean
+  error: string | null
+  onChange: (patch: Partial<TierDraft>) => void
+  onSave: () => void
+  onRequestDelete?: () => void
+  onClose: () => void
+}
+
+export function TierFormDrawer({
+  open,
+  mode,
+  draft,
+  dirty,
+  saving,
+  error,
+  onChange,
+  onSave,
+  onRequestDelete,
+  onClose,
+}: TierFormDrawerProps): ReactNode {
+  const canSave = !saving && (mode === 'create' || dirty)
+
+  const handleKeyDown = (e: KeyboardEvent<HTMLDivElement>): void => {
+    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter' && canSave) {
+      e.preventDefault()
+      onSave()
+    }
+  }
+
+  return (
+    <DetailDrawer
+      open={open}
+      onClose={onClose}
+      title={mode === 'create' ? 'New Tier' : `tier/${draft.id}`}
+      titleExtra={mode === 'edit' ? <Badge tone="ok">Active</Badge> : undefined}
+      footer={
+        <>
+          {mode === 'edit' && onRequestDelete !== undefined && (
+            <Button variant="danger" size="sm" icon="trash-2" disabled={saving} onClick={onRequestDelete}>
+              Delete
+            </Button>
+          )}
+          <div className="flex-1" />
+          <Button variant="ghost" size="sm" disabled={saving} onClick={onClose}>
+            Cancel
+          </Button>
+          <Button
+            variant="primary"
+            size="sm"
+            icon="check"
+            pending={saving}
+            disabled={!canSave}
+            onClick={onSave}
+          >
+            {mode === 'create' ? 'Create' : 'Save'}
+          </Button>
+        </>
+      }
+    >
+      <div onKeyDown={handleKeyDown}>
+        <Stack gap="md">
+          {error !== null && <Callout tone="err">{error}</Callout>}
+
+          {mode === 'create' && (
+            <Field label="Tier ID" required hint="Lowercase letters, digits, hyphens.">
+              <Input
+                prefix="tier/"
+                mono
+                value={draft.id}
+                disabled={saving}
+                placeholder="fast"
+                onChange={(e) => onChange({ id: e.target.value })}
+              />
+            </Field>
+          )}
+
+          <Field label="Routing Mode" htmlFor={false}>
+            <SegmentedControl
+              size="sm"
+              aria-label="Routing mode"
+              value={draft.mode}
+              disabled={saving}
+              onValueChange={(next) => onChange({ mode: next === 'orchestrator' ? 'orchestrator' : 'single' })}
+              items={[
+                { value: 'single', label: 'Single Model' },
+                { value: 'orchestrator', label: 'Orchestrator' },
+              ]}
+            />
+          </Field>
+
+          <Field label="Target Model" required>
+            <ModelPickerControl
+              variant="field"
+              size="md"
+              buttonAriaLabel="Target model"
+              effectiveModel={draft.model || undefined}
+              activeThinkingLevel={draft.thinkingLevel}
+              allowTiers={false}
+              enableShortcut={false}
+              disabled={saving}
+              onApply={(model, level) => onChange({ model, thinkingLevel: level ?? '' })}
+              onResetDefault={() => onChange({ model: '', thinkingLevel: '' })}
+            />
+          </Field>
+
+          <Field label="Timeout">
+            <Input
+              type="number"
+              mono
+              suffix="s"
+              min={5}
+              max={600}
+              value={draft.timeoutSec}
+              disabled={saving}
+              onChange={(e) => onChange({ timeoutSec: e.target.value })}
+            />
+          </Field>
+
+          <Field label="Description">
+            <Textarea
+              rows={2}
+              value={draft.description}
+              disabled={saving}
+              placeholder="When should agents choose this tier?"
+              onChange={(e) => onChange({ description: e.target.value })}
+            />
+          </Field>
+        </Stack>
+      </div>
+    </DetailDrawer>
+  )
+}
+```
+
+## 4. Narrow `settingsPanel`, `workbenchPanel`, or Drawer `slot`
+
+In narrow containers (`360–520px`), lock controls to `sm (28px)` and `xs (22px)`, omit redundant view-level headers, and compose with `Card(variant="subtle")`, `KvGrid`, and `List(density="compact")`—never `CardGrid` or `> 3`-column `DataTable`.
+
+```tsx
+import type { ReactNode } from 'react'
+import {
+  Badge,
+  Button,
+  Card,
+  EmptyState,
+  IconButton,
+  KvGrid,
+  List,
+  ListRow,
+  Stack,
+  StatusLight,
+  Switch,
+} from '@helmx/plugin-client'
+
+interface TunnelEntry {
+  id: string
+  listen: string
+  target: string
+  active: boolean
+  connections: number
+}
+
+interface NodeTunnelsSlotProps {
+  nodeId: string
+  isOnline: boolean
+  tunnels: ReadonlyArray<TunnelEntry>
+  onToggle: (id: string, next: boolean) => void
+  onOpenFullScreen: () => void
+  onStop: (id: string) => void
+}
+
+export function NodeTunnelsSlot({
+  nodeId,
+  isOnline,
+  tunnels,
+  onToggle,
+  onOpenFullScreen,
+  onStop,
+}: NodeTunnelsSlotProps): ReactNode {
+  return (
+    <Stack gap="md">
+      <Card
+        variant="subtle"
+        title="Port Forwards"
+        actions={
+          <Button variant="secondary" size="sm" icon="external-link" onClick={onOpenFullScreen}>
+            Manage
+          </Button>
+        }
+      >
+        <KvGrid
+          items={[
+            { key: 'Node', value: <span className="mono">{nodeId}</span> },
+            { key: 'Status', value: <Badge tone={isOnline ? 'ok' : 'warn'}>{isOnline ? 'Online' : 'Offline'}</Badge> },
+            { key: 'Active rules', value: <span className="tabular-nums">{tunnels.filter((t) => t.active).length}</span> },
+          ]}
+        />
+      </Card>
+
+      {tunnels.length === 0 ? (
+        <EmptyState compact icon="network" title="No port forwards on this node" />
+      ) : (
+        <List density="compact" label="Node port forwards">
+          {tunnels.map((tunnel) => (
+            <ListRow
+              key={tunnel.id}
+              interactive={false}
+              leading={<StatusLight tone={tunnel.active ? 'done' : 'blocked'} label={tunnel.active ? 'Active' : 'Stopped'} />}
+              title={<span className="mono">{tunnel.listen}</span>}
+              meta={<span className="mono">-{'>'} {tunnel.target}</span>}
+              trailing={
+                <Stack direction="horizontal" align="center" gap="sm">
+                  <Badge tone="neutral" mono>{tunnel.connections}</Badge>
+                  <Switch
+                    checked={tunnel.active}
+                    disabled={!isOnline}
+                    aria-label={`Toggle ${tunnel.listen}`}
+                    onChange={(checked) => onToggle(tunnel.id, checked)}
+                  />
+                </Stack>
+              }
+              actions={
+                <IconButton
+                  icon="x"
+                  size="xs"
+                  variant="ghost"
+                  label={`Remove ${tunnel.listen}`}
+                  onClick={() => onStop(tunnel.id)}
+                />
+              }
+            />
+          ))}
+        </List>
+      )}
+    </Stack>
+  )
+}
+```

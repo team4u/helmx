@@ -62,12 +62,17 @@ Backend \`index.ts\` (a standard \`PluginDefinition\`):
 
 Frontend \`client/index.tsx\` (host shared SDK, import directly without installing):
 
+- **Mandatory UI HIG gate (read BEFORE writing any \`client/*.tsx\`)**:
+  \`\`\`
+  load_skill({ skillId: "helmx-cli", path: "references/ui-hig.md" })
+  \`\`\`
+  Follow the single Helmx UI HIG (Quiet Surface principles, \`32 / 28 / 22px\` control scale, 5-variant \`Button\` with \`secondary\` default and **zero \`variant="default"\`**, 4-way selector rules, 5 first-class stage/list archetypes plus custom domain stages, unified \`<Screen toolbar>\` shell, container density rules, Creative Zone boundaries, and canonical JSX patterns).
 - **The only allowed runtime bare imports are host shared modules**: \`react\`, \`react-dom\`, \`lucide-react\`, \`@helmx/plugin-client\`; types may use \`import type ... from '@helmx/protocol'\`. For third-party npm packages, declare each one in \`plugin.json.clientDependencies\` or \`package.json.helmx.clientDependencies\` first, then state the version range in \`package.json.dependencies\`; otherwise \`helmx plugins doctor\` fails explicitly on undeclared bare dependencies.
 - **The \`@helmx/plugin-client\` shared export list**:
   - **Reactive hooks**: \`usePluginContext()\` (provides \`callAction\` / \`fetchRoute\` / \`submitInput\` / \`openScreen\` / \`openSplitScreen\` / \`openConversationDrawer\` / \`openArtifact\` / \`openWorkbench\` / \`notify\`), \`usePluginDoc(name, pluginId?)\`, \`usePluginSessionDoc(name, opts?)\`, \`useHostModels()\`, \`useHostNodes()\`, \`useHostProfiles()\`, \`useConversations()\`, \`useConversation(id)\`, \`usePlugins()\`, \`useScreenParams()\`, \`useScreenDrawer(options?)\` (pairs with \`DetailDrawer\` for URL-hash-backed mobile/browser Back navigation), \`usePluginAction()\`, \`usePluginLocale()\`, \`usePluginTranslator()\`, \`useToolActivity(callId, active)\`;
-  - **Page layout primitives (prefer these over hand-rolled page scaffolding)**: \`Screen\` (fullscreen container + standard page header \`title/subtitle/actions\`), \`ScreenSection\` (section container \`title/titleExtra\`), \`ScreenToolbar\` (toolbar row), \`DataTable\` (composable table shell with unified \`loading/empty\` placeholders; \`thead/tbody\` expressed as JSX), \`KvGrid\` (\`items: [{ key, value }]\` key-value grid), \`DetailDrawer\` (right slide-over drawer; pair with \`useScreenDrawer()\` in \`Screen\` views);
-  - **Accessible controls, forms, and display components**: \`HelmxIcon\`, \`Button\` / \`IconButton\` (typed variants/sizes + \`pending\` busy state), \`Badge\`, \`Stack\` (spacing-token flex layout), \`Input\` / \`Textarea\`, \`Field\` / \`HelperText\` / \`ErrorText\` (non-wrapping label + automatic \`FieldContext\` wiring), \`Card\` / \`SelectCard\` / \`CardGrid\`, \`MonoId\`, \`Switch\`, \`Select\`, \`MultiSelect\`, \`Checkbox\`, \`Tabs / TabsList / TabsTrigger / TabsContent\`, \`SegmentedControl\`, \`Dialog / DialogTrigger / DialogContent / DialogTitle / DialogDescription / DialogClose\`, \`AlertDialog\` / \`ConfirmDialog\`, \`SearchBox\`, \`EmptyState\`, \`LoadingState\`, \`StatusLight\` (explicit \`tone: StatusLightTone\` or raw \`status\`, plus \`STATUS_LIGHT_TONES\` / \`normalizeStatusLightTone\` / \`isKnownStatusLightStatus\`), \`Callout\`, \`MarkdownView\`, \`MarkdownText\`, \`CodeBlockView\`, \`CopyButton\`, \`ViewBoundary\`, \`PluginSlot\`;
-- Styling defaults to zero private CSS: compose layout and forms with SDK primitives (\`Screen\`, \`ScreenSection\`, \`ScreenToolbar\`, \`Stack\`, \`Card\`, \`SelectCard\`, \`CardGrid\`, \`Field\`, \`Input\`, \`Textarea\`, \`Button\`, \`IconButton\`, \`Badge\`, \`MonoId\`, \`DataTable\`, \`KvGrid\`, \`DetailDrawer\`) and host spacing/color CSS variables (\`--space-1..6\`, \`--bg-elevated\`, \`--border\`, ...); add a scoped \`client/styles.css\` (bundled via \`import './styles.css'\`) only when the host vocabulary is genuinely insufficient, limit it to your own class names, and never write the host's \`styles.css\`;
+  - **Page shell & stage layout primitives (prefer these over hand-rolled page scaffolding)**: \`Screen\` (single unified page shell: \`layout="contained" | "full-bleed"\`, \`title/subtitle/actions\`, and sticky full-bleed \`toolbar={<ScreenToolbar ...>}\`), \`ScreenSection\` (section container \`title/titleExtra\`), \`ScreenToolbar\` (single-layer left-filters / right-search toolbar), \`List\` + \`ListRow\` (Hairline Roster List for items, rules, configs, and logs with sibling-slot a11y and \`@container\` narrow-pane collapse), \`Card\` / \`SelectCard\` (\`icon\`, \`badges\`, \`description\`, \`actions\`, \`footer\`) / \`CardGrid\` (browsable asset/catalog grids), \`DataTable\` (multi-column numeric comparison only; narrow panels \`< 560px\` capped at 3 columns), \`KvGrid\` (\`items: [{ key, value }]\` key-value grid), \`DetailDrawer\` (right slide-over drawer; pair with \`useScreenDrawer()\` in \`Screen\` views);
+  - **Accessible controls, forms, and display components**: \`HelmxIcon\`, \`Button\` / \`IconButton\` (5 orthogonal variants: \`secondary\` [Button default] | \`primary\` | \`ghost\` [IconButton default] | \`danger\` | \`inline\` — never \`variant="default"\`; sizes \`md\` 32px / \`sm\` 28px / \`xs\` 22px; \`pending\` busy state), \`Badge\`, \`Stack\` (spacing-token flex layout), \`Input\` (\`size\`, native \`prefix\` / \`suffix\`, \`mono\`, \`invalid\`) / \`Textarea\`, \`Field\` / \`HelperText\` / \`ErrorText\` (non-wrapping label + automatic \`FieldContext\` wiring), \`ModelPickerControl\` (pass \`variant="field"\` in forms/drawers), \`MonoId\`, \`Switch\`, \`Select\`, \`MultiSelect\`, \`Checkbox\`, \`Tabs / TabsList / TabsTrigger / TabsContent / TabCount\`, \`SegmentedControl\`, \`Dialog / DialogTrigger / DialogContent / DialogTitle / DialogDescription / DialogClose\`, \`AlertDialog\` / \`ConfirmDialog\`, \`SearchBox\` (\`variant="toolbar" size="sm"\` in toolbars; never native \`<input type="search">\`), \`EmptyState\`, \`LoadingState\`, \`StatusLight\` (explicit \`tone: StatusLightTone\` or raw \`status\`, plus \`STATUS_LIGHT_TONES\` / \`normalizeStatusLightTone\` / \`isKnownStatusLightStatus\`), \`Callout\`, \`MarkdownView\`, \`MarkdownText\`, \`CodeBlockView\`, \`CopyButton\`, \`ViewBoundary\`, \`PluginSlot\`;
+- Styling defaults to zero private CSS: compose layout and forms with SDK primitives (\`Screen\`, \`ScreenSection\`, \`ScreenToolbar\`, \`List\`, \`ListRow\`, \`Stack\`, \`Card\`, \`SelectCard\`, \`CardGrid\`, \`Field\`, \`Input\`, \`Textarea\`, \`Button\`, \`IconButton\`, \`Badge\`, \`MonoId\`, \`DataTable\`, \`KvGrid\`, \`DetailDrawer\`) and host spacing/color CSS variables (\`--space-1..6\`, \`--bg-elevated\`, \`--border\`, ...); add a scoped \`client/styles.css\` (bundled via \`import './styles.css'\`) only when the host vocabulary is genuinely insufficient, gate every \`:hover\` inside \`@media (hover: hover)\`, limit it to your own class names, and never write the host's \`styles.css\`;
 - Component files export only components and types (Fast Refresh); the \`module\` path and named \`export\` referenced by \`client\` must match reality (\`helmx plugins doctor\` validates compiled artifact exports).
 
 Full runnable template: \`load_skill({ skillId: "app-builder", path: "references/fullstack-template.md" })\`; for advanced extension points (backend lifecycle hooks, \`composerCompleter\`, workbench panels, etc.), consult \`load_skill({ skillId: "helmx-cli", path: "references/skill-and-plugin-dev.md" })\` on demand.
@@ -208,100 +213,213 @@ export default {
 } satisfies PluginDefinition
 \`\`\`
 
-## client/index.tsx (frontend: reuse \`@helmx/plugin-client\` primitives and host public CSS classes; no private stylesheet by default)
+## client/index.tsx (frontend: HIG-compliant \`@helmx/plugin-client\` primitives; zero private stylesheet)
 
 \`\`\`tsx
-import { useState, type ReactNode } from 'react'
+import { useMemo, useState, type ReactNode } from 'react'
+import type { ScreenProps } from '@helmx/protocol/browser'
 import {
-  usePluginContext,
-  usePluginDoc,
-  Screen,
-  ScreenSection,
-  DataTable,
-  Checkbox,
+  Badge,
   Button,
+  Checkbox,
+  DetailDrawer,
+  EmptyState,
   Field,
   Input,
+  List,
+  ListRow,
+  LoadingState,
+  Screen,
+  ScreenToolbar,
+  SearchBox,
+  Stack,
+  TabCount,
+  Tabs,
+  TabsList,
+  TabsTrigger,
+  formatTime,
+  usePluginAction,
+  usePluginContext,
+  usePluginDoc,
+  useScreenDrawer,
 } from '@helmx/plugin-client'
 
 interface Item { id: string; title: string; done: boolean; createdAt: number }
 
-export function MainScreen(): ReactNode {
-  const { callAction, notify } = usePluginContext()
+export function MainScreen(props: Partial<ScreenProps>): ReactNode {
+  const { notify } = usePluginContext()
   const doc = usePluginDoc<{ list: Item[] }>('items')
+  const actions = usePluginAction()
+  const drawer = useScreenDrawer({ createParam: 'create', scope: props })
+  const [filter, setFilter] = useState<'all' | 'open' | 'done'>('all')
+  const [query, setQuery] = useState('')
   const [draft, setDraft] = useState('')
-  const [pending, setPending] = useState(false)
 
   const list = doc?.list ?? []
   const doneCount = list.filter((it) => it.done).length
+  const openCount = list.length - doneCount
+  const visible = useMemo(
+    () =>
+      list.filter((it) => {
+        if (filter === 'open' && it.done) return false
+        if (filter === 'done' && !it.done) return false
+        if (query.trim() === '') return true
+        return it.title.toLowerCase().includes(query.trim().toLowerCase())
+      }),
+    [list, filter, query],
+  )
 
-  const add = async () => {
+  const handleAdd = async (): Promise<void> => {
     const title = draft.trim()
     if (title === '') return
-    setPending(true)
-    try {
-      await callAction('add_item', { title })
-      setDraft('')
-    } catch (err) {
-      notify('Add failed: ' + (err instanceof Error ? err.message : String(err)), 'error')
-    } finally {
-      setPending(false)
-    }
+    await actions.run('add_item', { title }, {
+      key: 'add-item',
+      onSuccess: () => {
+        setDraft('')
+        drawer.close()
+      },
+      onError: (msg) => notify('Add failed: ' + msg, 'error'),
+    })
+  }
+
+  const handleResetFilters = (): void => {
+    setFilter('all')
+    setQuery('')
+  }
+
+  const handleToggle = (item: Item, checked: boolean): void => {
+    void actions.run('set_done', { id: item.id, done: checked }, {
+      key: 'toggle:' + item.id,
+      onError: (msg) => notify('Update failed: ' + msg, 'error'),
+    })
   }
 
   return (
-    <Screen title="Sample Desk" subtitle={'Done ' + doneCount + ' / ' + list.length}>
-      <ScreenSection
-        title="Add an item"
-        titleExtra={
-          <Button
-            variant="primary"
+    <Screen
+      layout="contained"
+      title="Sample Desk"
+      subtitle={'Done ' + doneCount + ' / ' + list.length}
+      actions={
+        <Button
+          variant="primary"
+          size="sm"
+          icon="plus"
+          disabled={actions.pending}
+          onClick={() => drawer.openCreate()}
+        >
+          <span className="pane-action-label">New Item</span>
+        </Button>
+      }
+      toolbar={
+        <ScreenToolbar
+          label="Item filters"
+          actions={
+            <SearchBox
+              variant="toolbar"
+              size="sm"
+              value={query}
+              onChange={setQuery}
+              placeholder="Filter items..."
+              ariaLabel="Filter items"
+            />
+          }
+        >
+          <Tabs
+            value={filter}
+            onValueChange={(next) => setFilter(next as 'all' | 'open' | 'done')}
+            variant="pills"
             size="sm"
-            pending={pending}
-            disabled={draft.trim() === ''}
-            onClick={() => void add()}
           >
-            Add
-          </Button>
+            <TabsList aria-label="Status filter">
+              <TabsTrigger value="all">
+                <span>All</span>
+                <TabCount>{list.length}</TabCount>
+              </TabsTrigger>
+              <TabsTrigger value="open">
+                <span>Open</span>
+                <TabCount>{openCount}</TabCount>
+              </TabsTrigger>
+              <TabsTrigger value="done">
+                <span>Done</span>
+                <TabCount>{doneCount}</TabCount>
+              </TabsTrigger>
+            </TabsList>
+          </Tabs>
+        </ScreenToolbar>
+      }
+    >
+      {doc === undefined ? (
+        <LoadingState label="Loading items..." />
+      ) : visible.length === 0 ? (
+        <EmptyState
+          icon={list.length === 0 ? 'list-checks' : 'search'}
+          title={list.length === 0 ? 'No items yet' : 'No matching items'}
+          action={
+            list.length === 0 ? (
+              <Button variant="primary" size="sm" icon="plus" onClick={() => drawer.openCreate()}>
+                New Item
+              </Button>
+            ) : (
+              <Button variant="secondary" size="sm" icon="rotate-ccw" onClick={handleResetFilters}>
+                Reset Filters
+              </Button>
+            )
+          }
+        />
+      ) : (
+        <List label="Item list">
+          {visible.map((it) => (
+            <ListRow
+              key={it.id}
+              interactive={false}
+              leading={
+                <Checkbox
+                  checked={it.done}
+                  aria-label={'Mark ' + it.title + (it.done ? ' open' : ' done')}
+                  onChange={(checked) => handleToggle(it, checked)}
+                />
+              }
+              title={it.title}
+              meta={<span className="mono text-muted">{formatTime(it.createdAt)}</span>}
+              trailing={<Badge tone={it.done ? 'ok' : 'neutral'}>{it.done ? 'Done' : 'Open'}</Badge>}
+            />
+          ))}
+        </List>
+      )}
+
+      <DetailDrawer
+        {...drawer.drawerProps}
+        title="New Item"
+        footer={
+          <>
+            <div className="flex-1" />
+            <Button variant="ghost" size="sm" disabled={actions.pending} onClick={() => drawer.close()}>
+              Cancel
+            </Button>
+            <Button
+              variant="primary"
+              size="sm"
+              icon="check"
+              pending={actions.pendingKey === 'add-item'}
+              disabled={draft.trim() === ''}
+              onClick={() => void handleAdd()}
+            >
+              Add Item
+            </Button>
+          </>
         }
       >
-        <Field label="Item title">
-          <Input
-            value={draft}
-            placeholder="Type a todo and press Enter..."
-            onChange={(e) => setDraft(e.target.value)}
-            onKeyDown={(e) => { if (e.key === 'Enter') void add() }}
-          />
-        </Field>
-      </ScreenSection>
-
-      <ScreenSection title="Item list">
-        <DataTable loading={doc === undefined} empty={list.length === 0} emptyLabel="No items yet" columns={2}>
-          <thead>
-            <tr>
-              <th>Status</th>
-              <th>Content</th>
-            </tr>
-          </thead>
-          <tbody>
-            {list.map((it) => (
-              <tr key={it.id}>
-                <td>
-                  <Checkbox
-                    checked={it.done}
-                    onChange={(checked) => {
-                      void callAction('set_done', { id: it.id, done: checked }).catch((err: unknown) =>
-                        notify('Update failed: ' + (err instanceof Error ? err.message : String(err)), 'error'),
-                      )
-                    }}
-                  />
-                </td>
-                <td>{it.title}</td>
-              </tr>
-            ))}
-          </tbody>
-        </DataTable>
-      </ScreenSection>
+        <Stack gap="md">
+          <Field label="Item title" required>
+            <Input
+              value={draft}
+              placeholder="Type a todo and press Enter..."
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={(e) => (e.key === 'Enter' ? void handleAdd() : undefined)}
+            />
+          </Field>
+        </Stack>
+      </DetailDrawer>
     </Screen>
   )
 }
@@ -318,18 +436,19 @@ After editing source files, re-run \`helmx plugins doctor\` and \`helmx plugins 
 
 ## Styling rules
 
-- Default to zero private CSS: compose layout with SDK primitives (\`Screen\` header \`actions\`, \`ScreenSection\` \`titleExtra\`, \`DataTable\`, \`KvGrid\`) and host public classes (\`.input\`, \`.btn btn-primary\`, \`.stack-row\`, \`.loading-state\`, \`.callout\`); never re-declare form controls with custom classes.
-- Add a scoped custom stylesheet only when the host vocabulary is genuinely insufficient, and keep it limited to layout/branding on your own class names with host CSS variables (\`var(--fg)\`, \`var(--border)\`, ...).
+- Read \`load_skill({ skillId: "helmx-cli", path: "references/ui-hig.md" })\` before authoring UI.
+- Default to zero private CSS: compose layout and controls exclusively with SDK primitives (\`Screen\` with \`toolbar\` and \`actions\`, \`ScreenToolbar\`, \`List\` / \`ListRow\`, \`CardGrid\` / \`SelectCard\`, \`DataTable\`, \`KvGrid\`, \`DetailDrawer\`, \`Field\`, \`Input\`, 5-variant \`Button\` without \`variant="default"\`, \`SearchBox size="sm"\`, \`Tabs\` + \`TabCount\`); never re-declare raw \`.btn\` / \`.input\` controls or native \`<select>\` / \`<input type="search">\`.
+- Add a scoped custom stylesheet only when the host vocabulary is genuinely insufficient, keep every \`:hover\` inside \`@media (hover: hover)\`, and style strictly with host CSS variables (\`var(--fg)\`, \`var(--border)\`, ...).
 
 ## Checklist cross-reference
 
 - \`index.ts\` (and \`plugin.json\`) declares \`clientRoot: './client'\` explicitly (when undeclared the default root is the plugin directory itself, and \`client/index.tsx\` cannot be found);
 - Backend \`ctx.doc('items', ..., { public: true })\` + \`flush()\` after writes;
 - \`ctx.action\` declares both \`inputSchema\` and \`outputSchema\` (the single-point Schema contract; missing ones are rejected at register), with \`exposeAsTool: true\`;
-- The frontend prefers reusing \`@helmx/plugin-client\` layout primitives \`Screen / ScreenSection / DataTable / KvGrid\` and accessible controls (\`Checkbox\` uses \`onChange(checked)\`; notifications use \`notify(message, tone)\`), without introducing undeclared bare npm packages;
-- Zero private stylesheet by default (host public \`.input\` / \`.btn\` classes + SDK primitives; add scoped CSS only when the vocabulary is insufficient);
+- The frontend follows \`helmx-cli\` \`references/ui-hig.md\`: single \`<Screen toolbar={<ScreenToolbar />}>\` shell, \`List\` / \`ListRow\` for item rosters, \`DetailDrawer\` + \`useScreenDrawer\` for create/edit drawers, 5-variant \`Button\` (default \`secondary\`, zero \`variant="default"\`), \`SearchBox(variant="toolbar", size="sm")\`, \`Checkbox\` with \`onChange(checked)\`, and notifications via \`notify(message, tone)\`, without introducing undeclared bare npm packages;
+- Zero private stylesheet by default; if scoped CSS is added, gate every \`:hover\` inside \`@media (hover: hover)\` and use host semantic tokens;
 - \`ctx.ui.screen({ id: 'main', client: { module: 'index.tsx', export: 'MainScreen' } })\` and the frontend really exports \`MainScreen\` (\`helmx plugins doctor\` reports \`screens: ["main"]\`);
-- No \`sidebarItem\` registered by default (avoiding sidebar bloat; the optional sidebar entry in the \`helmx plugins init --template app\` skeleton can be removed as needed); no Emoji; styling uses host CSS variables.
+- No \`sidebarItem\` registered by default (avoiding sidebar bloat; the optional sidebar entry in the \`helmx plugins init --template app\` skeleton can be removed as needed); zero Emoji; styling uses host CSS variables.
 `
 
 const appBuilderSkillVars: Record<string, string> = {

@@ -10,7 +10,7 @@ import { createRequire } from 'node:module'
 import { existsSync } from 'node:fs'
 import { chmod, lstat, mkdir, mkdtemp, readdir, readFile, symlink, writeFile, rm, realpath, utimes } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
   HelmxError,
@@ -22,6 +22,7 @@ import {
   parseSkillFrontmatter,
 } from '@helmx/protocol'
 import {
+  APP_BUILDER_FULLSTACK_TEMPLATE_MD,
   APP_BUILDER_SKILL_ASSET,
   APP_BUILDER_SKILL_ID,
   APP_BUILDER_SKILL_MD,
@@ -36,6 +37,9 @@ import {
   HELMX_CLI_SKILL_ASSET,
   HELMX_CLI_SKILL_ID,
   HELMX_CLI_SKILL_OWNER,
+  HELMX_CLI_UI_HIG_MD,
+  HELMX_UI_HIG_BODY_MD,
+  HELMX_UI_HIG_PATTERNS_MD,
   PROFILES_SKILL_ASSET,
   PROFILES_SKILL_ID,
   PROFILES_SKILL_MD,
@@ -474,6 +478,116 @@ test('helmx-cli skill assets stay synchronized with UI extensions and runtime ca
     () => renderSkillTemplate('hello {{UNKNOWN_VAR}}', {}),
     (err: unknown) => err instanceof HelmxError && err.code === 'unreplaced_skill_placeholder',
   )
+})
+
+test('helmx-ui HIG single-source sync: repo skill (.helmx/skills/helmx-ui) matches helmx-cli references/ui-hig.md byte-for-byte and wires mandatory gates', { timeout: 60_000 }, async () => {
+  const repoRoot = resolve(testDir, '..', '..', '..')
+  const skillRaw = (await readFile(join(repoRoot, '.helmx', 'skills', 'helmx-ui', 'SKILL.md'), 'utf8')).replace(/\r\n/g, '\n')
+  const patternsRaw = (await readFile(join(repoRoot, '.helmx', 'skills', 'helmx-ui', 'references', 'patterns.md'), 'utf8')).replace(/\r\n/g, '\n')
+
+  const fm = parseSkillFrontmatter(skillRaw)
+  assert.equal(fm.name, 'helmx-ui')
+  assert.ok(fm.description.length > 0, 'helmx-ui SKILL.md must declare a non-empty description')
+  assert.equal(fm.managedByPlugin, undefined, 'repo workspace skill must not declare managedByPlugin')
+
+  const fmMatch = skillRaw.match(/^---\n[\s\S]*?\n---\n+/)
+  assert.ok(fmMatch !== null, 'helmx-ui SKILL.md must start with YAML frontmatter')
+  const repoSkillBody = skillRaw.slice(fmMatch[0].length)
+
+  assert.equal(
+    HELMX_UI_HIG_BODY_MD,
+    repoSkillBody,
+    'HELMX_UI_HIG_BODY_MD must stay byte-for-byte identical to .helmx/skills/helmx-ui/SKILL.md body',
+  )
+  assert.equal(
+    HELMX_UI_HIG_PATTERNS_MD,
+    patternsRaw,
+    'HELMX_UI_HIG_PATTERNS_MD must stay byte-for-byte identical to .helmx/skills/helmx-ui/references/patterns.md',
+  )
+  assert.equal(
+    HELMX_CLI_SKILL_ASSET.references['ui-hig.md'],
+    HELMX_CLI_UI_HIG_MD,
+    'helmx-cli references/ui-hig.md must wire HELMX_CLI_UI_HIG_MD directly',
+  )
+  assert.equal(
+    HELMX_CLI_UI_HIG_MD,
+    `${repoSkillBody}\n\n---\n\n${patternsRaw}`,
+    'helmx-cli references/ui-hig.md must combine SKILL.md body and references/patterns.md byte-for-byte',
+  )
+
+  // Hard-gate routing pointers across helmx-cli and app-builder
+  assert.ok(
+    HELMX_CLI_SKILL_MD.includes('load_skill({ skillId: "helmx-cli", path: "references/ui-hig.md" })'),
+    'helmx-cli SKILL.md Topic manuals must point to references/ui-hig.md',
+  )
+  assert.ok(
+    HELMX_CLI_SKILL_AND_PLUGIN_DEV_MD.includes('references/ui-hig.md'),
+    'helmx-cli skill-and-plugin-dev.md must point to references/ui-hig.md',
+  )
+  assert.ok(
+    APP_BUILDER_SKILL_MD.includes('load_skill({ skillId: "helmx-cli", path: "references/ui-hig.md" })'),
+    'app-builder Step 2 must require loading helmx-cli references/ui-hig.md before writing client/*.tsx',
+  )
+
+  // Phase 1 shared SDK exports documented in plugin-dev manual
+  for (const symbol of ['List', 'ListRow', 'TabCount']) {
+    assert.ok(
+      HELMX_CLI_SKILL_AND_PLUGIN_DEV_MD.includes(symbol),
+      `helmx-cli skill-and-plugin-dev.md must document Phase 1 export ${symbol}`,
+    )
+  }
+
+  // Hygiene & no-regression checks: zero Emoji, zero legacy raw CounterScreen markup, zero variant="default" in TSX examples
+  assert.ok(!/\p{Extended_Pictographic}/u.test(skillRaw), '.helmx/skills/helmx-ui/SKILL.md must contain zero Emoji')
+  assert.ok(!/\p{Extended_Pictographic}/u.test(patternsRaw), '.helmx/skills/helmx-ui/references/patterns.md must contain zero Emoji')
+
+  const extractTsxBlocks = (md: string): string[] =>
+    Array.from(md.matchAll(/```tsx\n([\s\S]*?)```/g), (match) => match[1]!)
+
+  const devTsxBlocks = extractTsxBlocks(HELMX_CLI_SKILL_AND_PLUGIN_DEV_MD)
+  const counterBlock = devTsxBlocks.find((block) => block.includes('export function CounterScreen'))
+  assert.ok(counterBlock !== undefined, 'skill-and-plugin-dev.md must contain a CounterScreen tsx example')
+  assert.ok(
+    counterBlock.includes('<Screen') &&
+      counterBlock.includes('<Card') &&
+      counterBlock.includes('variant="primary"') &&
+      !counterBlock.includes('<div className="card">') &&
+      !counterBlock.includes('<button type="button" className="btn') &&
+      !counterBlock.includes('variant="default"') &&
+      !counterBlock.includes('direction="row"'),
+    'CounterScreen example in skill-and-plugin-dev.md must use valid SDK primitives (<Screen>/<Card>/<Stack direction="horizontal">/<Button variant="primary">)',
+  )
+
+  const appTsxBlocks = extractTsxBlocks(APP_BUILDER_FULLSTACK_TEMPLATE_MD)
+  assert.ok(appTsxBlocks.length >= 1, 'app-builder fullstack template must include a tsx client example')
+  const appClientTsx = appTsxBlocks.join('\n')
+  assert.ok(
+    !appClientTsx.includes('variant="default"') &&
+      !appClientTsx.includes('<select') &&
+      !appClientTsx.includes('type="search"'),
+    'app-builder fullstack template tsx must never use removed Button variant="default", native <select>, or type="search"',
+  )
+  assert.ok(
+    appClientTsx.includes('<Screen') &&
+      appClientTsx.includes('toolbar={') &&
+      appClientTsx.includes('<List') &&
+      appClientTsx.includes('<ListRow') &&
+      appClientTsx.includes('<DetailDrawer'),
+    'app-builder fullstack template tsx must follow the unified Screen toolbar + List + DetailDrawer HIG',
+  )
+
+  const patternTsxBlocks = extractTsxBlocks(patternsRaw)
+  assert.equal(patternTsxBlocks.length, 4, '.helmx/skills/helmx-ui/references/patterns.md must provide all 4 canonical tsx recipes')
+  for (const block of patternTsxBlocks) {
+    assert.ok(
+      !block.includes('variant="default"') &&
+        !block.includes('direction="row"') &&
+        !block.includes('<select') &&
+        !block.includes('type="search"') &&
+        !block.includes('<button type="button" className="btn'),
+      'HIG canonical tsx patterns must stay free of deprecated Button default variant, invalid Stack direction="row", native controls, and raw .btn markup',
+    )
+  }
 })
 
 test('core-skills: kernel-owned core skills declare core:* ownership, split conversations/profiles, and leave zero placeholders', { timeout: 60_000 }, () => {
