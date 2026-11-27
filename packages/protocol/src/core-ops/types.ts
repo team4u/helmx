@@ -34,8 +34,18 @@ export interface CoreOperationHttpSpec {
   readonly pathParams?: Readonly<Record<string, string>>
   /** Per-path-param boundary validators applied before schema validation. */
   readonly pathValidators?: Readonly<Record<string, CoreOperationParamValidator>>
-  /** Query parameter names mapped from `url.searchParams` onto the input object. */
-  readonly queryParams?: readonly string[]
+  /**
+   * Optional JSON Schema applied exclusively to the parsed HTTP body before merging path/query fields.
+   * Useful when CLI/Action `inputSchema` includes query-only or extended fields (e.g. `wait`) that must
+   * remain rejected if sent in the HTTP JSON body.
+   */
+  readonly bodySchema?: JsonSchema
+  /**
+   * Query parameter mapping onto the input object:
+   * - `string[]`: URL query key and input property share the same name;
+   * - `Record<string, string>`: maps URL query key to input property name (e.g. `{ parent: 'parentConversationId' }`).
+   */
+  readonly queryParams?: readonly string[] | Readonly<Record<string, string>>
   /** How HTTP request bodies are parsed (`'none'` skips body parsing; `'optional'` defaults empty body to `{}`). */
   readonly bodyMode?: CoreOperationBodyMode
   /** Extra headers added to the success HTTP response (e.g. `{ 'cache-control': 'no-store' }`). */

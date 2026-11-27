@@ -1,13 +1,15 @@
 /**
  * Generic HTTP matcher, boundary validator, and dispatcher driven by `CoreOperationSpec[]`.
  *
- * Guarantees static-before-param precedence, percent-decoded path parameter validation,
- * query coercion, `bodyMode` (`required | optional | none`), JSON Schema enforcement,
- * SecretStash redaction control (`redactResponse: false`), and mapped-type exhaustiveness.
+ * Guarantees static-before-param precedence, per-route percent-decoded path parameter validation,
+ * query coercion (including alias mapping), `bodyMode` (`required | optional | none`), optional
+ * pre-merge `http.bodySchema` validation, SecretStash redaction control (`redactResponse: false`),
+ * and mapped-type exhaustiveness.
  */
 import {
   isValidNodeId,
   type CoreOperationHttpMethod,
+  type CoreOperationHttpSpec,
   type CoreOperationParamValidator,
   type CoreOperationSpec,
   type JsonSchema,
@@ -28,6 +30,12 @@ const FORWARD_ID_REGEX = /^fwd-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[
 export interface CoreOperationHttpHandlerContext {
   readonly route: RouteContext
   readonly redactor: JsonRedactor | undefined
+  /** Unmerged parsed HTTP JSON body (`{}` for `bodyMode: 'none'` or omitted optional body). */
+  readonly body: Readonly<Record<string, unknown>>
+  /** Unmerged extracted query parameters mapped onto schema property names. */
+  readonly query: Readonly<Record<string, unknown>>
+  /** Unmerged validated URL path parameters mapped onto schema property names. */
+  readonly path: Readonly<Record<string, unknown>>
 }
 
 export interface CoreOperationHttpCustomResponse {
@@ -214,32 +222,42 @@ function resolveSchemaPropertyTypes(schema: JsonSchema, field: string): Set<stri
   return new Set()
 }
 
+function normalizeQueryEntries(
+  queryParams: CoreOperationHttpSpec['queryParams'],
+): Array<readonly [queryKey: string, fieldName: string]> {
+  if (!queryParams) return []
+  if (Array.isArray(queryParams)) {
+    return (queryParams as readonly string[]).map((name) => [name, name] as const)
+  }
+  return Object.entries(queryParams as Readonly<Record<string, string>>)
+}
+
 function extractQueryParams(
   spec: CoreOperationSpec,
   url: URL,
 ): Record<string, unknown> {
-  const names = spec.http.queryParams
-  if (!names || names.length === 0) return {}
+  const entries = normalizeQueryEntries(spec.http.queryParams)
+  if (entries.length === 0) return {}
   const out: Record<string, unknown> = {}
-  for (const name of names) {
-    const raw = url.searchParams.get(name)
+  for (const [queryKey, fieldName] of entries) {
+    const raw = url.searchParams.get(queryKey)
     if (raw === null) continue
-    const types = resolveSchemaPropertyTypes(spec.inputSchema, name)
+    const types = resolveSchemaPropertyTypes(spec.inputSchema, fieldName)
     if (types.has('boolean')) {
-      const parsed = parseOptionalBooleanFlag(url, name)
-      if (parsed !== undefined) out[name] = parsed
+      const parsed = parseOptionalBooleanFlag(url, queryKey)
+      if (parsed !== undefined) out[fieldName] = parsed
     } else if (types.has('integer')) {
       if (/^-?\d+$/.test(raw)) {
         const num = Number(raw)
-        out[name] = Number.isSafeInteger(num) ? num : raw
+        out[fieldName] = Number.isSafeInteger(num) ? num : raw
       } else {
-        out[name] = raw
+        out[fieldName] = raw
       }
     } else if (types.has('number')) {
       const num = Number(raw)
-      out[name] = raw.trim() !== '' && Number.isFinite(num) ? num : raw
+      out[fieldName] = raw.trim() !== '' && Number.isFinite(num) ? num : raw
     } else {
-      out[name] = raw
+      out[fieldName] = raw
     }
   }
   return out
@@ -254,25 +272,19 @@ async function readOperationBody(
   if (bodyMode === 'optional') {
     return parseOptionalJsonObjectBody(ctx.request, (obj) => obj)
   }
-  const raw = await readJsonBody(ctx.request)
-  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
-    throw new ValidationError(`${spec.key} body must be a JSON object`)
-  }
-  return raw as Record<string, unknown>
+  // `readJsonBody` guarantees a plain JSON object or throws `BodyError('invalid_json')` (400).
+  return readJsonBody(ctx.request)
 }
 
-function matchGroup(
-  group: CompiledRouteGroup,
+function matchSegments(
+  compiledSegments: readonly CompiledSegment[],
   segments: readonly string[],
-): Record<string, string | number> | undefined {
-  if (segments.length !== group.segments.length) return undefined
+): Record<string, string | number> {
   const pathObj: Record<string, string | number> = {}
-  for (let i = 0; i < group.segments.length; i++) {
-    const expected = group.segments[i]!
+  for (let i = 0; i < compiledSegments.length; i++) {
+    const expected = compiledSegments[i]!
     const actual = segments[i]!
-    if (expected.kind === 'literal') {
-      if (actual !== expected.value) return undefined
-    } else {
+    if (expected.kind === 'param') {
       pathObj[expected.fieldName] = validatePathParam(actual, expected.fieldName, expected.validator)
     }
   }
@@ -361,22 +373,33 @@ export function createCoreOperationRouter<const TOps extends readonly CoreOperat
         return errorResponse(redactor, 404, 'not_found', 'route not found')
       }
 
-      const pathObj = matchGroup(group, ctx.segments)!
+      const pathObj = matchSegments(route.segments, ctx.segments)
       const bodyObj = await readOperationBody(route.spec, ctx)
-      if (route.spec.http.bodyMode !== 'none' && route.spec.http.pathParams) {
-        for (const fieldName of Object.values(route.spec.http.pathParams)) {
-          if (Object.hasOwn(bodyObj, fieldName)) {
-            throw new ValidationError(
-              `${route.spec.key} body does not allow unknown field ${fieldName}`,
-            )
+      if (route.spec.http.bodyMode !== 'none') {
+        if (route.spec.http.pathParams) {
+          for (const fieldName of Object.values(route.spec.http.pathParams)) {
+            if (Object.hasOwn(bodyObj, fieldName)) {
+              throw new ValidationError(
+                `${route.spec.key} body does not allow unknown field ${fieldName}`,
+              )
+            }
           }
+        }
+        if (route.spec.http.bodySchema !== undefined) {
+          assertBodySchema(route.spec.http.bodySchema, bodyObj, `${route.spec.key} body`)
         }
       }
       const queryObj = extractQueryParams(route.spec, ctx.url)
       const merged: Record<string, unknown> = { ...bodyObj, ...queryObj, ...pathObj }
       assertBodySchema(route.spec.inputSchema, merged, `${route.spec.key} request`)
 
-      const handlerCtx: CoreOperationHttpHandlerContext = { route: ctx, redactor }
+      const handlerCtx: CoreOperationHttpHandlerContext = {
+        route: ctx,
+        redactor,
+        body: bodyObj,
+        query: queryObj,
+        path: pathObj,
+      }
       const validated = route.handler.validate
         ? (route.handler.validate(merged, handlerCtx) ?? merged)
         : merged

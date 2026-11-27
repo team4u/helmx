@@ -2,11 +2,13 @@
  * Generic static core CLI command builder driven by `CoreOperationSpec[]` at compile time.
  *
  * Zero network fetch and 100% fault-isolated from dynamic plugin manifests (`actions.ts`):
- * supports `flagAliases`, `positional`, `timeoutMs`, REST `:param` + query interpolation,
- * `--json` raw passthrough, optional `formatHuman` hooks, and `customHandlers` for
- * composite commands (e.g. `nodes upgrade`).
+ * supports `flagAliases`, `positional` (with optional custom coercion hooks), `timeoutMs`,
+ * REST `:param` + query (with alias mapping) interpolation, `--json` raw passthrough,
+ * optional `formatHuman` hooks, deduplicated `extraFlags` overrides, and `customHandlers`
+ * for composite commands (e.g. `nodes upgrade`).
  */
 import type {
+  CoreOperationHttpSpec,
   CoreOperationKey,
   CoreOperationPositionalSpec,
   CoreOperationSpec,
@@ -39,6 +41,12 @@ export type CoreCliValidateResponse<TResult = unknown, TInput = Record<string, u
   ctx: CommandContext,
 ) => void
 
+export type CoreCliCoercePositional = (
+  raw: string,
+  pos: CoreOperationPositionalSpec,
+  ctx: CommandContext,
+) => unknown
+
 export interface CoreCliCustomCommandHandler {
   readonly description?: string
   readonly flags?: readonly FlagSpec[]
@@ -53,8 +61,12 @@ export interface CommandsFromOperationsOptions<TOps extends readonly CoreOperati
   readonly validateInput?: Partial<Record<CoreOperationKey<TOps>, CoreCliValidateInput>>
   /** Optional HTTP response shape check after request, keyed by `spec.key`. */
   readonly validateResponse?: Partial<Record<CoreOperationKey<TOps>, CoreCliValidateResponse>>
-  /** Optional extra CLI flags appended to a generated command, keyed by `spec.key`. */
+  /** Optional extra CLI flags appended to or overriding schema-derived flags, keyed by `spec.key`. */
   readonly extraFlags?: Partial<Record<CoreOperationKey<TOps>, readonly FlagSpec[]>>
+  /** Optional per-operation positional coercion overrides keyed by `spec.key` -> `pos.field`. */
+  readonly coercePositionals?: Partial<
+    Record<CoreOperationKey<TOps>, Readonly<Record<string, CoreCliCoercePositional>>>
+  >
   /** Custom composite command handlers keyed by joined CLI command path (e.g. `'nodes upgrade'`). */
   readonly customHandlers?: Readonly<Record<string, CoreCliCustomCommandHandler>>
   /** Non-JSON / standalone domain commands appended cleanly alongside generated operations. */
@@ -92,6 +104,40 @@ function formatPositionalSynopsis(
     .join(' ')
 }
 
+function normalizeQueryEntries(
+  queryParams: CoreOperationHttpSpec['queryParams'],
+): Array<readonly [queryKey: string, fieldName: string]> {
+  if (!queryParams) return []
+  if (Array.isArray(queryParams)) {
+    return (queryParams as readonly string[]).map((name) => [name, name] as const)
+  }
+  return Object.entries(queryParams as Readonly<Record<string, string>>)
+}
+
+function mergeFlagsWithOverrides(
+  schemaFlags: readonly FlagSpec[],
+  extraFlags: readonly FlagSpec[],
+): { flags: FlagSpec[]; overriddenNames: Set<string> } {
+  if (extraFlags.length === 0) {
+    return { flags: [...schemaFlags], overriddenNames: new Set() }
+  }
+  const byName = new Map(extraFlags.map((f) => [f.name, f] as const))
+  const overriddenNames = new Set<string>()
+  const merged: FlagSpec[] = schemaFlags.map((flag) => {
+    const override = byName.get(flag.name)
+    if (override !== undefined) {
+      overriddenNames.add(flag.name)
+      byName.delete(flag.name)
+      return override
+    }
+    return flag
+  })
+  for (const flag of byName.values()) {
+    merged.push(flag)
+  }
+  return { flags: merged, overriddenNames }
+}
+
 function resolveHttpRequestTarget(
   spec: CoreOperationSpec,
   input: Record<string, unknown>,
@@ -108,12 +154,12 @@ function resolveHttpRequestTarget(
   })
 
   const query = new URLSearchParams()
-  for (const queryField of spec.http.queryParams ?? []) {
-    const value = input[queryField]
+  for (const [queryKey, fieldName] of normalizeQueryEntries(spec.http.queryParams)) {
+    const value = input[fieldName]
     if (value !== undefined) {
-      query.set(queryField, String(value))
+      query.set(queryKey, String(value))
     }
-    consumedFields.add(queryField)
+    consumedFields.add(fieldName)
   }
   const queryText = query.toString()
   const fullPath = queryText.length > 0 ? `${path}?${queryText}` : path
@@ -150,7 +196,7 @@ function buildStandardCommand(
   const propertyNames = schemaPropertyNames(spec.inputSchema, flagOptions)
   const properties = schemaPropertiesOf(spec.inputSchema) ?? {}
   const extraFlags = options.extraFlags?.[spec.key] ?? []
-  const flags: FlagSpec[] = [...schemaFlags, ...extraFlags]
+  const { flags, overriddenNames } = mergeFlagsWithOverrides(schemaFlags, extraFlags)
   const positionalSynopsis = formatPositionalSynopsis(spec.cli.positional)
 
   return {
@@ -161,11 +207,14 @@ function buildStandardCommand(
     async run(ctx: CommandContext) {
       const input: Record<string, unknown> = {}
       for (const [flagName, value] of ctx.flags) {
+        // Overridden flags (e.g. changing array flag from JSON to CSV string) are converted explicitly by validateInput.
+        if (overriddenNames.has(flagName)) continue
         const propName = propertyNames.get(flagName)
         if (propName !== undefined) {
           input[propName] = value
         }
       }
+      const positionalCoercers = options.coercePositionals?.[spec.key]
       for (const [index, pos] of positionals.entries()) {
         const raw = ctx.positionals[index]
         const label = pos.label ?? pos.field
@@ -175,7 +224,10 @@ function buildStandardCommand(
           }
           continue
         }
-        const coerced = coercePositionalValue(raw, label, properties[pos.field])
+        const customCoerce = positionalCoercers?.[pos.field]
+        const coerced = customCoerce
+          ? customCoerce(raw, pos, ctx)
+          : coercePositionalValue(raw, label, properties[pos.field])
         if (input[pos.field] !== undefined) {
           throw new CliError(
             `field "${pos.field}" specified by both flag and positional <${label}>: provide only one`,

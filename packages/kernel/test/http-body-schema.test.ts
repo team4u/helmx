@@ -15,7 +15,8 @@
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { HelmxError } from '@helmx/protocol'
+import { HelmxError, type CoreOperationSpec } from '@helmx/protocol'
+import { createCoreOperationRouter } from '../src/http/core-operation-router.js'
 import { handleApi } from '../src/http/routes.js'
 import {
   parseConversationCompactBody,
@@ -679,6 +680,100 @@ test('nodes endpoints: returns 501 not_implemented when stub omits getHubAccess 
   assert.equal(postEndpoints.status, 404)
   const delIssue = await call(kernel, 'DELETE', '/api/nodes/issue')
   assert.equal(delIssue.status, 404)
+})
+
+test('core-operation-router: supports per-route pathParams/validators, query aliases, pre-merge bodySchema, and raw body/query/path ctx', { timeout: 60_000 }, async () => {
+  const ops = [
+    {
+      key: 'items.get',
+      domain: 'items',
+      id: 'get',
+      description: 'Get item',
+      inputSchema: {
+        type: 'object',
+        properties: { itemId: { type: 'integer', minimum: 1 }, parentId: { type: 'integer', minimum: 1 } },
+        required: ['itemId'],
+        additionalProperties: false,
+      },
+      outputSchema: { type: 'object' },
+      http: {
+        method: 'GET',
+        path: '/api/items/:id',
+        pathParams: { id: 'itemId' },
+        pathValidators: { id: 'positiveInt' },
+        queryParams: { parent: 'parentId' },
+        bodyMode: 'none',
+      },
+      cli: { command: ['items', 'get'] },
+      action: false,
+    },
+    {
+      key: 'items.send',
+      domain: 'items',
+      id: 'send',
+      description: 'Send to item',
+      inputSchema: {
+        type: 'object',
+        properties: { targetId: { type: 'string' }, text: { type: 'string' }, wait: { type: 'boolean' } },
+        required: ['targetId', 'text'],
+        additionalProperties: false,
+      },
+      outputSchema: { type: 'object' },
+      http: {
+        method: 'POST',
+        path: '/api/items/:id',
+        pathParams: { id: 'targetId' },
+        pathValidators: { id: 'id' },
+        queryParams: ['wait'],
+        bodyMode: 'required',
+        bodySchema: {
+          type: 'object',
+          properties: { text: { type: 'string' } },
+          required: ['text'],
+          additionalProperties: false,
+        },
+      },
+      cli: { command: ['items', 'send'] },
+      action: false,
+    },
+  ] as const satisfies readonly CoreOperationSpec[]
+
+  const dispatch = createCoreOperationRouter(ops, {
+    'items.get': (input, ctx) => ({ input, ctxPath: ctx.path, ctxQuery: ctx.query }),
+    'items.send': (input, ctx) => ({ input, ctxBody: ctx.body, ctxQuery: ctx.query, ctxPath: ctx.path }),
+  })
+
+  const callRouter = async (method: string, path: string, body?: unknown) => {
+    const url = new URL(`http://127.0.0.1${path}`)
+    const req = new Request(url, {
+      method,
+      ...(body !== undefined ? { headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) } : {}),
+    })
+    const segments = url.pathname.split('/').filter(Boolean)
+    if (segments[0] === 'api') segments.shift()
+    return (await dispatch({ request: req, method, segments, url }, undefined))!
+  }
+
+  // GET uses positiveInt validator -> rejects 'abc' with 400
+  await assert.rejects(() => callRouter('GET', '/api/items/abc'), (err: { code?: string; status?: number }) => err.code === 'validation_error' && err.status === 400)
+  // GET maps ?parent=9 -> parentId: 9
+  const got = await (await callRouter('GET', '/api/items/42?parent=9')).json() as Record<string, unknown>
+  assert.deepEqual(got.input, { itemId: 42, parentId: 9 })
+  assert.deepEqual(got.ctxPath, { itemId: 42 })
+  assert.deepEqual(got.ctxQuery, { parentId: 9 })
+
+  // POST uses its own route pathParams (targetId) & 'id' validator (accepts 'alpha-1')
+  const sent = await (await callRouter('POST', '/api/items/alpha-1?wait=1', { text: 'hello' })).json() as Record<string, unknown>
+  assert.deepEqual(sent.input, { targetId: 'alpha-1', text: 'hello', wait: true })
+  assert.deepEqual(sent.ctxBody, { text: 'hello' })
+  assert.deepEqual(sent.ctxQuery, { wait: true })
+  assert.deepEqual(sent.ctxPath, { targetId: 'alpha-1' })
+
+  // Query-only `wait` rejected when placed in JSON body via pre-merge bodySchema
+  await assert.rejects(
+    () => callRouter('POST', '/api/items/alpha-1', { text: 'hello', wait: true }),
+    (err: { code?: string; status?: number }) => err.code === 'validation_error' && err.status === 400,
+  )
 })
 
 test('nodes upgrade: attemptId disallowed; targetVersion preserves leading/trailing whitespace passthrough; strict SemVer and URL checks', { timeout: 60_000 }, async () => {

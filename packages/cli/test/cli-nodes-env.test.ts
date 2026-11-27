@@ -9,8 +9,12 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
-import { buildNodeConnectGuide } from '@helmx/protocol'
-import { coreCommands } from '../src/commands/index.js'
+import { buildNodeConnectGuide, type CoreOperationSpec } from '@helmx/protocol'
+import { parseFlags } from '../src/args.js'
+import { commandsFromOperations } from '../src/commands/from-operations.js'
+import { coreCommands, parsePositiveInt } from '../src/commands/index.js'
+import { HubClient } from '../src/hub-client.js'
+import type { Io } from '../src/options.js'
 import { updateCliCredentials } from '../src/credentials.js'
 import { CliError } from '../src/errors.js'
 import {
@@ -267,6 +271,113 @@ test('nodes endpoints: GET /api/nodes/endpoints outputs listen summary and endpo
   const badExtra = await runCliCaptured(['nodes', 'endpoints', 'extra', '--json'], env)
   assert.equal(badExtra.code, 1)
   assert.equal(parseCliError(badExtra).code, 'unexpected_positional')
+})
+
+test('commandsFromOperations: deduplicates extraFlags overrides, interpolates queryAliases, and supports coercePositionals', { timeout: 60_000 }, async (t) => {
+  const dir = useTempDir(t, 'helmx-cli-from-ops-')
+  const ops = [
+    {
+      key: 'items.create',
+      domain: 'items',
+      id: 'create',
+      description: 'Create item',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          itemId: { type: 'integer' },
+          parentId: { type: 'integer' },
+          tags: { type: 'array', items: { type: 'string' } },
+        },
+        additionalProperties: false,
+      },
+      outputSchema: { type: 'object' },
+      http: {
+        method: 'POST',
+        path: '/api/items/:id',
+        pathParams: { id: 'itemId' },
+        queryParams: { parent: 'parentId' },
+        bodyMode: 'optional',
+      },
+      cli: {
+        command: ['items', 'create'],
+        positional: [{ field: 'itemId', required: true }],
+        flagAliases: { parentId: 'parent' },
+      },
+      action: false,
+    },
+  ] as const satisfies readonly CoreOperationSpec[]
+
+  const cmds = commandsFromOperations(ops, {
+    extraFlags: {
+      'items.create': [{ name: 'tags', type: 'string', help: 'comma-separated tags' }],
+    },
+    coercePositionals: {
+      'items.create': {
+        itemId: (raw) => parsePositiveInt(raw, 'itemId'),
+      },
+    },
+    validateInput: {
+      'items.create': (input, ctx) => {
+        const rawTags = ctx.flags.get('tags')
+        if (typeof rawTags === 'string') {
+          input.tags = rawTags.split(',').filter(Boolean)
+        }
+        return input
+      },
+    },
+  })
+
+  assert.equal(cmds.length, 1)
+  const cmd = cmds[0]!
+  // `--tags` appears exactly once (overridden from json -> string), not duplicated.
+  assert.deepEqual(
+    cmd.flags!.map((f) => [f.name, f.type]),
+    [['parent', 'number'], ['tags', 'string']],
+  )
+
+  const hub = await startMockHub({ 'POST /api/items/42?parent=7': () => ({ body: { ok: true } }) }, { autoRegisterCleanup: t })
+  const env = makeCliEnv(hub.url, dir)
+  const parsedOk = parseFlags(cmd.flags!, ['42', '--parent', '7', '--tags', 'alpha,beta'])
+  const out: string[] = []
+  const io: Io = {
+    env,
+    out: (s) => out.push(s),
+    err: () => {},
+    fetchImpl: fetch,
+    stdin: { isTTY: false, readAll: async () => '' },
+  }
+  await cmd.run({
+    io,
+    env,
+    json: true,
+    args: ['42', '--parent', '7', '--tags', 'alpha,beta'],
+    flags: parsedOk.flags,
+    positionals: parsedOk.positionals,
+    dataDir: dir,
+    cwd: dir,
+    hub: async () => new HubClient({ baseUrl: hub.url, token: 'test-token' }, io),
+  })
+  assert.equal(hub.hits[0]?.path, '/api/items/42?parent=7')
+  assert.deepEqual(hub.hits[0]?.body, { tags: ['alpha', 'beta'] })
+
+  const parsedBad = parseFlags(cmd.flags!, ['not-an-int'])
+  await assert.rejects(
+    () =>
+      cmd.run({
+        io,
+        env,
+        json: true,
+        args: ['not-an-int'],
+        flags: parsedBad.flags,
+        positionals: parsedBad.positionals,
+        dataDir: dir,
+        cwd: dir,
+        hub: async () => {
+          throw new Error('should fail before hub call')
+        },
+      }),
+    (err: unknown) => err instanceof CliError && err.code === 'invalid_id',
+  )
 })
 
 test('nodes remove: DELETE /api/nodes/:id; rejects extra positional arguments', { timeout: 60_000 }, async (t) => {
