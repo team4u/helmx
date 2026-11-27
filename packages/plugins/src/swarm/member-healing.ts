@@ -402,6 +402,33 @@ export function createMemberHealing(ports: MemberHealingPorts) {
     }
   }
 
+  /**
+   * 结算归并"仍挂在 inflightWakeup、但提交已达终态 done"的唤醒，并等这次投递收尾（与启动恢复共用 classifyInflightIntent + applyRecoveredWakeup）。
+   * Why: 唤醒投递的游标推进（dispatcher 在 submitInputGuarded 返回后才落盘）可能晚于该回合的 turn_settled；
+   * 不先归并就会把刚结算的这一轮误判为"仍有待投递"，续催只在已推进的游标上空转并吞掉静默退场；
+   * 不等投递收尾，0-Token 静默检查会把仍在途的这次投递当作活跃交付而漏报 [stall]。
+   * 其余状态（active / unanswered / uncommitted / missing_conv）不触碰，保持既有恢复路径的行为。
+   */
+  const settleCompletedInflightWakeup = async (
+    input: MemberTurnSettledInput,
+    member: GroupMemberState,
+  ): Promise<GroupMemberState> => {
+    const inf = member.inflightWakeup
+    if (!inf) return member
+    const summary = ports.getCoordinator().readConversationOrUndefined(input.conversationId)
+    const status = await classifyInflightIntent(ports.ctx.host, input.conversationId, summary, inf)
+    if (status !== 'settled') return member
+    await store.updateMember(input.groupId, input.memberName, (t) => {
+      // 期间若已被 dispatcher 的游标推进清除、或已被更新的唤醒替换，则不归并。
+      if (t.inflightWakeup?.requestId !== inf.requestId) return
+      applyRecoveredWakeup(t, status, summary?.completionSeq, input.groupId, ports.logDiagnostic)
+    })
+    if (dispatcher.hasInflightWakeup(input.groupId, input.memberName)) {
+      await dispatcher.deliverWorkerWakeup(input.groupId, input.memberName)
+    }
+    return store.getGroup(input.groupId)?.members.find((m) => m.name === input.memberName && m.lifecycle === 'active') ?? member
+  }
+
   const onMemberTurnSettled = async (input: MemberTurnSettledInput): Promise<void> => {
     if (!ports.isAlive()) return
     const group = store.getGroup(input.groupId)
@@ -413,14 +440,15 @@ export function createMemberHealing(ports: MemberHealingPorts) {
       await handleFailedOrAbortedMemberTurn(input, member.lastWakeTaskSeq)
       return
     }
-    if (hasPendingDeliverableWakeup(member)) {
+    const settledMember = await settleCompletedInflightWakeup(input, member)
+    if (hasPendingDeliverableWakeup(settledMember)) {
       await dispatcher.deliverWorkerWakeup(input.groupId, input.memberName, { fromTurnSettled: true })
       return
     }
 
-    const silentAction = evaluateSilentExit(group, member, input.lastReplySummary)
+    const silentAction = evaluateSilentExit(group, settledMember, input.lastReplySummary)
     if (silentAction.kind === 'nudge') {
-      await handleSilentExitNudge(input, member, silentAction.taskSeq, silentAction.prompt)
+      await handleSilentExitNudge(input, settledMember, silentAction.taskSeq, silentAction.prompt)
       return
     }
     if (silentAction.kind === 'fallback_blocker') {

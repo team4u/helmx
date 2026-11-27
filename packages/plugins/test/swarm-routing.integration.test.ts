@@ -6,13 +6,14 @@
  *    6 条件 0-Token 根因 [stall] 守卫与 Hub 重启补发未送达信封；
  * 3) 多工具轮成员回合的精确结算（回归 handOver 误判）；
  * 4) done 非竞态补报、失败回合排队唤醒送达、活跃成员删锁与停用期对账；
- * 5) 主控分层唤醒（review 越过长跑成员、无唤醒 done 触发 stall、inflightReport 权威恢复、跨重启补报）。
+ * 5) 主控分层唤醒（review 越过长跑成员、无唤醒 done 触发 stall、inflightReport 权威恢复、跨重启补报）；
+ * 6) 唤醒投递游标推进与回合结算竞态：回合先结算时已结算的 inflight 唤醒先归并，静默退场续催与兜底 [blocker] 不被吞掉。
  */
 import { after, before, describe, test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 
@@ -35,9 +36,12 @@ import {
   setSwarmRoleResponses,
   type SwarmTestEnv,
 } from './helpers/swarm-integration-env.js'
+import { createCollabGroupRuntime } from '../src/swarm/group-store.js'
+import type { CollabGroupRuntime } from '../src/swarm/contracts.js'
 import {
   SWARM_PLUGIN_ID,
   WORKER_TAG,
+  resolveSwarmConfig,
   type BoardPost,
   type BoardViewDoc,
   type CollabGroupRecord,
@@ -804,6 +808,173 @@ describe('builtin:swarm board routing, settlement & self-healing', { concurrency
     } finally {
       await inst.app.close()
     }
+  })
+
+  test('swarm-int21: worker turn settling before the wakeup cursor write still merges the settled wakeup, nudges silent exit once, and lands the fallback [blocker]', { timeout: 60_000 }, async (t) => {
+    // 回归：dispatch_worker 的唤醒投递在 submitInputGuarded 接纳后才推进 readCursorSeq（dispatcher 第 3 步）；
+    // 工人回合若先结算，onMemberTurnSettled 曾把仍挂在 inflightWakeup 的这轮误判为"仍有待投递"而吞掉静默退场续催。
+    // 这里用 createCollabGroupRuntime 的宿主端口 + deferred 门控确定性地复现"回合先结算、游标后落地"的顺序（无固定 sleep）。
+    const dataDir = useTempDir(t, 'helmx-swarm-settle-race-')
+    const groupId = 'grp_settle_race'
+    const workerConvId = 11
+    const locks = new Map<string, Promise<unknown>>()
+    const errors: Array<{ title: string; detail: unknown }> = []
+    const submitted: Array<{ conversationId: number; requestId: string; text: string }> = []
+    const submissions = new Map<string, { status: 'queued' | 'placed' | 'done' | 'unanswered' }>()
+    const convs = new Map<number, { status: 'idle' | 'working' | 'error'; completionSeq: number }>([
+      [10, { status: 'idle', completionSeq: 1 }],
+      [workerConvId, { status: 'idle', completionSeq: 0 }],
+    ])
+    const settlingWorkers = new Map<number, number>()
+    const cursorGate = deferred<void>()
+    let runtime: CollabGroupRuntime | undefined
+
+    // 模拟 hooks.ts 的 turn_settled 入口（含 settlingWorkers 计数），直接驱动 onMemberTurnSettled。
+    const fireWorkerTurnSettled = (completionSeq: number, lastReplySummary: string): Promise<void> => {
+      settlingWorkers.set(workerConvId, (settlingWorkers.get(workerConvId) ?? 0) + 1)
+      return runtime!.onMemberTurnSettled({
+        groupId, memberName: 'mute', conversationId: workerConvId, completionSeq, outcome: 'completed', lastReplySummary,
+      }).finally(() => {
+        const remaining = (settlingWorkers.get(workerConvId) ?? 1) - 1
+        if (remaining === 0) settlingWorkers.delete(workerConvId)
+        else settlingWorkers.set(workerConvId, remaining)
+      })
+    }
+
+    const docState = new Map<string, unknown>()
+    const sessionState = new Map<number, unknown>()
+    const docs = {
+      boardBadges: { get: () => ({ byConversation: {} }), set: () => {}, update: () => {}, flush: async () => {} },
+      boardView: {
+        get: (cid: number) => sessionState.get(cid) ?? null,
+        set: (cid: number, val: unknown) => { sessionState.set(cid, val) },
+        update: () => {},
+        delete: (cid: number) => { sessionState.delete(cid) },
+        listConversationIds: () => [...sessionState.keys()],
+        flush: async () => {},
+      },
+    }
+    const fakeCtx = {
+      pluginId: SWARM_PLUGIN_ID,
+      dataDir,
+      doc: <T>(name: string, initial: T) => ({
+        get: () => (docState.get(name) as T) ?? initial,
+        set: (val: T) => { docState.set(name, val) },
+        update: (fn: (cur: T) => T) => { docState.set(name, fn((docState.get(name) as T) ?? initial)) },
+        flush: async () => {},
+      }),
+      sessionDoc: <T>(_name: string, initial: T) => ({
+        get: (cid: number) => (sessionState.get(cid) as T) ?? initial,
+        set: (cid: number, val: T) => { sessionState.set(cid, val) },
+        update: () => {},
+        delete: (cid: number) => { sessionState.delete(cid) },
+        listConversationIds: () => [...sessionState.keys()],
+        flush: async () => {},
+      }),
+      host: {
+        isClosing: false,
+        redact: (txt: string) => txt,
+        manageConversation: () => () => {},
+        listConversations: () => [],
+        withFileLock: async <T>(lockPath: string, fn: () => Promise<T>): Promise<T> => {
+          const prev = locks.get(lockPath) ?? Promise.resolve()
+          const run = prev.then(fn, fn)
+          locks.set(lockPath, run.then(() => undefined, () => undefined))
+          return run
+        },
+        atomicWriteFile: async (filePath: string, content: string) => {
+          mkdirSync(dirname(filePath), { recursive: true })
+          writeFileSync(filePath, content, 'utf8')
+        },
+        submitInput: async (id: number, text: string, opts?: { requestId?: string }) => {
+          submitted.push({ conversationId: id, requestId: opts?.requestId ?? '', text })
+        },
+        submitInputGuarded: async (id: number, text: string, opts?: { requestId?: string }) => {
+          const requestId = opts?.requestId ?? ''
+          submitted.push({ conversationId: id, requestId, text })
+          submissions.set(`${id}:${requestId}`, { status: 'done' })
+          if (requestId.startsWith('swarm-wakeup:')) {
+            // 内核语义：submitInputGuarded 接纳后即返回、回合异步结算；这里让回合先结算，再放行 dispatcher 的游标写入。
+            convs.set(id, { status: 'idle', completionSeq: 1 })
+            void fireWorkerTurnSettled(1, 'First turn: forgot to call board_post.')
+            await cursorGate.promise
+          }
+        },
+        getConversationSubmission: async (id: number, requestId: string) => submissions.get(`${id}:${requestId}`),
+        getConversationDetail: async () => ({ entries: [] }),
+      },
+    } as never
+    const fakeCoordinator = {
+      isActive: () => true,
+      isShutdown: () => false,
+      getConfig: () => resolveSwarmConfig({}),
+      getDocs: () => docs,
+      writeIndex: () => {},
+      settlingWorkers,
+      reportError: (title: string, detail: unknown) => { errors.push({ title, detail }) },
+      enqueueDispatch: async <T>(_key: string, fn: () => Promise<T>) => fn(),
+      track: async <T>(_label: string, fn: () => Promise<T>) => fn(),
+      readConversationOrUndefined: (id: number) => {
+        const entry = convs.get(id)
+        if (!entry) return undefined
+        return {
+          id, title: `conv-${id}`, profileId: 'assistant', nodeId: 'local', cwd: dataDir, model: 'faux/faux-1',
+          thinkingLevel: 'off' as const, unread: false, pinned: false, pendingAskCount: 0,
+          status: entry.status, tags: [], createdAt: 1, updatedAt: 1, stateChangeSeq: 1, completionSeq: entry.completionSeq,
+        }
+      },
+    } as never
+
+    const fixture: CollabGroupRecord = {
+      id: groupId, title: 'Settle Race Squad', coordinatorConversationId: 10, status: 'active',
+      members: [{
+        name: 'mute', conversationId: workerConvId, profileId: 'assistant', access: 'readwrite', isolation: 'inherit',
+        nodeId: 'local', cwd: dataDir, lifecycle: 'active', readCursorSeq: 0, pendingWakeupSeq: 0, createdAt: 1,
+      }],
+      headSeq: 0, coordinatorNotifiedSeq: 0, coordinatorPendingSeq: 0, createdAt: 1, updatedAt: 1,
+    }
+    const groupDir = join(dataDir, 'groups', groupId)
+    mkdirSync(groupDir, { recursive: true })
+    writeFileSync(join(groupDir, 'meta.json'), `${JSON.stringify(fixture, null, 2)}\n`, 'utf8')
+
+    runtime = createCollabGroupRuntime(fakeCtx, () => fakeCoordinator)
+    t.after(async () => {
+      cursorGate.resolve()
+      await runtime?.stopAndClear()
+    }, { timeout: 60_000 })
+    const memberNow = () => runtime!.getGroup(groupId)!.members.find((m) => m.name === 'mute')!
+    const wakeupSubmits = () => submitted.filter((s) => s.requestId.startsWith('swarm-wakeup:'))
+
+    await runtime.loadAllFromDisk()
+    await runtime.appendPost(groupId, {
+      from: 'coordinator', to: ['mute'], resolvedTargets: ['mute'], wake: true, kind: 'brief', refs: [], body: 'Implement task and report.',
+    })
+
+    // 1) 回合已结算、dispatcher 的游标写入仍被门控挂起：已结算的 inflight 唤醒必须先被归并（游标推进到 #1、inflight 清除）
+    await waitFor(() => memberNow().readCursorSeq === 1 && memberNow().inflightWakeup === undefined, {
+      message: 'settled inflight wakeup must be merged even though the dispatcher cursor write has not landed yet',
+    })
+    assert.equal(wakeupSubmits().length, 1, 'the brief wakeup is delivered exactly once')
+
+    // 2) 放行晚到的游标写入后仍续催一次（静默退场不再被吞），且晚到写入不破坏续催状态
+    cursorGate.resolve()
+    await waitFor(() => submitted.some((s) => s.requestId === `swarm-nudge:${groupId}:mute:1`) && memberNow().inflightNudge === undefined)
+    const nudged = memberNow()
+    assert.equal(nudged.readCursorSeq, 1)
+    assert.equal(nudged.lastWakeTaskSeq, 1)
+    assert.equal(nudged.silentExitNudgeSeq, 1)
+    assert.equal(nudged.inflightWakeup, undefined)
+    assert.equal(wakeupSubmits().length, 1, 'late cursor write must not re-deliver the wakeup')
+
+    // 3) 续催回合再次哑巴退场 -> 兜底 system [blocker]（与 swarm-int4 的完整链路一致）
+    convs.set(workerConvId, { status: 'idle', completionSeq: 2 })
+    await fireWorkerTurnSettled(2, 'Second turn after nudge: still forgot to call board_post.')
+    const blocker = runtime.getPosts(groupId).find((p) => p.from === 'system' && p.kind === 'blocker')
+    assert.ok(blocker !== undefined, 'fallback system blocker must be posted after the second silent exit')
+    assert.ok(blocker.body.includes('@mute') && blocker.body.includes('task #1'))
+    assert.equal(memberNow().silentExitNudgeSeq, undefined)
+    assert.equal(memberNow().lastWakeTaskSeq, undefined)
+    assert.deepEqual(errors, [])
   })
 
   test('swarm-int11: done non-race catch-up, failed-turn queued wakeup delivery, active worker delete lock + disabled-period reconcile', { timeout: 60_000 }, async (t) => {
