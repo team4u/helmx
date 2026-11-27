@@ -8,7 +8,7 @@
  * - Row actions (`cron_trigger` / `cron_delete` / `webhook_delete`) share one
  *   `usePluginAction` mutex across both tables.
  */
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import './styles.css'
 import type { ReactNode } from 'react'
 import type { ConversationSummary, ScreenProps } from '@helmx/protocol/browser'
@@ -37,14 +37,17 @@ import {
   usePluginDoc,
   usePluginLocale,
   usePluginTranslator,
+  useScreenDrawer,
   useSharedNowMs,
   type StatusLightTone,
   type UsePluginActionResult,
 } from '@helmx/plugin-client'
 import {
   asAlertingRunStatus,
+  encodeTriggerSelection,
   formatTriggerTargetSummary,
   parseCronJobs,
+  parseTriggerSelection,
   parseWebhooks,
   selectableRowProps,
   selectTriggerRuns,
@@ -639,13 +642,36 @@ export function TriggersManagerScreen(
   const conversations = useConversations()
   const jobs = parseCronJobs(crons)
   const hooks = parseWebhooks(webhooks)
-  const [selection, setSelection] = useState<TriggerDetailSelection | null>(null)
+  const docsLoading = crons === undefined && webhooks === undefined
+  const drawer = useScreenDrawer({
+    param: 'trigger',
+    hasItem: (raw) => {
+      if (docsLoading) return true
+      const parsed = parseTriggerSelection(raw)
+      if (parsed === null) return false
+      return parsed.kind === 'cron'
+        ? jobs.some((job) => job.id === parsed.id)
+        : hooks.some((hook) => hook.id === parsed.id)
+    },
+    scope: props,
+  })
+  const selection = parseTriggerSelection(drawer.itemId)
+  const selectionRef = useRef(selection)
+  selectionRef.current = selection
   const [pendingDelete, setPendingDelete] = useState<TriggerDetailSelection | null>(null)
 
   const selectedCron =
     selection?.kind === 'cron' ? jobs.find((job) => job.id === selection.id) : undefined
   const selectedWebhook =
     selection?.kind === 'webhook' ? hooks.find((hook) => hook.id === selection.id) : undefined
+  const drawerVisible = selectedCron !== undefined || selectedWebhook !== undefined
+  const wasDrawerVisibleRef = useRef(false)
+  useEffect(() => {
+    if (wasDrawerVisibleRef.current && !drawerVisible) {
+      setPendingDelete(null)
+    }
+    wasDrawerVisibleRef.current = drawerVisible
+  }, [drawerVisible])
 
   const confirmDelete = (): void => {
     const target = pendingDelete
@@ -657,7 +683,12 @@ export function TriggersManagerScreen(
         { id: target.id },
         {
           key: `delete:${target.id}`,
-          onSuccess: () => ctx.notify(triggersCronDeletedNotice(target.id, locale)),
+          onSuccess: () => {
+            ctx.notify(triggersCronDeletedNotice(target.id, locale))
+            if (selectionRef.current?.kind === 'cron' && selectionRef.current.id === target.id) {
+              drawer.close()
+            }
+          },
         },
       )
     } else {
@@ -666,7 +697,12 @@ export function TriggersManagerScreen(
         { id: target.id },
         {
           key: `webhook-delete:${target.id}`,
-          onSuccess: () => ctx.notify(triggersWebhookDeletedNotice(target.id, locale)),
+          onSuccess: () => {
+            ctx.notify(triggersWebhookDeletedNotice(target.id, locale))
+            if (selectionRef.current?.kind === 'webhook' && selectionRef.current.id === target.id) {
+              drawer.close()
+            }
+          },
         },
       )
     }
@@ -703,7 +739,7 @@ export function TriggersManagerScreen(
           loading={crons === undefined}
           actions={actions}
           selectedId={selectedCron?.id}
-          onSelect={(id) => setSelection({ kind: 'cron', id })}
+          onSelect={(id) => drawer.openItem(encodeTriggerSelection({ kind: 'cron', id }))}
           onRequestDelete={(id) => setPendingDelete({ kind: 'cron', id })}
         />
       </ScreenSection>
@@ -722,21 +758,21 @@ export function TriggersManagerScreen(
           loading={webhooks === undefined}
           actions={actions}
           selectedId={selectedWebhook?.id}
-          onSelect={(id) => setSelection({ kind: 'webhook', id })}
+          onSelect={(id) => drawer.openItem(encodeTriggerSelection({ kind: 'webhook', id }))}
           onRequestDelete={(id) => setPendingDelete({ kind: 'webhook', id })}
         />
       </ScreenSection>
 
       <div className="tg-note">{t(TRIGGERS_MANAGER_NOTE)}</div>
 
-      {(selectedCron !== undefined || selectedWebhook !== undefined) && (
+      {drawerVisible && (
         <TriggerDetailDrawer
           cronJob={selectedCron}
           webhook={selectedWebhook}
           conversations={conversations}
           actions={actions}
           inline={props.inlineDrawer}
-          onClose={() => setSelection(null)}
+          onClose={() => drawer.close()}
           onRequestDelete={setPendingDelete}
         />
       )}

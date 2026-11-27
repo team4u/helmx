@@ -666,6 +666,9 @@ export function shouldPushLocationHistory(prev: WorkspaceLocationState, next: Wo
   if (isOpeningDrawer(prev.primaryTarget, next.primaryTarget)) {
     return true
   }
+  if (prev.splitTarget !== null && next.splitTarget !== null && isOpeningDrawer(prev.splitTarget, next.splitTarget)) {
+    return true
+  }
   // Skills center scope switches (primary or split pane) are coordinate-level
   // data-source changes -> push (back returns to the previous scope).
   if (isSkillsScopeChanged(prev.primaryTarget, next.primaryTarget)) return true

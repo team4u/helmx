@@ -108,6 +108,7 @@ test('parseWorkflowDetail / filterSavedWorkflows / buildWorkflowEditRequest', { 
 function makeScreenProps(initial: Record<string, string> = {}) {
   const params: Record<string, string> = { ...initial }
   const setParamsCalls: Array<Record<string, string | undefined>> = []
+  const setParamsRecords: Array<{ patch: Record<string, string | undefined>; options?: { push?: boolean } }> = []
   return {
     pluginId: 'builtin:workflow',
     screenId: 'library',
@@ -115,14 +116,16 @@ function makeScreenProps(initial: Record<string, string> = {}) {
     get params() {
       return { ...params }
     },
-    setParams: (patch: Record<string, string | undefined>) => {
+    setParams: (patch: Record<string, string | undefined>, options?: { push?: boolean }) => {
       setParamsCalls.push(patch)
+      setParamsRecords.push({ patch, options })
       for (const [k, v] of Object.entries(patch)) {
         if (v === undefined) delete params[k]
         else params[k] = v
       }
     },
     setParamsCalls,
+    setParamsRecords,
   }
 }
 
@@ -167,6 +170,22 @@ test('工作流库 Screen：CardGrid + SelectCard 渲染元数据诊断；点击
 
     await act(async () => { triggers[0]!.click() })
     assert.deepEqual(props.setParamsCalls.filter((x) => 'wf' in x), [{ wf: 'release' }])
+    assert.deepEqual(
+      props.setParamsRecords.filter((r) => 'wf' in r.patch),
+      [{ patch: { wf: 'release' }, options: { push: true } }],
+      '从列表点选工作流必须传 { push: true }，使移动端后退可关抽屉',
+    )
+
+    // 悬空失效 wf 参数（列表已加载但无该条目）：再点真实卡片仍应走 push
+    const staleProps = makeScreenProps({ wf: 'deleted-wf' })
+    ui.rerender(e(WorkflowLibraryScreen, staleProps))
+    await act(async () => {})
+    const staleTriggers = [...ui.container.querySelectorAll('button.helmx-select-card-trigger')] as HTMLButtonElement[]
+    await act(async () => { staleTriggers[0]!.click() })
+    assert.deepEqual(
+      staleProps.setParamsRecords.at(-1),
+      { patch: { wf: 'release' }, options: { push: true } },
+    )
 
     // 深链 q 参数恢复搜索框并过滤卡片
     const qProps = makeScreenProps({ q: 'audit' })
@@ -237,6 +256,11 @@ test('详情抽屉：只读源码无编辑输入、空会话禁用运行、切�
     assert.ok(h.log.notices.some((n) => n.message.includes('Deleted workflow release')))
     assert.ok(h.log.actions.filter((c) => c.actionId === 'list').length >= 2, '删除后重新加载列表')
     assert.ok(props.setParamsCalls.some((p) => p['wf'] === undefined), '删除后清理 wf 深链参数')
+    assert.deepEqual(
+      props.setParamsRecords.filter((r) => r.patch['wf'] === undefined).at(-1),
+      { patch: { wf: undefined }, options: undefined },
+      '关闭/删除清理抽屉参数走 replace 而非 push',
+    )
   } finally {
     ui.unmount()
   }

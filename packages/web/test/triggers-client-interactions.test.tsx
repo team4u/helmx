@@ -360,12 +360,66 @@ describe("triggers-client-interactions", () => {
     }
   })
 
+  async function mountHostedScreen(
+    ctx: PluginClientContextType,
+    initialParams: Record<string, string> = {},
+  ): Promise<{
+    host: HTMLElement
+    getParams: () => Record<string, string>
+    paramCalls: Array<{ patch: Record<string, string | undefined>; options?: { push?: boolean } }>
+    unmount: () => void
+  }> {
+    let latestParams = { ...initialParams }
+    const paramCalls: Array<{ patch: Record<string, string | undefined>; options?: { push?: boolean } }> = []
+    function Harness() {
+      const [params, setParamsState] = React.useState<Record<string, string>>(initialParams)
+      latestParams = params
+      return e(
+        PluginClientContext.Provider,
+        { value: ctx },
+        e(components.TriggersManagerScreen, {
+          pluginId: 'builtin:triggers',
+          screenId: 'manager',
+          isSplit: false,
+          params,
+          setParams: (patch, options) => {
+            paramCalls.push({ patch, options })
+            setParamsState((prev) => {
+              const next = { ...prev }
+              for (const [k, v] of Object.entries(patch)) {
+                if (v === undefined) delete next[k]
+                else next[k] = v
+              }
+              latestParams = next
+              return next
+            })
+          },
+          inlineDrawer: true,
+        }),
+      )
+    }
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+    await act(async () => {
+      root.render(e(Harness))
+    })
+    await act(async () => {})
+    return {
+      host,
+      getParams: () => latestParams,
+      paramCalls,
+      unmount: () => {
+        act(() => root.unmount())
+        host.remove()
+      },
+    }
+  }
+
   test('manager screen：Screen .screen-heading 排版，点击 Cron / Webhook 行打开右侧详情抽屉', { timeout: 60_000 }, async () => {
     const spy = makeSpyCtx()
-    const { host, unmount } = await mount(
-      spy,
-      e(components.TriggersManagerScreen, { pluginId: 'builtin:triggers', screenId: 'manager', isSplit: false, params: {}, setParams: () => {}, inlineDrawer: true }),
-    )
+    const mounted = await mountHostedScreen(spy)
+    const { host, unmount } = mounted
     try {
       const heading = host.querySelector('.screen-header .screen-heading')
       assert.ok(heading, 'Screen 页头必须使用 .screen-heading 紧致组排')
@@ -378,6 +432,11 @@ describe("triggers-client-interactions", () => {
         brokenRow.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
       })
       await act(async () => {})
+
+      assert.deepEqual(mounted.paramCalls.at(-1), {
+        patch: { trigger: 'cron:broken' },
+        options: { push: true },
+      })
 
       const dialog = host.querySelector('[role="dialog"].primary-drawer-content')
       assert.ok(dialog, '点击行应展开右侧 540px 详情抽屉')
@@ -392,6 +451,10 @@ describe("triggers-client-interactions", () => {
         closeBtn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
       })
       await act(async () => {})
+      assert.deepEqual(mounted.paramCalls.at(-1), {
+        patch: { trigger: undefined },
+        options: undefined,
+      })
       assert.ok(host.querySelector('[role="dialog"].primary-drawer-content') === null, '关闭按钮应收起抽屉')
 
       const webhookRow = Array.from(host.querySelectorAll('tbody tr')).find((tr) =>
@@ -402,10 +465,32 @@ describe("triggers-client-interactions", () => {
         webhookRow.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
       })
       await act(async () => {})
+      assert.deepEqual(mounted.paramCalls.at(-1), {
+        patch: { trigger: 'webhook:ci' },
+        options: { push: true },
+      })
       const whDialog = host.querySelector('[role="dialog"].primary-drawer-content')
       assert.ok(whDialog, '点击 Webhook 行应展开详情抽屉')
       assert.match(whDialog.textContent ?? '', /CI 构建/)
       assert.doesNotMatch(whDialog.textContent ?? '', /hasSecret/, '抽屉同样不得暴露 hasSecret 内部键名')
+
+      // 删除当前已打开的 webhook 应自动清理 trigger 参数并收起抽屉
+      const deleteBtn = Array.from(whDialog.querySelectorAll('button')).find((b) =>
+        (b.textContent ?? '').includes('Delete'),
+      )
+      assert.ok(deleteBtn !== undefined)
+      await act(async () => {
+        deleteBtn.click()
+      })
+      const confirmDialog = host.querySelector('[role="alertdialog"]')
+      assert.ok(confirmDialog !== null)
+      const confirmDeleteBtn = confirmDialog.querySelector<HTMLButtonElement>('button.btn-danger')
+      assert.ok(confirmDeleteBtn !== null)
+      await act(async () => {
+        confirmDeleteBtn.click()
+      })
+      await act(async () => {})
+      assert.deepEqual(mounted.getParams(), {}, '删除当前打开的触发器后必须清理 URL trigger 参数')
     } finally {
       unmount()
     }
@@ -413,10 +498,8 @@ describe("triggers-client-interactions", () => {
 
   test('manager screen：实时运行记录从 conversations 投影，支持抽屉速览与整页打开', { timeout: 60_000 }, async () => {
     const spy = makeSpyCtx()
-    const { host, unmount } = await mount(
-      spy,
-      e(components.TriggersManagerScreen, { pluginId: 'builtin:triggers', screenId: 'manager', isSplit: false, params: {}, setParams: () => {}, inlineDrawer: true }),
-    )
+    const mounted = await mountHostedScreen(spy)
+    const { host, unmount } = mounted
     try {
       const dailyRow = Array.from(host.querySelectorAll('tbody tr')).find((tr) =>
         tr.textContent?.includes('daily-report'),

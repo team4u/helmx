@@ -138,9 +138,9 @@ export function summarizeProfiles(profiles: Profile[]): {
   }
 }
 
-/** Validate a new profile ID (letters, digits and hyphens, 1-64 chars). */
+/** Validate a new profile ID (letters, digits and hyphens, 1-64 chars; 'new' is a reserved route segment). */
 export function profileIdValid(id: string): boolean {
-  return /^[a-z0-9][a-z0-9-]{0,63}$/.test(id)
+  return id !== 'new' && /^[a-z0-9][a-z0-9-]{0,63}$/.test(id)
 }
 
 /** A starter entry being edited in the form (not saved yet; transient blanks allowed). */

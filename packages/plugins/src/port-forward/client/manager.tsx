@@ -43,6 +43,7 @@ import {
   usePluginDoc,
   usePluginLocale,
   usePluginTranslator,
+  useScreenDrawer,
 } from '@helmx/plugin-client'
 import {
   PF_RULES_DOC,
@@ -164,9 +165,10 @@ export function PortForwardManagerScreen(
   const [pendingBulkConfirm, setPendingBulkConfirm] = useState<PendingBulkConfirm>(null)
 
   const nodeFilter = props.params['node'] ?? ''
-  const editingId = props.params['edit']
-  const creating = props.params['create'] === '1'
-  const drawerOpen = creating || editingId !== undefined
+  const drawer = useScreenDrawer({ param: 'edit', createParam: 'create', scope: props })
+  const editingId = drawer.itemId
+  const creating = drawer.creating
+  const drawerOpen = drawer.open
 
   const rules = useMemo(() => parseRulesDoc(rawRules), [rawRules])
   const runtimeById = useMemo(() => parseRuntimeDoc(rawRuntime), [rawRuntime])
@@ -202,6 +204,9 @@ export function PortForwardManagerScreen(
 
   useEffect(() => {
     if (!drawerOpen) {
+      if (hydratedKeyRef.current !== null) {
+        setPendingDelete(null)
+      }
       hydratedKeyRef.current = null
       setFormError(null)
       return
@@ -218,18 +223,18 @@ export function PortForwardManagerScreen(
 
   const closeDrawer = (): void => {
     setFormError(null)
-    props.setParams({ create: undefined, edit: undefined })
+    drawer.close()
   }
 
   const openCreateDrawer = (): void => {
     setFormError(null)
     setDraft(createEmptyDraft(nodeFilter || 'local'))
-    props.setParams({ create: '1', edit: undefined })
+    drawer.openCreate()
   }
 
   const openEditDrawer = (ruleId: string): void => {
     setFormError(null)
-    props.setParams({ edit: ruleId, create: undefined })
+    drawer.openItem(ruleId)
   }
 
   const handleToggleRule = (row: SynthesizedPortForwardRow, nextEnabled: boolean): void => {

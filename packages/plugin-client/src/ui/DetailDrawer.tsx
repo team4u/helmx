@@ -14,6 +14,10 @@
  * the shell renders real markup without a DOM (pass inline to force it in the
  * browser too).
  *
+ * For URL-hash-synced browser/mobile Back navigation in full-screen plugin
+ * views, pair this shell with `useScreenDrawer` (`<DetailDrawer {...drawer.drawerProps} />`)
+ * so closed -> open pushes history and close restores the list cleanly.
+ *
  * This file only exports components and TS types (Fast Refresh friendly).
  */
 import { useRef, type ReactNode } from 'react'

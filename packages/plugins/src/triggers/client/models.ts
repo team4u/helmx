@@ -61,6 +61,25 @@ export type TriggerDetailSelection =
   | { kind: 'cron'; id: string }
   | { kind: 'webhook'; id: string }
 
+/** Serialize a trigger drawer selection into a URL-safe `trigger` screen param. */
+export function encodeTriggerSelection(selection: TriggerDetailSelection): string {
+  return `${selection.kind}:${selection.id}`
+}
+
+/** Parse a `trigger` screen param back into a typed selection (null when malformed or empty). */
+export function parseTriggerSelection(raw: string | undefined): TriggerDetailSelection | null {
+  if (raw === undefined || raw === '') return null
+  if (raw.startsWith('cron:')) {
+    const id = raw.slice('cron:'.length)
+    return id !== '' ? { kind: 'cron', id } : null
+  }
+  if (raw.startsWith('webhook:')) {
+    const id = raw.slice('webhook:'.length)
+    return id !== '' ? { kind: 'webhook', id } : null
+  }
+  return null
+}
+
 /**
  * Human-readable summary of a trigger's delivery mode & target.
  * Copy resolves against the given locale (defaults to en).

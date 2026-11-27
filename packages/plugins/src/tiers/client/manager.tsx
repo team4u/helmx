@@ -31,6 +31,7 @@ import {
   usePluginDoc,
   usePluginLocale,
   usePluginTranslator,
+  useScreenDrawer,
   type LocalizedText,
   type StatusLightTone,
 } from '@helmx/plugin-client'
@@ -103,21 +104,16 @@ export function TiersManagerScreen(
     formatError: (err) => tiersActionFailed(err, locale),
   })
 
+  const drawer = useScreenDrawer({ param: 'edit', createParam: 'create', scope: props })
   const hasHostParams = typeof props.setParams === 'function'
   const [localTab, setLocalTab] = useState<TiersManagerTab>('tiers')
-  const [localEditingId, setLocalEditingId] = useState<string | undefined>(undefined)
-  const [localCreating, setLocalCreating] = useState(false)
 
   const activeTab: TiersManagerTab = hasHostParams
     ? (props.params?.['tab'] === 'templates' ? 'templates' : 'tiers')
     : localTab
-  const editingId: string | undefined = hasHostParams
-    ? (props.params?.['edit'] !== undefined && props.params['edit'] !== '' ? props.params['edit'] : undefined)
-    : localEditingId
-  const creating: boolean = hasHostParams
-    ? props.params?.['create'] === '1'
-    : localCreating
-  const drawerOpen = creating || editingId !== undefined
+  const editingId = drawer.itemId
+  const creating = drawer.creating
+  const drawerOpen = drawer.open
 
   const [query, setQuery] = useState('')
   const [kindFilter, setKindFilter] = useState<TierKindFilter>('all')
@@ -131,22 +127,12 @@ export function TiersManagerScreen(
   const [formError, setFormError] = useState<string | null>(null)
   const hydratedKeyRef = useRef<string | null>(null)
 
-  const updateNavigation = (patch: {
-    tab?: TiersManagerTab
-    edit?: string | undefined
-    create?: boolean
-  }): void => {
+  const setActiveTab = (tab: TiersManagerTab): void => {
     if (hasHostParams) {
-      props.setParams?.({
-        ...(patch.tab !== undefined ? { tab: patch.tab === 'tiers' ? undefined : patch.tab } : {}),
-        ...('edit' in patch ? { edit: patch.edit } : {}),
-        ...('create' in patch ? { create: patch.create === true ? '1' : undefined } : {}),
-      })
+      props.setParams?.({ tab: tab === 'tiers' ? undefined : tab })
       return
     }
-    if (patch.tab !== undefined) setLocalTab(patch.tab)
-    if ('edit' in patch) setLocalEditingId(patch.edit)
-    if ('create' in patch) setLocalCreating(patch.create === true)
+    setLocalTab(tab)
   }
 
   const tierItems = useMemo(() => synthesizeTierItems(parsed.tiers, models), [parsed.tiers, models])
@@ -174,6 +160,7 @@ export function TiersManagerScreen(
         hydratedKeyRef.current = null
         setPendingPreset(undefined)
         setFormError(null)
+        setPendingDeleteTier(null)
       }
       return
     }
@@ -192,20 +179,20 @@ export function TiersManagerScreen(
     setFormError(null)
     setPendingPreset(preset)
     setDraft(createEmptyTierDraft(preset))
-    updateNavigation({ create: true, edit: undefined })
+    drawer.openCreate()
   }
 
   const openEditDrawer = (tierId: string): void => {
     actions.clearError()
     setFormError(null)
     setPendingPreset(undefined)
-    updateNavigation({ edit: tierId, create: false })
+    drawer.openItem(tierId)
   }
 
   const closeDrawer = (): void => {
     setFormError(null)
     setPendingPreset(undefined)
-    updateNavigation({ create: false, edit: undefined })
+    drawer.close()
   }
 
   const mutateDraft = (patch: Partial<TierFormDraft>): void => {
@@ -241,11 +228,8 @@ export function TiersManagerScreen(
       onSuccess: () => {
         ctx.notify(tiersTierSavedNotice(checked.payload.id, locale))
         setPendingPreset(undefined)
-        updateNavigation({
-          ...(creating ? { tab: 'tiers' } : {}),
-          create: false,
-          edit: undefined,
-        })
+        if (creating && !hasHostParams) setLocalTab('tiers')
+        drawer.close(creating ? { tab: undefined } : undefined)
       },
       onError: (msg) => {
         setFormError(msg)
@@ -373,7 +357,7 @@ export function TiersManagerScreen(
         <Tabs
           value={activeTab}
           onValueChange={(nextValue) =>
-            updateNavigation({ tab: nextValue === 'templates' ? 'templates' : 'tiers' })
+            setActiveTab(nextValue === 'templates' ? 'templates' : 'tiers')
           }
           variant="pills"
         >

@@ -34,6 +34,7 @@ import {
   usePluginAction,
   usePluginContext,
   usePluginLocale,
+  useScreenDrawer,
 } from '@helmx/plugin-client'
 import {
   COPY,
@@ -336,7 +337,12 @@ export function WorkflowLibraryScreen(props: WorkflowLibraryScreenProps): ReactN
     setQueryDraft(queryParam)
   }, [queryParam])
 
-  const selectedName = props.params['wf']
+  const drawer = useScreenDrawer({
+    param: 'wf',
+    hasItem: (name) => items === undefined || items.some((i) => i.name === name),
+    scope: props,
+  })
+  const selectedName = drawer.itemId
   const selectedItem = selectedName !== undefined ? items?.find((i) => i.name === selectedName) : undefined
   const filtered = useMemo(() => (items === undefined ? undefined : filterSavedWorkflows(items, queryDraft)), [items, queryDraft])
 
@@ -401,7 +407,7 @@ export function WorkflowLibraryScreen(props: WorkflowLibraryScreenProps): ReactN
                 key={item.name}
                 selected={selectedName === item.name}
                 tone={item.metadataError ? 'warn' : 'default'}
-                onSelect={() => props.setParams({ wf: item.name })}
+                onSelect={() => drawer.openItem(item.name)}
                 title={
                   <span className="wf-lib-card-head">
                     <HelmxIcon name="workflow" size={14} />
@@ -443,10 +449,10 @@ export function WorkflowLibraryScreen(props: WorkflowLibraryScreenProps): ReactN
         <WorkflowLibraryDrawer
           item={selectedItem}
           inline={props.inlineDrawer}
-          onClose={() => props.setParams({ wf: undefined })}
+          onClose={() => drawer.close()}
           onDeleted={() => {
             void reload()
-            props.setParams({ wf: undefined })
+            drawer.close()
           }}
         />
       ) : null}

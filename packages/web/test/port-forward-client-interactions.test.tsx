@@ -292,18 +292,44 @@ describe('port-forward-client-interactions', () => {
       config: { allowPublicBind: false },
     })
 
-    const paramPatches: Array<Record<string, string | undefined>> = []
-    const { host, unmount } = await mount(
-      spy,
-      e(components.PortForwardManagerScreen, {
-        pluginId: 'builtin:port-forward',
-        screenId: 'main',
-        isSplit: false,
-        params: {},
-        setParams: (patch) => paramPatches.push(patch),
-        inlineDrawer: true,
-      }),
-    )
+    const paramPatches: Array<{ patch: Record<string, string | undefined>; options?: { push?: boolean } }> = []
+    let screenParams: Record<string, string> = {}
+    const screenHost = document.createElement('div')
+    document.body.appendChild(screenHost)
+    const { createRoot: createPFReRoot } = await import('react-dom/client')
+    const pfRoot = createPFReRoot(screenHost)
+    const renderPF = async () => {
+      await act(async () => {
+        pfRoot.render(
+          e(
+            PluginClientContext.Provider,
+            { value: spy },
+            e(components.PortForwardManagerScreen, {
+              pluginId: 'builtin:port-forward',
+              screenId: 'main',
+              isSplit: false,
+              params: screenParams,
+              setParams: (patch, options) => {
+                paramPatches.push({ patch, options })
+                const next = { ...screenParams }
+                for (const [k, v] of Object.entries(patch)) {
+                  if (v === undefined) delete next[k]
+                  else next[k] = v
+                }
+                screenParams = next
+              },
+              inlineDrawer: true,
+            }),
+          ),
+        )
+      })
+    }
+    await renderPF()
+    const host = screenHost
+    const unmount = () => {
+      act(() => pfRoot.unmount())
+      screenHost.remove()
+    }
     try {
       const text = host.textContent ?? ''
       assert.equal(EMOJI_RE.test(text), false, 'UI must contain zero Emoji')
@@ -396,13 +422,40 @@ describe('port-forward-client-interactions', () => {
       })
       assert.deepEqual(spy.actionCalls[1], { actionId: 'pause_runtime', input: {} })
 
-      // Clicking card primary trigger requests edit drawer via setParams
+      // Clicking card primary trigger requests edit drawer via useScreenDrawer ({ push: true } from closed)
       const cardTrigger = host.querySelector<HTMLButtonElement>('.helmx-select-card-trigger')
       assert.ok(cardTrigger !== null)
       await act(async () => {
         cardTrigger.click()
       })
-      assert.deepEqual(paramPatches.at(-1), { edit: 'r-working', create: undefined })
+      assert.deepEqual(paramPatches.at(-1), { patch: { edit: 'r-working', create: undefined }, options: { push: true } })
+      await renderPF()
+
+      // Closing drawer while open omits push (replace / symmetric back-pop)
+      const closeBtn = host.querySelector<HTMLButtonElement>('button[aria-label="Close"]')
+      assert.ok(closeBtn !== null)
+      await act(async () => {
+        closeBtn.click()
+      })
+      assert.deepEqual(paramPatches.at(-1), { patch: { edit: undefined, create: undefined }, options: undefined })
+      await renderPF()
+
+      // Opening create drawer from closed passes { push: true }
+      const newMappingBtn = [...host.querySelectorAll('button')].find((b) =>
+        b.textContent?.includes('New mapping'),
+      )
+      assert.ok(newMappingBtn !== undefined)
+      await act(async () => {
+        newMappingBtn.click()
+      })
+      assert.deepEqual(paramPatches.at(-1), { patch: { edit: undefined, create: '1' }, options: { push: true } })
+      await renderPF()
+      const cancelBtnFromCreate = [...host.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Cancel')
+      assert.ok(cancelBtnFromCreate !== undefined)
+      await act(async () => {
+        cancelBtnFromCreate.click()
+      })
+      await renderPF()
 
       // Delete flow via ConfirmDialog (Cancel first, then Confirm)
       const deleteBtn = host.querySelector<HTMLButtonElement>('button[aria-label="Delete"]')

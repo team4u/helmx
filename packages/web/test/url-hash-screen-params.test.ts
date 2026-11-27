@@ -15,10 +15,15 @@ import { test } from 'node:test'
 import * as React from 'react'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
-import { HelmxStoreProvider } from '../src/lib/HelmxStoreProvider.js'
-import { useHelmxStore } from '../src/lib/store-context.js'
 import { hangingEventStream } from './helpers/sse-stream.js'
 import type { HelmxStoreValue } from '../src/lib/types.js'
+
+const { HelmxStoreProvider } = await import('../src/lib/HelmxStoreProvider.js')
+const { useHelmxStore } = await import('../src/lib/store-context.js')
+const { DetailDrawer, ScreenParamsContext, useScreenDrawer } = await import('@helmx/plugin-client')
+const { ProfileCenter } = await import('../src/profiles/ProfileCenter.js')
+const { NodeCenter } = await import('../src/nodes/NodeCenter.js')
+const { ModelCenter } = await import('../src/models/ModelCenter.js')
 
 ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -566,6 +571,236 @@ test('skills 节点选择：深链还原、节点切换 push、详情开合保�
       { kind: 'skills', nodeId: 'remote-1' },
       '前进还原带节点参数的技能中心',
     )
+  } finally {
+    act(() => root?.unmount())
+    host.remove()
+  }
+})
+
+test('useScreenDrawer 端到端真实 history：后退关抽屉留在列表、开关无幽灵历史帧、深链关闭安全', { timeout: 60_000 }, async (t) => {
+  stubFetch()
+  t.after(() => (globalThis.fetch as unknown as { restore: () => void }).restore())
+  snapshotDelayMs = 0
+
+  let drawerHandle: ReturnType<typeof useScreenDrawer> | undefined
+  let openTargetFn: ((target: string, opts?: { split?: boolean }) => void) | undefined
+  let capturedPrimary: HelmxStoreValue['primaryTarget'] = { kind: 'conversation', conversationId: 1 }
+
+  function BoardWithDrawer(): React.ReactNode {
+    const store = useHelmxStore()
+    capturedPrimary = store.primaryTarget
+    openTargetFn = (target, opts) => store.openTarget(target, opts)
+    const target = store.primaryTarget
+    const isBoard = target.kind === 'screen' && target.pluginId === 'test:nav' && target.screenId === 'board'
+    const params = isBoard && target.params !== undefined ? target.params : {}
+
+    const Inner = (): React.ReactNode => {
+      const drawer = useScreenDrawer({ param: 'edit', createParam: 'create' })
+      drawerHandle = drawer
+      return e(
+        DetailDrawer,
+        {
+          ...drawer.drawerProps,
+          inline: true,
+          title: drawer.creating ? 'New' : (drawer.itemId ?? 'Empty'),
+          children: e('div', { 'data-drawer-item': drawer.itemId ?? (drawer.creating ? 'new' : '') }, 'body'),
+        },
+      )
+    }
+
+    if (!isBoard) return e('div', { 'data-view': target.kind })
+    return e(
+      ScreenParamsContext.Provider,
+      {
+        value: {
+          isSplit: false,
+          params,
+          setParams: (patch, options) => store.setScreenParams(patch, { split: false, push: options?.push }),
+        },
+      },
+      e(Inner),
+    )
+  }
+
+  const settle = async (): Promise<void> => {
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 40))
+    })
+  }
+
+  // Scenario 1: #/c/1 -> #/views/test:nav/board -> open A (push) -> switch B (replace) -> back closes drawer -> back returns #/c/1
+  resetLocation('#/c/1')
+  const host = document.createElement('div')
+  document.body.appendChild(host)
+  let root: Root | undefined
+  act(() => {
+    root = createRoot(host)
+    root.render(e(HelmxStoreProvider, null, e(BoardWithDrawer)))
+  })
+  try {
+    await settle()
+    await act(async () => {
+      openTargetFn!('screen:test:nav/board')
+    })
+    await settle()
+    assert.equal(window.location.hash, '#/views/test:nav/board')
+
+    const lenOnBoard = window.history.length
+    await act(async () => {
+      drawerHandle!.openItem('tier-a')
+    })
+    await settle()
+    assert.equal(window.history.length, lenOnBoard + 1, '关闭 -> 打开详情抽屉 push 历史栈')
+    assert.equal(drawerHandle!.open, true)
+    assert.equal(window.location.hash, '#/views/test:nav/board?sp.edit=tier-a')
+
+    await act(async () => {
+      drawerHandle!.openItem('tier-b')
+    })
+    await settle()
+    assert.equal(window.history.length, lenOnBoard + 1, '已打开切换另一条目走 replace，不叠栈')
+    assert.equal(drawerHandle!.itemId, 'tier-b')
+    assert.equal(window.location.hash, '#/views/test:nav/board?sp.edit=tier-b')
+
+    await act(async () => {
+      window.history.back()
+    })
+    await settle()
+    assert.equal(window.location.hash, '#/views/test:nav/board', '移动端/浏览器后退必须先关抽屉并留在列表页')
+    assert.equal(drawerHandle!.open, false)
+    assert.equal(capturedPrimary.kind, 'screen')
+
+    await act(async () => {
+      window.history.back()
+    })
+    await settle()
+    assert.equal(window.location.hash, '#/c/1', '再次后退才离开列表回到前一页')
+
+    // Scenario 2: Symmetric close via × / Save leaves ZERO ghost duplicate history entries
+    await act(async () => {
+      openTargetFn!('screen:test:nav/board')
+    })
+    await settle()
+    await act(async () => {
+      drawerHandle!.openItem('tier-a')
+    })
+    await settle()
+    await act(async () => {
+      drawerHandle!.close()
+    })
+    await settle()
+    assert.equal(drawerHandle!.open, false)
+    assert.equal(window.location.hash, '#/views/test:nav/board')
+
+    await act(async () => {
+      drawerHandle!.openCreate()
+    })
+    await settle()
+    assert.equal(drawerHandle!.creating, true)
+    await act(async () => {
+      drawerHandle!.close()
+    })
+    await settle()
+    assert.equal(drawerHandle!.open, false)
+    assert.equal(window.location.hash, '#/views/test:nav/board')
+
+    await act(async () => {
+      window.history.back()
+    })
+    await settle()
+    assert.equal(window.location.hash, '#/c/1', '多次开关抽屉后退只需 1 次即离开列表，绝无幽灵重复帧')
+  } finally {
+    act(() => root?.unmount())
+    host.remove()
+  }
+
+  // Scenario 3: Deep-link direct open -> close safely uses replaceState without exiting
+  resetLocation('#/views/test:nav/board?sp.edit=tier-a')
+  const deepHost = document.createElement('div')
+  document.body.appendChild(deepHost)
+  let deepRoot: Root | undefined
+  act(() => {
+    deepRoot = createRoot(deepHost)
+    deepRoot.render(e(HelmxStoreProvider, null, e(BoardWithDrawer)))
+  })
+  try {
+    await settle()
+    assert.equal(drawerHandle!.open, true)
+    assert.equal(drawerHandle!.itemId, 'tier-a')
+    await act(async () => {
+      drawerHandle!.close()
+    })
+    await settle()
+    assert.equal(drawerHandle!.open, false)
+    assert.equal(window.location.hash, '#/views/test:nav/board', '深链直达关闭安全留在本页')
+  } finally {
+    act(() => deepRoot?.unmount())
+    deepHost.remove()
+  }
+})
+
+test('三大中心新建模式抽屉：打开 push、后退关抽屉不卡死、点关闭对称回收', { timeout: 60_000 }, async (t) => {
+  stubFetch()
+  t.after(() => (globalThis.fetch as unknown as { restore: () => void }).restore())
+  snapshotDelayMs = 0
+
+  let openTargetFn: ((target: Record<string, unknown>) => void) | undefined
+  function CentersHost(): React.ReactNode {
+    const store = useHelmxStore()
+    openTargetFn = (target) => store.openTarget(target as never)
+    if (store.primaryTarget.kind === 'profiles') return e(ProfileCenter, { inlineDrawer: true })
+    if (store.primaryTarget.kind === 'nodes') return e(NodeCenter, { inlineDrawer: true })
+    if (store.primaryTarget.kind === 'models') return e(ModelCenter, { inlineDrawer: true })
+    return e('div', null, 'other')
+  }
+
+  const settle = async (): Promise<void> => {
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 40))
+    })
+  }
+
+  resetLocation('#/c/1')
+  const host = document.createElement('div')
+  document.body.appendChild(host)
+  let root: Root | undefined
+  act(() => {
+    root = createRoot(host)
+    root.render(e(HelmxStoreProvider, null, e(CentersHost)))
+  })
+
+  try {
+    await settle()
+    for (const spec of [
+      { kind: 'profiles', newBtnText: 'New profile', expectedHash: '#/settings/profiles/new', listHash: '#/settings/profiles' },
+      { kind: 'nodes', newBtnText: 'Connect node', expectedHash: '#/settings/nodes/new', listHash: '#/settings/nodes' },
+      { kind: 'models', newBtnText: 'Add custom gateway', expectedHash: '#/settings/models/new', listHash: '#/settings/models' },
+    ]) {
+      await act(async () => {
+        openTargetFn!({ kind: spec.kind })
+      })
+      await settle()
+      assert.equal(window.location.hash, spec.listHash)
+      assert.ok(host.querySelector('.primary-drawer-content') === null)
+
+      const addBtn = Array.from(host.querySelectorAll('button')).find((b) =>
+        (b.textContent ?? '').includes(spec.newBtnText),
+      )
+      assert.ok(addBtn !== undefined, `expected "${spec.newBtnText}" button in ${spec.kind}`)
+      await act(async () => {
+        addBtn.click()
+      })
+      await settle()
+      assert.equal(window.location.hash, spec.expectedHash)
+      assert.ok(host.querySelector('.primary-drawer-content') !== null, `${spec.kind} create drawer opens`)
+
+      await act(async () => {
+        window.history.back()
+      })
+      await settle()
+      assert.equal(window.location.hash, spec.listHash, `${spec.kind} Back returns to list`)
+      assert.ok(host.querySelector('.primary-drawer-content') === null, `${spec.kind} Back closes create drawer cleanly`)
+    }
   } finally {
     act(() => root?.unmount())
     host.remove()

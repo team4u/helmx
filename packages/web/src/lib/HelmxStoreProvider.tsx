@@ -28,6 +28,27 @@ import { useGlobalShortcuts } from './use-global-shortcuts.js'
 import { useSseEvents } from './use-sse-events.js'
 import { useUnreadSync } from './use-unread-sync.js'
 
+const HELMX_PREV_HASH_KEY = '__helmxPrevHash'
+const SYMMETRIC_BACK_FALLBACK_MS = 120
+
+interface PendingSymmetricBack {
+  expectedHash: string
+  superseded: boolean
+  timer: ReturnType<typeof setTimeout> | null
+}
+
+function readHistoryPrevHash(): string | null {
+  const state = window.history.state as Record<string, unknown> | null
+  if (state !== null && typeof state === 'object' && typeof state[HELMX_PREV_HASH_KEY] === 'string') {
+    return state[HELMX_PREV_HASH_KEY]
+  }
+  return null
+}
+
+function makeHistoryState(prevHash: string): Record<string, string> {
+  return { [HELMX_PREV_HASH_KEY]: prevHash }
+}
+
 function HomeLandingWatcher({ store }: { store: HelmxExternalStore }) {
   const pendingRef = useRef(true)
   const authenticated = useAuthenticated()
@@ -132,7 +153,36 @@ function HelmxStoreEffects({ store, boot }: { store: HelmxExternalStore; boot: S
     return () => store.dispose()
   }, [store])
 
+  const pendingSymmetricBackRef = useRef<PendingSymmetricBack | null>(null)
+
+  const clearPendingSymmetricBack = useCallback(() => {
+    const pending = pendingSymmetricBackRef.current
+    if (pending !== null) {
+      if (pending.timer !== null) clearTimeout(pending.timer)
+      pendingSymmetricBackRef.current = null
+    }
+  }, [])
+
+  const flushLatestLocationToHistory = useCallback(() => {
+    const latest = store.getLocationState()
+    const latestHash = formatLocationHash(latest)
+    if (window.location.hash !== latestHash) {
+      const pendingOverride = store.pendingHistoryMode
+      const currentUrlState = parseLocationHash(window.location.hash)
+      if (pendingOverride === 'push' || (pendingOverride === null && shouldPushLocationHistory(currentUrlState, latest))) {
+        window.history.pushState(makeHistoryState(window.location.hash), '', latestHash)
+      } else {
+        window.history.replaceState(pendingOverride === 'replace' ? null : window.history.state, '', latestHash)
+      }
+    }
+    store.pendingHistoryMode = null
+    store.lastSyncedLocation = latest
+  }, [store])
+
+  useEffect(() => clearPendingSymmetricBack, [clearPendingSymmetricBack])
+
   const logout = useCallback(() => {
+    clearPendingSymmetricBack()
     store.prepareLogoutHistoryReset()
     resetUnreadSync()
     // Resets the address bar to the default deep link (replaceState keeps the
@@ -140,7 +190,7 @@ function HelmxStoreEffects({ store, boot }: { store: HelmxExternalStore; boot: S
     // clobbering a user-pasted deep link.
     window.history.replaceState(null, '', '#/settings/profiles')
     store.finishLogoutStateReset()
-  }, [resetUnreadSync, store])
+  }, [clearPendingSymmetricBack, resetUnreadSync, store])
   useEffect(() => store.bindLogout(logout), [store, logout])
 
   useEffect(() => {
@@ -153,12 +203,23 @@ function HelmxStoreEffects({ store, boot }: { store: HelmxExternalStore; boot: S
       if (!url.startsWith('/#')) return
       const parsed = parseLocationHash(url.slice(1))
       if (isSameLocationState(parsed, store.lastSyncedLocation)) return
+      clearPendingSymmetricBack()
       store.navActions.applyExternalLocation(parsed)
     })
-  }, [store])
+  }, [clearPendingSymmetricBack, store])
 
   useEffect(() => {
     const applyUrlLocation = () => {
+      const pending = pendingSymmetricBackRef.current
+      if (pending !== null) {
+        if (pending.timer !== null) clearTimeout(pending.timer)
+        pendingSymmetricBackRef.current = null
+        if (pending.superseded) {
+          flushLatestLocationToHistory()
+          return
+        }
+        if (window.location.hash === pending.expectedHash) return
+      }
       const parsed = parseLocationHash(window.location.hash)
       if (isSameLocationState(parsed, store.lastSyncedLocation)) return
       store.navActions.applyExternalLocation(parsed)
@@ -169,25 +230,46 @@ function HelmxStoreEffects({ store, boot }: { store: HelmxExternalStore; boot: S
       window.removeEventListener('hashchange', applyUrlLocation)
       window.removeEventListener('popstate', applyUrlLocation)
     }
-  }, [store])
+  }, [flushLatestLocationToHistory, store])
 
   useEffect(() => {
     if (!authenticated) return
     const nextHash = formatLocationHash(locationState)
+    if (pendingSymmetricBackRef.current !== null) {
+      pendingSymmetricBackRef.current.superseded = true
+      return
+    }
     if (nextHash === window.location.hash) {
       store.lastSyncedLocation = locationState
       store.pendingHistoryMode = null
       return
     }
     const override = store.pendingHistoryMode
+    let symmetricBackHash: string | null = null
     if (override === 'push' || (override === null && shouldPushLocationHistory(store.lastSyncedLocation, locationState))) {
-      window.history.pushState(null, '', nextHash)
+      window.history.pushState(makeHistoryState(window.location.hash), '', nextHash)
+    } else if (override === null && readHistoryPrevHash() === nextHash) {
+      symmetricBackHash = nextHash
     } else {
-      window.history.replaceState(null, '', nextHash)
+      window.history.replaceState(override === 'replace' ? null : window.history.state, '', nextHash)
     }
     store.pendingHistoryMode = null
     store.lastSyncedLocation = locationState
-  }, [authenticated, locationState, store])
+    if (symmetricBackHash !== null) {
+      const pending: PendingSymmetricBack = {
+        expectedHash: symmetricBackHash,
+        superseded: false,
+        timer: null,
+      }
+      pendingSymmetricBackRef.current = pending
+      pending.timer = setTimeout(() => {
+        if (pendingSymmetricBackRef.current !== pending) return
+        pendingSymmetricBackRef.current = null
+        flushLatestLocationToHistory()
+      }, SYMMETRIC_BACK_FALLBACK_MS)
+      window.history.back()
+    }
+  }, [authenticated, flushLatestLocationToHistory, locationState, store])
 
   useGlobalShortcuts(store)
 

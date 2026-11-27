@@ -232,6 +232,7 @@ test('profile-center-model: profileIdValid rule validation', { timeout: 60_000 }
   assert.equal(profileIdValid('code-reviewer'), true)
   assert.equal(profileIdValid('agent-1'), true)
   assert.equal(profileIdValid(''), false)
+  assert.equal(profileIdValid('new'), false, "'new' is reserved for the create drawer route segment")
   assert.equal(profileIdValid('UPPER'), false)
   assert.equal(profileIdValid('with space'), false)
 })

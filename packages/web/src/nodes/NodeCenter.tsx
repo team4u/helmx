@@ -44,7 +44,6 @@ export function NodeCenter({
   const { t } = useWebLocale()
   const [query, setQuery] = useState('')
   const [activeTab, setActiveTab] = useState<NodeCategoryTab>('all')
-  const [isAddingNew, setIsAddingNew] = useState(false)
 
   const categoryCounts = useMemo(() => buildNodeCategoryCounts(nodes), [nodes])
   const pills = useMemo(
@@ -68,15 +67,18 @@ export function NodeCenter({
     () => nodes.find((n) => n.id === selectedNodeId) ?? null,
     [nodes, selectedNodeId],
   )
-  const isDrawerOpen = Boolean(selectedNodeId && selectedNode) || isAddingNew
+  const isAddingNew = selectedNodeId === 'new' && selectedNode === null
+  const isDrawerOpen = isAddingNew || Boolean(selectedNodeId && selectedNode)
 
   const handleSelectNode = (nodeId: string) => {
-    setIsAddingNew(false)
     openTarget({ kind: 'nodes', nodeId }, isSplit ? { split: true } : undefined)
   }
 
+  const handleConnectNew = () => {
+    openTarget({ kind: 'nodes', nodeId: 'new' }, isSplit ? { split: true } : undefined)
+  }
+
   const handleCloseDrawer = () => {
-    setIsAddingNew(false)
     openTarget({ kind: 'nodes' }, isSplit ? { split: true } : undefined)
   }
 
@@ -100,7 +102,7 @@ export function NodeCenter({
         <Button
           size="sm"
           icon="plus"
-          onClick={() => setIsAddingNew(true)}
+          onClick={handleConnectNew}
           title={t('nodes.connectTitle')}
         >
           <span className="pane-action-label">{t('nodes.connect')}</span>

@@ -85,7 +85,6 @@ export function ModelCenter({
   const [catalog, setCatalog] = useState<ModelProviderSummary[]>([])
   const [savedDefaultOverride, setSavedDefaultOverride] = useState<DefaultModelInfo | null>(null)
   const [refreshingCatalog, setRefreshingCatalog] = useState(false)
-  const [creatingCustom, setCreatingCustom] = useState(false)
 
   useEffect(() => {
     setSavedDefaultOverride(null)
@@ -183,28 +182,23 @@ export function ModelCenter({
     return providers.find((p) => p.id === selectedProviderId) ?? null
   }, [providers, selectedProviderId])
 
+  const creatingCustom = selectedProviderId === 'new' && selectedProvider === null
   const isDrawerOpen = creatingCustom || Boolean(selectedProviderId && selectedProvider)
 
   const handleSelectProvider = (providerId: string) => {
-    setCreatingCustom(false)
     openTarget({ kind: 'models', providerId }, isSplit ? { split: true } : undefined)
   }
 
   const handleOpenCreateCustom = () => {
-    setCreatingCustom(true)
-    if (centerTab !== 'providers' || selectedProviderId !== undefined) {
-      openTarget({ kind: 'models' }, isSplit ? { split: true } : undefined)
-    }
+    openTarget({ kind: 'models', providerId: 'new' }, isSplit ? { split: true } : undefined)
   }
 
   const handleCloseDrawer = () => {
-    setCreatingCustom(false)
     openTarget({ kind: 'models' }, isSplit ? { split: true } : undefined)
   }
 
   const handleTabChange = (tab: string) => {
     if (tab === centerTab) return
-    setCreatingCustom(false)
     openTarget(
       tab === 'defaults' ? { kind: 'models', tab: 'defaults' } : { kind: 'models' },
       isSplit ? { split: true } : undefined,
@@ -305,7 +299,6 @@ export function ModelCenter({
         title: t('models.notice.customCreated'),
         body: t('models.notice.customCreatedBody', { name: input.label || input.id, id: input.id }),
       })
-      setCreatingCustom(false)
       openTarget({ kind: 'models', providerId: input.id }, isSplit ? { split: true } : undefined)
     } catch (err) {
       pushNotice?.({

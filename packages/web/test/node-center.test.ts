@@ -1238,3 +1238,10 @@ test('nodesApi.endpoints and nodes-modal-model re-exports: GET /api/nodes/endpoi
     globalThis.fetch = originalFetch
   }
 })
+
+test('validateNodeIdInput: rejects reserved "new" and "local" route segments', { timeout: 60_000 }, async () => {
+  const { validateNodeIdInput } = await import('../src/modals/nodes-modal-model.js')
+  assert.equal(validateNodeIdInput('worker-1', enT).ok, true)
+  assert.equal(validateNodeIdInput('new', enT).ok, false)
+  assert.equal(validateNodeIdInput('local', enT).ok, false)
+})

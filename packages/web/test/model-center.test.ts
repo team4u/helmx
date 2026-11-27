@@ -79,6 +79,14 @@ test('model-center-model: default provider list covers the 8 mainstream presets 
     validateCustomGatewayInput({ id: 'BAD ID', baseUrl: 'http://127.0.0.1:8000/v1', modelsText: 'qwen-72b', isNew: true, existingIds: [] }, enT),
     null,
   )
+  assert.notEqual(
+    validateCustomGatewayInput({ id: 'new', baseUrl: 'http://127.0.0.1:8000/v1', modelsText: 'qwen-72b', isNew: true, existingIds: [] }, enT),
+    null,
+  )
+  assert.notEqual(
+    validateCustomGatewayInput({ id: 'defaults', baseUrl: 'http://127.0.0.1:8000/v1', modelsText: 'qwen-72b', isNew: true, existingIds: [] }, enT),
+    null,
+  )
   assert.equal(
     isProviderFilterEligible({ id: 'openai', name: 'OpenAI', configured: false, modelsCount: 2 }, []),
     false,

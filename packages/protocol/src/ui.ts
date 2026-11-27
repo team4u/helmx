@@ -750,7 +750,8 @@ export interface PluginClientContext {
  *   usePluginDocState / usePluginSessionDoc / usePluginSessionDocState /
  *   useToolActivity / useTimelineToolCalls / useConversations / useConversation /
  *   usePlugins / usePluginConfig / useScreenParams (screen-local params scope provided
- *   by the host ScreenHost) / useHostModels / useHostNodes / useHostProfiles (stable-handle
+ *   by the host ScreenHost) / useScreenDrawer (URL-hash-backed DetailDrawer navigation
+ *   with closed->open push and switch/close replace semantics) / useHostModels / useHostNodes / useHostProfiles (stable-handle
  *   reads of host read-only catalog slices; unrelated host port revisions must not re-render
  *   consumers) / useSharedNowMs / usePluginAction / usePanelShortcut / useComposerCommand /
  *   useComposerModelPickerMode;
@@ -949,6 +950,7 @@ export const PLUGIN_CLIENT_SHARED_EXPORTS = [
   'usePlugins',
   'usePluginConfig',
   'useScreenParams',
+  'useScreenDrawer',
   'useHostModels',
   'useHostNodes',
   'useHostProfiles',

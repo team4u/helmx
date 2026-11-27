@@ -31,11 +31,12 @@ export const NODE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/
 
 export type NodeIdValidation = { ok: true; nodeId: string } | { ok: false; error: string }
 
-/** Validate an enrollment node ID input: trim, reserved names and charset rules. */
+/** Validate an enrollment node ID input: trim, reserved names ('local', 'new') and charset rules. */
 export function validateNodeIdInput(raw: string, t: WebMessageTranslator): NodeIdValidation {
   const nodeId = raw.trim()
   if (nodeId === '') return { ok: false, error: t('modals.nodeId.empty') }
   if (nodeId === 'local') return { ok: false, error: t('modals.nodeId.localReserved') }
+  if (nodeId === 'new') return { ok: false, error: t('modals.nodeId.invalidChars') }
   if (!NODE_ID_PATTERN.test(nodeId)) {
     return { ok: false, error: t('modals.nodeId.invalidChars') }
   }

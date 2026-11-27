@@ -74,7 +74,9 @@ export function validateCustomGatewayInput(
   const id = input.id.trim().toLowerCase()
   if (input.isNew) {
     if (!id) return t('models.errors.customGatewayIdRequired')
-    if (!CUSTOM_GATEWAY_ID_RE.test(id)) return t('models.errors.customGatewayIdInvalid')
+    if (id === 'new' || id === 'defaults' || !CUSTOM_GATEWAY_ID_RE.test(id)) {
+      return t('models.errors.customGatewayIdInvalid')
+    }
     if (input.existingIds?.some((existing) => existing.toLowerCase() === id)) {
       return t('models.errors.customGatewayIdDuplicate', { id })
     }

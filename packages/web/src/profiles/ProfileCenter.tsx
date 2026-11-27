@@ -45,7 +45,6 @@ export function ProfileCenter({
   const { t } = useWebLocale()
   const [query, setQuery] = useState('')
   const [activeTab, setActiveTab] = useState<ProfileCategoryTab>('all')
-  const [isCreatingNew, setIsCreatingNew] = useState(false)
 
   const effectiveDefaultModelInfo = useMemo(() => {
     if (modelDefaults.defaultModel === undefined && modelDefaults.defaultThinkingLevel === undefined) {
@@ -79,7 +78,8 @@ export function ProfileCenter({
     () => profiles.find((p) => p.id === selectedProfileId) ?? null,
     [profiles, selectedProfileId],
   )
-  const isDrawerOpen = Boolean((selectedProfileId && selectedProfile) || isCreatingNew || selectedProfileId === 'new')
+  const isCreatingNew = selectedProfileId === 'new' && selectedProfile === null
+  const isDrawerOpen = isCreatingNew || Boolean(selectedProfileId && selectedProfile)
 
   const openCenterTarget = (profileId?: string) => {
     const target = profileId !== undefined ? { kind: 'profiles' as const, profileId } : { kind: 'profiles' as const }
@@ -87,22 +87,18 @@ export function ProfileCenter({
   }
 
   const handleSelectProfile = (profileId: string) => {
-    setIsCreatingNew(false)
     openCenterTarget(profileId)
   }
 
   const handleCreateNew = () => {
-    setIsCreatingNew(true)
     openCenterTarget('new')
   }
 
   const handleCloseDrawer = () => {
-    setIsCreatingNew(false)
     openCenterTarget(undefined)
   }
 
   const handleProfileSaved = (saved: Profile) => {
-    setIsCreatingNew(false)
     void refreshAssets()
     pushNotice({
       type: 'notification',
@@ -114,7 +110,6 @@ export function ProfileCenter({
   }
 
   const handleProfileDeleted = (deletedId: string) => {
-    setIsCreatingNew(false)
     void refreshAssets()
     pushNotice({
       type: 'notification',
@@ -161,7 +156,7 @@ export function ProfileCenter({
       overlays={
         <ProfileDetailDrawer
           profile={selectedProfile}
-          isNew={isCreatingNew || selectedProfileId === 'new'}
+          isNew={isCreatingNew}
           open={isDrawerOpen}
           onClose={handleCloseDrawer}
           inline={inlineDrawer}

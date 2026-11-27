@@ -49,8 +49,9 @@
 
 ### 历史策略红线
 
-- push：切换主屏/分屏、抽屉栈打开与加深压栈（`drawer=wb/...` / `drawer=c/<id>`）、持久弹窗、Rail 空间切换；
-- replace：抽屉栈退层（`<- 返回` / `Esc` / 面包屑截断 / 关闭整栈）、同一弹窗内切换子项、工作台内切 Tab、同一 screen / overview 目标仅改参数（含总览筛选与搜索）、待命目标改草稿环境或待命页内切换角色、删除回退与草稿→真实会话迁移；
+- push：切换主屏/分屏、五大中心与插件屏从列表打开详情/新建抽屉（含分屏与 `.../new`）、抽屉栈打开与加深压栈（`drawer=wb/...` / `drawer=c/<id>`）、持久弹窗、Rail 空间切换；
+- replace（及对称出栈）：抽屉栈退层（`<- 返回` / `Esc` / 面包屑截断 / 关闭整栈）、同一抽屉/弹窗内切换子项、关闭详情/新建抽屉（当回到刚才 `pushState` 前的同一列表 Hash 时，由 `HelmxStoreProvider` 对称执行 `history.back()` 消费该栈帧，避免多次开关后出现必须连点/连划多次返回才离开的重复历史帧；深链直入无前驱帧时仍安全 `replaceState`）、工作台内切 Tab、同一 screen / overview 目标仅改参数（含总览筛选与搜索）、待命目标改草稿环境或待命页内切换角色、删除回退与草稿→真实会话迁移；
+- 插件屏内的 `DetailDrawer` 统一复用 `@helmx/plugin-client` 的 `useScreenDrawer` 控制器（无需手工拼 `setParams(..., { push: true })` 与悬空深链判空），由其统一保障开关历史策略。
 - `replace` 只替换当前历史项，不能也不宣称清空整个历史栈；历史策略统一维护在 `shouldPushLocationHistory`，调用方可经 `openTarget({ history })` 覆写下一拍；
 - 访问已删除会话的深链显式提示不存在，不得路由循环或静默跳转；
 - **抽屉栈与顶层模态正交**：右侧抽屉栈通过重复查询参数 `drawer=wb/<tab>`、`drawer=wb@<convId>/<tab>`、`drawer=c/<id>` 按底到顶序列化（同帧去重截断、上限 5 层），与顶层居中预览模态（`modal=artifact` / `modal=file`）完全正交、互不覆盖；

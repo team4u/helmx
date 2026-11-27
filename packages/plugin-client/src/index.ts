@@ -234,6 +234,12 @@ export { Callout } from './callout.js'
 export type { CalloutProps } from './callout.js'
 export { DetailDrawer } from './ui/DetailDrawer.js'
 export type { DetailDrawerProps } from './ui/DetailDrawer.js'
+export { useScreenDrawer } from './ui/use-screen-drawer.js'
+export type {
+  ScreenDrawerMode,
+  UseScreenDrawerOptions,
+  UseScreenDrawerResult,
+} from './ui/use-screen-drawer.js'
 export { DockTray, DockTrayRow } from './ui/DockTray.js'
 export type { DockTrayProps, DockTrayRowProps } from './ui/DockTray.js'
 

@@ -2195,4 +2195,115 @@ describe("tiers-client-interactions", () => {
       await mounted.unmount()
     }
   })
+
+  test('TiersManagerScreen: useScreenDrawer pushes on closed->open, replaces on card switch or close', { timeout: 60_000 }, async () => {
+    const ctx = makeSpyCtx()
+    setBuiltinClientStub({
+      docs: {
+        state: {
+          tiers: {
+            coder: { kind: 'single', model: 'faux/workhorse', description: 'Daily coding workhorse' },
+            architect: { kind: 'single', model: 'faux/flagship', description: 'Architecture and reviews' },
+          },
+          templates: {},
+        },
+      },
+    })
+    let params: Record<string, string> = {}
+    const paramCalls: Array<{ patch: Record<string, string | undefined>; options?: { push?: boolean } }> = []
+    const store = makeTestStore({
+      models: TEST_MODELS,
+      modelDefaults: { modelTiers: TEST_TIERS },
+    })
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+
+    const renderHosted = async () => {
+      await act(async () => {
+        root.render(
+          e(
+            HostStoreProviders,
+            { value: store },
+            e(
+              PluginClientContext.Provider,
+              { value: ctx },
+              e(TiersManagerScreen, {
+                pluginId: 'builtin:tiers',
+                screenId: 'main',
+                isSplit: false,
+                inlineDrawer: true,
+                params,
+                setParams: (patch: Record<string, string | undefined>, options?: { push?: boolean }) => {
+                  paramCalls.push({ patch, options })
+                  const next = { ...params }
+                  for (const [k, v] of Object.entries(patch)) {
+                    if (v === undefined) delete next[k]
+                    else next[k] = v
+                  }
+                  params = next
+                },
+              }),
+            ),
+          ),
+        )
+      })
+    }
+
+    try {
+      await renderHosted()
+      const coderTrigger = host.querySelector<HTMLButtonElement>('[data-tier-id="coder"] .helmx-select-card-trigger')
+      assert.ok(coderTrigger !== null)
+
+      // 1) Closed -> edit coder: must push history
+      await act(async () => {
+        coderTrigger.click()
+      })
+      assert.deepEqual(paramCalls.at(-1), {
+        patch: { edit: 'coder', create: undefined },
+        options: { push: true },
+      })
+      await renderHosted()
+      assert.ok(host.querySelector('.tiers-drawer') !== null)
+
+      // 2) Open -> switch to architect: must replace (no push)
+      const architectTrigger = host.querySelector<HTMLButtonElement>('[data-tier-id="architect"] .helmx-select-card-trigger')
+      assert.ok(architectTrigger !== null)
+      await act(async () => {
+        architectTrigger.click()
+      })
+      assert.deepEqual(paramCalls.at(-1), {
+        patch: { edit: 'architect', create: undefined },
+        options: undefined,
+      })
+      await renderHosted()
+
+      // 3) Close drawer via header close button -> omits push
+      const closeBtn = document.body.querySelector<HTMLButtonElement>('.primary-drawer-content button[aria-label="Close"]')
+      assert.ok(closeBtn !== null)
+      await act(async () => {
+        closeBtn.click()
+      })
+      assert.deepEqual(paramCalls.at(-1), {
+        patch: { edit: undefined, create: undefined },
+        options: undefined,
+      })
+      await renderHosted()
+      assert.ok(host.querySelector('.tiers-drawer') === null)
+
+      // 4) Closed -> Add tier: must push history
+      await act(async () => {
+        findButton(host, 'Add tier').click()
+      })
+      assert.deepEqual(paramCalls.at(-1), {
+        patch: { edit: undefined, create: '1' },
+        options: { push: true },
+      })
+    } finally {
+      await act(async () => {
+        root.unmount()
+      })
+      host.remove()
+    }
+  })
 })
