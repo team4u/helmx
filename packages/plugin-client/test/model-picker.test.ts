@@ -781,7 +781,9 @@ test('ModelPickerControl SSR: variant="field" renders standard 32px/28px bordere
   assert.doesNotMatch(fieldHtml, /btn-ghost/, 'field variant must not wear ghost button classes')
   assert.match(fieldHtml, /helmx-model-picker-placeholder">Pick a model<\/span>/)
   assert.match(fieldHtml, /helmx-model-picker-chevron/)
-  assert.match(fieldHtml, /data-invalid="true"/, 'field variant reflects invalid state from enclosing Field via data-invalid')
+  assert.match(fieldHtml, /role="combobox"/, 'field variant exposes combobox role matching Select')
+  assert.match(fieldHtml, /aria-invalid="true"/, 'field variant emits aria-invalid="true" when enclosing Field has an error')
+  assert.match(fieldHtml, /data-invalid="true"/, 'field variant mirrors data-invalid="true"')
   assert.match(fieldHtml, /aria-describedby="[^"]*-error"/, 'field variant inherits aria-describedby from enclosing Field')
 
   // Default variant="composer" preserves compact ghost button classes unchanged

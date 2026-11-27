@@ -1,4 +1,4 @@
-import { useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent, type ReactNode, type RefObject } from 'react'
+import { useCallback, useContext, useEffect, useId, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent, type ReactNode, type RefObject } from 'react'
 import { MODEL_TIER_PREFIX, isOrchestratorTier, type HostModelEntry, type ModelTierCatalogEntry } from '@helmx/protocol/browser'
 import {
   ComposerModelPickerModeContext,
@@ -783,6 +783,7 @@ export function ModelPickerControl({
   const listActiveThinkingLevel = activeMode !== null ? (activeMode.spec.activeThinkingLevel ?? '') : activeThinkingLevel
 
   const isFieldVariant = variant === 'field'
+  const popoverId = useId()
   const resolvedPopoverSide = popoverSide ?? (isFieldVariant ? 'bottom' : 'top')
   const fieldProps = useFieldControlProps({
     id: buttonId,
@@ -812,6 +813,24 @@ export function ModelPickerControl({
     isFieldVariant && isPlaceholder
       ? 'composer-model-label helmx-model-picker-placeholder'
       : 'composer-model-label'
+  const resolvedTriggerAriaLabel =
+    buttonAriaLabel ??
+    formatModelPickerCopy(copy.buttonAria, {
+      model: shortName,
+      level: showLevel ? formatModelPickerCopy(copy.levelSuffix, { level: effectiveLevel }) : '',
+    })
+  const triggerBody = (
+    <>
+      {pending ? <HelmxIcon name="loader" size={12} className="spin-slow" /> : null}
+      <span className={labelClassName}>{shortName}</span>
+      {showLevel ? <span className="composer-model-level">· {effectiveLevel}</span> : null}
+      <HelmxIcon
+        name="chevron-down"
+        size={12}
+        className={isFieldVariant ? 'helmx-model-picker-chevron' : undefined}
+      />
+    </>
+  )
 
   return (
     <span className={rootClassName} ref={rootRef}>
@@ -824,6 +843,26 @@ export function ModelPickerControl({
               <span className="helmx-model-picker-anchor" aria-hidden="true" />
             </PopoverAnchor>
           )
+        ) : isFieldVariant ? (
+          <PopoverTrigger asChild>
+            <button
+              id={resolvedButtonId}
+              type="button"
+              role="combobox"
+              aria-haspopup="dialog"
+              aria-controls={popoverId}
+              className={triggerClassName}
+              disabled={disabled || pending}
+              aria-invalid={resolvedInvalid ? true : undefined}
+              data-invalid={resolvedInvalid ? 'true' : undefined}
+              aria-expanded={open}
+              aria-describedby={resolvedAriaDescribedBy}
+              aria-label={resolvedTriggerAriaLabel}
+              title={buttonTitle}
+            >
+              {triggerBody}
+            </button>
+          </PopoverTrigger>
         ) : (
           <PopoverTrigger asChild>
             <button
@@ -834,28 +873,16 @@ export function ModelPickerControl({
               data-invalid={resolvedInvalid ? 'true' : undefined}
               aria-expanded={open}
               aria-describedby={resolvedAriaDescribedBy}
-              aria-label={
-                buttonAriaLabel ??
-                formatModelPickerCopy(copy.buttonAria, {
-                  model: shortName,
-                  level: showLevel ? formatModelPickerCopy(copy.levelSuffix, { level: effectiveLevel }) : '',
-                })
-              }
+              aria-label={resolvedTriggerAriaLabel}
               title={buttonTitle}
             >
-              {pending ? <HelmxIcon name="loader" size={12} className="spin-slow" /> : null}
-              <span className={labelClassName}>{shortName}</span>
-              {showLevel ? <span className="composer-model-level">· {effectiveLevel}</span> : null}
-              <HelmxIcon
-                name="chevron-down"
-                size={12}
-                className={isFieldVariant ? 'helmx-model-picker-chevron' : undefined}
-              />
+              {triggerBody}
             </button>
           </PopoverTrigger>
         )}
         <PopoverPortal>
           <PopoverContent
+            id={popoverId}
             ref={contentRef}
             tabIndex={-1}
             side={resolvedPopoverSide}

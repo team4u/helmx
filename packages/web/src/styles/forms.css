@@ -264,11 +264,13 @@
   cursor: not-allowed;
 }
 
+.helmx-model-picker-trigger[aria-invalid='true'],
 .helmx-model-picker-trigger[data-invalid='true'] {
   border-color: var(--err);
   background: color-mix(in srgb, var(--err-bg) 35%, var(--bg-elevated));
 }
 
+.helmx-model-picker-trigger[aria-invalid='true']:focus-visible,
 .helmx-model-picker-trigger[data-invalid='true']:focus-visible {
   outline: none;
   border-color: var(--err);
