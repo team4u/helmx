@@ -505,6 +505,11 @@ test('initGitRepo and createGitTemplate: repository bootstrap and isolated cpSyn
   }).trim()
   assert.equal(standaloneBranch, 'main')
   assert.equal(readFileSync(join(standalone, 'nested/hello.txt'), 'utf8'), 'hello\n')
+  // `maintenance.auto=false` 防止 `git commit` 派生的后台维护进程在 `.git/objects/` 下创建 `maintenance.lock`，
+  // 与 `cloneTo` 的 `cpSync` 遍历竞争导致 ENOENT；该配置须随 `.git/config` 一并复制进模板与每个副本。
+  const maintenanceAuto = (repoDir: string): string =>
+    execFileSync('git', ['config', '--local', '--get', 'maintenance.auto'], { cwd: repoDir, encoding: 'utf8' }).trim()
+  assert.equal(maintenanceAuto(standalone), 'false')
 
   const emptyRepo = join(scratch, 'empty')
   initGitRepo(emptyRepo, {})
@@ -522,6 +527,8 @@ test('initGitRepo and createGitTemplate: repository bootstrap and isolated cpSyn
   try {
     const copyA = template.cloneTo(join(scratch, 'copy-a'))
     const copyB = template.cloneTo(join(scratch, 'copy-b'))
+    assert.equal(maintenanceAuto(template.templateDir), 'false')
+    assert.equal(maintenanceAuto(copyA), 'false', 'config must be copied into clones via .git/config')
     assert.equal(readFileSync(join(copyA, 'base.txt'), 'utf8'), 'base-v1\n')
     assert.equal(readFileSync(join(copyB, 'base.txt'), 'utf8'), 'base-v1\n')
 

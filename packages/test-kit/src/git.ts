@@ -29,9 +29,9 @@ function runGit(dir: string, args: string[]): void {
 }
 
 /**
- * Initialize a real Git repository at the given directory (`main` branch, isolated config, and an
- * initial commit). Writes `README.md` by default; customize the initial working tree file set via
- * `files`.
+ * Initialize a real Git repository at the given directory (`main` branch, isolated config, an
+ * initial commit, and background maintenance disabled). Writes `README.md` by default; customize
+ * the initial working tree file set via `files`.
  */
 export function initGitRepo(
   dir: string,
@@ -39,6 +39,11 @@ export function initGitRepo(
 ): string {
   mkdirSync(dir, { recursive: true })
   runGit(dir, ['init', '-q', '-b', 'main'])
+  // `git commit` 派生分离的 `git maintenance run --auto`，它即使无事可做也会在 `.git/objects/` 下创建并释放
+  // `maintenance.lock`；该锁文件与 `cloneTo` 的 `cpSync` 目录遍历竞争导致 ENOENT（CI 高并发下偶发）。
+  // 关闭后不再派生后台进程；本配置写入 `.git/config`，模板 `setup` 回调中的后续 commit 与 `cloneTo`
+  // 副本一并覆盖。
+  runGit(dir, ['config', 'maintenance.auto', 'false'])
   runGit(dir, ['config', 'user.email', 'test@helmx.local'])
   runGit(dir, ['config', 'user.name', 'helmx-test'])
   const entries = Object.entries(files)
