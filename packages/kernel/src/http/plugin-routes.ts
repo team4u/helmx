@@ -6,27 +6,25 @@
  * Disable double-gate: re-checks plugin enabled status via summary before dispatch (409 if disabled)
  * and tracks handler execution in `liveTasks` (shared with actions/tools for disable blocking).
  */
-import { HelmxError, isPluginSummaryActive, REQUEST_SCHEMAS } from '@helmx/protocol'
+import { HelmxError, isPluginSummaryActive, PLUGIN_CORE_OPERATIONS } from '@helmx/protocol'
 import { redactJsonValue } from '../redact.js'
 import type { PluginHost } from '../plugins/index.js'
 import type { SecretStash } from '../services/index.js'
 import type { SessionDocEventHub } from '../runtime/events.js'
 import { readSanitizedPluginConfig, resolvePluginDoctorTarget } from '../runtime/guards/plugin-guards.js'
+import { createCoreOperationRouter } from './core-operation-router.js'
 import { compressGzip, markStreamingJsonBody } from './gzip.js'
 import { errorResponse, jsonOk, readJsonBody, type JsonRedactor } from './http-utils.js'
 import { decodeSegment, findPluginRoute } from './route-match.js'
 import { snapshotDocOf } from './session-doc-routes.js'
 import { concatUint8Arrays, readBoundedChunks, stitchRemainingStream } from './stream-utils.js'
 import {
-  assertBodySchema,
   parseActionInvokeBody,
   parseDocNameParam,
-  parsePluginConfigBody,
   requireIdParam,
   ValidationError,
 } from './validate.js'
-import { parseOptionalBooleanFlag, parseOptionalJsonObjectBody, type RouteContext } from './route-context.js'
-import { methodNotAllowed } from './route-context.js'
+import type { RouteContext } from './route-context.js'
 
 export type PluginRoutesHost = Pick<
   PluginHost,
@@ -70,6 +68,118 @@ export interface PluginRoutesTarget {
   readonly stash?: PluginRoutesStash
 }
 
+function dispatchPluginJsonRoutes(
+  kernel: Pick<PluginRoutesTarget, 'plugins' | 'stash'>,
+): (ctx: RouteContext, redactor: JsonRedactor | undefined) => Promise<Response | undefined> {
+  return createCoreOperationRouter(PLUGIN_CORE_OPERATIONS, {
+    'plugins.list': () => kernel.plugins.list(),
+
+    'plugins.manifest': (input, { redactor }) => {
+      if (kernel.plugins.getManifest === undefined) {
+        return errorResponse(redactor, 501, 'not_supported', 'Current kernel does not support plugin manifest projection')
+      }
+      return kernel.plugins.getManifest(input.id as string)
+    },
+
+    'plugins.doc': {
+      validate: (input) => {
+        parseDocNameParam(input.name as string)
+      },
+      handle: (input) => {
+        const pluginId = input.pluginId as string
+        const name = input.name as string
+        const conversationId = input.conversationId as number | undefined
+        if (conversationId === undefined) {
+          return kernel.plugins.getPublicDoc(pluginId, name)
+        }
+        return kernel.plugins.getPublicSessionDoc(pluginId, name, conversationId)
+      },
+    },
+
+    'plugins.config_get': (input) =>
+      readSanitizedPluginConfig(
+        kernel.plugins,
+        input.id as string,
+        kernel.stash !== undefined ? (text) => kernel.stash!.redact(text) : undefined,
+      ),
+
+    'plugins.doctor': {
+      validate: (input) => {
+        resolvePluginDoctorTarget(
+          input as { path?: string; id?: string },
+          { allowTarget: false },
+        )
+      },
+      handle: (input, { redactor }) => {
+        if (kernel.plugins.doctorExternalPlugin === undefined) {
+          return errorResponse(redactor, 501, 'not_supported', 'Current kernel does not support plugin static doctor checks')
+        }
+        const target = resolvePluginDoctorTarget(
+          input as { path?: string; id?: string },
+          { allowTarget: false },
+        )
+        return kernel.plugins.doctorExternalPlugin(target)
+      },
+    },
+
+    'plugins.config_set': async (input) => {
+      await kernel.plugins.setConfig(input.id as string, { ...(input.values as Record<string, unknown>) })
+      return { ok: true }
+    },
+
+    'plugins.enable': async (input) => {
+      await kernel.plugins.enable(input.id as string)
+      return kernel.plugins.list()
+    },
+
+    'plugins.disable': async (input, { body, query }) => {
+      const force = body.force === true || query.force === true
+      await kernel.plugins.disable(input.id as string, force ? { force: true } : undefined)
+      return kernel.plugins.list()
+    },
+
+    'plugins.reload': (input, { redactor }) => {
+      if (kernel.plugins.reloadExternalPlugin === undefined) {
+        return errorResponse(redactor, 501, 'not_supported', 'Current kernel does not support plugin hot reload')
+      }
+      return kernel.plugins.reloadExternalPlugin(input.id as string)
+    },
+
+    'plugins.rescan': (_input, { redactor }) => {
+      if (kernel.plugins.rescanExternalPlugins === undefined) {
+        return errorResponse(redactor, 501, 'not_supported', 'Current kernel does not support plugin rescan')
+      }
+      return kernel.plugins.rescanExternalPlugins()
+    },
+
+    'plugins.install': (input, { redactor }) => {
+      if (kernel.plugins.installPluginPackage === undefined) {
+        return errorResponse(redactor, 501, 'not_supported', 'Current kernel does not support plugin package installation')
+      }
+      const source = input.source as string
+      return kernel.plugins.installPluginPackage(
+        source,
+        input.enable !== undefined ? { enable: input.enable as boolean } : {},
+      )
+    },
+
+    'plugins.update': (input, { redactor }) => {
+      if (kernel.plugins.updatePluginPackage === undefined) {
+        return errorResponse(redactor, 501, 'not_supported', 'Current kernel does not support plugin package updates')
+      }
+      const opts = input.source !== undefined ? { source: input.source as string } : {}
+      return kernel.plugins.updatePluginPackage(input.id as string, opts)
+    },
+
+    'plugins.remove': (input, { redactor }) => {
+      if (kernel.plugins.removePluginPackage === undefined) {
+        return errorResponse(redactor, 501, 'not_supported', 'Current kernel does not support plugin package removal')
+      }
+      return kernel.plugins.removePluginPackage(input.id as string)
+    },
+  })
+}
+
 export async function handlePluginsDomain(
   ctx: RouteContext,
   kernel: PluginRoutesTarget,
@@ -81,131 +191,23 @@ export async function handlePluginsDomain(
   const fourth = segments[3]
   const fifth = segments[4]
 
-  if (second === undefined && method === 'GET') {
-    return jsonOk(redactor, await kernel.plugins.list())
+  // Streaming, compiled module bundle, and dynamic plugin sub-routes stay outside CORE_OPERATIONS.
+  if (second !== undefined && third === 'docs' && fourth !== undefined && fifth === 'events' && segments.length === 5 && method === 'GET') {
+    const pluginId = requireIdParam(second, 'pluginId')
+    return sessionDocEventsResponse(ctx, kernel, redactor, pluginId, decodeSegment(fourth))
   }
-  // External plugin DX loop (top-level routes without plugin ID segment; matched before requireIdParam).
-  if (second === 'doctor' && method === 'POST' && third === undefined) {
-    if (kernel.plugins.doctorExternalPlugin === undefined) {
-      return errorResponse(redactor, 501, 'not_supported', 'Current kernel does not support plugin static doctor checks')
-    }
-    const body = await readJsonBody(ctx.request)
-    assertBodySchema(REQUEST_SCHEMAS.pluginDoctor, body, 'plugins doctor body')
-    const target = resolvePluginDoctorTarget(
-      body as { path?: string; id?: string },
-      { allowTarget: false },
-    )
-    return jsonOk(redactor, await kernel.plugins.doctorExternalPlugin(target))
-  }
-  if (second === 'rescan' && method === 'POST' && third === undefined) {
-    if (kernel.plugins.rescanExternalPlugins === undefined) {
-      return errorResponse(redactor, 501, 'not_supported', 'Current kernel does not support plugin rescan')
-    }
-    return jsonOk(redactor, await kernel.plugins.rescanExternalPlugins())
-  }
-  // Managed plugin package installation (POST /api/plugins/install, body { source, enable? }).
-  if (second === 'install' && method === 'POST' && third === undefined) {
-    if (kernel.plugins.installPluginPackage === undefined) {
-      return errorResponse(redactor, 501, 'not_supported', 'Current kernel does not support plugin package installation')
-    }
-    const body = await readJsonBody(ctx.request)
-    assertBodySchema(REQUEST_SCHEMAS.pluginInstall, body, 'plugins install body')
-    const source = body.source as string
-    return jsonOk(
-      redactor,
-      await kernel.plugins.installPluginPackage(
-        source,
-        body.enable !== undefined ? { enable: body.enable as boolean } : {},
-      ),
-    )
-  }
-  const pluginId = requireIdParam(second ?? '', 'pluginId')
-  // Reserved core management segments in position 3: enable/disable/config; dynamic routes live under routes/.
-  if (third === 'enable' && method === 'POST' && fourth === undefined) {
-    await kernel.plugins.enable(pluginId)
-    return jsonOk(redactor, await kernel.plugins.list())
-  }
-  if (third === 'disable' && method === 'POST' && fourth === undefined) {
-    const opts = await parseOptionalJsonObjectBody(ctx.request, parsePluginDisableBody)
-    const queryForce = parseOptionalBooleanFlag(ctx.url, 'force')
-    const force = opts.force === true || queryForce === true
-    await kernel.plugins.disable(pluginId, force ? { force: true } : undefined)
-    return jsonOk(redactor, await kernel.plugins.list())
-  }
-  // External plugin controlled hot reload (POST /api/plugins/:id/reload): leaves current instance untouched on preflight failure.
-  if (third === 'reload' && method === 'POST' && fourth === undefined) {
-    if (kernel.plugins.reloadExternalPlugin === undefined) {
-      return errorResponse(redactor, 501, 'not_supported', 'Current kernel does not support plugin hot reload')
-    }
-    return jsonOk(redactor, await kernel.plugins.reloadExternalPlugin(pluginId))
-  }
-  // Managed plugin package update (POST /api/plugins/:id/update; optional body { source? }).
-  if (third === 'update' && method === 'POST' && fourth === undefined) {
-    if (kernel.plugins.updatePluginPackage === undefined) {
-      return errorResponse(redactor, 501, 'not_supported', 'Current kernel does not support plugin package updates')
-    }
-    const opts = await parseOptionalJsonObjectBody(ctx.request, parsePluginUpdateBody)
-    return jsonOk(redactor, await kernel.plugins.updatePluginPackage(pluginId, opts))
-  }
-  // Managed plugin package removal (POST /api/plugins/:id/remove).
-  if (third === 'remove' && method === 'POST' && fourth === undefined) {
-    if (kernel.plugins.removePluginPackage === undefined) {
-      return errorResponse(redactor, 501, 'not_supported', 'Current kernel does not support plugin package removal')
-    }
-    return jsonOk(redactor, await kernel.plugins.removePluginPackage(pluginId))
-  }
-  if (third === 'config' && fourth === undefined) {
-    if (method === 'GET') {
-      const snapshot = await readSanitizedPluginConfig(
-        kernel.plugins,
-        pluginId,
-        kernel.stash !== undefined ? (text) => kernel.stash!.redact(text) : undefined,
-      )
-      return jsonOk(redactor, snapshot)
-    }
-    if (method === 'PUT') {
-      const body = await readJsonBody(ctx.request)
-      await kernel.plugins.setConfig(pluginId, parsePluginConfigBody(body))
-      return jsonOk(redactor, { ok: true })
-    }
-    return methodNotAllowed(redactor, method)
-  }
-  // Read-only plugin extension contract projection: GET /api/plugins/:pluginId/manifest
-  if (third === 'manifest' && fourth === undefined) {
-    if (method !== 'GET') return methodNotAllowed(redactor, method)
-    if (kernel.plugins.getManifest === undefined) {
-      return errorResponse(redactor, 501, 'not_supported', 'Current kernel does not support plugin manifest projection')
-    }
-    return jsonOk(redactor, await kernel.plugins.getManifest(pluginId))
-  }
-  // Plugin public document: GET /api/plugins/:pluginId/docs/:name (404 if private, disabled, or missing).
-  // ?conversationId=N selects sessionDoc snapshot; `/events` opens the dedicated sessionDoc SSE stream.
-  if (third === 'docs' && method === 'GET') {
-    // Dedicated SSE: GET /api/plugins/:id/docs/:name/events?conversationId=N
-    // Total segments = plugins(1) + id(2) + docs(3) + name(4) + events(5).
-    if (fourth !== undefined && fifth === 'events' && segments.length === 5) {
-      return sessionDocEventsResponse(ctx, kernel, redactor, pluginId, decodeSegment(fourth))
-    }
-    if (fifth !== undefined) return errorResponse(redactor, 404, 'not_found', 'route not found')
-    if (fourth === undefined) throw new ValidationError('missing doc name path segment')
-    const name = parseDocNameParam(decodeSegment(fourth))
-    const conversationId = parseConversationIdQuery(ctx.url)
-    if (conversationId === undefined) {
-      return jsonOk(redactor, await kernel.plugins.getPublicDoc(pluginId, name))
-    }
-    return jsonOk(
-      redactor,
-      await kernel.plugins.getPublicSessionDoc(pluginId, name, conversationId),
-    )
-  }
-  // Plugin client module: GET/HEAD /api/plugins/:pluginId/client.mjs?module=<relativePath>&chunk=<chunkName>&hash=<contentHash>
-  if (third === 'client.mjs' && (method === 'GET' || method === 'HEAD') && fourth === undefined) {
+  if (second !== undefined && third === 'client.mjs' && (method === 'GET' || method === 'HEAD') && fourth === undefined) {
+    const pluginId = requireIdParam(second, 'pluginId')
     return serveClientModule(ctx, kernel, pluginId)
   }
-  // Plugin dynamic routes: scoped under /api/plugins/:pluginId/routes/... so core management paths cannot be shadowed.
-  if (third === 'routes') {
+  if (second !== undefined && third === 'routes') {
+    requireIdParam(second, 'pluginId')
     return dispatchPluginRoute(kernel, redactor, ctx.request, method, segments)
   }
+
+  const matched = await dispatchPluginJsonRoutes(kernel)(ctx, redactor)
+  if (matched !== undefined) return matched
+
   return errorResponse(redactor, 404, 'not_found', 'route not found')
 }
 
@@ -242,20 +244,8 @@ export async function handleActionsDomain(
 }
 
 // ---------------------------------------------------------------------------
-// Internal helpers: body validation / doc SSE / client.mjs / dynamic route dispatch
+// Internal helpers: doc SSE / client.mjs / dynamic route dispatch
 // ---------------------------------------------------------------------------
-
-/** POST /api/plugins/:id/disable body: only force(query ?force=1 same meaning). */
-function parsePluginDisableBody(body: Record<string, unknown>): { force?: boolean } {
-  assertBodySchema(REQUEST_SCHEMAS.pluginDisable, body, 'plugins disable body')
-  return body.force !== undefined ? { force: body.force as boolean } : {}
-}
-
-/** POST /api/plugins/:id/update body: optional non-empty `source` string for switching/upgrading pinned sources. */
-function parsePluginUpdateBody(body: Record<string, unknown>): { source?: string } {
-  assertBodySchema(REQUEST_SCHEMAS.pluginUpdate, body, 'plugins update body')
-  return body.source !== undefined ? { source: body.source as string } : {}
-}
 
 /** Parses `?conversationId=N` query param as a positive safe integer (400 otherwise). */
 function parseConversationIdQuery(url: URL): number | undefined {

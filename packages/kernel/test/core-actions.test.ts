@@ -1851,4 +1851,30 @@ describe('Core actions (core:*) parity, discovery, and security invariants', { t
       await kernel.close()
     }
   })
+
+  it('core:plugins & core:skills preserve exact registration order, exclude install/update/remove, and expose doctor target', { timeout: 60_000 }, async () => {
+    const kernel = await openRuntime(join(root, 'plugins-skills-manifests'))
+    try {
+      const pluginActions = kernel.plugins.listActions().filter((m) => m.pluginId === 'core:plugins')
+      assert.deepEqual(
+        pluginActions.map((m) => m.id),
+        ['list', 'manifest', 'doc', 'config_get', 'doctor', 'config_set', 'enable', 'disable', 'reload', 'rescan'],
+      )
+      for (const excluded of ['install', 'update', 'remove']) {
+        assert.equal(pluginActions.some((m) => m.id === excluded), false, `core:plugins.${excluded} must not exist`)
+      }
+      const doctorManifest = pluginActions.find((m) => m.id === 'doctor')!
+      assert.ok((doctorManifest.inputSchema.properties as Record<string, unknown>)['target'])
+      const manifestOp = pluginActions.find((m) => m.id === 'manifest')!
+      assert.equal(manifestOp.inputSchema.required, undefined)
+
+      const skillActions = kernel.plugins.listActions().filter((m) => m.pluginId === 'core:skills')
+      assert.deepEqual(skillActions.map((m) => m.id), ['list', 'read'])
+      for (const action of skillActions) {
+        assert.deepEqual(action.scope, { conversationIds: [] })
+      }
+    } finally {
+      await kernel.close()
+    }
+  })
 })

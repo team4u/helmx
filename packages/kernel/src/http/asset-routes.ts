@@ -6,9 +6,10 @@
  * Artifact content reads delegate to `ArtifactService.readBufferForMetadata` (metadata shape gate +
  * three-layer realpath symlink-escape guard + truthful 404 on ENOENT + isolated Uint8Array copy).
  */
-import { HelmxError } from '@helmx/protocol'
+import { HelmxError, SKILL_CORE_OPERATIONS } from '@helmx/protocol'
 import { MAX_ARTIFACT_BYTES, type ArtifactService, type SkillService } from '../services/index.js'
 import type { ConversationService } from '../runtime/conversation-service.js'
+import { createCoreOperationRouter } from './core-operation-router.js'
 import { buildContentDisposition, errorResponse, jsonOk, readBinaryBodyWithLimit, readJsonBody, type JsonRedactor } from './http-utils.js'
 import { decodeSegment } from './route-match.js'
 import { isSafeRelativePath, requireIdParam, ValidationError } from './validate.js'
@@ -171,25 +172,37 @@ export async function postConversationArtifact(
 // /api/skills
 // ---------------------------------------------------------------------------
 
+function dispatchSkillJsonRoutes(
+  kernel: Pick<AssetRoutesTarget, 'skills'>,
+): (ctx: RouteContext, redactor: JsonRedactor | undefined) => Promise<Response | undefined> {
+  return createCoreOperationRouter(SKILL_CORE_OPERATIONS, {
+    'skills.list': () => kernel.skills.list(),
+
+    'skills.read': {
+      validate: (input) => {
+        const path = input.path as string | undefined
+        if (path !== undefined && !isSafeRelativePath(path)) {
+          throw new HelmxError('path_traversal', `skill file path out of bounds: ${String(input.id)}/${path}`, 400)
+        }
+      },
+      handle: async (input) => {
+        const text = await kernel.skills.readFile(input.id as string, input.path as string | undefined)
+        return { text }
+      },
+    },
+  })
+}
+
 export async function handleSkillsDomain(
   ctx: RouteContext,
   kernel: Pick<AssetRoutesTarget, 'skills'>,
   redactor: JsonRedactor | undefined,
 ): Promise<Response> {
-  const { method, segments } = ctx
-  const second = segments[1]
-  const third = segments[2]
-  if (second === undefined && method === 'GET') {
-    return jsonOk(redactor, await kernel.skills.list())
+  // Preserve 400 validation_error on non-GET /api/skills (requireIdParam('') contract).
+  if (ctx.segments[1] === undefined && ctx.method !== 'GET') {
+    requireIdParam('', 'skillId')
   }
-  const skillId = requireIdParam(second ?? '', 'skillId')
-  if (third === undefined && method === 'GET') {
-    const path = ctx.url.searchParams.get('path') ?? undefined
-    if (path !== undefined && !isSafeRelativePath(path)) {
-      throw new HelmxError('path_traversal', `skill file path out of bounds: ${skillId}/${path}`, 400)
-    }
-    const text = await kernel.skills.readFile(skillId, path)
-    return jsonOk(redactor, { text })
-  }
+  const matched = await dispatchSkillJsonRoutes(kernel)(ctx, redactor)
+  if (matched !== undefined) return matched
   return errorResponse(redactor, 404, 'not_found', 'route not found')
 }

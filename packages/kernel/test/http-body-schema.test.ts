@@ -1086,3 +1086,53 @@ test('Profile HTTP accepts boolean restrictToCwd; non-boolean rejects', { timeou
     assert.throws(() => parseProfileBody({ id: 'worker', restrictToCwd }, { requireId: true }))
   }
 })
+
+// ---------------------------------------------------------------------------
+// Plugins & Skills CoreOperationRouter parity (501/400/static-before-param)
+// ---------------------------------------------------------------------------
+
+test('plugins & skills router parity: unwired 501 not_supported, static routes, doc query, and skills query validation', { timeout: 60_000 }, async () => {
+  const calls = newCallLog()
+  const kernel = makeKernel(calls)
+
+  // Unwired optional plugin DX/package methods return 501 not_supported
+  for (const [m, p, body] of [
+    ['POST', '/api/plugins/doctor', { id: 'builtin:x' }],
+    ['POST', '/api/plugins/rescan', undefined],
+    ['POST', '/api/plugins/install', { source: '/abs/plugin' }],
+    ['POST', '/api/plugins/builtin:x/reload', undefined],
+    ['POST', '/api/plugins/builtin:x/update', undefined],
+    ['POST', '/api/plugins/builtin:x/remove', undefined],
+  ] as const) {
+    const res = await call(kernel, m, p, body)
+    assert.equal(res.status, 501, `${m} ${p} should return 501 when unwired`)
+    assert.equal(res.code, 'not_supported')
+  }
+
+  // Body schema + path param guards on plugins doctor/disable/config
+  await expect400(kernel, 'POST', '/api/plugins/doctor', { target: 'builtin:x' })
+  await expect400(kernel, 'POST', '/api/plugins/doctor', { path: '/abs/p', id: 'builtin:x' })
+  await expect400(kernel, 'POST', '/api/plugins/builtin:x/disable?force=maybe')
+  await expect400(kernel, 'PUT', '/api/plugins/builtin:x/config', { id: 'other', values: { a: 1 } })
+
+  // GET /api/plugins/:id/docs/:name?conversationId=N switches between global and session docs
+  const globalDoc = await call(kernel, 'GET', '/api/plugins/builtin:x/docs/board')
+  assert.equal(globalDoc.status, 200)
+  const badDocName = await call(kernel, 'GET', '/api/plugins/builtin:x/docs/.bad')
+  assert.equal(badDocName.status, 400)
+  const badConvId = await call(kernel, 'GET', '/api/plugins/builtin:x/docs/board?conversationId=0')
+  assert.equal(badConvId.status, 400)
+  const sessionDoc = await call(kernel, 'GET', '/api/plugins/builtin:x/docs/board?conversationId=3')
+  assert.equal(sessionDoc.status, 404) // makeKernel stub throws 404 from getPublicSessionDoc
+
+  // Skills GET + path traversal / empty path / invalid id validation
+  const skillsList = await call(kernel, 'GET', '/api/skills')
+  assert.equal(skillsList.status, 200)
+  const skillRead = await call(kernel, 'GET', '/api/skills/demo-skill')
+  assert.equal(skillRead.status, 200)
+  const skillTraversal = await call(kernel, 'GET', '/api/skills/demo-skill?path=../secret.txt')
+  assert.equal(skillTraversal.status, 400)
+  assert.equal(skillTraversal.code, 'path_traversal')
+  await expect400(kernel, 'GET', '/api/skills/demo-skill?path=')
+  await expect400(kernel, 'GET', '/api/skills/.invalid')
+})

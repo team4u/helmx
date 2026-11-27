@@ -1,11 +1,28 @@
 /**
  * Managed external plugin package lifecycle commands:
- * plugins install / update / remove.
+ * plugins install / update / remove (custom handlers registered via `commandsFromOperations`).
  */
-import type { PluginInstallResult, PluginRemoveResult, PluginSummary, PluginUpdateResult } from '@helmx/protocol'
+import {
+  PLUGIN_CORE_OPERATIONS,
+  type PluginInstallResult,
+  type PluginRemoveResult,
+  type PluginSummary,
+  type PluginUpdateResult,
+} from '@helmx/protocol'
 import { CliError } from '../errors.js'
-import type { CommandContext, CommandSpec } from './shared.js'
+import { schemaFlagsForOperation, type CoreCliCustomCommandHandler } from './from-operations.js'
+import type { CommandContext } from './shared.js'
 import { assertNoExtraPositionals, printResult, requirePositional } from './shared.js'
+
+const PLUGIN_INSTALL_SPEC = PLUGIN_CORE_OPERATIONS.find((op) => op.key === 'plugins.install')!
+const INSTALL_SCHEMA_FLAGS = new Map(
+  schemaFlagsForOperation(PLUGIN_INSTALL_SPEC).map((flag) => [flag.name, flag] as const),
+)
+
+const PLUGIN_UPDATE_SPEC = PLUGIN_CORE_OPERATIONS.find((op) => op.key === 'plugins.update')!
+const UPDATE_SCHEMA_FLAGS = new Map(
+  schemaFlagsForOperation(PLUGIN_UPDATE_SPEC).map((flag) => [flag.name, flag] as const),
+)
 
 /**
  * Destructive removal confirmation (routes exclusively through `ctx.io`):
@@ -34,13 +51,17 @@ async function confirmRemove(ctx: CommandContext, assumedYes: boolean, pluginId:
   }
 }
 
-export function pluginPackageCommands(): CommandSpec[] {
-  return [
-    {
-      path: ['plugins', 'install'],
+export function pluginPackageCustomHandlers(): Record<string, CoreCliCustomCommandHandler> {
+  return {
+    'plugins install': {
       description:
         'Install and register an external plugin package from npm/git/local path (POST /api/plugins/install; disabled by default unless --enable; reinstalling the same canonical local directory performs an idempotent hot update preserving ctx.doc data). source is resolved on the Hub host; enabled plugins run trusted code in-process with no sandbox',
-      flags: [{ name: 'enable', type: 'boolean', help: 'enable immediately after install (registered as disabled by default)' }],
+      flags: [
+        {
+          ...(INSTALL_SCHEMA_FLAGS.get('enable') ?? { name: 'enable', type: 'boolean' as const }),
+          help: 'enable immediately after install (registered as disabled by default)',
+        },
+      ],
       positional: '<source>',
       async run(ctx: CommandContext) {
         const source = requirePositional(ctx.positionals, 0, 'source')
@@ -89,8 +110,7 @@ export function pluginPackageCommands(): CommandSpec[] {
       },
     },
 
-    {
-      path: ['plugins', 'update'],
+    'plugins update': {
       description:
         'Update an installed external plugin package (or --all managed packages) and reload (POST /api/plugins/:id/update; optional --source <source> switches/upgrades pinned sources while preserving plugin data)',
       flags: [
@@ -100,8 +120,7 @@ export function pluginPackageCommands(): CommandSpec[] {
           help: 'update all managed external plugins sequentially (mutually exclusive with <id> and --source)',
         },
         {
-          name: 'source',
-          type: 'string',
+          ...(UPDATE_SCHEMA_FLAGS.get('source') ?? { name: 'source', type: 'string' as const }),
           help: 'optional new package source to switch/upgrade to while preserving plugin data (single plugin only)',
         },
       ],
@@ -218,8 +237,7 @@ export function pluginPackageCommands(): CommandSpec[] {
       },
     },
 
-    {
-      path: ['plugins', 'remove'],
+    'plugins remove': {
       description:
         'Remove a managed external plugin package (POST /api/plugins/:id/remove; disables plugin and deletes its Hub install directory and record irreversibly). Prompts for confirmation on TTY; pass --yes non-interactively',
       flags: [{ name: 'yes', type: 'boolean', help: 'skip confirmation prompt (for non-interactive/scripted usage)' }],
@@ -238,5 +256,5 @@ export function pluginPackageCommands(): CommandSpec[] {
         ctx.io.out(`Removed directory (Hub host): ${result.installPath}\n`)
       },
     },
-  ]
+  }
 }
