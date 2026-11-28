@@ -45,8 +45,8 @@
 
 遵循 Helmx Quiet Surface 与模块化独立入口规范：
 
-- **`DuoManagerScreen`（`manager.tsx`，`sidebarItem` order 17）**：全站标准 `<Screen layout="contained" toolbar>` + 状态筛选 `Tabs(variant="pills")`（全部 / 就绪 / 异常）+ `SearchBox(variant="toolbar", size="sm")` + `<List>` / `<ListRow>` 单列发丝分割列表（直观展示 `tier/<id>`、`Planner → Executor` 流、步数上限与可用状态 `StatusLight`），空态提供推荐起步列表行；搭配右侧 `DuoDetailDrawer`（`useScreenDrawer` 驱动创建/编辑、`.duo-orchestrator-fields` 分组框、`<MonoId>` 标识行、`Cmd/Ctrl + Enter` 提交与 `ConfirmDialog` 删除/强删确认）。
-- **`DuoSettingsPanel`（`settings.tsx`，`settingsPanel` order 27）**：在设置中心展示当前编排器总数/就绪数及 `<List density="compact">` 摘要列表，并提供直达 `screen:builtin:duo/main` 的入口。
+- **`DuoManagerScreen`（`manager.tsx`，`sidebarItem` order 17）**：全站标准 `<Screen layout="contained" toolbar>` + 状态筛选 `Tabs(variant="pills")`（全部 / 可用 / 异常）+ `SearchBox(variant="toolbar", size="sm")` + `<List>` / `<ListRow>` 单列发丝分割列表（直观展示 `tier/<id>`、`Planner → Executor` 流、步数上限与可用状态 `StatusLight`），空态提供推荐起步列表行；搭配右侧 `DuoDetailDrawer`（`useScreenDrawer` 驱动创建/编辑、`.duo-orchestrator-fields` 分组框、`<MonoId>` 标识行、`Cmd/Ctrl + Enter` 提交与 `ConfirmDialog` 删除/强删确认）。
+- **`DuoSettingsPanel`（`settings.tsx`，`settingsPanel` order 27）**：在设置中心展示当前编排器总数与可用数量及 `<List density="compact">` 摘要列表，并提供直达 `screen:builtin:duo/main` 的入口。
 - **`DuoToolbarPill`（`index.tsx`，`COMPOSER_STATUS_SLOT`）**：挂载于输入框下方状态行，以极简 22px `.helmx-toolbar-pill` 展示 `规划 · <planner>` / `执行 · <executor>` / `协调 · <planner>`（仅步数暂停告警时切 `--warn`）；点击弹出 `Popover` 查看 `<MonoId>`、只读规划模型、交互式执行模型 `ModelPickerControl` 临时覆盖、恢复默认、执行步数计数与跳转编辑入口；待命草稿与非顶层人类会话直接返回 `null`。
 - **`DuoTransitionToolRow`（`index.tsx`，`toolView` `replaceRow: true`）**：在时间线以 26px `.trace-row` 紧凑渲染 `exit_plan_mode`（切换执行阶段）/ `hand_back_to_planner`（交回规划阶段）切相轨迹、目标阶段徽标、状态灯、耗时与报错摘要。
 - **Omnibox 动态检索（`helmx.search`）**：按编排器名称、`tier/<id>` 与底层模型 ref 实时索引（面包屑 `编排器` / `Orchestrator`），命中条目直达 `screen:builtin:duo/main?edit=<id>`（另注导航命令 `duo-create` -> `?create=1`）。

@@ -10,7 +10,7 @@ export const DUO_COPY = {
   deleteItem: { en: 'Delete', 'zh-CN': '删除' },
   filterAria: { en: 'Filter orchestrators', 'zh-CN': '筛选编排器' },
   filterAll: { en: 'All', 'zh-CN': '全部' },
-  filterReady: { en: 'Ready', 'zh-CN': '就绪' },
+  filterReady: { en: 'Available', 'zh-CN': '可用' },
   filterAttention: { en: 'Attention', 'zh-CN': '异常' },
   searchPlaceholder: {
     en: 'Search orchestrators or models…',
@@ -29,7 +29,7 @@ export const DUO_COPY = {
   useStarter: { en: 'Bind', 'zh-CN': '绑定' },
   noMatchTitle: { en: 'No matching orchestrators', 'zh-CN': '未找到匹配的编排器' },
 
-  statusAvailable: { en: 'Ready', 'zh-CN': '就绪' },
+  statusAvailable: { en: 'Available', 'zh-CN': '可用' },
   statusDisabled: { en: 'Model disabled', 'zh-CN': '模型已禁用' },
   statusUnavailable: { en: 'Unavailable', 'zh-CN': '不可用' },
 
@@ -90,7 +90,7 @@ export const DUO_COPY = {
     'zh-CN': '编排器将只读规划模型与工作区执行模型配对为可直接选用的 tier/<id> 档位。',
   },
   settingsKvTotal: { en: 'Orchestrators', 'zh-CN': '编排器总数' },
-  settingsKvReady: { en: 'Ready', 'zh-CN': '就绪数' },
+  settingsKvReady: { en: 'Available', 'zh-CN': '可用' },
   settingsOpenManager: { en: 'Open Orchestrator', 'zh-CN': '打开编排器管理' },
   settingsDisabledAlert: {
     en: 'Enable builtin:duo to configure and run Orchestrators.',

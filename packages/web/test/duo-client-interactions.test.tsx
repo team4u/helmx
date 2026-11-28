@@ -565,7 +565,7 @@ describe('duo-client-interactions', () => {
       assert.match(fullText, /tier\/arch_coder/)
       assert.match(fullText, /tier\/missing_ext/)
 
-      // Status pill filter (Attention -> 1 item, Ready -> 1 item, All -> 2 items)
+      // Status pill filter (Attention -> 1 item, Available -> 1 item, All -> 2 items)
       const attentionTab = Array.from(fullMount.host.querySelectorAll<HTMLButtonElement>('[role="tab"]'))
         .find((el) => (el.textContent ?? '').includes('Attention'))
       assert.ok(attentionTab !== undefined)
@@ -573,6 +573,14 @@ describe('duo-client-interactions', () => {
         attentionTab.click()
       })
       assert.equal(fullMount.host.querySelectorAll('[data-duo-recipe-id]').length, 1)
+      const availableTab = Array.from(fullMount.host.querySelectorAll<HTMLButtonElement>('[role="tab"]'))
+        .find((el) => (el.textContent ?? '').includes('Available'))
+      assert.ok(availableTab !== undefined)
+      await act(async () => {
+        availableTab.click()
+      })
+      assert.equal(fullMount.host.querySelectorAll('[data-duo-recipe-id]').length, 1)
+      assert.ok(fullMount.host.querySelector('[data-duo-recipe-id="arch_coder"] [aria-label="Available"]') !== null)
       const allTab = Array.from(fullMount.host.querySelectorAll<HTMLButtonElement>('[role="tab"]'))
         .find((el) => (el.textContent ?? '').includes('All'))!
       await act(async () => {
@@ -671,6 +679,7 @@ describe('duo-client-interactions', () => {
       const text = mounted.host.textContent ?? ''
       assert.match(text, /Orchestrator \(Flagship\)/)
       assert.match(text, /tier\/arch_coder/)
+      assert.match(text, /Available/)
       assert.ok(mounted.host.querySelector('.helmx-list-compact') !== null)
       const rowBtn = mounted.host.querySelector<HTMLButtonElement>('button.helmx-list-row-trigger')
       assert.ok(rowBtn !== null)
