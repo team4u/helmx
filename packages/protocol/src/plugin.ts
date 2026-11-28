@@ -1025,7 +1025,7 @@ export interface HelmxPluginContext<TConfig = Record<string, unknown>> {
 }
 
 export interface PluginDefinition {
-  /** Plugin ID, e.g. 'builtin:profile', 'builtin:triggers'. */
+  /** Plugin ID, e.g. 'builtin:mentions', 'builtin:triggers'. */
   id: string
   /**
    * Plugin display name (display copy, `LocalizedText`): a plain string or a
@@ -1046,8 +1046,6 @@ export interface PluginDefinition {
    */
   icon?: string
   version?: string
-  /** true 表示常驻不可卸载（builtin:profile）。 */
-  locked?: boolean
   /**
    * 插件间依赖契约：依赖的其他插件 ID 列表（仅 ID，不做版本解析）。
    * - 注册边界校验形状（非空字符串、插件 id 字符集）并按声明序去重；

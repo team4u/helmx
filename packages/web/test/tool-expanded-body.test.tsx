@@ -1021,7 +1021,6 @@ test('TraceRow：tool.view 透传 presentationMeta 且不再透传 siblingCalls/
       name: 'Demo ToolView',
       version: '1.0.0',
       enabled: true,
-      locked: false,
       status: 'active',
       hooks: [],
       actions: [],
@@ -1152,7 +1151,6 @@ test('ConversationTimeline 端到端装配：toolResult.details 透传至 ToolVi
     {
       id: 'demo:workflow-probe',
       name: 'Workflow Probe',
-      locked: false,
       enabled: true,
       status: 'active' as const,
       hooks: [],
@@ -1321,7 +1319,6 @@ test('TraceRow：replaceRow=true 卡片统一提供宿主输入/输出展开开�
         name: 'Demo Cards',
         version: '1.0.0',
         enabled: true,
-        locked: false,
         status: 'active',
         hooks: [],
         actions: [],

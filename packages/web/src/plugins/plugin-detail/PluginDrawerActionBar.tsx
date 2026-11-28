@@ -90,7 +90,7 @@ export function PluginDrawerActionBar({
             variant={plugin.enabled ? 'secondary' : 'primary'}
             size="sm"
             icon={plugin.enabled ? 'square' : 'play'}
-            disabled={plugin.locked || toggling}
+            disabled={toggling}
             onClick={() => onToggle(plugin, plugin.enabled ? false : true)}
           >
             {plugin.enabled

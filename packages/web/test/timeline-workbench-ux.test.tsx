@@ -491,7 +491,6 @@ describe("timeline-workbench-ux", () => {
       name: '工作流',
       version: '1',
       enabled: true,
-      locked: false,
       hooks: [],
       actions: [],
       tools: [],
@@ -749,7 +748,7 @@ describe("timeline-workbench-ux", () => {
     const store = makeTestStore({
       sseConnected: false,
       workbenchTab: requested,
-      plugins: [{ id: 'sample', name: 'Sample', version: '1.0.0', enabled: true, locked: false, hooks: [], actions: [], tools: [] }],
+      plugins: [{ id: 'sample', name: 'Sample', version: '1.0.0', enabled: true, hooks: [], actions: [], tools: [] }],
     })
     const setTab = store.actions.setWorkbenchTab
     const realSetTab: (tab: string) => void = (tab) => setTab(tab)
@@ -802,7 +801,7 @@ describe("timeline-workbench-ux", () => {
     const conv = makeConversation(1, { profileId: 'coder' })
     const store = makeTestStore({
       conversations: [conv],
-      plugins: [{ id: 'sample', name: 'Sample', version: '1.0.0', enabled: true, locked: false, hooks: [], actions: [], tools: [], clientHashes: { 'index.tsx': 'h1' } }],
+      plugins: [{ id: 'sample', name: 'Sample', version: '1.0.0', enabled: true, hooks: [], actions: [], tools: [], clientHashes: { 'index.tsx': 'h1' } }],
       uiContributions: [
         {
           pluginId: 'sample',
@@ -840,7 +839,7 @@ describe("timeline-workbench-ux", () => {
     const conv = makeConversation(1, { profileId: 'coder' })
     const store = makeTestStore({
       conversations: [conv],
-      plugins: [{ id: 'sample', name: 'Sample', version: '1.0.0', enabled: true, locked: false, hooks: [], actions: [], tools: [], clientHashes: { 'index.tsx': 'h1' } }],
+      plugins: [{ id: 'sample', name: 'Sample', version: '1.0.0', enabled: true, hooks: [], actions: [], tools: [], clientHashes: { 'index.tsx': 'h1' } }],
       uiContributions: [1, 2, 3, 4].map((idx) => ({
         pluginId: 'sample',
         surface: 'workbench.panel' as const,

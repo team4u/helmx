@@ -21,7 +21,7 @@ helmx start
 
 可以先问「请读一下这个项目的 README，告诉我该从哪里开始跑测试。」这一步能同时确认模型可用、助手读到的是你想看的目录。
 
-以后经常使用同一目录时，可以为它建一个 Profile，保存默认节点、目录、模型和技能。 [Profile 参考](../plugins/profile.md)
+以后经常使用同一目录时，可以为它建一个 Profile，保存默认节点、目录、模型和技能。 [CLI 命令参考](../cli/reference.md#产物与技能) · [架构总览](../architecture/overview.md)
 
 ## 接下来
 

@@ -88,7 +88,6 @@ export function createStepsPlugin(options: StepsPluginOptions = {}): PluginDefin
     },
     icon: 'check-square',
     version: '0.1.0',
-    locked: false,
     ...clientAssets,
     definePlugin(ctx) {
       const kv = ctx.kv<StepsConversationRecord>(STEPS_KV_NAMESPACE)

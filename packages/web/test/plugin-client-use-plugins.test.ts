@@ -40,7 +40,7 @@ function storeWithScreens(plugins: HelmxStoreValue['plugins'], ui: UiContributio
 }
 
 test('usePlugins：plugins 返回 store.plugins 同一引用（实时数据源非拷贝）', { timeout: 60_000 }, () => {
-  const plugins = [{ id: 'todo-app', name: '待办应用', locked: false, enabled: true, hooks: [], actions: [], tools: [] }]
+  const plugins = [{ id: 'todo-app', name: '待办应用', enabled: true, hooks: [], actions: [], tools: [] }]
   const store = storeWithScreens(plugins, [])
   let captured: ReturnType<typeof usePlugins> | undefined
   function Probe(): React.ReactNode {
@@ -86,7 +86,7 @@ test('usePlugins：screens 返回 groupedUi.screens 同一引用（含 pluginId 
 
 test('usePlugins：无 PluginClientContext（全屏视图无会话槽位）时同样可用', { timeout: 60_000 }, () => {
   const store = storeWithScreens(
-    [{ id: 'a', name: 'A', locked: false, enabled: true, hooks: [], actions: [], tools: [] }],
+    [{ id: 'a', name: 'A', enabled: true, hooks: [], actions: [], tools: [] }],
     [],
   )
   let captured: ReturnType<typeof usePlugins> | undefined
@@ -100,8 +100,8 @@ test('usePlugins：无 PluginClientContext（全屏视图无会话槽位）时�
 })
 
 test('usePlugins：store 快照更新后响应式返回新值（无缓存旧引用）', { timeout: 60_000 }, () => {
-  const firstPlugins = [{ id: 'a', name: 'A', locked: false, enabled: true, hooks: [], actions: [], tools: [] }]
-  const secondPlugins = [...firstPlugins, { id: 'b', name: 'B', locked: false, enabled: true, hooks: [], actions: [], tools: [] }]
+  const firstPlugins = [{ id: 'a', name: 'A', enabled: true, hooks: [], actions: [], tools: [] }]
+  const secondPlugins = [...firstPlugins, { id: 'b', name: 'B', enabled: true, hooks: [], actions: [], tools: [] }]
   let store = storeWithScreens(firstPlugins, [])
   const captured: Array<ReturnType<typeof usePlugins>> = []
   function Probe(): React.ReactNode {
@@ -142,7 +142,6 @@ test('usePluginConfig：在 PluginClientContext + HostStoreProviders 下实时�
     {
       id: 'speed-test',
       name: 'Speed Test',
-      locked: false,
       enabled: true,
       hooks: [],
       actions: [],

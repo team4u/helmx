@@ -560,7 +560,6 @@ function toSummary(summaries: Map<string, { id: string; version?: string; enable
   return {
     id: s.id,
     name: s.id,
-    locked: false,
     enabled: s.enabled,
     hooks: [] as never[],
     actions: s.enabled ? ['ping'] : [],

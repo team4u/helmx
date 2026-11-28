@@ -245,10 +245,9 @@ test('自动发现与全链路启用：installed-plugins 代码根与 plugins �
   assert.equal((globalThis as Record<string, unknown>).__hiddenExecuted, undefined)
   assert.ok(ids.includes('builtin:mentions'))
 
-  // 显式 plugin.json 默认停用且 locked=false；启用后 action / public doc / 默认 clientRoot 编译全通
+  // 显式 plugin.json 默认停用；启用后 action / public doc / 默认 clientRoot 编译全通
   const demo = list.find((p) => p.id === 'demo-external')!
   assert.equal(demo.enabled, false)
-  assert.equal(demo.locked, false)
   await sharedApp.kernel.plugins.enable('demo-external')
   assert.equal(((await sharedApp.kernel.plugins.invokeAction('demo-external', 'bump', { step: 5 })) as { count: number }).count, 5)
   assert.deepEqual(sharedApp.kernel.plugins.getPublicDoc('demo-external', 'status').value, { count: 5 })

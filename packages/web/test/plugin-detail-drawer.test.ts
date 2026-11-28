@@ -30,7 +30,6 @@ function makePlugin(partial: Partial<PluginSummary> = {}): PluginSummary {
     id: 'builtin:workflow',
     name: '工作流引擎',
     version: '1.2.0',
-    locked: false,
     enabled: true,
     hooks: ['before_turn', 'turn_settled'],
     actions: ['run', 'inspect'],
@@ -51,15 +50,14 @@ function typeIntoInput(input: HTMLInputElement, text: string): void {
 }
 
 // ---------------------------------------------------------------------------
-// 1. SSR 渲染测试：抽屉元信息、常驻状态、能力清单透视与 0 Emoji 铁律
+// 1. SSR 渲染测试：抽屉元信息、能力清单透视与 0 Emoji 铁律
 // ---------------------------------------------------------------------------
 
-test('PluginDetailDrawer：SSR 渲染包含抽屉主体、详细元信息、常驻状态与能力清单（Tools / Actions / Hooks）', { timeout: 60_000 }, () => {
+test('PluginDetailDrawer：SSR 渲染包含抽屉主体、详细元信息与能力清单（Tools / Actions / Hooks）', { timeout: 60_000 }, () => {
   const plugin = makePlugin({
     id: 'builtin:workflow',
     name: '工作流引擎',
     version: '1.2.0',
-    locked: true,
     enabled: true,
     tools: ['subagent', 'cleanup_worktree'],
     actions: ['run', 'inspect'],
@@ -81,11 +79,10 @@ test('PluginDetailDrawer：SSR 渲染包含抽屉主体、详细元信息、常�
   assert.match(html, /class="[^"]*primary-drawer-content[^"]*"/)
   assert.match(html, /role="dialog"/)
 
-  // 2. 插件详细元信息：名称、唯一 ID、版本与常驻徽章
+  // 2. 插件详细元信息：名称、唯一 ID 与版本
   assert.match(html, /工作流引擎/)
   assert.match(html, /builtin:workflow/)
   assert.match(html, /v1\.2\.0/)
-  assert.match(html, /Resident/)
 
   // 3. 能力清单透视：Tools 清单、Actions 清单、Hooks 清单
   assert.match(html, /subagent/)
@@ -170,7 +167,7 @@ test('PluginDetailDrawer：点击关闭按钮与按下 Escape 键触发 onClose 
 })
 
 // ---------------------------------------------------------------------------
-// 3. 启停控制测试：点击切换启停、常驻锁定与 409 在途任务处理
+// 3. 启停控制测试：点击切换启停与 409 在途任务处理
 // ---------------------------------------------------------------------------
 
 test('PluginDetailDrawer：启停按钮响应用户操作并调用 onToggleEnabled', { timeout: 60_000 }, async () => {
@@ -183,7 +180,7 @@ test('PluginDetailDrawer：启停按钮响应用户操作并调用 onToggleEnabl
 
   try {
     let toggledPlugin: PluginSummary | null = null
-    const plugin = makePlugin({ enabled: false, locked: false })
+    const plugin = makePlugin({ enabled: false })
 
     await act(async () => {
       root.render(
@@ -205,36 +202,15 @@ test('PluginDetailDrawer：启停按钮响应用户操作并调用 onToggleEnabl
       btn.textContent?.includes('Enable plugin'),
     ) as HTMLButtonElement | undefined
     assert.ok(toggleBtn, 'Disabled plugin should show an Enable plugin button')
-    assert.equal(toggleBtn.disabled, false, '未锁定且未 toggling 时按钮不应处于禁用态')
+    assert.equal(toggleBtn.disabled, false, '未 toggling 时按钮不应处于禁用态')
 
     await act(async () => {
       toggleBtn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
     })
     assert.equal((toggledPlugin as PluginSummary | null)?.id, 'builtin:workflow', '点击启用应触发 onToggleEnabled 并传递当前插件')
 
-    // 测试常驻锁定不可停用
-    const lockedPlugin = makePlugin({ enabled: true, locked: true })
-    await act(async () => {
-      root.render(
-        e(PluginDetailDrawer, {
-          plugin: lockedPlugin,
-          open: true,
-          inline: true,
-          onClose: () => {},
-          onToggleEnabled: async () => {},
-          toggling: false,
-        }),
-      )
-    })
-
-    const lockedToggleBtn = Array.from(container.querySelectorAll('button')).find((btn) =>
-      btn.textContent?.includes('Disable plugin'),
-    ) as HTMLButtonElement | undefined
-    assert.ok(lockedToggleBtn, '已启用插件展示“停用插件”按钮')
-    assert.equal(lockedToggleBtn.disabled, true, '常驻锁定插件启停按钮必须处于禁用态')
-
     // 测试 409 在途冲突提示
-    const activePlugin = makePlugin({ enabled: true, locked: false })
+    const activePlugin = makePlugin({ enabled: true })
     await act(async () => {
       root.render(
         e(PluginDetailDrawer, {
@@ -638,7 +614,7 @@ test('PluginDetailDrawer：停用遇 409 plugin_in_use 时展示占用清单并�
   const toggleCalls: Array<{ force?: boolean } | undefined> = []
 
   try {
-    const plugin = makePlugin({ enabled: true, locked: false })
+    const plugin = makePlugin({ enabled: true })
     let failWithInUse = true
 
     await act(async () => {
@@ -734,7 +710,7 @@ test('PluginDetailDrawer：409 plugin_has_live_tasks 仍保持硬阻断提示且
   pluginsApi.getConfig = async () => ({ values: {}, schema: {} })
 
   try {
-    const plugin = makePlugin({ enabled: true, locked: false })
+    const plugin = makePlugin({ enabled: true })
 
     await act(async () => {
       root.render(
@@ -1023,7 +999,6 @@ test('PluginDetailDrawer & PluginConfigForm：zh-CN locale 渲染中文状态、
     id: 'external:broken',
     name: { en: 'Broken Plugin', 'zh-CN': '损坏插件' },
     description: undefined,
-    locked: true,
     enabled: false,
     status: 'failed',
     tools: [],
@@ -1053,7 +1028,6 @@ test('PluginDetailDrawer & PluginConfigForm：zh-CN locale 渲染中文状态、
   )
 
   assert.match(zhHtml, /损坏插件/)
-  assert.match(zhHtml, /常驻/)
   assert.match(zhHtml, /加载失败/)
   assert.match(zhHtml, /当前状态/)
   assert.match(zhHtml, /异常/)
@@ -1404,8 +1378,8 @@ test('PluginDetailDrawer：切换插件清空占用确认与错误、丢弃迟�
   const originalGetConfig = pluginsApi.getConfig
   pluginsApi.getConfig = async () => ({ values: {}, schema: {} })
 
-  const pluginA = makePlugin({ id: 'ext:alpha', name: 'Alpha Plugin', enabled: true, locked: false })
-  const pluginB = makePlugin({ id: 'ext:beta', name: 'Beta Plugin', enabled: true, locked: false })
+  const pluginA = makePlugin({ id: 'ext:alpha', name: 'Alpha Plugin', enabled: true })
+  const pluginB = makePlugin({ id: 'ext:beta', name: 'Beta Plugin', enabled: true })
 
   try {
     // 1. Trigger 409 plugin_in_use on Alpha, then switch directly to Beta (open stays true):

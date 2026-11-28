@@ -1,5 +1,5 @@
 /**
- * builtin:mentions: cross-Profile `@` collaboration plugin (non-locked, toggleable).
+ * builtin:mentions: cross-Profile `@` collaboration plugin (toggleable).
  *
  * Responsibilities:
  * - Low-priority `before_turn` (priority -100, running after default tool-stripping hooks) injects

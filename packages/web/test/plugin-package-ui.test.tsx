@@ -48,7 +48,6 @@ function makeManagedPlugin(partial: Partial<PluginSummary> = {}): PluginSummary 
     id: 'my-plugin',
     name: '我的外部插件',
     version: '1.0.0',
-    locked: false,
     enabled: false,
     hooks: [],
     actions: [],
@@ -339,7 +338,7 @@ test('PluginDetailDrawer：内置或未受管插件不展示包管理区块', { 
   const { PluginDetailDrawer } = await import('../src/plugins/PluginDetailDrawer.js')
 
   const builtin: PluginSummary = {
-    id: 'builtin:workflow', name: '工作流引擎', version: '1.2.0', locked: false, enabled: true,
+    id: 'builtin:workflow', name: '工作流引擎', version: '1.2.0', enabled: true,
     hooks: [], actions: [], tools: [],
   }
   const html = renderToString(
@@ -546,7 +545,7 @@ test('PluginCenter 集成：安装成功后 syncPlugins 刷新列表并导航至
   const originalList = pluginsApi.list
 
   const builtinPlugin: PluginSummary = {
-    id: 'builtin:mentions', name: '角色点名', version: '1.0.0', locked: false, enabled: true,
+    id: 'builtin:mentions', name: '角色点名', version: '1.0.0', enabled: true,
     hooks: [], actions: [], tools: [],
   }
   let serverPlugins: PluginSummary[] = [builtinPlugin]
@@ -808,7 +807,7 @@ test('PluginCenter：顶栏「全部更新」顺序更新、汇总通知、部�
   const originalUpdate = pluginsApi.update
   const originalList = pluginsApi.list
   const builtinPlugin: PluginSummary = {
-    id: 'builtin:mentions', name: 'Mentions', version: '1.0.0', locked: false, enabled: true,
+    id: 'builtin:mentions', name: 'Mentions', version: '1.0.0', enabled: true,
     hooks: [], actions: [], tools: [],
   }
   const managedA = makeManagedPlugin({ id: 'ext-a', name: 'Ext A', version: '1.0.0' })

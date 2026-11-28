@@ -190,14 +190,6 @@ export function topoSortByDependencies<T>(
   return out;
 }
 
-export function assertNotLocked(state: PluginState): void {
-  if (state.definition.locked === true) {
-    throw new HelmxError('plugin_locked', `Plugin ${state.definition.id} is locked and cannot be disabled or unregistered`, 403, {
-      pluginId: state.definition.id,
-    });
-  }
-}
-
 /** Active for external callers = enabled, idle, and error-free (not transitioning or failed). */
 export function isPluginStateActive(state: PluginState): boolean {
   return state.enabled && state.phase === 'idle' && state.lastError === undefined;
@@ -255,7 +247,6 @@ export function resolveInitialEnabled(
   store: PluginConfigStore | undefined,
   options: { enabled?: boolean },
 ): boolean {
-  if (definition.locked === true) return true;
   let persisted: boolean | undefined;
   try {
     persisted = store?.getEnabled?.(definition.id);
@@ -500,7 +491,6 @@ export function pluginSummaryOf(
     ...(state.definition.icon ? { icon: state.definition.icon } : {}),
     version: state.definition.version,
     ...(state.dependencies.length > 0 ? { dependencies: [...state.dependencies] } : {}),
-    locked: state.definition.locked === true,
     enabled: state.enabled,
     status: failed ? 'failed' : active ? 'active' : 'disabled',
     ...(failed ? { error: state.lastError } : {}),

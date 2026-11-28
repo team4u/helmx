@@ -60,7 +60,6 @@ function makePlugin(id: string, name: string, enabled = true): PluginSummary {
     name: { en: name, 'zh-CN': name },
     version: '1.0.0',
     enabled,
-    locked: false,
     hooks: [],
     actions: [],
     tools: [],

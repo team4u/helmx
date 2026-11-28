@@ -1,10 +1,10 @@
 # 长期记忆插件
 
-`builtin:memory` 解决「跨会话记住用户偏好与约定」的问题：按 Profile 维护一份 `MEMORY.md`，每回合注入模型上下文，并提供单 Profile 粒度的开关。适合想让助理记住稳定偏好的使用者，以及排查记忆丢失/超限的维护者。记忆与人格正交——SYSTEM.md 归 [`builtin:profile`](profile.md)，MEMORY.md 归本插件；内核与 `@helmx/protocol` 对记忆零感知。
+`builtin:memory` 解决「跨会话记住用户偏好与约定」的问题：按 Profile 维护一份 `MEMORY.md`，每回合注入模型上下文，并提供单 Profile 粒度的开关。适合想让助理记住稳定偏好的使用者，以及排查记忆丢失/超限的维护者。记忆与人格正交——SYSTEM.md 与技能底座由 `@helmx/kernel` 内核提供，MEMORY.md 归本插件，`@helmx/protocol` 对记忆零感知。
 
 ## 当前状态
 
-默认启用、非 `locked` 可停用。完全自治：`MemoryStore` 自管 `<dataDir>/profiles/<profileId>/MEMORY.md`，磁盘全文是唯一权威，不进任何公共文档。
+默认启用、可按需停用。完全自治：`MemoryStore` 自管 `<dataDir>/profiles/<profileId>/MEMORY.md`，磁盘全文是唯一权威，不进任何公共文档。
 
 ## 能力和入口
 
@@ -110,6 +110,7 @@ Profile 关闭记忆时，或会话为派生子会话（子代理 / Workflow / S
 
 ## 相关文档
 
-- [角色与技能底座](profile.md)：SYSTEM.md 注入（与本插件正交）
+- [角色点名协作](mentions.md)：跨 Profile `@` 点名协作（与本插件正交）
+- [微内核架构总览](../architecture/overview.md)：内核通用角色/技能底座与包边界
 - [插件系统设计与契约](overview.md)：`ctx.doc` / `ctx.action` 宿主机制
 - [CLI 命令参考](../cli/reference.md)：`helmx memory` 命令与 `--current`

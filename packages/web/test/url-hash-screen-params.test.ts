@@ -41,7 +41,7 @@ const snapshotPayload = {
   seq: 1,
   conversations: [],
   pendingAsks: [],
-  plugins: [{ id: 'test:nav', name: '导航测试', locked: false, enabled: true, hooks: [], actions: [], tools: [] }],
+  plugins: [{ id: 'test:nav', name: '导航测试', enabled: true, hooks: [], actions: [], tools: [] }],
   ui: [
     {
       pluginId: 'test:nav',

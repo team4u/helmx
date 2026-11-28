@@ -92,7 +92,6 @@ test('reloadExternalPlugin swaps unregister -> fresh normalized register with th
   assert.equal(register.definition?.id, PLUGIN_ID)
   assert.deepEqual(register.options, { enabled: true })
   assert.equal(register.definition?.clientRoot, sourceDir, 'registered definition must be normalized (clientRoot defaults to the source dir)')
-  assert.equal(register.definition?.locked, undefined, 'external definitions cannot carry locked')
 })
 
 test('reloadExternalPlugin rolls back to the pre-reload definition when the swap fails (rolledBack=true, root cause kept)', { timeout: 60_000 }, async (t) => {

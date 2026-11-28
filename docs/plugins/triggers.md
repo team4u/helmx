@@ -4,7 +4,7 @@
 
 ## 当前状态
 
-默认启用、非 `locked` 可停用。管理界面为 client.tsx React 单轨（`TriggersManagerScreen` 与 `TriggersSettingsPanel`），详情抽屉直接基于实时会话列表展示该触发器的最近运行记录并支持右侧抽屉速览与主屏跳转（零双写）。
+默认启用、可按需停用。管理界面为 client.tsx React 单轨（`TriggersManagerScreen` 与 `TriggersSettingsPanel`），详情抽屉直接基于实时会话列表展示该触发器的最近运行记录并支持右侧抽屉速览与主屏跳转（零双写）。
 
 ## 能力和入口
 

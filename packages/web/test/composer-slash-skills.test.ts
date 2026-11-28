@@ -154,8 +154,8 @@ function makeStore(conversation: ConversationSummary, opts: MountOptions): Helmx
   return makeTestStore({
     conversations: [conversation],
     plugins: opts.plugins ?? [
-      { id: 'builtin:mentions', name: 'mentions', locked: false, enabled: true, hooks: [], actions: [], tools: [] },
-      { id: 'builtin:herdr', name: 'herdr', locked: false, enabled: true, hooks: [], actions: [], tools: [] },
+      { id: 'builtin:mentions', name: 'mentions', enabled: true, hooks: [], actions: [], tools: [] },
+      { id: 'builtin:herdr', name: 'herdr', enabled: true, hooks: [], actions: [], tools: [] },
     ],
     profiles: opts.profiles,
     skills: opts.skills ?? CATALOG,
@@ -234,8 +234,8 @@ test('interaction: profile.skills=[] -> no skills at all, only builtin commands'
 
 test('interaction: whitelisted profile -> only whitelisted skills; disabled-plugin managed skills never appear even on whitelist hits', { timeout: 60_000 }, async () => {
   const plugins = [
-    { id: 'builtin:mentions', name: 'mentions', locked: false, enabled: true, hooks: [], actions: [], tools: [] },
-    { id: 'builtin:herdr', name: 'herdr', locked: false, enabled: false, hooks: [], actions: [], tools: [] },
+    { id: 'builtin:mentions', name: 'mentions', enabled: true, hooks: [], actions: [], tools: [] },
+    { id: 'builtin:herdr', name: 'herdr', enabled: false, hooks: [], actions: [], tools: [] },
   ] as PluginSummary[]
   const { typeSlash, unmount } = await mountComposer(conv(3, 'coder'), {
     profiles: [{ id: 'coder', tags: [], skills: ['tally', 'herdr-tool'] }],

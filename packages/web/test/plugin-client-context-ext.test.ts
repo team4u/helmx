@@ -216,7 +216,7 @@ test('usePluginDocState：真实 store 驱动 loading -> error -> retry() -> rea
   t.after(() => { globalThis.fetch = originalFetch })
 
   const store = makeTestStore({
-    plugins: [{ id: 'test:plugin', name: 'Test', version: '1.0.0', enabled: true, locked: false, hooks: [], actions: [], tools: [] }],
+    plugins: [{ id: 'test:plugin', name: 'Test', version: '1.0.0', enabled: true, hooks: [], actions: [], tools: [] }],
   })
   const ctx = createPluginClientContext(createPluginClientHostPort(store), 'test:plugin', 1)
   const probe = mountProbe<PluginDocState<{ count: number }>>(store, ctx, () => usePluginDocState<{ count: number }>('status'))

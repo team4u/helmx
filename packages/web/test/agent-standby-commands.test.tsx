@@ -545,9 +545,9 @@ describe('agent-standby-commands', () => {
       { id: 'herdr-tool', name: '终端工具', managedByPlugin: 'builtin:herdr', references: [] },
     ]
     state.plugins = [
-      { id: 'builtin:mentions', name: 'mentions', locked: false, enabled: true, hooks: [], actions: [], tools: [] },
-      { id: 'builtin:herdr', name: 'herdr', locked: false, enabled: false, hooks: [], actions: [], tools: [] },
-      { id: 'p1', name: 'p1', locked: false, enabled: true, hooks: [], actions: ['ping'], tools: [] },
+      { id: 'builtin:mentions', name: 'mentions', enabled: true, hooks: [], actions: [], tools: [] },
+      { id: 'builtin:herdr', name: 'herdr', enabled: false, hooks: [], actions: [], tools: [] },
+      { id: 'p1', name: 'p1', enabled: true, hooks: [], actions: ['ping'], tools: [] },
     ]
     state.ui = [
       {
@@ -643,7 +643,7 @@ describe('agent-standby-commands', () => {
 
   test('draft-state plugin slash commands: popover picks execute and close; failures keep the draft; none create a conversation', { timeout: 60_000 }, async () => {
     state.plugins = [
-      { id: 'p1', name: 'p1', locked: false, enabled: true, hooks: [], actions: ['ping'], tools: [] },
+      { id: 'p1', name: 'p1', enabled: true, hooks: [], actions: ['ping'], tools: [] },
     ]
     state.ui = [
       {
@@ -687,7 +687,7 @@ describe('agent-standby-commands', () => {
 
   test('draft-state plugin slash commands: optimistic clear, in-flight banner + spinner, and rollback on untouched failure', { timeout: 60_000 }, async () => {
     state.plugins = [
-      { id: 'p1', name: 'p1', locked: false, enabled: true, hooks: [], actions: ['ping'], tools: [] },
+      { id: 'p1', name: 'p1', enabled: true, hooks: [], actions: ['ping'], tools: [] },
     ]
     state.ui = [
       {
@@ -740,7 +740,7 @@ describe('agent-standby-commands', () => {
 
   test('draft-state @: pops mentionable profile candidates (carrying profileId), filters and inserts on pick; only the later send creates and submits', { timeout: 60_000 }, async () => {
     state.plugins = [
-      { id: 'builtin:mentions', name: '角色点名', locked: false, enabled: true, hooks: [], actions: ['list_mentionable'], tools: [] },
+      { id: 'builtin:mentions', name: '角色点名', enabled: true, hooks: [], actions: ['list_mentionable'], tools: [] },
     ]
     state.ui = [
       {
@@ -826,7 +826,7 @@ describe('agent-standby-commands', () => {
 
   test('draft-state # / :: global doc completion sources work with proper replacement; sessionDoc sources explicitly require an existing conversation', { timeout: 60_000 }, async () => {
     state.plugins = [
-      { id: 'p1', name: 'p1', locked: false, enabled: true, hooks: [], actions: [], tools: [] },
+      { id: 'p1', name: 'p1', enabled: true, hooks: [], actions: [], tools: [] },
     ]
     state.ui = [
       {
@@ -888,7 +888,6 @@ describe('agent-standby-commands', () => {
       {
         id: 'builtin:plan',
         name: 'Plan Mode',
-        locked: false,
         enabled: true,
         hooks: [],
         actions: ['toggle'],
@@ -898,7 +897,6 @@ describe('agent-standby-commands', () => {
       {
         id: 'builtin:title',
         name: 'Title',
-        locked: false,
         enabled: true,
         hooks: [],
         actions: ['generate'],

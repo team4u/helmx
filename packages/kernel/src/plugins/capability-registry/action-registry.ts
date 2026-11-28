@@ -83,7 +83,7 @@ export function actionToolAlias(pluginId: string, actionId: string): string {
 
 /**
  * Parses a qualified `pluginId.actionId` identifier. Since `pluginId` may contain `:`
- * (e.g. `builtin:profile`), split at the first `.` rather than the last.
+ * (e.g. `builtin:mentions`), split at the first `.` rather than the last.
  */
 export function parseQualifiedActionId(qualified: string): { pluginId: string; actionId: string } {
   const dot = qualified.indexOf('.');

@@ -32,7 +32,6 @@ function makePlugin(partial: Partial<PluginSummary> & { id: string }): PluginSum
   return {
     name: partial.name ?? partial.id,
     version: '1.0.0',
-    locked: false,
     enabled: true,
     hooks: [],
     actions: [],

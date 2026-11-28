@@ -127,7 +127,6 @@ function createChangesHarness(options: {
       version: '0.1.0',
       enabled: true,
       builtin: true,
-      locked: false,
       status: 'active',
     } as unknown as PluginSummary,
     {
@@ -136,7 +135,6 @@ function createChangesHarness(options: {
       version: '0.1.0',
       enabled: true,
       builtin: true,
-      locked: false,
       status: 'active',
     } as unknown as PluginSummary,
   ]

@@ -896,24 +896,8 @@ test('normal disable: service by register inverse order stop', { timeout: 60_000
 });
 
 // ---------------------------------------------------------------------------
-// locked plugin / doc namespacing / config honesty
+// doc namespacing / config honesty
 // ---------------------------------------------------------------------------
-
-test('locked plugin disable/unregister 403 plugin_locked', { timeout: 60_000 }, async () => {
-  const host = makeHost();
-  await host.register({
-    id: 'builtin:mentions',
-    locked: true,
-    definePlugin: () => {},
-  });
-  await assert.rejects(host.disable('builtin:mentions'), (err: unknown) => {
-    assert.ok(err instanceof HelmxError);
-    assert.equal(err.code, 'plugin_locked');
-    assert.equal(err.status, 403);
-    return true;
-  });
-  await assertRejectsCode(() => host.unregister('builtin:mentions'), 'plugin_locked', 403);
-});
 
 test('doc namespace isolation pluginId:name; get returns clone preventing unpersisted mutations', { timeout: 60_000 }, async () => {
   const host = makeHost();
@@ -1778,12 +1762,9 @@ test('register/enable/disable/unregister after success plugin.changed event; wit
   await host.unregister('p:ev');
   assert.equal(changed(), 4);
 
-  // reject but without state change (locked / in-flight task / missing) do not fake change event
+  // reject without state change (missing plugin) does not fabricate change event
   const h2 = makeHost();
-  await h2.register({ id: 'p:locked', locked: true, definePlugin: () => {} });
   const before = events.length;
-  await assertRejectsCode(() => h2.disable('p:locked'), 'plugin_locked');
-  await assertRejectsCode(() => h2.unregister('p:locked'), 'plugin_locked');
   await assertRejectsCode(() => h2.disable('p:none'), 'unknown_plugin');
   await assertRejectsCode(() => h2.unregister('p:none'), 'unknown_plugin');
   assert.equal(events.length, before); // reject not new increase event

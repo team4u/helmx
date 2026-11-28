@@ -105,7 +105,6 @@ export function createPlanPlugin(options: PlanPluginOptions = {}): PluginDefinit
     },
     icon: 'list-tree',
     version: '0.1.0',
-    locked: false,
     ...clientAssets,
     definePlugin(ctx) {
       ctx.configSchema({

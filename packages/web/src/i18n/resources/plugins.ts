@@ -10,7 +10,6 @@ import type { MessageTable } from '../messages.js'
 
 export const pluginsMessages = {
   // Shared plugin labels
-  'plugins.resident': { en: 'Resident', 'zh-CN': '常驻' },
   'plugins.status.error': { en: 'Error', 'zh-CN': '异常' },
   'plugins.openView': { en: 'Open view', 'zh-CN': '打开视图' },
   'plugins.installPlugin': { en: 'Install plugin', 'zh-CN': '安装插件' },
@@ -47,10 +46,6 @@ export const pluginsMessages = {
   'plugins.errorStage.unknown': { en: 'Unknown stage', 'zh-CN': '未知阶段' },
 
   // PluginCard
-  'plugins.card.switchLockedTitle': {
-    en: 'Resident plugins cannot be disabled',
-    'zh-CN': '常驻插件不可停用',
-  },
   'plugins.card.switchLoadBrokenTitle': {
     en: 'Plugin failed to load; click to see error details',
     'zh-CN': '插件加载失败，请点击查看错误详情',
@@ -58,10 +53,6 @@ export const pluginsMessages = {
   'plugins.card.switchDisableTitle': { en: 'Click to disable', 'zh-CN': '点击停用' },
   'plugins.card.switchEnableTitle': { en: 'Click to enable', 'zh-CN': '点击启用' },
   'plugins.card.versionTitle': { en: 'Version {version}', 'zh-CN': '版本 {version}' },
-  'plugins.card.lockedTitle': {
-    en: 'Resident core plugin; cannot be disabled',
-    'zh-CN': '常驻核心插件，不可停用',
-  },
   'plugins.card.failedFallbackTitle': {
     en: 'Plugin failed to load or enable',
     'zh-CN': '插件加载或启用失败',

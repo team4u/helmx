@@ -1,8 +1,8 @@
 /**
  * Kernel-owned `profiles` managed skill (`managedByPlugin: core:profiles`).
  *
- * Split out of the former `builtin:profile` combined `profile` skill so Profile (role)
- * CRUD, persona, and guardrail guidance lives under the `core:profiles` domain.
+ * Lives under the `core:profiles` kernel domain so Profile (role)
+ * CRUD, persona, and guardrail guidance stays aligned with core actions.
  */
 import type { BuiltinSkillAsset } from '../../services/skill-service.js'
 import { renderSkillTemplate } from './template.js'

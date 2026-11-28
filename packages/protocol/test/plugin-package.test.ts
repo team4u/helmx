@@ -95,7 +95,6 @@ test('PluginSummary.managed is an additive optional field (type guards and struc
   const legacy: PluginSummary = {
     id: 'builtin:mentions',
     name: 'mentions',
-    locked: false,
     enabled: true,
     hooks: [],
     actions: [],

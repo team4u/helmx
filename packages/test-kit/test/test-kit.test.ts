@@ -171,7 +171,6 @@ test('DTO factories: makeConversationSummary / makeProfile / makePluginSummary d
   assert.equal(pluginDefault.id, 'test:plugin')
   assert.equal(pluginDefault.name, 'test:plugin')
   assert.equal(pluginDefault.enabled, true)
-  assert.equal(pluginDefault.locked, false)
   assert.deepEqual(pluginDefault.hooks, [])
   assert.deepEqual(pluginDefault.actions, [])
   assert.deepEqual(pluginDefault.tools, [])
@@ -179,7 +178,6 @@ test('DTO factories: makeConversationSummary / makeProfile / makePluginSummary d
   const pluginCustom = makePluginSummary({
     id: 'builtin:workflow',
     name: 'workflow engine',
-    locked: false,
     enabled: false,
     status: 'disabled',
     tools: ['subagent'],

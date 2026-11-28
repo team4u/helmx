@@ -192,7 +192,6 @@ test('Stage 0 protocol contracts lock transient live, clientHashes, lastEntryId,
   const pluginSummary: PluginSummary = {
     id: 'builtin:workflow',
     name: 'Workflow',
-    locked: false,
     enabled: true,
     hooks: [],
     actions: [],

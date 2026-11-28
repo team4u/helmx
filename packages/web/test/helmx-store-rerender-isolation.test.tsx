@@ -110,7 +110,6 @@ const makeSnapshot = (): HelmxSnapshot => ({
     {
       id: 'builtin:mentions',
       name: 'Role Mentions',
-      locked: false,
       enabled: true,
       hooks: [],
       actions: [],
@@ -119,7 +118,6 @@ const makeSnapshot = (): HelmxSnapshot => ({
     {
       id: 'test:plugin',
       name: 'Test Plugin',
-      locked: false,
       enabled: true,
       hooks: [],
       actions: [],

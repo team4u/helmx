@@ -1,15 +1,14 @@
 /**
  * Kernel-owned core managed skills (`managedByPlugin: core:*`) and startup bootstrapper.
  *
- * All four host/domain manuals live directly in `@helmx/kernel` rather than `builtin:profile`:
+ * All four host/domain manuals live directly in `@helmx/kernel`:
  * - `helmx-cli` -> `core:host`
  * - `app-builder` -> `core:plugins`
  * - `conversations` -> `core:conversations`
  * - `profiles` -> `core:profiles`
  *
- * Bootstrapped during `KernelRuntime.initialize()` before plugin activation so migrated skill
- * directories (`helmx-cli`, `app-builder`) already carry `core:*` ownership on disk before
- * active plugin owner reconciliation sweeps retired `builtin:profile` directories (e.g. `profile`).
+ * Bootstrapped during `KernelRuntime.initialize()` before plugin activation so kernel-owned skill
+ * directories already carry `core:*` ownership on disk before active plugin owner reconciliation runs.
  */
 import { HelmxError, isValidCoreOwnerId, parseSkillFrontmatter } from '@helmx/protocol'
 import type { BuiltinSkillAsset, SkillService } from '../../services/skill-service.js'

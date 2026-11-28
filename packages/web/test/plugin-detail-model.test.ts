@@ -30,7 +30,6 @@ function makePlugin(partial: Partial<PluginSummary> = {}): PluginSummary {
     id: 'builtin:workflow',
     name: '工作流引擎',
     version: 'v1.2.0',
-    locked: false,
     enabled: true,
     status: 'active',
     hooks: [],

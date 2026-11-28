@@ -325,7 +325,6 @@ describe('duo-client-interactions', () => {
       id: DUO_PLUGIN_ID,
       name: { en: 'Orchestrator', 'zh-CN': '编排器' },
       version: '0.2.0',
-      locked: false,
       enabled: true,
       status: 'active',
       hooks,

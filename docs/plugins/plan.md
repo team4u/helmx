@@ -4,7 +4,7 @@
 
 ## 当前状态
 
-默认启用、非 `locked` 可停用。全部策略、状态与前端视图位于插件层；内核只通过 `AskDoc` 通用字段（`choice` / `model` / `defaultValue` / `hint`）与 `PluginToolResultEnvelope.control` 透传纯机制级的回合控制原语，对计划业务概念零感知。
+默认启用、可按需停用。全部策略、状态与前端视图位于插件层；内核只通过 `AskDoc` 通用字段（`choice` / `model` / `defaultValue` / `hint`）与 `PluginToolResultEnvelope.control` 透传纯机制级的回合控制原语，对计划业务概念零感知。
 
 ## 适用范围与入口
 
@@ -49,7 +49,7 @@
 - **普通模式（`mode === 'normal'`）**：仅剔除 `plan_save` 与 `plan_propose`（保留内核 `ask_user`），不注入任何提示词段落；
 - **计划模式（`mode === 'planning'`）**：仅保留 `PLAN_MODE_TOOL_WHITELIST` 中的八个工具：
   `read`、`read_artifact`、`load_skill`、`ask_user`、`bash`、`run_action`、`plan_save`、`plan_propose`（明确不含 `update_steps`，实时步骤清单面向执行阶段）。
-  `write`、`edit`、`register_artifact`、`subagent`、`SubagentWorkflow`、`cleanup_worktree`、`update_memory`、`swarm_*` 等文件修改与派工工具全部被剔除；原生 `bash` 与 `run_action` 经 `plan.mode` 段落施加模型级只读规划约束（仅用于代码检索、构建、类型检查、测试、`git` 只读命令以及 `list` / `describe` / 只读查询动作，禁止修改文件、重定向写入、提交或变更宿主机状态；无静态 Shell 校验器）。由于钩子在 `builtin:profile`（`-100`）之前执行且剔除了派工工具，系统提示词中的 `<available_profiles>` 同步自然省略；同时注入 `plan.mode` 段落明确只读约束、提案前用 `ask_user` 澄清阻塞歧义、自包含且易审阅的 Markdown 章节契约（`Goal`、`User Review Required` GitHub Alerts、`Proposed Changes` `[MODIFY]`/`[NEW]`/`[DELETE]` 标记与既有文件链接/新建文件行内代码路径规范、`Verification Plan`），以及「在 `plan_save` 与 `plan_propose` 之后不在聊天正文重复粘贴或复述计划全文」的防冗余提示（确保 `handoff` 后零上下文执行者无需二次盲搜）。
+  `write`、`edit`、`register_artifact`、`subagent`、`SubagentWorkflow`、`cleanup_worktree`、`update_memory`、`swarm_*` 等文件修改与派工工具全部被剔除；原生 `bash` 与 `run_action` 经 `plan.mode` 段落施加模型级只读规划约束（仅用于代码检索、构建、类型检查、测试、`git` 只读命令以及 `list` / `describe` / 只读查询动作，禁止修改文件、重定向写入、提交或变更宿主机状态；无静态 Shell 校验器）。由于钩子在 `builtin:mentions`（`-100`）之前执行且剔除了派工工具，系统提示词中的 `<available_profiles>` 同步自然省略；同时注入 `plan.mode` 段落明确只读约束、提案前用 `ask_user` 澄清阻塞歧义、自包含且易审阅的 Markdown 章节契约（`Goal`、`User Review Required` GitHub Alerts、`Proposed Changes` `[MODIFY]`/`[NEW]`/`[DELETE]` 标记与既有文件链接/新建文件行内代码路径规范、`Verification Plan`），以及「在 `plan_save` 与 `plan_propose` 之后不在聊天正文重复粘贴或复述计划全文」的防冗余提示（确保 `handoff` 后零上下文执行者无需二次盲搜）。
 
 ### 2. 工具清单与边界
 

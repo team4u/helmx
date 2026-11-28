@@ -253,7 +253,6 @@ test('CodeBlockRenderer 从 store.plugins 读取 clientHashes：命中 O(1) 缓�
       plugins: [{
         id: 'cb-hash-plugin',
         name: 'CB',
-        locked: false,
         enabled: true,
         status: 'active',
         hooks: [],

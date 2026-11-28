@@ -7,7 +7,6 @@
  * - while disabled, `setConfig` works before `enable` (retaining `configSchema`);
  * - `enable` persists `true` and `disable` persists `false`; across "restarts" (new `PluginHost`
  *   with the same persistent store), persisted toggles override the declaration default;
- * - `locked` plugins remain enabled even if declared with `enabled: false`;
  * - explicit JSON-safe diagnostics when `stop` and/or persistence fail together;
  * - service `liveTasks` keep-alive gate: blocks `disable`/`unregister` even without tracker tasks,
  *   unblocks once empty, and fails explicitly on thrown errors or invalid return values.
@@ -128,12 +127,10 @@ function servicePlugin(
     onStart?: () => void;
     onStop?: () => void;
     liveTasks?: () => string[];
-    locked?: boolean;
   } = {},
 ): PluginDefinition {
   return {
     id,
-    ...(opts.locked ? { locked: true } : {}),
     definePlugin: (ctx) => {
       ctx.configSchema({ endpoint: { type: 'string', label: 'Endpoint' } });
       ctx.ui.sidebarItem({ id: 'nav', label: 'Navigation' });
@@ -415,25 +412,6 @@ test('HelmxPluginConfigStore setEnabled: non-boolean argument fails 400 validati
     (err: unknown) => err instanceof HelmxError && err.code === 'validation_error' && err.status === 400,
   );
   assert.equal(existsSync(join(dataDir, 'config.json')), false);
-});
-
-// ---------------------------------------------------------------------------
-// locked protection
-// ---------------------------------------------------------------------------
-
-test('locked plugin stays enabled even when registered with enabled:false, and disable rejects 403', { timeout: 60_000 }, async () => {
-  const store = new MemoryToggleStore();
-  const host = makeHost(store);
-  const started: string[] = [];
-  await host.register(
-    servicePlugin('builtin:mentions', { onStart: () => started.push('start'), locked: true }),
-    { enabled: false },
-  );
-  assert.equal(host.list().find((p) => p.id === 'builtin:mentions')!.enabled, true);
-  assert.deepEqual(started, ['start']);
-  await assertRejectsCode(() => host.disable('builtin:mentions'), 'plugin_locked');
-  // locked does not persist any toggle state (rejected disable produces no write side effects)
-  assert.equal(store.enabled.has('builtin:mentions'), false);
 });
 
 // ---------------------------------------------------------------------------

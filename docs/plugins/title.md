@@ -4,7 +4,7 @@
 
 ## 当前状态
 
-默认启用、非 `locked` 可停用。注册一个旁路动作 `generate`（`exposeToPrompt: false`，不进入系统提示词 `<available_actions>`）与一条作用域限真实会话的命令 `/title`（`scope: {}`）。
+默认启用、可按需停用。注册一个旁路动作 `generate`（`exposeToPrompt: false`，不进入系统提示词 `<available_actions>`）与一条作用域限真实会话的命令 `/title`（`scope: {}`）。
 
 ## 能力和入口
 

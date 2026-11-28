@@ -90,7 +90,6 @@ export interface PluginManifestProjection {
   description?: LocalizedText
   icon?: string
   version?: string
-  locked: boolean
   enabled: boolean
   status: PluginStatus
   error?: PluginDiagnosticError

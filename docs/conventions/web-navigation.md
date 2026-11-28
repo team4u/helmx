@@ -44,7 +44,7 @@
 
 - `{ kind: 'skills'; skillId?; nodeId? }` 表达技能中心目标：`skillId` 是详情抽屉选中项，`nodeId` 是当前选中的计算节点（来自在线节点列表，不携带会话或 `cwd`）；
 - 节点选择经顶层 `node` 查询参数序列化（如 `#/settings/skills/git-commit?node=code2`，空值与 `'local'` 归一回无参 Hub 形态）；分屏内技能中心的节点参数编码在 `split` 值内部，两套命名空间互不串扰；
-- 无 `node` 参数即 Hub 全局目录（消费 `GET /api/skills`）；携带节点时经 `builtin:profile` 的 `skill_catalog` / `skill_read` action 拉取该节点的 Hub + 节点机器级合并目录与节点技能内容（同名 Hub 版本优先、节点来源只读、离线/未注册显式报错，语义见 [profile 插件](../plugins/profile.md)）；
+- 无 `node` 参数即 Hub 全局目录（消费 `GET /api/skills`）；携带节点时经内核技能作用域端点 `GET /api/skills/scoped/catalog` 与 `GET /api/skills/:id?nodeId=...`（对应 `core:skills.catalog` / `core:skills.read`）拉取该节点的 Hub + 节点机器级合并目录与节点技能内容（同名 Hub 版本优先、节点来源只读、离线/未注册显式报错）；
 - 所选节点属于位置的一部分：深链直达、刷新与浏览器前进/后退都可恢复当前节点与选中详情；目标相等比较包含 `nodeId`，切换节点 `push` 入历史栈以便后退返回上一节点，关闭详情抽屉保留节点参数。
 
 ### 历史策略红线

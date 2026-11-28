@@ -4,7 +4,7 @@
  * (`<dataDir>/installed-plugins/<dir>`).
  *
  * Background: plugin IDs allow `:` (`/^[A-Za-z0-9:_-]+$/`), whereas Windows filenames forbid `:`
- * (interpreted as an NTFS alternate data stream, causing `mkdir builtin:profile` to fail with ENOENT).
+ * (interpreted as an NTFS alternate data stream, causing `mkdir builtin:mentions` to fail with ENOENT).
  * Escapes `:` to `%3A` while preserving all other characters so IDs without `:` keep identical layouts.
  *
  * Single source of truth for `<dataDir>/plugins/<...>` (`ctx.dataDir`) and

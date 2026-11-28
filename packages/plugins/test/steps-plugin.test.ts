@@ -338,7 +338,6 @@ test('registration & manifest: bilingual UI copy, English tool schemas, replay=s
     assert.ok(parseNonEmptyLocalizedText(manifest.name as LocalizedText))
     assert.ok(parseNonEmptyLocalizedText(manifest.description as LocalizedText))
     assert.equal(manifest.icon, 'check-square')
-    assert.equal(manifest.locked, false)
 
     const tool = h.host.listTools().find((t) => t.name === STEPS_TOOL_UPDATE)
     assert.ok(tool, 'update_steps must be registered')

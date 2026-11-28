@@ -31,7 +31,6 @@ function makePlugin(partial: Partial<PluginSummary> = {}): PluginSummary {
     id: 'builtin:workflow',
     name: '工作流引擎',
     version: '1.2.0',
-    locked: false,
     enabled: true,
     hooks: ['before_turn', 'turn_settled'],
     actions: ['run', 'inspect'],
@@ -41,7 +40,7 @@ function makePlugin(partial: Partial<PluginSummary> = {}): PluginSummary {
 }
 
 // ---------------------------------------------------------------------------
-// 1. SSR 渲染测试：卡片包含图标、名称、版本、锁定标签、Tools/Actions 胶囊徽章
+// 1. SSR 渲染测试：卡片包含图标、名称、版本、Tools/Actions 胶囊徽章
 // ---------------------------------------------------------------------------
 
 test('PluginCard：优先展示插件定义自带的 description，不做 ID 特判', { timeout: 60_000 }, () => {
@@ -85,12 +84,11 @@ test('PluginCard：未声明 description 时回退能力透视而非 ID 特判',
   assert.doesNotMatch(html, /常驻角色与技能底座/)
 })
 
-test('PluginCard：SSR 渲染包含图标、名称、版本、常驻标签与能力胶囊徽章', { timeout: 60_000 }, () => {
+test('PluginCard：SSR 渲染包含图标、名称、版本与能力胶囊徽章', { timeout: 60_000 }, () => {
   const plugin = makePlugin({
     id: 'builtin:workflow',
     name: '工作流引擎',
     version: '1.2.0',
-    locked: true,
     enabled: true,
     tools: ['subagent', 'cleanup_worktree'],
     actions: ['run', 'inspect'],
@@ -117,11 +115,7 @@ test('PluginCard：SSR 渲染包含图标、名称、版本、常驻标签与能
   // 3. 版本号
   assert.match(html, /v1\.2\.0/)
 
-  // 4. 常驻锁定标签（locked: true）
-  assert.match(html, /Resident/)
-  assert.match(html, /class="[^"]*badge badge-neutral[^"]*"[^>]*title="Resident core plugin/)
-
-  // 5. 能力徽章（Tools / Actions / Hooks）归属卡片正文 .helmx-card-body，底栏仅放操作与开关
+  // 4. 能力徽章（Tools / Actions / Hooks）归属卡片正文 .helmx-card-body，底栏仅放操作与开关
   assert.match(html, /2 Tools/)
   assert.match(html, /2 Actions/)
   assert.match(html, /1 Hooks/)
@@ -135,10 +129,10 @@ test('PluginCard：SSR 渲染包含图标、名称、版本、常驻标签与能
   assert.doesNotMatch(footerSlice, /2 Tools|2 Actions|1 Hooks/, '卡片底栏不得再堆放能力计数徽章')
   assert.match(footerSlice, /plugin-card-actions/)
 
-  // 6. Switch 开关渲染且因 locked 处于禁用态
+  // 5. Switch 开关渲染且处于可切换状态
   assert.match(footerSlice, /role="switch"/)
   assert.match(html, /aria-checked="true"/)
-  assert.match(html, /is-disabled|disabled/)
+  assert.equal(footerSlice.includes(' disabled'), false)
 })
 
 // ---------------------------------------------------------------------------
@@ -205,7 +199,6 @@ test('PluginCard：切换 Switch 开关触发 onToggle 且阻止冒泡到 onSele
   const plugin = makePlugin({
     id: 'builtin:workflow',
     name: '工作流引擎',
-    locked: false,
     enabled: true,
   })
 
@@ -241,27 +234,22 @@ test('PluginCard：切换 Switch 开关触发 onToggle 且阻止冒泡到 onSele
 })
 
 // ---------------------------------------------------------------------------
-// 4. 锁定插件与 toggling 约束
+// 4. toggling 态禁用约束
 // ---------------------------------------------------------------------------
 
-test('PluginCard：常驻锁定插件（locked: true）与 toggling 态禁用 Switch', { timeout: 60_000 }, () => {
+test('PluginCard：toggling 态禁用 Switch', { timeout: 60_000 }, () => {
   const container = document.createElement('div')
   document.body.appendChild(container)
   const root = ReactDOMClient.createRoot(container)
 
   let toggleTriggered = false
-  const lockedPlugin = makePlugin({
-    id: 'builtin:mentions',
-    name: '角色点名',
-    locked: true,
-    enabled: true,
-  })
-
+  const normalPlugin = makePlugin({ enabled: false })
   act(() => {
     root.render(
       e(PluginCard, {
-        plugin: lockedPlugin,
+        plugin: normalPlugin,
         selected: false,
+        toggling: true,
         onSelect: () => {},
         onToggle: () => {
           toggleTriggered = true
@@ -270,31 +258,12 @@ test('PluginCard：常驻锁定插件（locked: true）与 toggling 态禁用 Sw
     )
   })
 
-  const switchBtn = container.querySelector('[role="switch"]') as HTMLButtonElement
-  assert.ok(switchBtn, '必须渲染 Switch 开关')
-  assert.equal(switchBtn.disabled, true, '常驻插件的 Switch 必须处于禁用状态')
-
-  act(() => {
-    switchBtn.click()
-  })
-  assert.equal(toggleTriggered, false, '常驻插件禁用 Switch 点击不应触发 onToggle')
-
-  // 测试 toggling 态
-  const normalPlugin = makePlugin({ locked: false, enabled: false })
-  act(() => {
-    root.render(
-      e(PluginCard, {
-        plugin: normalPlugin,
-        selected: false,
-        toggling: true,
-        onSelect: () => {},
-        onToggle: () => {},
-      }),
-    )
-  })
-
   const togglingSwitchBtn = container.querySelector('[role="switch"]') as HTMLButtonElement
   assert.equal(togglingSwitchBtn.disabled, true, 'toggling: true 时 Switch 应处于禁用状态')
+  act(() => {
+    togglingSwitchBtn.click()
+  })
+  assert.equal(toggleTriggered, false, 'toggling 禁用 Switch 点击不应触发 onToggle')
 
   act(() => {
     root.unmount()
@@ -341,7 +310,7 @@ test('PluginCard：渲染输出全程 0 Emoji', { timeout: 60_000 }, () => {
 
   const html = renderToString(
     e(PluginCard, {
-      plugin: makePlugin({ locked: true }),
+      plugin: makePlugin({}),
       selected: true,
       onSelect: () => {},
       onToggle: () => {},
@@ -655,7 +624,6 @@ test('plugin-card-model & PluginCard：en / zh-CN 双语描述、故障阶段标
     id: 'community:glossary',
     name: { en: 'Glossary', 'zh-CN': '术语表' },
     description: undefined,
-    locked: true,
     enabled: false,
     status: 'failed',
     error: { code: 'plugin_enable_failed', message: 'boom', stage: 'enable' },
@@ -671,10 +639,7 @@ test('plugin-card-model & PluginCard：en / zh-CN 双语描述、故障阶段标
     ),
   )
   assert.match(zhHtml, /术语表/)
-  assert.match(zhHtml, /常驻/)
   assert.match(zhHtml, /异常/)
   assert.match(zhHtml, /提供 1 个工具能力支持。/)
-  assert.match(zhHtml, /常驻插件不可停用/)
-  assert.doesNotMatch(zhHtml, /<span>Resident<\/span>/)
   assert.doesNotMatch(zhHtml, /<span>Error<\/span>/)
 })

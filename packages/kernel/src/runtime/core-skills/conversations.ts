@@ -1,8 +1,8 @@
 /**
  * Kernel-owned `conversations` managed skill (`managedByPlugin: core:conversations`).
  *
- * Split out of the former `builtin:profile` combined `profile` skill so conversation recall
- * and lifecycle guidance lives under the `core:conversations` domain alongside its actions.
+ * Lives under the `core:conversations` kernel domain so conversation recall
+ * and lifecycle guidance stays aligned with its actions.
  */
 import type { BuiltinSkillAsset } from '../../services/skill-service.js'
 import { renderSkillTemplate } from './template.js'

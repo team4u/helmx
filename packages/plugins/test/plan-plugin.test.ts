@@ -561,7 +561,6 @@ test('registration: registers valid UI specs, model configSchema, bilingual labe
     const summary = harness.host.list().find((p) => p.id === PLAN_PLUGIN_ID)
     assert.ok(summary && summary.enabled)
     assert.equal(summary.icon, 'list-tree')
-    assert.equal(summary.locked, false)
 
     // Bilingual display metadata + zero Emoji
     assert.notEqual(parseNonEmptyLocalizedText(summary.name as LocalizedText), undefined)

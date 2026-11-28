@@ -98,7 +98,7 @@ test('同一批到达的 ask.upsert/resolved 记录准确，插件停用清除�
   state = applyEventFrame(state, { seq: 12, event: { type: 'ask.resolved', askId: 'a', status: 'superseded' } })
   assert.deepEqual(state.pendingAsks, [])
   state = { ...state, pluginDocs: { 'p/doc': { secret: false } } }
-  const plugin = { id: 'p', name: 'P', version: '1', enabled: false, locked: false, hooks: [], actions: [], tools: [] }
+  const plugin = { id: 'p', name: 'P', version: '1', enabled: false, hooks: [], actions: [], tools: [] }
   state = applyEventFrame(state, { seq: 13, event: { type: 'plugin.changed', plugin, ui: [] } })
   assert.deepEqual(state.pluginDocs, {})
 })
@@ -448,7 +448,6 @@ test('plugin.changed：纯配置更新保留 pluginDocs 与 uiContributions；fa
   const activePlugin = {
     id: 'p1',
     name: 'P1',
-    locked: false,
     enabled: true,
     status: 'active' as const,
     hooks: [],
@@ -460,7 +459,6 @@ test('plugin.changed：纯配置更新保留 pluginDocs 与 uiContributions；fa
   const otherPlugin = {
     id: 'p2',
     name: 'P2',
-    locked: false,
     enabled: true,
     status: 'active' as const,
     hooks: [],
@@ -555,7 +553,6 @@ test('reconcilePluginsState 按摘要对账 plugins/uiContributions/pluginDocs�
   const makePlugin = (id: string, extra?: Record<string, unknown>) => ({
     id,
     name: id,
-    locked: false,
     enabled: true,
     status: 'active' as const,
     hooks: [],

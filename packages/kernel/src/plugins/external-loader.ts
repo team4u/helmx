@@ -310,7 +310,6 @@ export function assertExternalDefinition(candidate: unknown, dirPath: string): P
 
 /**
  * External plugin definition normalization:
- * - Strip `locked` (external plugins cannot mark themselves resident/non-unloadable);
  * - Cross-plugin dependencies: merge & deduplicate code and manifest (`plugin.json` `dependencies` /
  *   `package.json#helmx.dependencies`); invalid manifest values already fail when read;
  * - Frontend controlled npm dependencies: normalize manifest specifiers (`plugin.json` `clientDependencies` /
@@ -464,7 +463,6 @@ export function getDefinitionTsRoot(definition: PluginDefinition): string | unde
 
 export function normalizeDefinition(definition: PluginDefinition, dirPath: string): PluginDefinition {
   const normalized = { ...definition };
-  delete normalized.locked;
   // Frontend controlled npm dependencies: external plugins honor manifest declarations anchored to dirPath only.
   const clientDeps = readHelmxClientDependencies(dirPath);
   delete normalized.npmDependencies;

@@ -420,7 +420,6 @@ describe('EventHub.publish event shapes', { timeout: 60_000 }, () => {
     const plugin = {
       id: 'builtin:herdr',
       name: 'Herdr',
-      locked: true,
       enabled: true,
       hooks: [],
       actions: [],

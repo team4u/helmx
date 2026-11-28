@@ -316,10 +316,10 @@ describe("plugin-client-runtime", () => {
     try {
       // 1. 全部匹配且启用（含纯 publicConfig 变更）：0 逐出，不递增 revision，不通知
       const zero = reconcilePluginClientCache([
-        { id: 'keep-p', name: 'K', locked: false, enabled: true, status: 'active', hooks: [], actions: [], tools: [], clientHashes: { 'index.tsx': 'hash-keep' }, publicConfig: { refreshSec: 30 } },
-        { id: 'change-p', name: 'C', locked: false, enabled: true, status: 'active', hooks: [], actions: [], tools: [], clientHashes: { 'index.tsx': 'hash-old' } },
-        { id: 'disable-p', name: 'D', locked: false, enabled: true, status: 'active', hooks: [], actions: [], tools: [], clientHashes: { 'index.tsx': 'hash-dis' } },
-        { id: 'fail-p', name: 'F', locked: false, enabled: true, status: 'active', hooks: [], actions: [], tools: [], clientHashes: { 'index.tsx': 'hash-fail' } },
+        { id: 'keep-p', name: 'K', enabled: true, status: 'active', hooks: [], actions: [], tools: [], clientHashes: { 'index.tsx': 'hash-keep' }, publicConfig: { refreshSec: 30 } },
+        { id: 'change-p', name: 'C', enabled: true, status: 'active', hooks: [], actions: [], tools: [], clientHashes: { 'index.tsx': 'hash-old' } },
+        { id: 'disable-p', name: 'D', enabled: true, status: 'active', hooks: [], actions: [], tools: [], clientHashes: { 'index.tsx': 'hash-dis' } },
+        { id: 'fail-p', name: 'F', enabled: true, status: 'active', hooks: [], actions: [], tools: [], clientHashes: { 'index.tsx': 'hash-fail' } },
       ])
       assert.equal(zero, 0)
       assert.equal(notifications, 0)
@@ -327,10 +327,10 @@ describe("plugin-client-runtime", () => {
 
       // 2. keep-p 不变，change-p 换 hash，disable-p 停用，fail-p 处于 enabled=true+status='failed'：仅逐出后三者
       const evicted = reconcilePluginClientCache([
-        { id: 'keep-p', name: 'K', locked: false, enabled: true, status: 'active', hooks: [], actions: [], tools: [], clientHashes: { 'index.tsx': 'hash-keep' } },
-        { id: 'change-p', name: 'C', locked: false, enabled: true, status: 'active', hooks: [], actions: [], tools: [], clientHashes: { 'index.tsx': 'hash-new' } },
-        { id: 'disable-p', name: 'D', locked: false, enabled: false, status: 'disabled', hooks: [], actions: [], tools: [] },
-        { id: 'fail-p', name: 'F', locked: false, enabled: true, status: 'failed', hooks: [], actions: [], tools: [], clientHashes: { 'index.tsx': 'hash-fail' } },
+        { id: 'keep-p', name: 'K', enabled: true, status: 'active', hooks: [], actions: [], tools: [], clientHashes: { 'index.tsx': 'hash-keep' } },
+        { id: 'change-p', name: 'C', enabled: true, status: 'active', hooks: [], actions: [], tools: [], clientHashes: { 'index.tsx': 'hash-new' } },
+        { id: 'disable-p', name: 'D', enabled: false, status: 'disabled', hooks: [], actions: [], tools: [] },
+        { id: 'fail-p', name: 'F', enabled: true, status: 'failed', hooks: [], actions: [], tools: [], clientHashes: { 'index.tsx': 'hash-fail' } },
       ])
       assert.equal(evicted, 3)
       assert.equal(notifications, 1)
@@ -363,7 +363,6 @@ describe("plugin-client-runtime", () => {
       plugins: [{
         id: 'ui-hash-p',
         name: 'UI Hash P',
-        locked: false,
         enabled: true,
         status: 'active',
         hooks: [],

@@ -406,9 +406,9 @@ describe("plugin-client-css", () => {
 
     const store = makeTestStore({
       plugins: [
-        { id: 'p:alpha', name: 'Alpha', locked: false, enabled: true, status: 'active', hooks: [], actions: [], tools: [], clientHashes: { 'index.tsx': 'h-alpha' } },
-        { id: 'p:beta', name: 'Beta', locked: false, enabled: true, status: 'active', hooks: [], actions: [], tools: [], clientHashes: { 'index.tsx': 'h-beta' } },
-        { id: 'p:code', name: 'Code', locked: false, enabled: true, status: 'active', hooks: [], actions: [], tools: [], clientHashes: { 'code.tsx': 'h-code' } },
+        { id: 'p:alpha', name: 'Alpha', enabled: true, status: 'active', hooks: [], actions: [], tools: [], clientHashes: { 'index.tsx': 'h-alpha' } },
+        { id: 'p:beta', name: 'Beta', enabled: true, status: 'active', hooks: [], actions: [], tools: [], clientHashes: { 'index.tsx': 'h-beta' } },
+        { id: 'p:code', name: 'Code', enabled: true, status: 'active', hooks: [], actions: [], tools: [], clientHashes: { 'code.tsx': 'h-code' } },
       ],
       uiContributions: [
         {

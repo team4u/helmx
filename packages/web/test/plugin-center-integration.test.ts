@@ -33,7 +33,6 @@ function makePlugin(partial: Partial<PluginSummary> & { id: string }): PluginSum
   return {
     name: partial.name ?? partial.id,
     version: partial.version ?? '1.0.0',
-    locked: partial.locked ?? false,
     enabled: partial.enabled ?? true,
     hooks: partial.hooks ?? [],
     actions: partial.actions ?? [],
@@ -46,7 +45,6 @@ const mockPlugins: PluginSummary[] = [
   makePlugin({
     id: 'builtin:mentions',
     name: '角色点名',
-    locked: false,
     enabled: true,
     tools: [],
     actions: ['list_mentionable'],
@@ -54,7 +52,6 @@ const mockPlugins: PluginSummary[] = [
   makePlugin({
     id: 'builtin:workflow',
     name: '工作流引擎',
-    locked: false,
     enabled: true,
     tools: ['subagent', 'cleanup_worktree'],
     actions: ['run', 'inspect'],
@@ -62,7 +59,6 @@ const mockPlugins: PluginSummary[] = [
   makePlugin({
     id: 'builtin:herdr',
     name: 'Herdr 控制台',
-    locked: false,
     enabled: false,
     tools: [],
     actions: ['bridge_status', 'resume'],
@@ -70,7 +66,6 @@ const mockPlugins: PluginSummary[] = [
   makePlugin({
     id: 'builtin:triggers',
     name: '触发器连接器',
-    locked: false,
     enabled: true,
     tools: [],
     actions: ['webhook_deliver'],
@@ -78,7 +73,6 @@ const mockPlugins: PluginSummary[] = [
   makePlugin({
     id: 'tools:calculator',
     name: '计算器工具',
-    locked: false,
     enabled: true,
     tools: ['calculate'],
     actions: [],

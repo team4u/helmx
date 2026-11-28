@@ -1615,7 +1615,6 @@ test('usePluginConfig: returns current plugin publicConfig, falls back to stable
     {
       id: 'p1',
       name: 'P1',
-      locked: false,
       enabled: true,
       hooks: [],
       actions: [],
@@ -1625,7 +1624,6 @@ test('usePluginConfig: returns current plugin publicConfig, falls back to stable
     {
       id: 'p2',
       name: 'P2',
-      locked: false,
       enabled: true,
       hooks: [],
       actions: [],

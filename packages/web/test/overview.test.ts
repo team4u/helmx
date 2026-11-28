@@ -477,7 +477,7 @@ test('ConversationOverview card meta slot: contributions render with tree props;
     ],
     // clientHashes 对齐 seedPluginClientModule 的 contentHash（'seeded'）：
     // PluginUiView 走内存缓存快路径，零网络请求（about:blank 下相对 URL fetch 必炸）。
-    plugins: [{ id: 'demo-desk', name: 'Apps', version: '0.0.0', enabled: true, locked: false, hooks: [], actions: [], tools: [], clientHashes: { 'overview-meta.tsx': 'seeded' } }],
+    plugins: [{ id: 'demo-desk', name: 'Apps', version: '0.0.0', enabled: true, hooks: [], actions: [], tools: [], clientHashes: { 'overview-meta.tsx': 'seeded' } }],
     primaryTarget: { kind: 'overview' },
     uiContributions: [slotContribution],
   })
@@ -1515,7 +1515,7 @@ test('ConversationOverview new topic: multiple agents open a dropdown with the l
 test('ConversationOverview new topic: no creatable agent renders no button', { timeout: 60_000 }, async () => {
   const store = overviewStore({
     profiles: [{ id: 'disabled-agent', name: '停用插件角色', managedByPlugin: 'ext:off' }],
-    plugins: [{ id: 'ext:off', name: 'Off', version: '1.0.0', locked: false, enabled: false, hooks: [], actions: [], tools: [] }],
+    plugins: [{ id: 'ext:off', name: 'Off', version: '1.0.0', enabled: false, hooks: [], actions: [], tools: [] }],
     conversations: [conv({ id: 4, title: 'helmx 会话根', ownedBy: 'helmx', createdAt: 6000, updatedAt: 6000 })],
     primaryTarget: { kind: 'overview' },
   })

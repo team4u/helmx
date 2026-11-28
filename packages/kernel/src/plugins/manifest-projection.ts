@@ -243,7 +243,6 @@ export function buildPluginManifestProjection(
       : {}),
     ...(state.definition.icon ? { icon: state.definition.icon } : {}),
     ...(state.definition.version !== undefined ? { version: state.definition.version } : {}),
-    locked: state.definition.locked === true,
     enabled: state.enabled,
     status,
     ...(failed && state.lastError !== undefined

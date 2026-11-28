@@ -92,7 +92,7 @@ export function usePluginDrawerActions({
     targetEnabled?: boolean,
     options?: { force?: boolean },
   ) => {
-    if (targetPlugin.locked || toggling) return
+    if (toggling) return
     const generation = ++actionGeneration.current
     setActionError(null)
     setInUseConfirm(null)

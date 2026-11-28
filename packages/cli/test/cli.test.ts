@@ -729,7 +729,7 @@ test('search,models,plugins,actions list,status', { timeout: 60_000 }, async (t)
           },
         }
       },
-      'GET /api/plugins': () => ({ body: [makePluginSummary({ id: 'builtin:mentions', name: 'Role Mentions', locked: false })] }),
+      'GET /api/plugins': () => ({ body: [makePluginSummary({ id: 'builtin:mentions', name: 'Role Mentions' })] }),
       'POST /api/plugins/builtin%3Aherdr/disable': () => ({ body: { ok: 1 } }),
       'GET /api/plugins/builtin%3Aherdr/config': () => ({ body: { values: { a: 1 }, schema: {} } }),
       'PUT /api/plugins/builtin%3Aherdr/config': (body) => {

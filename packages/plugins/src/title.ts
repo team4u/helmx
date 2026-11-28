@@ -107,7 +107,6 @@ export function createTitlePlugin(options: TitlePluginOptions = {}): PluginDefin
     },
     icon: 'edit-3',
     version: '0.1.0',
-    locked: false,
     definePlugin(ctx) {
       ctx.configSchema({
         autoTitle: {

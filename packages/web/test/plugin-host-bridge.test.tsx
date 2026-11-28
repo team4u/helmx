@@ -134,7 +134,6 @@ describe('plugin-host-bridge', () => {
     const plugin1: PluginSummary = {
       id: 'p1',
       name: 'Plugin One',
-      locked: false,
       enabled: true,
       hooks: [],
       actions: [],

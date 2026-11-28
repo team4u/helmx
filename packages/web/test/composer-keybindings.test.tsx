@@ -768,8 +768,8 @@ describe("composer-keybindings", () => {
         profiles: [profile],
         skills,
         plugins: [
-          { id: 'builtin:mentions', name: 'mentions', locked: false, enabled: true, hooks: [], actions: [], tools: [] },
-          { id: 'builtin:herdr', name: 'herdr', locked: false, enabled: false, hooks: [], actions: [], tools: [] },
+          { id: 'builtin:mentions', name: 'mentions', enabled: true, hooks: [], actions: [], tools: [] },
+          { id: 'builtin:herdr', name: 'herdr', enabled: false, hooks: [], actions: [], tools: [] },
         ],
         models: [
           {

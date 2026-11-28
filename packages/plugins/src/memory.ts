@@ -102,7 +102,6 @@ export function createMemoryPlugin(options: { dream?: DreamEngineOptions } = {})
     },
     icon: 'sparkles',
     version: '0.1.0',
-    locked: false,
     ...resolvePluginClientAssets(MEMORY_PLUGIN_ID, 'memory', 'memory_plugin_client_missing'),
     definePlugin(ctx) {
       ctx.configSchema({

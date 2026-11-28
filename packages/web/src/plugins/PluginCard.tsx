@@ -34,7 +34,7 @@ export interface PluginCardProps {
 /**
  * 全屏插件中心单张插件卡片视图组件：
  * - 基于 SelectCard（<article> + <button aria-pressed> + 兄弟 footer/actions 槽位）；
- * - 顶部展示名称、ID（严格靠左对齐）、版本与常驻徽章，零图标杂音；
+ * - 顶部展示名称、ID（严格靠左对齐）与版本，零图标杂音；
  * - 中部展示简要功能说明、能力计数徽章（Tools / Actions / Hooks）与故障摘要；
  * - 底部统一为单行 size="xs" 快捷操作按钮与启停开关；
  * - 全程零 Emoji，符合无障碍与键盘导航规范。
@@ -58,7 +58,6 @@ export function PluginCard({
   const t = useMemo(() => createWebTranslator(locale), [locale])
   const name = resolveLocalizedText(plugin.name, locale) || plugin.id
   const description = getPluginDescription(plugin, locale, t)
-  const isLocked = plugin.locked === true
   const active = isPluginSummaryActive(plugin)
   const failed = isPluginFailed(plugin)
   // 仅活跃运行态且有 Screen 贡献时提供快捷打开（enabled=true 但 status=failed 不显示可用 Screen）。
@@ -68,17 +67,15 @@ export function PluginCard({
       : null
   // 源码/清单加载阶段失败（scan/load）：模块未成功导入，无有效 definition 可重试启用
   const isLoadBroken = plugin.error?.stage === 'scan' || plugin.error?.stage === 'load'
-  const isSwitchDisabled = isLocked || toggling || isLoadBroken
+  const isSwitchDisabled = toggling || isLoadBroken
 
   // 启停开关反映持久化期望开关（plugin.enabled）：当 enabled=true 且 status=failed（如依赖被强停）时，
   // 仍允许点击开关停用插件以重置故障态；运行态样式与可用 Screen 则统一按 active 判定。
-  const switchTitle = isLocked
-    ? t('plugins.card.switchLockedTitle')
-    : isLoadBroken
-      ? t('plugins.card.switchLoadBrokenTitle')
-      : plugin.enabled
-        ? t('plugins.card.switchDisableTitle')
-        : t('plugins.card.switchEnableTitle')
+  const switchTitle = isLoadBroken
+    ? t('plugins.card.switchLoadBrokenTitle')
+    : plugin.enabled
+      ? t('plugins.card.switchDisableTitle')
+      : t('plugins.card.switchEnableTitle')
 
   const cardClasses = [
     'plugin-card',
@@ -109,11 +106,6 @@ export function PluginCard({
             <span className="plugin-card-version" title={t('plugins.card.versionTitle', { version: versionLabel })}>
               {versionLabel}
             </span>
-          )}
-          {isLocked && (
-            <Badge tone="neutral" icon="lock" title={t('plugins.card.lockedTitle')}>
-              {t('plugins.resident')}
-            </Badge>
           )}
           {failed && (
             <StatusLight

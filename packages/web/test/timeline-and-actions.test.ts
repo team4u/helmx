@@ -156,7 +156,6 @@ test('groupedUi.settingsPanels 排序与 PluginDetailDrawer 多面板全量渲�
     id: 'plugin-c',
     name: '多面板测试插件',
     version: '1.0.0',
-    locked: false,
     enabled: true,
     hooks: [],
     actions: [],

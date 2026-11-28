@@ -26,7 +26,6 @@ function makePlugin(overrides: Partial<PluginSummary> & { id: string }): PluginS
     id: overrides.id,
     name: overrides.name ?? overrides.id,
     version: overrides.version ?? '0.1.0',
-    locked: overrides.locked ?? false,
     enabled: overrides.enabled ?? true,
     hooks: overrides.hooks ?? [],
     actions: overrides.actions ?? [],

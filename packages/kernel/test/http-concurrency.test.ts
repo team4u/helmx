@@ -98,7 +98,6 @@ test('pre-dispatch summary re-check: rejects 409 when listRoutes snapshot includ
     name: 'stale-plugin',
     enabled: false,
     status: 'disabled',
-    locked: false,
     hooks: [],
     actions: [],
     tools: [],

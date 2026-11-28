@@ -13,7 +13,6 @@ import {
 import { registerPluginTsRoot } from './backend-ts-loader.js';
 import { getDefinitionTsRoot } from './external-loader.js';
 import {
-  assertNotLocked,
   getActiveEnabledPluginIds,
   normalizeDependencies,
   persistEnabled,
@@ -212,7 +211,6 @@ export async function runUnregisterTransaction(
   ctx: PluginLifecycleContext,
 ): Promise<void> {
   const state = requirePlugin(ctx.plugins, pluginId);
-  assertNotLocked(state);
   assertNoEnabledDependents(ctx.plugins, pluginId);
   if (!state.enabled) {
     await teardownPluginState(state, { stopServices: false }, ctx);
@@ -281,7 +279,6 @@ export async function runDisableTransaction(
   ctx: PluginLifecycleContext,
 ): Promise<void> {
   const state = requirePlugin(ctx.plugins, pluginId);
-  assertNotLocked(state);
   if (!state.enabled) return;
   assertPluginIdle(pluginId, state, ctx);
   if (options.force !== true) {

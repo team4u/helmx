@@ -44,13 +44,13 @@ full 模板产出 `plugin.json`（含 `clientRoot: "./client"`）、`index.ts`�
   "main": "index.ts",
   "clientRoot": "./client",
   "clientDependencies": ["chart.js"],
-  "dependencies": ["builtin:profile"]
+  "dependencies": ["builtin:workflow"]
 }
 ```
 
 清单约束与入口发现：
 
-- `id` 仅允许字母、数字、下划线与连字符，**禁止冒号**（冒号保留给 `builtin:` 命名空间）与 `builtin:` 前缀；外部插件禁止 `locked`（宿主加载时自动剥离）；
+- `id` 仅允许字母、数字、下划线与连字符，**禁止冒号**（冒号保留给 `builtin:` 命名空间）与 `builtin:` 前缀；
 - `main` 缺省时按约定顺序探测 `index.ts / index.tsx / index.mjs / index.mts / index.js`（TypeScript 优先），也支持 `package.json` 的 `helmx.main` / `main` 回落（`.js` 后缀自动重写同名 TS 源）；`main` 越出插件目录（含符号链接）显式拒绝；
 - `clientRoot` 缺省为插件目录本身，必须是插件目录内的非空相对路径；未声明时一切 `client` 组件引用在注册边界拒绝（不允许无法编译的悬空引用）；
 - `clientDependencies: string[]` 是前端受控 npm 依赖说明符（裸包名或子路径）：宿主映射为「解析根 = 插件自身目录」的受控依赖，client.tsx 中同名裸导入解析进 `<插件目录>/node_modules` 并逐文件 containment 校验后打进 bundle；未声明的裸依赖编译期显式拒绝。版本建议同时声明在 `package.json` 的 `dependencies`（受管安装优先取该 range）。在代码内声明 `npmDependencies` 自指解析根对外部插件无效；
@@ -208,7 +208,7 @@ import { NODE_DETAIL_SECTION_SLOT } from '@helmx/protocol';
 ctx.ui.slot({ id: 'node-inspection', target: NODE_DETAIL_SECTION_SLOT, client: { module: 'client.tsx', export: 'NodeInspectionSection' } });
 ```
 
-组件接收 `{ nodeId, isLocal, isOnline, isNew: false }`，按 `nodeId` 调用插件自己的 Action 获取诊断。`builtin:profile` 的 `PROFILE_DETAIL_SECTION_SLOT` 同理（Props `{ profileId, isNew, disabled }`）。
+组件接收 `{ nodeId, isLocal, isOnline, isNew: false }`，按 `nodeId` 调用插件自己的 Action 获取诊断。宿主保留插槽 `PROFILE_DETAIL_SECTION_SLOT`（虚拟命名空间 `builtin:profile/detail-section`，不对应同名插件）同理（Props `{ profileId, isNew, disabled }`）。
 
 ### 输入补全源
 

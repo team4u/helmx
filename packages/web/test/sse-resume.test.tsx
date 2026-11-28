@@ -129,7 +129,6 @@ describe("sse-resume", () => {
   const pluginSummary = (id: string) => ({
     id,
     name: id,
-    locked: false,
     enabled: true,
     hooks: [],
     actions: [],
@@ -2114,7 +2113,7 @@ describe("sse-resume", () => {
     const off2 = subscribeSessionDoc(key2, () => {})
     try {
       const activePlugin = {
-        id: 're:p', name: 'Re-enable P', locked: false, enabled: true, status: 'active' as const,
+        id: 're:p', name: 'Re-enable P', enabled: true, status: 'active' as const,
         hooks: [], actions: [], tools: [], clientHashes: { 'index.tsx': 'h1' },
       }
       const disabledPlugin = { ...activePlugin, enabled: false, status: 'disabled' as const }

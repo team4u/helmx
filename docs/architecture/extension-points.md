@@ -16,7 +16,7 @@
 | `PluginKvRegistry` | `ctx.kv<T>(namespace)` 按键持久存储、边界校验、SecretStash 脱敏与 256 KiB 单条上限 |
 | `UiRegistry` | 界面声明校验、跨插件冲突裁决（priority），经注入端口请求客户端构建产物 |
 | `RuntimeToolRegistry` | 注册与热更新内核/插件工具；`run_action` 调用与只读 `describe` |
-| `HookBridge` | 每次模型请求按 scope 裁剪插件工具；钩子链收敛后投射动作目录，清理不可达能力的旧指引 |
+| `HookBridge` | 协调内核每回合 Profile/技能上下文装配（`TurnContextAssembler`），按 scope 裁剪插件工具；钩子链收敛后同步投射 `profile.skills` 与动作目录 |
 | `AssetReloader` | 纯文件资产（Profile/技能）的热重载协调 |
 
 插件可通过 `ctx.host.onEvent` / `ctx.host.emitEvent` 观察与发布事件（内建宿主事件经 `@helmx/protocol` 的 `HostEventMap` 提供强类型载荷重载，自定义插件事件保持通用 `string` 回退）。监听器收到经过边界校验与脱敏的事件信封；订阅随插件生命周期解除。
@@ -116,7 +116,7 @@ export interface ComposerController {
 
 ### 宿主保留插槽
 
-宿主保留七个子插槽常量（单一只读协议目录 `HOST_SLOT_CATALOG` / `HOST_SLOT_TARGETS` 在 `packages/protocol/src/ui.ts`）：`PROFILE_DETAIL_SECTION_SLOT`（`builtin:profile/detail-section`，传 `ProfileDetailSlotProps`：`profileId / isNew / disabled`）、`NODE_DETAIL_SECTION_SLOT`（`builtin:node/detail-section`，仅已有节点挂载，传 `NodeDetailSlotProps`：`nodeId / isLocal / isOnline / isNew: false`）、`COMPOSER_TOOLBAR_SLOT`（`builtin:composer/toolbar`，主输入框左下角工具栏 `.composer-toolbar-left` 模型选择器之后，实会话传 `ComposerScopeProps`（`conversation / composer`），待命草稿传 `ComposerToolbarSlotProps`（`effectiveModel / profileId / draftMeta / setDraftMeta / disabled`，写入不标脏草稿）；用于激活态紧凑模式胶囊等轻控件，如 `builtin:plan` 的激活态退出胶囊）、`COMPOSER_MENU_SLOT`（`builtin:composer/menu`，主输入框左下角统一 `+` 下拉菜单内的模式/操作菜单项，实会话与待命草稿分别透传 `ComposerMenuSlotProps`（继承 `ComposerToolbarSlotProps` 并额外提供 `onCloseMenu`）；贡献 `DropdownMenuItem`，若插件已贡献此插槽则宿主会自动将其从通用插件命令分段去重）、`COMPOSER_STATUS_SLOT`（`builtin:composer/status`，输入框下方状态行上下文用量旁，实会话传 `ComposerScopeProps`，待命草稿传 `ComposerStatusSlotProps`；承载 `builtin:token-speed` 实时解码速率等只读指标与 `builtin:duo` 编排器阶段胶囊、`builtin:magpie` 配额概览等紧凑状态交互）、`COMPOSER_DOCK_SLOT`（`builtin:composer/dock`，Composer 底部在途编排活动区，传 `ComposerScopeProps`）与 `OVERVIEW_CARD_META_SLOT`（`builtin:overview/card-meta`，会话总览卡片元信息区，传 `OverviewCardMetaSlotProps`：`rootConversation / memberIds`；只读徽标/跳转胶囊经 `ctx.ui.slot` 贡献，重操作留在插件自己的 screen/抽屉）。`builtin:node`、`builtin:composer` 与 `builtin:overview` 是宿主保留命名空间，不代表存在同名插件。插槽不传接入令牌，也不隐式借用当前会话。
+宿主保留七个子插槽常量（单一只读协议目录 `HOST_SLOT_CATALOG` / `HOST_SLOT_TARGETS` 在 `packages/protocol/src/ui.ts`）：`PROFILE_DETAIL_SECTION_SLOT`（`builtin:profile/detail-section`，传 `ProfileDetailSlotProps`：`profileId / isNew / disabled`）、`NODE_DETAIL_SECTION_SLOT`（`builtin:node/detail-section`，仅已有节点挂载，传 `NodeDetailSlotProps`：`nodeId / isLocal / isOnline / isNew: false`）、`COMPOSER_TOOLBAR_SLOT`（`builtin:composer/toolbar`，主输入框左下角工具栏 `.composer-toolbar-left` 模型选择器之后，实会话传 `ComposerScopeProps`（`conversation / composer`），待命草稿传 `ComposerToolbarSlotProps`（`effectiveModel / profileId / draftMeta / setDraftMeta / disabled`，写入不标脏草稿）；用于激活态紧凑模式胶囊等轻控件，如 `builtin:plan` 的激活态退出胶囊）、`COMPOSER_MENU_SLOT`（`builtin:composer/menu`，主输入框左下角统一 `+` 下拉菜单内的模式/操作菜单项，实会话与待命草稿分别透传 `ComposerMenuSlotProps`（继承 `ComposerToolbarSlotProps` 并额外提供 `onCloseMenu`）；贡献 `DropdownMenuItem`，若插件已贡献此插槽则宿主会自动将其从通用插件命令分段去重）、`COMPOSER_STATUS_SLOT`（`builtin:composer/status`，输入框下方状态行上下文用量旁，实会话传 `ComposerScopeProps`，待命草稿传 `ComposerStatusSlotProps`；承载 `builtin:token-speed` 实时解码速率等只读指标与 `builtin:duo` 编排器阶段胶囊、`builtin:magpie` 配额概览等紧凑状态交互）、`COMPOSER_DOCK_SLOT`（`builtin:composer/dock`，Composer 底部在途编排活动区，传 `ComposerScopeProps`）与 `OVERVIEW_CARD_META_SLOT`（`builtin:overview/card-meta`，会话总览卡片元信息区，传 `OverviewCardMetaSlotProps`：`rootConversation / memberIds`；只读徽标/跳转胶囊经 `ctx.ui.slot` 贡献，重操作留在插件自己的 screen/抽屉）。`builtin:profile`、`builtin:node`、`builtin:composer` 与 `builtin:overview` 是宿主保留命名空间，不代表存在同名插件。插槽不传接入令牌，也不隐式借用当前会话。
 
 ### 输入补全数据源
 
@@ -175,7 +175,7 @@ pnpm helmx plugins doc builtin:workflow runs --current --watch --json
 
 - **标识与生命周期边界**：`capabilityId` 在注册、消费与订阅边界均按 `^[a-z0-9][a-z0-9._-]{0,63}$` 强校验；受插件 epoch 守卫约束；插件停用、停止、回滚或卸载时宿主自动释放其提供的全部能力与监听订阅，非活跃（disabled / deactivating / failed）插件的实现即时从 `consume` 视图消失。
 - **典型内置契约**：
-  - `helmx.dispatch-tools`：`DispatchToolsCapability`（`{ toolNames }`），`builtin:workflow`（`['subagent', 'SubagentWorkflow']`）与 `builtin:swarm`（`['swarm_dispatch_worker']`）声明派工入口工具：`builtin:profile` 消费 `toolNames` 决定 `<available_profiles>` 协作目录注入与 `@` 补全，`builtin:workflow` / `builtin:swarm` 的深度守卫按 `toolNames` 剥离派工入口（确保第 1 层 Swarm 成员保留看板通信工具）；
+  - `helmx.dispatch-tools`：`DispatchToolsCapability`（`{ toolNames }`），`builtin:workflow`（`['subagent', 'SubagentWorkflow']`）与 `builtin:swarm`（`['swarm_dispatch_worker']`）声明派工入口工具：`builtin:mentions` 消费 `toolNames` 决定 `<available_profiles>` 协作目录（`mentions.catalog`）注入与 `@` 补全（停用后即时消失），`builtin:workflow` / `builtin:swarm` 的深度守卫按 `toolNames` 剥离派工入口（确保第 1 层 Swarm 成员保留看板通信工具）；
   - `helmx.planning-orchestration-tools`：`PlanningOrchestrationToolsCapability`（`{ toolNames }`），`builtin:workflow`（`['subagent', 'SubagentWorkflow', 'workflow_steer']`）与 `builtin:swarm`（`[...SWARM_TOOL_NAMES]`）声明规划阶段仍允许放行的编排工具，`builtin:duo` 在规划阶段（Planning Phase）动态消费并叠加到只读工具白名单（零硬编码工具名，任意第三方编排插件自动生效）；
   - `helmx.default-child-model`：`DefaultChildModelCapability`（`resolveDefaultChildModel(parentConversationId)`），`builtin:duo` 提供默认子代理/成员模型解析（映射至活跃 Duo 会话的 `executorModel` 与 `executorThinkingLevel`），由 `builtin:workflow` 与 `builtin:swarm` 在省略显式 `model` 时消费；
   - `helmx.plan-mode-active`：`PlanModeActiveCapability`（`isPlanning(conversationId)`），`builtin:plan` 提供只读计划模式探测，供 `builtin:duo` 等插件避让 `/plan` 规划回合；

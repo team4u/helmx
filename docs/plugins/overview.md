@@ -4,27 +4,27 @@
 
 ## 当前状态
 
-插件系统是 Helmx 的核心生产能力：内核（`@helmx/kernel`）只保留持久会话、跨节点执行底座、Model/Auth 与插件宿主四块通用机制，其余一切业务能力由插件承载。官方插件实现与资产位于 `packages/plugins`，由产品组合根 `packages/hub/src/app.ts` 的 `createHelmx` 注册，共 17 个内置插件（全部默认启用）：
+插件系统是 Helmx 的核心生产能力：内核（`@helmx/kernel`）只保留持久会话与通用角色/技能底座、跨节点执行底座、Model/Auth 与插件宿主四块通用机制，其余一切业务能力由插件承载。官方插件实现与资产位于 `packages/plugins`，由产品组合根 `packages/hub/src/app.ts` 的 `createHelmx` 注册，共 17 个内置插件（全部默认启用，且均可按需停用）：
 
-| 插件 ID | 名称 | 职责一句话 | 默认状态 | locked |
-| :--- | :--- | :--- | :--- | :--- |
-| `builtin:profile` | 角色与技能底座 | 按会话 Profile 注入 SYSTEM.md / AGENTS.md 与技能目录，补写默认 `assistant` 托管声明并提供 `load_skill` 工具（内核核心技能由 `core:*` 直接自举） | 启用 | 是（常驻不可停用） |
-| `builtin:workflow` | 工作流与子代理编排 | `subagent` / `SubagentWorkflow` 工具、DSL 引擎与账本恢复 | 启用 | 否 |
-| `builtin:worktree` | 受管工作树 | 受管 Git Worktree 分配、持久租约与持有锁、两段式结构化探测、`cleanup_worktree` 工具与 `worktrees` CLI | 启用 | 否 |
-| `builtin:changes` | 通用改动检视 | 工作台 `Changes` 面板（原地展开单文件彩色 Diff、仅限本会话的工作区/工作树切换）、按需分屏检视台（`screen:builtin:changes/inspector`）与跨插件工作台直达插槽 | 启用 | 否 |
-| `builtin:swarm` | Swarm 对等协同看板 | 扁平对等序号黑板、正交唤醒、`turn_settled` 纯事件防掉棒自愈与自适应协同看板 | 启用 | 否 |
-| `builtin:memory` | 长期记忆 | 按 Profile 管理 MEMORY.md 注入与启停，提供 `update_memory` 工具与每日 Dream 自动整理（`dream` / `dream_status` / `dream_configure`） | 启用 | 否 |
-| `builtin:json-render` | JSON 卡片渲染 | 接管 ```ui 代码围栏渲染声明式 JSON Spec 卡片，自举 `generative-ui` 技能 | 启用 | 否 |
-| `builtin:mermaid` | Mermaid 图表 | 接管 ```mermaid 围栏，把 Mermaid 文本渲染为矢量图表 | 启用 | 否 |
-| `builtin:triggers` | 触发器 | Cron 定时与 Webhook 签名入站连接器 | 启用 | 否 |
-| `builtin:magpie` | Magpie 网关 | 动态模型网关接入：目录、配额与路由组诊断 | 启用 | 否 |
-| `builtin:token-speed` | Token 速率 | 输入区状态行实时解码速率（只读展示，内核零速率计算） | 启用 | 否 |
-| `builtin:tiers` | 模型档位 | 语义模型档位（`tier/<id>`）、自定义多套模板与 `model-tiers` 受管技能 | 启用 | 否 |
-| `builtin:duo` | 编排器 | Planner + Executor 编排器（挂载为 `tier/<id>`）、独立编排器管理页、状态行胶囊与单会话临时覆盖、`exit_plan_mode` / `hand_back_to_planner`、`helmx.default-child-model` 与 `duo` 受管技能 | 启用 | 否 |
-| `builtin:title` | 会话标题 | 首轮完成后后台静默整理清晰标题，提供 `/title` 命令按当前内容随时重整 | 启用 | 否 |
-| `builtin:plan` | 计划模式 | 只读调研、澄清问答与结构化计划草拟：规划工具白名单（剥离写与派工工具）、`AskDoc` 审批、人工编辑、产物归档与可选新上下文/模型交接执行 | 启用 | 否 |
-| `builtin:steps` | 实时步骤清单 | 由 `update_steps` 工具驱动的实时步骤清单：输入框上方可折叠进度条、时间线紧凑轨迹与全生命周期收敛 | 启用 | 否 |
-| `builtin:port-forward` | 端口映射 | 持久化 Hub 到本地/远程计算节点的 TCP 端口映射管理与按节点实时状态投影 | 启用 | 否 |
+| 插件 ID | 名称 | 职责一句话 | 默认状态 |
+| :--- | :--- | :--- | :--- |
+| `builtin:mentions` | 角色点名 | 在输入框提供 `@` 角色点名补全（`role-mentions`），并在存在派工工具时注入 `<available_profiles>` 协作目录（`mentions.catalog`） | 启用 |
+| `builtin:workflow` | 工作流与子代理编排 | `subagent` / `SubagentWorkflow` 工具、DSL 引擎与账本恢复 | 启用 |
+| `builtin:worktree` | 受管工作树 | 受管 Git Worktree 分配、持久租约与持有锁、两段式结构化探测、`cleanup_worktree` 工具与 `worktrees` CLI | 启用 |
+| `builtin:changes` | 通用改动检视 | 工作台 `Changes` 面板（原地展开单文件彩色 Diff、仅限本会话的工作区/工作树切换）、按需分屏检视台（`screen:builtin:changes/inspector`）与跨插件工作台直达插槽 | 启用 |
+| `builtin:swarm` | Swarm 对等协同看板 | 扁平对等序号黑板、正交唤醒、`turn_settled` 纯事件防掉棒自愈与自适应协同看板 | 启用 |
+| `builtin:memory` | 长期记忆 | 按 Profile 管理 MEMORY.md 注入与启停，提供 `update_memory` 工具与每日 Dream 自动整理（`dream` / `dream_status` / `dream_configure`） | 启用 |
+| `builtin:json-render` | JSON 卡片渲染 | 接管 ```ui 代码围栏渲染声明式 JSON Spec 卡片，自举 `generative-ui` 技能 | 启用 |
+| `builtin:mermaid` | Mermaid 图表 | 接管 ```mermaid 围栏，把 Mermaid 文本渲染为矢量图表 | 启用 |
+| `builtin:triggers` | 触发器 | Cron 定时与 Webhook 签名入站连接器 | 启用 |
+| `builtin:magpie` | Magpie 网关 | 动态模型网关接入：目录、配额与路由组诊断 | 启用 |
+| `builtin:token-speed` | Token 速率 | 输入区状态行实时解码速率（只读展示，内核零速率计算） | 启用 |
+| `builtin:tiers` | 模型档位 | 语义模型档位（`tier/<id>`）、自定义多套模板与 `model-tiers` 受管技能 | 启用 |
+| `builtin:duo` | 编排器 | Planner + Executor 编排器（挂载为 `tier/<id>`）、独立编排器管理页、状态行胶囊与单会话临时覆盖、`exit_plan_mode` / `hand_back_to_planner`、`helmx.default-child-model` 与 `duo` 受管技能 | 启用 |
+| `builtin:title` | 会话标题 | 首轮完成后后台静默整理清晰标题，提供 `/title` 命令按当前内容随时重整 | 启用 |
+| `builtin:plan` | 计划模式 | 只读调研、澄清问答与结构化计划草拟：规划工具白名单（剥离写与派工工具）、`AskDoc` 审批、人工编辑、产物归档与可选新上下文/模型交接执行 | 启用 |
+| `builtin:steps` | 实时步骤清单 | 由 `update_steps` 工具驱动的实时步骤清单：输入框上方可折叠进度条、时间线紧凑轨迹与全生命周期收敛 | 启用 |
+| `builtin:port-forward` | 端口映射 | 持久化 Hub 到本地/远程计算节点的 TCP 端口映射管理与按节点实时状态投影 | 启用 |
 
 内核包自身不注册任何插件；同一注册点还会调用 `loadExternalPlugins` 从 `<dataDir>/installed-plugins/` 目录加载外部插件（默认停用；与运行期数据目录 `<dataDir>/plugins/<id>/` 物理分离）。各插件的深度文档见文末「相关文档」。
 
@@ -106,11 +106,10 @@
 - **拓扑时序**：全局启动屏障按依赖拓扑序 prepare/start，`stop` / `dispose` 按逆拓扑序；
 - **依赖者保护**：停用被依赖插件时，依赖它的已启用插件（含传递依赖者）作为 `plugin_in_use` 占用项拦截；`--force` 停用后依赖者被显式标记为故障态（`status=failed` 附诊断），绝不静默潜伏。
 
-停用一个插件要过三道关卡，顺序固定：
+停用一个插件要过两道关卡，顺序固定（另内置/核心命名空间 `builtin:*` / `core:*` 禁止外部重载与受管卸载，返回 `403 plugin_locked`）：
 
-1. **locked 硬拒绝**：`locked: true` 的插件（仅 `builtin:profile`）永久禁止停用或卸载，返回 `403 plugin_locked`；
-2. **在途任务硬阻断**：`liveTasks()` 非空（执行中的动作/工具/子代理派生/服务自声明任务）即 `409 plugin_has_live_tasks`，**不可 force**；`liveTasks()` 执行崩溃按 `500 plugin_live_tasks_check_failed` 拒绝，绝不默认放行；
-3. **持久资源知情确认**：`inUse()` 声明持久生效资源（如已启用的 cron 任务、webhook 端点、Profile 运行时绑定、模型引用），非空默认 `409 plugin_in_use` 并列出占用清单；显式 `--force` 可越过（磁盘配置保留，重新启用后恢复）。
+1. **在途任务硬阻断**：`liveTasks()` 非空（执行中的动作/工具/子代理派生/服务自声明任务）即 `409 plugin_has_live_tasks`，**不可 force**；`liveTasks()` 执行崩溃按 `500 plugin_live_tasks_check_failed` 拒绝，绝不默认放行；
+2. **持久资源知情确认**：`inUse()` 声明持久生效资源（如已启用的 cron 任务、webhook 端点、Profile 运行时绑定、模型引用），非空默认 `409 plugin_in_use` 并列出占用清单；显式 `--force` 可越过（磁盘配置保留，重新启用后恢复）。
 
 停用后该插件的工具、动作、动态 CLI 命令、受管技能、UI 贡献与事件订阅**即时消失，不留幻影提示词**。插件加载或启用失败不拖垮内核：`PluginSummary.status` 置 `failed` 并携带结构化 `error`（`code / message / stage / details`），`stage` 标明故障阶段（`scan` / `load` / `define` / `enable`）；失败插件在插件中心可见且诊断可读，修复源码后经 `reload` 或重启恢复。
 
@@ -129,7 +128,7 @@
 
 ## 相关文档
 
-- 各内置插件深度文档：[workflow](workflow.md) · [worktree](worktree.md) · [changes](changes.md) · [swarm](swarm.md) · [profile](profile.md) · [memory](memory.md) · [triggers](triggers.md) · [magpie](magpie.md) · [json-render](json-render.md) · [mermaid](mermaid.md) · [token-speed](token-speed.md) · [tiers](tiers.md) · [duo](duo.md) · [title](title.md) · [plan](plan.md) · [steps](steps.md) · [port-forward](port-forward.md)
+- 各内置插件深度文档：[mentions](mentions.md) · [workflow](workflow.md) · [worktree](worktree.md) · [changes](changes.md) · [swarm](swarm.md) · [memory](memory.md) · [triggers](triggers.md) · [magpie](magpie.md) · [json-render](json-render.md) · [mermaid](mermaid.md) · [token-speed](token-speed.md) · [tiers](tiers.md) · [duo](duo.md) · [title](title.md) · [plan](plan.md) · [steps](steps.md) · [port-forward](port-forward.md)
 - [插件开发实战](plugin-development.md)：从 `helmx plugins init` 到 doctor / rescan / enable / reload 的完整闭环
 - [生命周期 Hook 与全界面扩展点](../architecture/extension-points.md)：4 个 Hook 与 10 个 UI surface 的逐项契约
 - [微内核架构总览](../architecture/overview.md)：内核四块机制与包依赖方向

@@ -51,7 +51,6 @@ export function makePluginSummary(
     id,
     name: overrides.name ?? id,
     version: '0.1.0',
-    locked: false,
     enabled: true,
     hooks: [],
     actions: [],

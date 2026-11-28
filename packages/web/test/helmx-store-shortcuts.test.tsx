@@ -435,7 +435,7 @@ describe("helmx-store-shortcuts", () => {
       { id: 'managed-disabled', name: 'Managed', managedByPlugin: 'ext:off' },
     ]
     const testPlugins: PluginSummary[] = [
-      { id: 'ext:off', name: 'Off', version: '1.0.0', enabled: false, locked: false, hooks: [], actions: [], tools: [] },
+      { id: 'ext:off', name: 'Off', version: '1.0.0', enabled: false, hooks: [], actions: [], tools: [] },
     ]
     const testConvs: ConversationSummary[] = [
       makeConversation(10, { profileId: 'coder', nodeId: 'remote-box', cwd: '/srv/app', updatedAt: 500 }),

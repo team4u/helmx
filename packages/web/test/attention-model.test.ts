@@ -543,7 +543,7 @@ test('Sidebar mount path: the attention hook discovers workbench badge docs and 
     })
   }) as typeof fetch
   const store = sidebarStore({
-    plugins: [{ id: 'builtin:workflow', name: 'Workflow', version: '0.0.0', enabled: true, locked: false, hooks: [], actions: [], tools: [] }],
+    plugins: [{ id: 'builtin:workflow', name: 'Workflow', version: '0.0.0', enabled: true, hooks: [], actions: [], tools: [] }],
     conversations: [
       conv({ id: 1, title: '主会话', profileId: 'assistant', createdAt: 9000, updatedAt: 9000 }),
       conv({ id: 50, title: '别处', profileId: 'coder' }),
@@ -673,7 +673,7 @@ test('extractRailQuickEntries: only screen-backed quickEntry items pass; missing
 
 test('Sidebar renders rail quick entries and disables with the plugin contributions (store.live SSE path)', { timeout: 60_000 }, async () => {
   const store = sidebarStore({
-    plugins: [{ id: 'demo-desk', name: 'Apps', version: '0.0.0', enabled: true, locked: false, hooks: [], actions: [], tools: [] }],
+    plugins: [{ id: 'demo-desk', name: 'Apps', version: '0.0.0', enabled: true, hooks: [], actions: [], tools: [] }],
     conversations: [conv({ id: 50, title: '当前查看', profileId: 'coder' })],
     primaryTarget: { kind: 'conversation', conversationId: 50 },
     uiContributions: [sidebarItemContribution(), screenContribution()],
@@ -780,7 +780,7 @@ test('CommandPaletteModal: all plugin views are searchable rows and open via the
   globalThis.fetch = (async () =>
     new Response(JSON.stringify({ query: 'board', messages: [], pluginItems: [] }), { status: 200, headers: { 'content-type': 'application/json' } })) as typeof fetch
   const store = sidebarStore({
-    plugins: [{ id: 'demo-desk', name: { en: 'Apps', 'zh-CN': '应用' }, version: '0.0.0', enabled: true, locked: false, hooks: [], actions: [], tools: [] }],
+    plugins: [{ id: 'demo-desk', name: { en: 'Apps', 'zh-CN': '应用' }, version: '0.0.0', enabled: true, hooks: [], actions: [], tools: [] }],
     conversations: [conv({ id: 50, title: '当前查看', profileId: 'coder' })],
     primaryTarget: { kind: 'conversation', conversationId: 50 },
     uiContributions: [sidebarItemContribution(), screenContribution()],
@@ -945,7 +945,7 @@ function badgeScenarioStore(overrides: { doc?: Record<string, unknown>; specBadg
     }
   }
   return sidebarStore({
-    plugins: [{ id: 'demo-desk', name: 'Apps', version: '0.0.0', enabled: true, locked: false, hooks: [], actions: [], tools: [] }],
+    plugins: [{ id: 'demo-desk', name: 'Apps', version: '0.0.0', enabled: true, hooks: [], actions: [], tools: [] }],
     conversations: [conv({ id: 50, title: '当前查看', profileId: 'coder' })],
     primaryTarget: { kind: 'screen', pluginId: 'demo-desk', screenId: 'app-center' },
     uiContributions: [sidebarItemContribution({ spec }), screenContribution()],

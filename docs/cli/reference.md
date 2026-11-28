@@ -182,7 +182,7 @@ PUT 为整体替换契约：update 走语义化标志时 CLI 先 GET 完整 Prof
 
 **`helmx plugins manifest <id>`** — 单个已注册插件的只读扩展契约投影（`GET /api/plugins/:id/manifest`）：稳定排序汇总 `hooks / actions / tools / ui / routes / docs（仅公开描述符）/ configFields（隐藏 secret 默认值与运行期值）/ providers（仅 id/name）/ services / clientModules`。
 
-**`helmx plugins enable <id>` / `helmx plugins disable <id> [--force]`** — 启停。停用预检：locked 插件 `403`；在途任务（自定义任务、执行中 Tool、挂起 `agent_spawn`）`409 plugin_has_live_tasks` 不可 force；持久资源占用（cron 规则、webhook 端点、Profile 运行时绑定）默认 `409 plugin_in_use` 列出占用清单，`--force` 知情越过（磁盘配置保留）。
+**`helmx plugins enable <id>` / `helmx plugins disable <id> [--force]`** — 启停。停用预检：在途任务（自定义任务、执行中 Tool、挂起 `agent_spawn`）`409 plugin_has_live_tasks` 不可 force；持久资源占用（cron 规则、webhook 端点、Profile 运行时绑定）默认 `409 plugin_in_use` 列出占用清单，`--force` 知情越过（磁盘配置保留）。
 
 **`helmx plugins config <id> [--input <json>] [--set <k=v>] [--unset <key>]`** — 无修改标志时查看 `{values, schema, sources}`；`--set`/`--unset` 可重复，值按 JSON boolean/number 解析。secret 字段自动分离至 credentials.json。
 
@@ -216,7 +216,7 @@ PUT 为整体替换契约：update 走语义化标志时 CLI 先 GET 完整 Prof
 
 **`helmx artifacts get <id> [--output <path>]`** — 读取产物内容；文本直出，二进制必须 `--output` 落盘；实际写入后回显绝对路径与实际字节数；传输中断返回 `download_failed`，已有目标文件保持原样。
 
-**`helmx skills list` / `helmx skills read <id> [--path <rel>]`** — 技能目录浏览；`--path` 读子文件，缺省 SKILL.md。缺省展示 Hub 全局目录；`--current` 作用域到当前会话工作区（读 `HELMX_CONVERSATION_ID` 并先经 Hub 解析该会话真实 `nodeId`/`cwd`）；`--node <id>` 单独使用可浏览该节点的 Hub + 机器级根目录（`~/.helmx/skills`、`~/.agents/skills`），可选配合 `--cwd <dir>` 额外叠加工作区 `.helmx/skills`（`--cwd` 必须搭配 `--node`，且均与 `--current` 互斥）。同名按 Hub > 节点机器级 > 工作区优先级保留生效版本；未注册/离线节点与非法坐标显式报错，被遮蔽 id 与扫描期不可用诊断显式报告。
+**`helmx skills list` / `helmx skills read <id> [--path <rel>]`** — 技能目录浏览；`--path` 读子文件，缺省 SKILL.md。缺省展示 Hub 全局目录（`GET /api/skills`）；`--current` 作用域到当前会话工作区（读 `HELMX_CONVERSATION_ID` 并先经 Hub 解析该会话真实 `nodeId`/`cwd`）；`--node <id>` 单独使用可浏览该节点的 Hub + 机器级根目录（`~/.helmx/skills`、`~/.agents/skills`），可选配合 `--cwd <dir>` 额外叠加工作区 `.helmx/skills`（`--cwd` 必须搭配 `--node`，且均与 `--current` 互斥）。作用域查询与读取走内核端点 `GET /api/skills/scoped/catalog`（`core:skills.catalog`）与 `GET /api/skills/:id[?path=&nodeId=&cwd=]`（`core:skills.read`）。同名按 Hub > 节点机器级 > 工作区优先级保留生效版本；未注册/离线节点与非法坐标显式报错，被遮蔽 id 与扫描期不可用诊断显式报告。
 
 ---
 
@@ -240,7 +240,7 @@ PUT 为整体替换契约：update 走语义化标志时 CLI 先 GET 完整 Prof
 | `helmx swarm abort-worker / switch-model / inspect-worker / archive-worker / close-group` | builtin:swarm | 中止成员当前回合、给闲置成员换模型、查看或归档成员、结单。用 `--keep-worktree` 保留有改动或未合入的工作树；非 Linux 节点自动删干净目录需显式传 `--allow-unverified-usage`。 |
 | `helmx memory get / set / configure` | builtin:memory | 长期记忆管理；均以 `--profile-id <id>` 或 `--current` 选目标，皆缺 `400 validation_error`；`set --text <str> [--mode replace\|append]`；`configure --enabled <bool> [--text <str>]` |
 | `helmx memory dream / dream_status / dream_configure` | builtin:memory | 每日 Dream 记忆整理：`dream` 立即整理（`--profile-id`/`--current`，无候选或无模型会话合法跳过并返回 reason，在途关闭如实 `memory_disabled` 不写回）；`dream_status` 查看调度/候选/上次整理（`--profile-id`/`--current` 聚焦只读目标，候选文件异常显式报错）；`dream_configure --enabled <bool> --hour <0-23> --timezone <IANA>` 配置（至少一项，暂停即清除 nextRunAt，首启排下一低峰点、过期仅补跑一次） |
-| `helmx profile list_mentionable` | builtin:profile | 列出可 `@` 点名协作的 Profile 候选（`--current` / `--conversation-id` / `--profile-id` 选上下文） |
+| `helmx mentions list_mentionable` | builtin:mentions | 列出可 `@` 点名协作的 Profile 候选（`--current` / `--conversation-id` / `--profile-id` 选上下文） |
 | `helmx cron list / create / delete / trigger` | builtin:triggers | cron 任务管理；create 必填 `--id --schedule --text`（标准五字段，timezone 默认 UTC），支持 `--target-conversation-id` / `--target-profile-id` 定向 |
 | `helmx webhook create / list / delete` | builtin:triggers | webhook 端点管理（HMAC-SHA256 验签）；create 必填 `--id --secret`，**secret 仅允许人工 HTTP/CLI 配置**（会话上下文调用被 403 拒绝） |
 | `helmx magpie status / refresh / quota` | builtin:magpie | 网关状态、目录刷新与配额查询 |

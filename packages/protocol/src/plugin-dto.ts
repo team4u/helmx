@@ -182,8 +182,6 @@ export interface PluginSummary {
   version?: string
   /** Other plugin IDs this plugin depends on (deduplicated at the registration boundary; all must be enabled before enabling). */
   dependencies?: string[]
-  /** Resident and non-removable (e.g. builtin:profile). */
-  locked: boolean
   enabled: boolean
   /** Current plugin status: active | disabled | failed. */
   status?: PluginStatus

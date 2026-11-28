@@ -26,7 +26,7 @@ pnpm build && pnpm typecheck && pnpm lint && pnpm check:hygiene && pnpm test:all
 
 1. **单向包依赖**：`@helmx/kernel`（机制）、`@helmx/plugins`（内置插件与插件业务契约）、`@helmx/hub`（产品组合根与 `helmx-hub`）；内核不得依赖插件或组合根。`@helmx/ui` 为独立 Quiet Surface 设计系统包（零插件运行时依赖）；`@helmx/plugin-client` 为独立浏览器插件运行时 SDK（依赖 `@helmx/ui` 与 `@helmx/protocol`，不得反向依赖 `@helmx/web`）。`@helmx/plugin-build` 经端口注入宿主。`@helmx/protocol` 只放通用跨包契约，零重依赖。
 2. **内核四块通用机制**（`@helmx/kernel`，详见 `docs/architecture/overview.md`）：
-   - `pi-durable`：通用 `Conversation(nodeId, cwd)` 五态、`state.sqlite` + FTS5（**纯可重建派生索引，禁写 `pi_*` 表语义**）、`AskDoc`、`SecretStash`、`Artifacts`、资产热重载与原生 `spawnAgent`；
+   - `pi-durable`：通用 `Conversation(nodeId, cwd)` 五态、`state.sqlite` + FTS5（**纯可重建派生索引，禁写 `pi_*` 表语义**）、`AskDoc`、`SecretStash`、`Artifacts`、资产热重载、通用角色/技能底座（`TurnContextAssembler` / `ScopedSkillService` / `load_skill` / `core:profiles` 托管默认 `assistant` Profile / `core:*` 核心技能自举）与原生 `spawnAgent`；
    - `EnvFabric` + `NodeRegistry`：`/ws/node`、`/ws/node-tunnel`（TCP-only `openTunnel`）、`local` + `@helmx/node`、`bash/read/write/edit/gate/env exec` 与 `nodeId + canonicalPath` 文件互斥；
    - `Model 与 Auth`：模型接入、禁用过滤、凭据与令牌；
    - `PluginHost`：`definePlugin(ctx)`（`provide/consume`、`kv`、`route`、`host`）、受管包生命周期与 `dependencies` 拓扑启停。
@@ -35,7 +35,7 @@ pnpm build && pnpm typecheck && pnpm lint && pnpm check:hygiene && pnpm test:all
 5. **扩展面契约（零 `if/else` 插件 ID 特判）**：
    - **后端 4 Hook**（`continue | transform | handled | block`，`block` 仅 `input`）：`input`、`before_turn`、`agent_spawn`（支持 `next` around）、`turn_settled`（`completed | failed | aborted`）；
    - **前端 10 `ctx.ui`**（`client.tsx` React 单轨）：`sidebarItem`、`screen`、`timelineRenderer`、`markdownCodeBlock`、`toolView`、`composerCompleter`、`workbenchPanel`、`command`、`settingsPanel`、`slot`。
-6. **17 个内置插件**（`@helmx/plugins`，`@helmx/hub` 注册，全默认启用；详情见 `docs/plugins/overview.md`）：`profile`（`locked`）、`workflow`、`worktree`（与 workflow 零静态依赖）、`changes`、`swarm`、`memory`、`json-render`、`mermaid`、`triggers`、`magpie`、`token-speed`、`tiers`（`1 tier = 1 model` + 模板）、`duo`（双相规划/执行协同 + `agent_spawn` + `helmx.default-child-model`）、`title`、`plan`、`steps`、`port-forward`。
+6. **17 个内置插件**（`@helmx/plugins`，`@helmx/hub` 注册，全默认启用，均可自由停用；详情见 `docs/plugins/overview.md`）：`mentions`、`workflow`、`worktree`（与 workflow 零静态依赖）、`changes`、`swarm`、`memory`、`json-render`、`mermaid`、`triggers`、`magpie`、`token-speed`、`tiers`（`1 tier = 1 model` + 模板）、`duo`（双相规划/执行协同 + `agent_spawn` + `helmx.default-child-model`）、`title`、`plan`、`steps`、`port-forward`。
    - **插件铁律**：① 停用后工具、动作、CLI、受管技能与 UI 贡献**即时消失，不留幻影提示词**；② 高频会话态用 `ctx.sessionDoc` 按需订阅，禁塞全局 `ctx.doc`（单文档上限 2 MiB，超限 `413`）；③ 启动先按依赖拓扑全体 `prepare()` 再 `start()`，随后按依赖与 `reconcileAfter` 软序 `reconcile()`；④ 停用/重载在途任务经 `liveTasks` 硬阻断（`409 plugin_has_live_tasks`，不可 force），持久占用或被依赖报 `409 plugin_in_use`（可 `--force`）。
 7. **明确不做**：服务端 TUI 兼容层；独立 `Space` CRUD 表（直用 `(nodeId, cwd)`）；内嵌 Python SSH 桥接（走 `EnvFabric`）；混装 `helmx` 与 `helmx-node`；第二套微应用子宿主（全栈微应用即带 `ctx.ui.screen` 的受管插件）；Web 端 Worktree Diff 合入状态机；在 `Conversation`/`ModelProvider` 底层伪装终端 CLI Agent。
 
@@ -105,6 +105,6 @@ pnpm build && pnpm typecheck && pnpm lint && pnpm check:hygiene && pnpm test:all
 - **总览与入门**：`docs/README.md` · `docs/getting-started/`（index / installation / first-workflow / orchestration-guide）· `docs/cli/reference.md` · `docs/releasing.md`
 - **架构机制**：`docs/architecture/overview.md` · `extension-points.md` · `envfabric.md` · `pi-durable.md`
 - **编排引擎**：`docs/workflows/dsl-guide.md` · `worktree-and-gate.md` · `journaling-recovery.md`
-- **插件生态**：`docs/plugins/overview.md` · `plugin-development.md` 及 17 插件同名文档：`profile / workflow / worktree / changes / swarm / memory / triggers / magpie / json-render / mermaid / token-speed / tiers / duo / title / plan / steps / port-forward`
+- **插件生态**：`docs/plugins/overview.md` · `plugin-development.md` 及 17 插件同名文档：`mentions / workflow / worktree / changes / swarm / memory / triggers / magpie / json-render / mermaid / token-speed / tiers / duo / title / plan / steps / port-forward`
 - **Web 与 UI 规范**：`.helmx/skills/helmx-ui/SKILL.md` + `references/patterns.md`（全站唯一 UI HIG 真源，改 Web/插件前端必读）· `docs/conventions/web-frontend.md`（宿主工程约束）· `docs/conventions/web-navigation.md`（URL Hash 导航）
 - **工程排障**：`.helmx/skills/helmx-troubleshooting/SKILL.md`（长测试后台跑法、合并后 `HEAD^{tree}` 免重跑、happy-dom / Radix / TS 踩坑、fork `spawn_error` 恢复）——若当前环境未自动加载 `.helmx/skills/`，请按需主动读取上述两份技能

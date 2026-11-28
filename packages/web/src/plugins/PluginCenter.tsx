@@ -259,7 +259,7 @@ export function PluginCenter({
     targetEnabled?: boolean,
     options?: { force?: boolean },
   ) => {
-    if (plugin.locked || togglingId === plugin.id) return
+    if (togglingId === plugin.id) return
     setTogglingId(plugin.id)
     const nextEnabled = targetEnabled !== undefined ? targetEnabled : !plugin.enabled
     const displayName = resolveLocalizedText(plugin.name, locale) || plugin.id

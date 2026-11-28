@@ -655,7 +655,7 @@ test('after Sidebar mounts, ensurePluginDoc loads the badge docs of hit panels o
     return new Response(JSON.stringify({ key: 'stub', value: {} }), { status: 200, headers: { 'content-type': 'application/json' } })
   }) as typeof fetch
   const store = sidebarStore({
-    plugins: [{ id: 'builtin:workflow', name: 'Workflow', version: '0.0.0', enabled: true, locked: false, hooks: [], actions: [], tools: [] }],
+    plugins: [{ id: 'builtin:workflow', name: 'Workflow', version: '0.0.0', enabled: true, hooks: [], actions: [], tools: [] }],
     conversations: [
       conv({ id: 1, title: '主会话', profileId: 'assistant', createdAt: 9000, updatedAt: 9000 }),
       conv({ id: 50, title: '别处', profileId: 'coder' }),

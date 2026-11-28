@@ -832,7 +832,7 @@ function makeTestStore(partial: TestStoreOverrides = {}): HelmxExternalStore {
       conv({ id: 10, title: '用户会话1', profileId: 'assistant' }),
       conv({ id: 11, title: '用户会话2', profileId: 'assistant' }),
     ],
-    plugins: [{ id: 'builtin:mentions', name: '角色点名', locked: false, enabled: true, hooks: [], actions: [], tools: [] }],
+    plugins: [{ id: 'builtin:mentions', name: '角色点名', enabled: true, hooks: [], actions: [], tools: [] }],
     profiles: [{ id: 'assistant', name: '个人助理' }],
     models: [
       {

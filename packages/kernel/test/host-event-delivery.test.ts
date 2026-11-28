@@ -165,7 +165,7 @@ describe('host event single-delivery contract', { timeout: 60_000 }, () => {
         const event = frame.event as { type: string }
         if (event.type === 'plugin.changed') seen.push(event.type)
       })
-      kernel.emitHostEvent('plugin.changed', { plugin: { id: 'test:hot', version: '1.0.0', enabled: true, locked: false } })
+      kernel.emitHostEvent('plugin.changed', { plugin: { id: 'test:hot', version: '1.0.0', enabled: true } })
       assert.equal(seen.length, 1, 'plugin.changed must still emit on hot-reload failure so clients never miss state transitions')
     } finally {
       await kernel.close()

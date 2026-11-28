@@ -215,7 +215,6 @@ test('plugins manifest: GET /api/plugins/:id/manifest with URI encoding, --json 
     id: 'builtin:triggers',
     name: { en: 'Triggers', 'zh-CN': '触发器' },
     description: { 'zh-CN': '定时与回调' },
-    locked: false,
     enabled: true,
     status: 'active',
     dependencies: [],

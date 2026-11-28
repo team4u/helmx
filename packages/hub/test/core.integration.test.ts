@@ -250,13 +250,12 @@ after(async () => {
   await mainEnv?.close()
 }, { timeout: 60_000 })
 
-test('核心协同 1：profile/memory 默认装配与锁定保护、SYSTEM/MEMORY 段落注入、update_memory 跨回合持久化及 subagent parentToolCallId 广播', { timeout: 60_000 }, async () => {
+test('核心协同 1：mentions/memory 默认装配、SYSTEM/MEMORY 段落注入、update_memory 跨回合持久化及 subagent parentToolCallId 广播', { timeout: 60_000 }, async () => {
   const { kernel, faux } = mainEnv
   const host = kernel.plugins
 
   assert.equal(host.list().find((p) => p.id === 'builtin:profile'), undefined, 'builtin:profile 已合入内核并退出插件清单')
   const mentionsSummary = host.list().find((p) => p.id === 'builtin:mentions')!
-  assert.equal(mentionsSummary.locked, false)
   assert.equal(mentionsSummary.enabled, true)
   assert.ok(mentionsSummary.actions.includes('list_mentionable'))
   await host.disable('builtin:mentions')
@@ -268,7 +267,6 @@ test('核心协同 1：profile/memory 默认装配与锁定保护、SYSTEM/MEMOR
   assert.equal(host.list().find((p) => p.id === 'builtin:mentions')?.enabled, true)
 
   const memorySummary = host.list().find((p) => p.id === 'builtin:memory')!
-  assert.equal(memorySummary.locked, false)
   assert.equal(memorySummary.enabled, true)
   assert.ok(memorySummary.tools.includes('update_memory'))
   assert.ok(['get', 'set', 'configure'].every((a) => memorySummary.actions.includes(a)))

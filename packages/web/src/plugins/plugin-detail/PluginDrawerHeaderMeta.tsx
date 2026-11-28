@@ -6,7 +6,7 @@ import { getPluginDescription } from '../plugin-card-model.js'
 import { isPluginFailed } from '../plugin-center-model.js'
 import { pluginDrawerVersionLabel } from './plugin-detail-model.js'
 
-/** 抽屉标题右侧徽章：版本、常驻核心与依赖数。 */
+/** 抽屉标题右侧徽章：版本与依赖数。 */
 export function PluginDrawerTitleBadges({
   plugin,
   t,
@@ -20,11 +20,6 @@ export function PluginDrawerTitleBadges({
       {versionLabel && (
         <Badge tone="neutral" mono title={t('plugins.card.versionTitle', { version: versionLabel })}>
           {versionLabel}
-        </Badge>
-      )}
-      {plugin?.locked && (
-        <Badge tone="warn" icon="lock" title={t('plugins.card.lockedTitle')}>
-          {t('plugins.resident')}
         </Badge>
       )}
       {plugin?.dependencies && plugin.dependencies.length > 0 && (
