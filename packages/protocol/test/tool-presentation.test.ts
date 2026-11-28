@@ -10,6 +10,7 @@ import {
   KERNEL_TOOL_NAMES,
   KERNEL_TOOL_PRESENTATION_META_SCHEMAS,
   READ_TOOL_META_SCHEMA,
+  READ_TOOL_TRUNCATION_SCHEMA,
   REQUEST_SCHEMAS,
   REQUEST_SCHEMA_PATTERNS,
   TOOL_DIFF_MAX_ROWS,
@@ -524,7 +525,32 @@ test('kernel builtin tool presentationMeta schemas compile and enforce strict sh
   assert.equal(KERNEL_TOOL_PRESENTATION_META_SCHEMAS['ask_user'], ASK_USER_TOOL_META_SCHEMA)
 
   assertBoundedPresentationMeta({ path: '/a.ts', nodeId: 'local' }, { schema: READ_TOOL_META_SCHEMA })
+  assertBoundedPresentationMeta(
+    {
+      path: '/a.ts',
+      nodeId: 'local',
+      truncation: {
+        truncated: true,
+        truncatedBy: 'lines',
+        totalLines: 3000,
+        totalBytes: 90_000,
+        outputLines: 2000,
+        outputBytes: 48_000,
+        lastLinePartial: false,
+        firstLineExceedsLimit: false,
+        maxLines: 2000,
+        maxBytes: 51_200,
+      },
+    },
+    { schema: READ_TOOL_META_SCHEMA },
+  )
+  assertBoundedPresentationMeta(
+    { path: '/img.png', nodeId: 'remote-1', mimeType: 'image/png', imageUnsupportedByModel: 'text-only' },
+    { schema: READ_TOOL_META_SCHEMA },
+  )
+  assertSchemaCompilable(READ_TOOL_TRUNCATION_SCHEMA)
   assert.throws(() => assertBoundedPresentationMeta({ path: '/a.ts', nodeId: 'local', content: 'leak' }, { schema: READ_TOOL_META_SCHEMA }))
+  assert.throws(() => assertBoundedPresentationMeta({ path: '/img.png', nodeId: 'local', mimeType: '' }, { schema: READ_TOOL_META_SCHEMA }))
 
   assertBoundedPresentationMeta({ path: '/a.ts', nodeId: 'local', bytesWritten: 42 }, { schema: WRITE_TOOL_META_SCHEMA })
   assertBoundedPresentationMeta({ path: '/a.ts', nodeId: 'local', bytesWritten: 42, artifactId: 'art-1' }, { schema: WRITE_TOOL_META_SCHEMA })

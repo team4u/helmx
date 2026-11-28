@@ -10,6 +10,7 @@
  */
 
 import { BACKGROUND_CONTEXT, withAbortSignal, type Context } from '@earendil-works/chord/context'
+import { LineScanner, type BinaryReader, type LineScan } from '@earendil-works/pi-durable/env'
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -53,8 +54,10 @@ function makeRecordingEnv(options: {
     absolutePath(path: string, context: Context): Promise<{ ok: true; value: string } | { ok: false; error: { code: string; message: string } }>
     joinPath(parts: string[], context: Context): Promise<{ ok: true; value: string } | { ok: false; error: { code: string; message: string } }>
     canonicalPath(path: string, context: Context): Promise<{ ok: true; value: string } | { ok: false; error: { code: string; message: string } }>
+    exists(path: string, context: Context): Promise<{ ok: true; value: boolean } | { ok: false; error: { code: string; message: string } }>
     fileInfo(path: string, context: Context): Promise<{ ok: true; value: { kind: 'file' | 'directory'; size: number } } | { ok: false; error: { code: string; message: string } }>
     readTextFile(path: string, context: Context): Promise<{ ok: true; value: string } | { ok: false; error: { code: string; message: string } }>
+    openBinaryReader(path: string, options: { noFollow?: boolean } | undefined, context: Context): Promise<{ ok: true; value: BinaryReader } | { ok: false; error: { code: string; message: string } }>
     writeFile(path: string, content: string, context: Context): Promise<{ ok: true; value: void } | { ok: false; error: { code: string; message: string } }>
     createDir(path: string, options: { recursive?: boolean }, context: Context): Promise<{ ok: true; value: void } | { ok: false; error: { code: string; message: string } }>
   }
@@ -80,9 +83,14 @@ function makeRecordingEnv(options: {
         record('canonicalPath', path, context)
         return { ok: true, value: options.canonical(path) }
       },
+      async exists(path, context) {
+        record('exists', path, context)
+        return { ok: true, value: options.files?.has(path) ?? false }
+      },
       async fileInfo(path, context) {
         record('fileInfo', path, context)
-        return { ok: true, value: { kind: 'file', size: 16 } }
+        const content = options.files?.get(path)
+        return { ok: true, value: { kind: 'file', size: content === undefined ? 16 : Buffer.byteLength(content, 'utf8') } }
       },
       async readTextFile(path, context) {
         record('readTextFile', path, context)
@@ -91,6 +99,31 @@ function makeRecordingEnv(options: {
           return { ok: false, error: { code: 'not_found', message: `ENOENT: ${path}` } }
         }
         return { ok: true, value: content }
+      },
+      async openBinaryReader(path, _opts, context) {
+        record('openBinaryReader', path, context)
+        const content = options.files?.get(path)
+        if (content === undefined) {
+          return { ok: false, error: { code: 'not_found', message: `ENOENT: ${path}` } as never }
+        }
+        const bytes = Buffer.from(content, 'utf8')
+        return {
+          ok: true,
+          value: {
+            async info() {
+              return { ok: true, value: { name: path, path, kind: 'file', size: bytes.length, mtimeMs: 1 } }
+            },
+            async read(offset, length) {
+              return { ok: true, value: bytes.subarray(offset, offset + length) }
+            },
+            async scanLines(scanOpts): Promise<{ ok: true; value: LineScan }> {
+              const scanner = new LineScanner(scanOpts.startLine, scanOpts.endLine)
+              scanner.push(bytes)
+              return { ok: true, value: scanner.finish() }
+            },
+            async close() {},
+          },
+        }
       },
       async writeFile(path, content, context) {
         record('writeFile', path, context)
@@ -241,7 +274,7 @@ describe('remote file tools cross-platform path semantics (recording ExecutionEn
       paths.every((p) => p.startsWith('C:\\')),
       `remote paths must use win32 syntax (never corrupted by Hub resolve): ${JSON.stringify(paths)}`,
     )
-    assert.ok(paths.includes('C:\\workspace\\note.md'), `readTextFile must receive win32 resolved absolute path: ${JSON.stringify(paths)}`)
+    assert.ok(paths.includes('C:\\workspace\\note.md'), `openBinaryReader must receive win32 resolved absolute path: ${JSON.stringify(paths)}`)
     const structured = result.structuredOutput as { content: string }
     assert.ok(structured.content.includes('# remote content'))
   })
@@ -352,8 +385,8 @@ describe('remote file tools cross-platform path semantics (recording ExecutionEn
     const context = withAbortSignal(controller.signal, BACKGROUND_CONTEXT)
     const tool = createReadTool(deps)
     await tool.execute({ path: 'a.txt' }, makeApi('C:\\workspace'), context)
-    const seen = recorder.calls.find((c) => c.method === 'readTextFile')
-    assert.ok(seen, 'remote readTextFile must be invoked')
+    const seen = recorder.calls.find((c) => c.method === 'openBinaryReader')
+    assert.ok(seen, 'remote openBinaryReader must be invoked')
     assert.equal(seen!.context.abortSignal, controller.signal, 'tool Context abortSignal must propagate to remote env calls')
   })
 

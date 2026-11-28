@@ -157,12 +157,18 @@ test('string content vs non-plaintext content: truncates strings, leaves non-pla
       {
         role: 'toolResult',
         toolCallId: 'c',
-        toolName: 'x',
+        toolName: 'read',
         content: [{ type: 'image', data: 'a'.repeat(4000), mimeType: 'image/png' }],
       },
     ],
   }
-  assert.equal(projectDetailEntry(binary), binary)
+  const binarySnapshot = JSON.parse(JSON.stringify(binary))
+  const binaryProjected = projectDetailEntry(binary)!
+  assert.notEqual(binaryProjected, binary)
+  assert.deepEqual(binary, binarySnapshot, 'must not mutate input entry with image block')
+  const binMsg = binaryProjected.model![0] as Record<string, unknown>
+  assert.equal(binMsg['truncated'], true)
+  assert.deepEqual(binMsg['content'], [{ type: 'text', text: '[image: image/png]' }])
 })
 
 test('pageVisibleEntries: hides pi.system inside paging loop so limit counts visible entries', { timeout: 60_000 }, async () => {

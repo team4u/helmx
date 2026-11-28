@@ -37,7 +37,7 @@ flowchart TD
 
 ## 内核工具与宿主端口
 
-内核提供文件与命令工具，以及 `read_artifact`、`register_artifact`、`run_action` 等通用模型工具（清单见 `packages/kernel/src/runtime/tool-registry.ts`）。`bash / read / write / edit` 与 `register_artifact` 的节点文件读取使用 EnvFabric 和会话绑定的 `(nodeId, cwd)`；`read_artifact` 读取 Hub 产物存储，`run_action` 经插件动作总线执行，不经过节点通道。`register_artifact` 对离线节点、非普通文件或超过 15 MiB 的文件显式失败。
+内核提供文件与命令工具，以及 `read_artifact`、`register_artifact`、`run_action` 等通用模型工具（清单见 `packages/kernel/src/runtime/tool-registry.ts`）。`bash / read / write / edit` 与 `register_artifact` 的节点文件读取使用 EnvFabric（含注入到 `Harness.open` `options.env` 的会话级 `ExecutionEnv`）和会话绑定的 `(nodeId, cwd)`：`read` 支持 `offset/limit` 行分页（默认 2,000 行 / 50 KiB）与多模态图片缩放读取，`edit` 支持单处或 `edits[]` 原子多处替换（保留 BOM 与逐行换行符），模型 `bash` 工具实时流式脱敏输出、保留尾部 2,000 行 / 50 KiB 并把超限节点 `spillPath`（≤15 MiB）落入 `ArtifactService` 供 `read_artifact` 续读后清理节点临时文件；`read_artifact` 读取 Hub 产物存储，`run_action` 经插件动作总线执行，不经过节点通道。`register_artifact` 对离线节点、非普通文件或超过 15 MiB 的文件显式失败。
 
 插件侧的两个宿主端口：`ctx.host.runGate(command, options)` 在目标节点/会话工作目录执行验证门禁命令（返回 `ok / output / exitCode / timedOut`）；`ctx.host.execEnv(req)` 经同一通道执行命令（复用 SecretStash 注入与脱敏，靶点解析优先级：显式 nodeId/cwd > conversationId 绑定坐标 > `local`/Hub cwd）。`subagent` 等编排工具不在内核——它们由 `builtin:workflow` 提供。
 

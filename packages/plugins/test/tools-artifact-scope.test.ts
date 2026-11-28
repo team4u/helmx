@@ -136,10 +136,16 @@ function makeRemoteFileEnv(options: {
     readers,
     env: {
       id: 'remote:fake-file-node',
+      async absolutePath(path: string, _context: Context) {
+        return { ok: true as const, value: path }
+      },
       async canonicalPath(path: string, _context: Context) {
         calls.push(`canonicalPath:${path}`)
         const mapped = options.canonical[path]
         return mapped === undefined ? notFound(path) : { ok: true as const, value: mapped }
+      },
+      async exists(path: string, _context: Context) {
+        return { ok: true as const, value: options.files.has(path) }
       },
       async fileInfo(path: string, _context: Context) {
         calls.push(`fileInfo:${path}`)
@@ -179,6 +185,37 @@ function makeRemoteFileEnv(options: {
               return {
                 ok: true as const,
                 value: source.subarray(offset, offset + Math.min(length, available)),
+              }
+            },
+            async scanLines(scanOpts: { startLine: number; endLine?: number }, _context: Context) {
+              const source = file.readBytes ?? file.bytes
+              let newlines = 0
+              let start = scanOpts.startLine === 0 ? 0 : source.byteLength
+              let end = source.byteLength
+              let firstLineEnd = source.byteLength
+              let lastLineStart = 0
+              let line = 0
+              for (let i = 0; i < source.byteLength; i++) {
+                if (source[i] === 10) {
+                  newlines++
+                  if (line === scanOpts.startLine) firstLineEnd = Math.min(firstLineEnd, i)
+                  line++
+                  if (line === scanOpts.startLine) start = i + 1
+                  if (scanOpts.endLine !== undefined && line === scanOpts.endLine) end = i
+                  if (i + 1 <= end) lastLineStart = i + 1
+                }
+              }
+              return {
+                ok: true as const,
+                value: {
+                  newlines,
+                  start,
+                  end: Math.max(start, end),
+                  firstLineEnd: Math.max(start, firstLineEnd),
+                  lastLineStart: Math.max(start, lastLineStart),
+                  selectedBytes: Math.max(0, end - start),
+                  firstLineBytes: Math.max(0, firstLineEnd - start),
+                },
               }
             },
             async close(_context: Context) {
@@ -664,15 +701,16 @@ describe('read/write/edit/bash：真实 target 路径与 nodeId 回显', { timeo
     assert.equal(structured.path, join(dir, 'note.txt'))
     assert.equal(structured.nodeId, 'local')
     // 远端：canonicalPath 解析后的真实路径回显。
+    const remoteBytes = Buffer.from('远端内容', 'utf8')
     const { env } = makeRemoteFileEnv({
       canonical: { '/proj/link.txt': '/proj/real.txt' },
       files: new Map([
-        ['/proj/real.txt', { kind: 'file', size: 12, bytes: Buffer.alloc(0) }],
+        ['/proj/real.txt', { kind: 'file', size: remoteBytes.length, bytes: remoteBytes }],
       ]),
     })
     const remoteEnv = {
       ...env,
-      async readTextFile(path: string, _context: Context) {
+      async readTextFile(_path: string, _context: Context) {
         return { ok: true, value: '远端内容' }
       },
     }

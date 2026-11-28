@@ -280,3 +280,28 @@ test('共享 Schema 校验后仍拒绝超过总文本预算的差异', { timeout
   assert.equal(result.ok, false)
   if (!result.ok) assert.match(result.reason, /budget/)
 })
+
+test('buildPendingEditDiff：支持 edits[] 批量与 JSON 字符串容错，独立计算词级标注', { timeout: 60_000 }, () => {
+  const batch = buildPendingEditDiff({
+    path: '/a.ts',
+    edits: [
+      { oldText: 'alpha = 1', newText: 'alpha = 2' },
+      { oldText: 'beta = 10\nbeta2 = 20', newText: 'beta = 99\nbeta2 = 20' },
+    ],
+  })
+  assert.ok(batch !== undefined && batch.kind === 'computed')
+  if (batch.kind !== 'computed') return
+  assert.equal(batch.addedLines, 2)
+  assert.equal(batch.removedLines, 2)
+  assert.ok(batch.rows.some((r) => r.kind === 'remove' && r.text === 'alpha = 1'))
+  assert.ok(batch.rows.some((r) => r.kind === 'add' && r.text === 'beta = 99'))
+
+  const stringified = buildPendingEditDiff({
+    path: '/a.ts',
+    edits: JSON.stringify([{ oldText: 'oldLine', newText: 'newLine' }]),
+  })
+  assert.ok(stringified !== undefined && stringified.kind === 'computed')
+  if (stringified.kind !== 'computed') return
+  assert.equal(stringified.addedLines, 1)
+  assert.equal(stringified.removedLines, 1)
+})

@@ -145,6 +145,30 @@ test('edit running：显示Pending change hunks，不带文件行号', { timeout
   } finally {
     m.unmount()
   }
+
+  const mBatch = createMount()
+  try {
+    await mBatch.render(
+      bodyUi(
+        trace({
+          toolName: 'edit',
+          status: 'running',
+          input: {
+            path: '/batch.ts',
+            edits: [
+              { oldText: 'const a = 1', newText: 'const a = 2' },
+              { oldText: 'const b = 10', newText: 'const b = 20' },
+            ],
+          },
+        }),
+      ),
+    )
+    assert.match(mBatch.host.textContent ?? '', /Pending change hunks/)
+    assert.ok(mBatch.host.querySelector('.trace-diff-pending'), 'edits[] 批量编辑同样支持片段预览')
+    assert.match(mBatch.host.textContent ?? '', /const b = 20/)
+  } finally {
+    mBatch.unmount()
+  }
 })
 
 test('edit pending → success：完成且元数据合法后切换为内核真实差异（真实行号）', { timeout: 60_000 }, async () => {
@@ -452,6 +476,43 @@ test('read：spill 输出不做源码高亮并保留产物入口；普通结果�
     assert.equal(preLineCount(m2.host, '.trace-code-sec pre'), 1)
   } finally {
     m2.unmount()
+  }
+
+  const mImg = createMount()
+  try {
+    await mImg.render(
+      bodyUi(
+        trace({
+          toolName: 'read',
+          input: { path: 'diagram.png' },
+          resultText: '[image: image/png]',
+          resultTruncation: { truncated: true, totalChars: 4096, totalLines: 1 },
+          presentationMeta: { path: '/abs/diagram.png', nodeId: 'local', mimeType: 'image/png' },
+        }),
+      ),
+    )
+    assert.match(mImg.host.textContent ?? '', /Image attachment/)
+    assert.match(mImg.host.textContent ?? '', /image\/png/)
+    assert.doesNotMatch(mImg.host.textContent ?? '', /Expand full text/)
+    assert.ok(mImg.host.querySelector('.trace-code-sec') === null, '图片附件不走源码高亮分支')
+  } finally {
+    mImg.unmount()
+  }
+
+  const mUnsup = createMount()
+  try {
+    await mUnsup.render(
+      bodyUi(
+        trace({
+          toolName: 'read',
+          input: { path: 'diagram.png' },
+          presentationMeta: { path: '/abs/diagram.png', nodeId: 'local', imageUnsupportedByModel: 'text-only-1' },
+        }),
+      ),
+    )
+    assert.match(mUnsup.host.textContent ?? '', /text-only-1/)
+  } finally {
+    mUnsup.unmount()
   }
 })
 

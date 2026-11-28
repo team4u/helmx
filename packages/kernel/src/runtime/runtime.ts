@@ -72,6 +72,7 @@ import {
 import { registerCoreActions } from './core-actions.js'
 import { bootstrapCoreSkills } from './core-skills/index.js'
 import { clearRegistryToolAbortFallbacks } from './tool-registry.js'
+import { invalidPathText, normalizePathForTarget, targetPlatformForNode } from './target-platform.js'
 import { ASK_USER_OWNER_ID } from './tools.js'
 
 export type KernelRuntimeOptions = KernelBootOptions
@@ -239,6 +240,29 @@ export class KernelRuntime {
         this.models.modelThinkingLevelOf({ provider: providerId, modelId }),
       isDisabled: (providerId, modelId) => this.models.isModelDisabled(providerId, modelId),
     }))
+    this.init.setEnvResolver((target) => {
+      const conversationId = target.conversationId as number
+      const conv = this.store.getConv(conversationId)
+      const nodeId = conv?.nodeId ?? 'local'
+      const rawCwd = target.cwd ?? conv?.cwd ?? this.init.cwd
+      const cwdNorm = normalizePathForTarget(rawCwd, targetPlatformForNode(this.envFabric, nodeId))
+      if (!cwdNorm.ok) {
+        throw new HelmxError('invalid_path', invalidPathText(cwdNorm), 400)
+      }
+      if (nodeId !== 'local' && !this.envFabric.isOnline(nodeId)) {
+        throw new HelmxError(
+          'node_offline',
+          `node '${nodeId}' is offline; cannot establish remote execution environment (refusing to fall back to local)`,
+          409,
+          { nodeId },
+        )
+      }
+      return this.envFabric.envForTarget({
+        conversationId,
+        nodeId,
+        cwd: cwdNorm.path,
+      })
+    })
     this.init.setFatalStorageHandler(
       (source, error) => this.handleFatalStorageError(source, error),
       () => this.closed,

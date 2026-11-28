@@ -91,6 +91,7 @@ test('@helmx/protocol/browser: export declarations aligned with the root entry\'
     'TOOL_PRESENTATION_META_MAX_NODES',
     'validateEditToolResult',
     'EDIT_TOOL_RESULT_SCHEMA',
+    'READ_TOOL_TRUNCATION_SCHEMA',
     'READ_TOOL_META_SCHEMA',
     'WRITE_TOOL_META_SCHEMA',
     'BASH_TOOL_META_SCHEMA',

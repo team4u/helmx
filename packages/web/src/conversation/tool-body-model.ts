@@ -173,16 +173,24 @@ export interface ReadBodyData {
   language: string
   /** Output contains a kernel over-length Spill marker: preview-grade text, no source syntax highlighting. */
   isSpill: boolean
+  /** Image MIME type emitted in presentationMeta when `read` loads an image block. */
+  mimeType?: string
+  /** Model id reported when an image was read on a model lacking image input capability. */
+  imageUnsupportedByModel?: string
 }
 
 export function readBodyData(tool: ToolTrace): ReadBodyData {
   const meta = asRecord(tool.presentationMeta)
   const input = asRecord(tool.input)
   const path = stringField(meta, 'path') ?? stringField(input, 'path')
+  const mimeType = stringField(meta, 'mimeType')
+  const imageUnsupportedByModel = stringField(meta, 'imageUnsupportedByModel')
   return {
     content: tool.resultText,
     language: languageFromFilename(path),
     isSpill: tool.artifactRef !== undefined,
+    ...(mimeType !== undefined && mimeType !== '' ? { mimeType } : {}),
+    ...(imageUnsupportedByModel !== undefined && imageUnsupportedByModel !== '' ? { imageUnsupportedByModel } : {}),
   }
 }
 

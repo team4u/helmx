@@ -28,7 +28,10 @@ import {
   type EditToolResult,
   type ToolDiffRow,
 } from '@helmx/protocol'
-import { computeEditDiff } from '../src/runtime/tool-edit-diff.js'
+import {
+  computeEditDiff,
+  computeMultiEditDiff,
+} from '../src/runtime/tool-edit-diff.js'
 import { createEditTool } from '../src/runtime/tools.js'
 import {
   ArtifactService,
@@ -681,5 +684,38 @@ describe('edit tool: remote sharing the same pure function', { timeout: 60_000 }
     assert.equal(result.isError, true)
     assert.equal(result.structuredOutput, undefined)
     assert.equal(files.get('/workspace/x.txt'), 'a\nb\n')
+  })
+
+  it('computeMultiEditDiff: 10000-line file distant dual edits produce bounded disjoint windows with accurate shifted newLines', { timeout: 60_000 }, () => {
+    const lines = Array.from({ length: 10_000 }, (_, i) => `row-${i + 1}`)
+    const original = `${lines.join('\n')}\n`
+    const firstOld = 'row-5'
+    const firstNew = 'row-5-a\nrow-5-b'
+    const secondOld = 'row-9995'
+    const secondNew = 'row-9995-updated'
+    const offset1 = original.indexOf(firstOld)
+    const offset2 = original.indexOf(secondOld)
+    const updated =
+      original.slice(0, offset1) +
+      firstNew +
+      original.slice(offset1 + firstOld.length, offset2) +
+      secondNew +
+      original.slice(offset2 + secondOld.length)
+    const diff = computeMultiEditDiff(
+      original,
+      updated,
+      [
+        { matchOffset: offset1, replacedLength: firstOld.length, insertedLength: firstNew.length },
+        { matchOffset: offset2, replacedLength: secondOld.length, insertedLength: secondNew.length },
+      ],
+      identityRedact,
+    )
+    assert.equal(diff.truncated, false)
+    assert.equal(diff.removedLines, 2)
+    assert.equal(diff.addedLines, 3)
+    assert.equal(diff.firstChangedLine, 5)
+    assertSchemaValid({ path: '/huge.txt', nodeId: 'local', replaced: true, diff })
+    const secondAdd = diff.rows.find((r) => r.kind === 'add' && r.text === secondNew)
+    assert.ok(secondAdd && secondAdd.kind === 'add' && secondAdd.newLine === 9_996)
   })
 })

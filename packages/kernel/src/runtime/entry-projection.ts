@@ -96,6 +96,16 @@ function isPlainTextContent(content: unknown): content is string | ReadonlyArray
   )
 }
 
+function isImageContentBlock(block: unknown): block is { type: 'image'; mimeType: string } {
+  return (
+    block !== null &&
+    typeof block === 'object' &&
+    !Array.isArray(block) &&
+    (block as { type?: unknown }).type === 'image' &&
+    typeof (block as { mimeType?: unknown }).mimeType === 'string'
+  )
+}
+
 /** Combine text content (concatenates block text directly, matching frontend rendering). */
 function combinedTextOf(content: string | ReadonlyArray<{ type: 'text'; text: string }>): string {
   return typeof content === 'string' ? content : content.map((block) => block.text).join('')
@@ -153,6 +163,35 @@ function projectToolResultMessage(message: unknown): unknown {
   const m = message as Record<string, unknown>
   if (m['role'] !== 'toolResult' && m['role'] !== 'tool') return message
   const content = m['content']
+  if (Array.isArray(content) && content.some(isImageContentBlock)) {
+    const projectedBlocks = content.map((block) =>
+      isImageContentBlock(block)
+        ? { type: 'text' as const, text: `[image: ${block.mimeType}]` }
+        : block,
+    )
+    if (isPlainTextContent(projectedBlocks)) {
+      const text = combinedTextOf(projectedBlocks)
+      if (
+        text.length > TOOL_RESULT_TRUNCATE_THRESHOLD_CHARS &&
+        !isStructuredJsonText(text) &&
+        !ARTIFACT_SPILL_MARKER_RE.test(text)
+      ) {
+        const truncated = truncatePlainText(text)
+        return {
+          ...m,
+          content: [{ type: 'text', text: truncated.text }],
+          truncated: true as const,
+          totalChars: truncated.totalChars,
+          totalLines: truncated.totalLines,
+        }
+      }
+    }
+    return {
+      ...m,
+      content: projectedBlocks,
+      truncated: true as const,
+    }
+  }
   if (!isPlainTextContent(content)) return message
   const text = combinedTextOf(content)
   if (text.length <= TOOL_RESULT_TRUNCATE_THRESHOLD_CHARS) return message

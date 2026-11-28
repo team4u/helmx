@@ -7,6 +7,7 @@
  */
 
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
+import type { ExecutionEnv } from '@earendil-works/pi-durable/env'
 import {
   fauxAssistantMessage,
   fauxToolCall,
@@ -18,11 +19,13 @@ import assert from 'node:assert/strict'
 import {
   ARTIFACT_READ_META_SCHEMA,
   ARTIFACT_REGISTER_META_SCHEMA,
+  BASH_TOOL_META_SCHEMA,
   EDIT_TOOL_RESULT_SCHEMA,
   assertBoundedPresentationMeta,
   validateOrThrow,
   type EditToolResult,
 } from '@helmx/protocol'
+import { createLocalExecutionEnv } from '../src/env/local-host-env.js'
 import { KernelRuntime } from '../src/runtime/index.js'
 import {
   ArtifactService,
@@ -67,6 +70,7 @@ async function makeRealDeps(dir: string, stash = new SecretStash()): Promise<Hel
     defaultCwd: dir,
     hubUrl: 'http://127.0.0.1:3202',
     redact: (t) => stash.redact(t),
+    createStreamingRedactor: () => stash.createStreamingRedactor(),
     artifacts,
   }
 }
@@ -390,19 +394,39 @@ describe('read tool real file behavior', { timeout: 60_000 }, () => {
     assert.ok(structured.content.includes('via-symlink'))
   })
 
-  it('directory reject; over large file explicit file_too_large and to out alternative refer quote', { timeout: 60_000 }, async () => {
+  it('directory reject; large file (>128 KiB) paginates via offset/limit, strips BOM, and reads PNG image', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'rd4')
     const deps = await makeRealDeps(dir)
     const tool = createReadTool(deps)
     const dirResult = await tool.execute({ path: '.' }, makeApi(dir), BACKGROUND_CONTEXT)
     assert.equal(dirResult.isError, true)
-    const big = Buffer.alloc(129 * 1024, 0x61)
-    writeFileSync(join(dir, 'big.txt'), big)
-    const bigResult = await tool.execute({ path: 'big.txt' }, makeApi(dir), BACKGROUND_CONTEXT)
-    assert.equal(bigResult.isError, true)
-    const text = (bigResult.output as Array<{ type: string; text: string }>)[0]!.text
-    assert.ok(text.includes('file_too_large'))
-    assert.ok(text.includes('read_artifact'), 'error information should refer quote page alternative path')
+    assert.ok(((dirResult.output as Array<{ text: string }>)[0]!.text).includes('is directory'))
+
+    const lines = Array.from({ length: 2400 }, (_, i) => `L${i + 1}:${'a'.repeat(60)}`)
+    writeFileSync(join(dir, 'big.txt'), `\uFEFF${lines.join('\n')}\n`, 'utf8')
+    const first = await tool.execute({ path: 'big.txt' }, makeApi(dir), BACKGROUND_CONTEXT)
+    assert.equal(!!first.isError, false)
+    const firstOut = first.structuredOutput as { content: string; truncation?: { truncated: boolean; outputLines: number } }
+    assert.equal(firstOut.content.startsWith('\uFEFF'), false, 'UTF-8 BOM must be stripped')
+    assert.ok(firstOut.content.startsWith('L1:'))
+    assert.equal(firstOut.truncation?.truncated, true)
+    assert.ok(first.diagnostics?.some((d) => d.message.includes('Use offset=')))
+
+    const tail = await tool.execute({ path: 'big.txt', offset: 2350, limit: 100 }, makeApi(dir), BACKGROUND_CONTEXT)
+    assert.equal(!!tail.isError, false)
+    const tailOut = tail.structuredOutput as { content: string }
+    assert.ok(tailOut.content.includes('L2400:'))
+
+    // Real 1x1 PNG multimodal image read
+    const pngBase64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
+    writeFileSync(join(dir, 'pixel.png'), Buffer.from(pngBase64, 'base64'))
+    const imgRes = await tool.execute({ path: 'pixel.png' }, makeApi(dir), BACKGROUND_CONTEXT)
+    assert.equal(!!imgRes.isError, false)
+    const imgBlock = (imgRes.output as Array<{ type: string; mimeType?: string; data?: string }>)[0]!
+    assert.equal(imgBlock.type, 'image')
+    assert.equal(imgBlock.mimeType, 'image/png')
+    assert.ok(typeof imgBlock.data === 'string' && imgBlock.data.length > 0)
+    assert.equal((imgRes.details as { mimeType?: string }).mimeType, 'image/png')
   })
 
   it('read error redaction (secret does not enter error text)', { timeout: 60_000 }, async () => {
@@ -419,6 +443,33 @@ describe('read tool real file behavior', { timeout: 60_000 }, () => {
     )
     assert.equal(result.isError, true)
     assert.ok(!JSON.stringify(result).includes(secretValue), 'error text same must redaction')
+  })
+
+  it('read remote offline node rejects explicitly with node_offline and never falls back to local disk', { timeout: 60_000 }, async () => {
+    const dir = join(rootDir, 'rd-offline')
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, 'local-only.txt'), 'must-not-leak', 'utf8')
+    const baseDeps = await makeRealDeps(dir)
+    const offlineDeps: HelmxToolDeps = {
+      ...baseDeps,
+      nodeIdOf: () => 'remote-offline',
+      envFabric: {
+        isOnline: () => false,
+        nodePlatformOf: () => 'linux',
+        envFor: () => {
+          throw new Error('must not be called when offline')
+        },
+        envForTarget: () => {
+          throw new Error('must not be called when offline')
+        },
+      } as never,
+    }
+    const tool = createReadTool(offlineDeps)
+    const res = await tool.execute({ path: 'local-only.txt' }, makeApi(dir, 1), BACKGROUND_CONTEXT)
+    assert.equal(res.isError, true)
+    const text = (res.output as Array<{ type: string; text: string }>)[0]!.text
+    assert.ok(text.includes('node_offline'), `expected node_offline error, got: ${text}`)
+    assert.ok(!text.includes('must-not-leak'))
   })
 })
 
@@ -714,6 +765,116 @@ describe('bash tool (SDK execute direct tune, real service dependency)', { timeo
       'illegal timeout must not by static default change by default',
     )
   })
+
+  it('>1.2 MiB output retains bounded tail without output_limit_exceeded, spills readable artifact, and cleans temp spillPath', { timeout: 60_000 }, async () => {
+    const dir = join(rootDir, 'bt-large-spill')
+    const deps = await makeRealDeps(dir)
+    const tool = createBashTool(deps)
+    const realEnv = createLocalExecutionEnv({ cwd: dir })
+    const removedPaths: string[] = []
+    let capturedSpillPath: string | undefined
+    const spyEnv: ExecutionEnv = Object.assign(Object.create(Object.getPrototypeOf(realEnv)), realEnv, {
+      async exec(command: string | readonly string[], opts: Parameters<ExecutionEnv['exec']>[1], ctx: Parameters<ExecutionEnv['exec']>[2]) {
+        const res = await realEnv.exec(command, opts, ctx)
+        capturedSpillPath = res.ok ? res.value.spillPath : res.error.spillPath
+        return res
+      },
+      async remove(path: string, opts: Parameters<ExecutionEnv['remove']>[1], ctx: Parameters<ExecutionEnv['remove']>[2]) {
+        removedPaths.push(path)
+        return realEnv.remove(path, opts, ctx)
+      },
+    })
+    const liveChunks: string[] = []
+    const baseApi = makeApi(dir, 1) as unknown as Record<string, unknown>
+    const api = {
+      ...baseApi,
+      env: spyEnv,
+      output(chunk: string) {
+        liveChunks.push(chunk)
+      },
+    }
+    try {
+      // >1.2 MiB across 30,000 lines (far above legacy 1 MiB fail threshold).
+      const cmd = `python3 -c "for i in range(1, 30001): print(f'line-{i:05d}-' + 'X'*32)"`
+      const result = await tool.execute({ command: cmd }, api as never, BACKGROUND_CONTEXT)
+      assert.equal(result.isError, false, 'large bash output must succeed with tail + artifact spill')
+      const text = (result.output as Array<{ text: string }>)[0]!.text
+      assert.ok(!text.includes('output_limit_exceeded'), 'model bash tool must no longer fail with output_limit_exceeded')
+      assert.ok(text.includes('line-30000-'), 'trailing lines must be preserved in tool output')
+      assert.ok(!text.includes('line-00001-'), 'early prefix lines must be trimmed from inline output')
+      assert.match(text, /\[Output truncated \((lines|bytes)\):/, 'truncation summary should be present')
+      const match = /\[Artifact\] id=([^\s]+)/.exec(text)
+      assert.ok(match?.[1], 'artifact reference must be present in output')
+      assert.ok(liveChunks.join('').includes('line-30000-'), 'api.output() must stream output chunks live')
+
+      const details = assertBoundedPresentationMeta(result.details, { schema: BASH_TOOL_META_SCHEMA })
+      assert.deepEqual(details, { ok: true, exitCode: 0, timedOut: false, nodeId: 'local', cwd: dir })
+
+      // Verify full >1.2 MiB output is preserved in ArtifactService and readable via read_artifact.
+      const readArt = createReadArtifactTool(deps, (c, o) => c === o)
+      const firstPage = await readArt.execute({ id: match[1]!, offset: 0, limit: 4096 }, makeApi(dir, 1), BACKGROUND_CONTEXT)
+      assert.equal(!!firstPage.isError, false)
+      assert.ok((firstPage.structuredOutput as { chunk: string }).chunk.includes('line-00001-'))
+
+      // Verify temporary node spillPath was both requested for removal and actually removed from disk.
+      assert.ok(capturedSpillPath !== undefined, 'ExecutionEnv.exec should emit spillPath when thresholds exceeded')
+      assert.ok(removedPaths.includes(capturedSpillPath!), 'spillPath must be deleted via env.remove in finally')
+      assert.equal(existsSync(capturedSpillPath!), false, 'temp spillPath file must not remain on disk')
+    } finally {
+      await realEnv.cleanup(BACKGROUND_CONTEXT)
+    }
+  })
+
+  it('split-chunk SecretStash secret is redacted in api.output() live stream, tail output, and spill artifact', { timeout: 60_000 }, async () => {
+    const dir = join(rootDir, 'bt-live-redact')
+    const stash = new SecretStash()
+    const secret = 'sk-bash-live-stream-secret-998877'
+    stash.addRedaction(secret)
+    const deps = await makeRealDeps(dir, stash)
+    const tool = createBashTool(deps)
+    const liveChunks: string[] = []
+    const baseApi = makeApi(dir, 1) as unknown as Record<string, unknown>
+    const api = {
+      ...baseApi,
+      output(chunk: string) {
+        liveChunks.push(chunk)
+      },
+    }
+    // Print >55 KiB so artifact spill also runs, with secret split by dd bs=1 right inside chunks.
+    const cmd = `{ printf 'head=%s-tail\\n' '${secret}' | dd bs=1 2>/dev/null; python3 -c "print('P'*60000)"; printf 'end=%s!\\n' '${secret}' | dd bs=1 2>/dev/null; }`
+    const result = await tool.execute({ command: cmd }, api as never, BACKGROUND_CONTEXT)
+    assert.equal(result.isError, false)
+    const liveAll = liveChunks.join('')
+    assert.equal(liveAll.includes(secret), false, 'plaintext secret must never reach api.output()')
+    assert.ok(liveAll.includes('head=[REDACTED]-tail'), 'live stream must emit redacted prefix')
+    assert.ok(liveAll.includes('end=[REDACTED]!'), 'live stream must emit redacted suffix')
+
+    const text = (result.output as Array<{ text: string }>)[0]!.text
+    assert.equal(text.includes(secret), false, 'final output must not contain secret')
+    const artMatch = /\[Artifact\] id=([^\s]+)/.exec(text)
+    assert.ok(artMatch?.[1], 'spill artifact must be written')
+    const artifactText = await deps.artifacts.readContent(artMatch[1]!)
+    assert.equal(artifactText.includes(secret), false, 'spilled artifact must never contain plaintext secret')
+    assert.ok(artifactText.includes('head=[REDACTED]-tail'))
+    assert.ok(artifactText.includes('end=[REDACTED]!'))
+  })
+
+  it('timeout emits BASH_TOOL_META_SCHEMA details with timedOut=true and exitCode=null', { timeout: 60_000 }, async () => {
+    const dir = join(rootDir, 'bt-timeout-meta')
+    const deps = await makeRealDeps(dir)
+    const tool = createBashTool(deps)
+    const result = await tool.execute(
+      { command: 'echo before-timeout; sleep 30', timeoutMs: 400 },
+      makeApi(dir, 1),
+      BACKGROUND_CONTEXT,
+    )
+    assert.equal(result.isError, true)
+    const text = (result.output as Array<{ text: string }>)[0]!.text
+    assert.ok(text.includes('before-timeout'))
+    assert.ok(text.includes('timeout after 400ms'))
+    const details = assertBoundedPresentationMeta(result.details, { schema: BASH_TOOL_META_SCHEMA })
+    assert.deepEqual(details, { ok: false, exitCode: null, timedOut: true, nodeId: 'local', cwd: dir })
+  })
 })
 
 describe('SDK real link (faux model drive tool invoke)', { timeout: 60_000 }, () => {
@@ -730,7 +891,7 @@ describe('SDK real link (faux model drive tool invoke)', { timeout: 60_000 }, ()
       services: { artifacts: ArtifactService }
     }
     try {
-      const bigCommand = `python3 -c "print('B'*40000)"`
+      const bigCommand = `python3 -c "print('B'*60000)"`
       kernel.__faux.setResponses([
         fauxAssistantMessage([fauxToolCall('bash', { command: bigCommand })], {
           stopReason: 'toolUse',
@@ -1090,7 +1251,7 @@ describe('Profile.restrictToCwd guardrail: file tools confined to the conversati
     writeFileSync(join(dir, 'inner', 'note.md'), 'inside')
     const deps = await makeRestrictedDeps(join(dir, 'inner'))
     const tool = createReadTool(deps)
-    for (const p of ['../secret.txt', join(outer, 'secret.txt'), '/etc/hostname']) {
+    for (const p of ['../secret.txt', '@../secret.txt', join(outer, 'secret.txt'), '/etc/hostname']) {
       const result = await tool.execute({ path: p }, makeApi(join(dir, 'inner')), BACKGROUND_CONTEXT)
       assert.equal(result.isError, true, `path ${p} should be rejected under restrictToCwd`)
       const text = (result.output as Array<{ type: string; text: string }>)[0]!.text

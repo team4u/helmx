@@ -449,6 +449,9 @@ export class HookBridge {
   }
 }
 
+/** Tools whose own execution enforces bounded pagination/tail output and artifact spill directly. */
+const SELF_BOUNDED_OUTPUT_TOOLS: ReadonlySet<string> = new Set(['read', 'read_artifact', 'bash'])
+
 /** Unified outbound tool-result handling: bounded presentationMeta/structuredOutput guard + redaction + spill boundary. */
 export async function prepareToolResultWith(
   artifacts: HookBridgeOptions['artifacts'],
@@ -458,6 +461,9 @@ export async function prepareToolResultWith(
   options?: GuardToolResultOptions,
 ): Promise<ToolExecutionResult> {
   const safe = guardToolExecutionResult(result, redact, options)
+  if (options?.toolName !== undefined && SELF_BOUNDED_OUTPUT_TOOLS.has(options.toolName)) {
+    return safe
+  }
   const output = safe.output ?? []
   const text = output.filter((block) => block.type === 'text').map((block) => block.text).join('\n')
   const spill = await artifacts.spill(conversationId, `tool-${randomUUID()}`, text)

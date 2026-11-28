@@ -84,6 +84,11 @@ export type PendingEditDiff =
   | { kind: 'computed'; rows: PendingDiffRow[]; addedLines: number; removedLines: number; truncated: boolean }
   | { kind: 'skipped'; reason: string }
 
+export interface EditTextPair {
+  oldText: string
+  newText: string
+}
+
 export function editInputTexts(input: unknown): { oldText?: string; newText?: string } {
   if (input === null || typeof input !== 'object' || Array.isArray(input)) return {}
   const record = input as Record<string, unknown>
@@ -91,6 +96,44 @@ export function editInputTexts(input: unknown): { oldText?: string; newText?: st
     ...(typeof record.oldText === 'string' ? { oldText: record.oldText } : {}),
     ...(typeof record.newText === 'string' ? { newText: record.newText } : {}),
   }
+}
+
+export function editInputPairs(input: unknown): EditTextPair[] {
+  if (input === null || typeof input !== 'object' || Array.isArray(input)) return []
+  const record = input as Record<string, unknown>
+  let rawEdits: unknown = record.edits
+  if (typeof rawEdits === 'string') {
+    try {
+      rawEdits = JSON.parse(rawEdits)
+    } catch {
+      rawEdits = undefined
+    }
+  }
+  if (
+    rawEdits !== null &&
+    typeof rawEdits === 'object' &&
+    !Array.isArray(rawEdits) &&
+    typeof (rawEdits as Record<string, unknown>).oldText === 'string' &&
+    typeof (rawEdits as Record<string, unknown>).newText === 'string'
+  ) {
+    rawEdits = [rawEdits]
+  }
+  const hasTopPair = typeof record.oldText === 'string' && typeof record.newText === 'string'
+  if (Array.isArray(rawEdits) && rawEdits.length > 0 && !hasTopPair) {
+    const pairs: EditTextPair[] = []
+    for (const item of rawEdits) {
+      if (item === null || typeof item !== 'object' || Array.isArray(item)) continue
+      const itemRec = item as Record<string, unknown>
+      if (typeof itemRec.oldText === 'string' && typeof itemRec.newText === 'string') {
+        pairs.push({ oldText: itemRec.oldText, newText: itemRec.newText })
+      }
+    }
+    return pairs
+  }
+  if (hasTopPair && rawEdits === undefined) {
+    return [{ oldText: record.oldText as string, newText: record.newText as string }]
+  }
+  return []
 }
 
 function changeLines(value: string): string[] {
@@ -103,32 +146,51 @@ function changeLines(value: string): string[] {
   return lines
 }
 
-/** 入参只能构成片段对比；真实文件行号来自成功结果。 */
+/** 入参只能构成片段对比（支持单处 oldText/newText 或批量 edits[]）；真实文件行号来自成功结果。 */
 export function buildPendingEditDiff(input: unknown): PendingEditDiff | undefined {
-  const { oldText, newText } = editInputTexts(input)
-  if (oldText === undefined || newText === undefined) return undefined
-  if (oldText.length > PENDING_DIFF_MAX_INPUT_CHARS || newText.length > PENDING_DIFF_MAX_INPUT_CHARS) {
-    return { kind: 'skipped', reason: `oldText/newText exceeds the ${PENDING_DIFF_MAX_INPUT_CHARS} character budget` }
+  const pairs = editInputPairs(input)
+  if (pairs.length === 0) return undefined
+  let totalChars = 0
+  for (const pair of pairs) {
+    if (pair.oldText.length > PENDING_DIFF_MAX_INPUT_CHARS || pair.newText.length > PENDING_DIFF_MAX_INPUT_CHARS) {
+      return { kind: 'skipped', reason: `oldText/newText exceeds the ${PENDING_DIFF_MAX_INPUT_CHARS} character budget` }
+    }
+    totalChars += pair.oldText.length + pair.newText.length
+    if (totalChars > PENDING_DIFF_MAX_INPUT_CHARS * 2) {
+      return { kind: 'skipped', reason: `oldText/newText exceeds the ${PENDING_DIFF_MAX_INPUT_CHARS} character budget` }
+    }
   }
   try {
-    const changes = diffLines(oldText, newText, { maxEditLength: PENDING_DIFF_MAX_EDIT_LENGTH, timeout: 100 })
-    if (changes === undefined) return { kind: 'skipped', reason: 'Diff computation exceeded the time or edit distance budget' }
     const rows: PendingDiffRow[] = []
     let addedLines = 0
     let removedLines = 0
     let totalRows = 0
-    for (const change of changes) {
-      const kind = change.added ? 'add' : change.removed ? 'remove' : 'context'
-      for (const text of changeLines(change.value)) {
-        totalRows++
-        if (rows.length < PENDING_DIFF_MAX_ROWS) rows.push({ kind, text })
-        if (kind === 'add') addedLines++
-        else if (kind === 'remove') removedLines++
+    for (const pair of pairs) {
+      const changes = diffLines(pair.oldText, pair.newText, {
+        maxEditLength: PENDING_DIFF_MAX_EDIT_LENGTH,
+        timeout: 100,
+      })
+      if (changes === undefined) {
+        return { kind: 'skipped', reason: 'Diff computation exceeded the time or edit distance budget' }
       }
+      const pairRows: PendingDiffRow[] = []
+      for (const change of changes) {
+        const kind = change.added ? 'add' : change.removed ? 'remove' : 'context'
+        for (const text of changeLines(change.value)) {
+          totalRows++
+          if (rows.length + pairRows.length < PENDING_DIFF_MAX_ROWS) {
+            pairRows.push({ kind, text })
+          }
+          if (kind === 'add') addedLines++
+          else if (kind === 'remove') removedLines++
+        }
+      }
+      // Run adjacent word diff per edit item so neighboring hunks never bleed into each other.
+      decorateAdjacentWordPairs(pairRows, (row, segments) => {
+        if (segments !== undefined) row.word = segments
+      })
+      rows.push(...pairRows)
     }
-    decorateAdjacentWordPairs(rows, (row, segments) => {
-      if (segments !== undefined) row.word = segments
-    })
     return { kind: 'computed', rows, addedLines, removedLines, truncated: totalRows > rows.length }
   } catch {
     return { kind: 'skipped', reason: 'Diff computation failed' }

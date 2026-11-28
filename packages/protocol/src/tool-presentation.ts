@@ -195,12 +195,34 @@ export function validateEditToolResult(value: unknown): EditToolResultValidation
 
 const nonNegativeInt = { type: 'integer', minimum: 0, maximum: Number.MAX_SAFE_INTEGER }
 
+/** Truncation telemetry schema emitted by paginated `read` when file output hits line or byte bounds. */
+export const READ_TOOL_TRUNCATION_SCHEMA: JsonSchema = {
+  type: 'object',
+  properties: {
+    truncated: { type: 'boolean' },
+    truncatedBy: { type: 'string', enum: ['lines', 'bytes'] },
+    totalLines: nonNegativeInt,
+    totalBytes: nonNegativeInt,
+    outputLines: nonNegativeInt,
+    outputBytes: nonNegativeInt,
+    lastLinePartial: { type: 'boolean' },
+    firstLineExceedsLimit: { type: 'boolean' },
+    maxLines: nonNegativeInt,
+    maxBytes: nonNegativeInt,
+  },
+  required: ['truncated', 'totalLines', 'totalBytes', 'outputLines', 'outputBytes', 'maxLines', 'maxBytes'],
+  additionalProperties: false,
+}
+
 /** Presentation metadata schema for built-in `read` tool (omits full file content already in model output). */
 export const READ_TOOL_META_SCHEMA: JsonSchema = {
   type: 'object',
   properties: {
     path: { type: 'string', minLength: 1 },
     nodeId: { type: 'string', minLength: 1 },
+    mimeType: { type: 'string', minLength: 1 },
+    imageUnsupportedByModel: { type: 'string', minLength: 1 },
+    truncation: READ_TOOL_TRUNCATION_SCHEMA,
   },
   required: ['path', 'nodeId'],
   additionalProperties: false,

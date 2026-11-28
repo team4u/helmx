@@ -264,10 +264,17 @@ describe('read tool fd read path', { timeout: 60_000 }, () => {
     const dirResult = await tool.execute({ path: '.' }, makeApi(dir), BACKGROUND_CONTEXT)
     assert.equal(dirResult.isError, true)
 
-    writeFileSync(join(dir, 'big.txt'), Buffer.alloc(129 * 1024, 0x61))
-    const big = await tool.execute({ path: 'big.txt' }, makeApi(dir), BACKGROUND_CONTEXT)
-    assert.equal(big.isError, true)
-    const text = (big.output as Array<{ type: 'text'; text: string }>)[0]!.text
-    assert.ok(text.includes('file_too_large'))
+    const lines = Array.from({ length: 2200 }, (_, i) => `line-${String(i + 1).padStart(4, '0')}-${'x'.repeat(60)}`)
+    writeFileSync(join(dir, 'big.txt'), lines.join('\n'))
+    const page1 = await tool.execute({ path: 'big.txt', offset: 1, limit: 1500 }, makeApi(dir), BACKGROUND_CONTEXT)
+    assert.equal(!!page1.isError, false)
+    const s1 = page1.structuredOutput as { content: string }
+    assert.ok(s1.content.startsWith('line-0001-'))
+    assert.ok(page1.diagnostics?.some((d) => d.message.includes('Use offset=')))
+
+    const page2 = await tool.execute({ path: 'big.txt', offset: 2100, limit: 200 }, makeApi(dir), BACKGROUND_CONTEXT)
+    assert.equal(!!page2.isError, false)
+    const s2 = page2.structuredOutput as { content: string }
+    assert.ok(s2.content.includes('line-2200-'))
   })
 })

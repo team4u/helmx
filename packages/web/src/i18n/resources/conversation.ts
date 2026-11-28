@@ -382,6 +382,15 @@ export const conversationMessages = {
   'conv.read.failed': { en: 'Read failed', 'zh-CN': '读取失败' },
   'conv.read.reading': { en: 'Reading', 'zh-CN': '读取中' },
   'conv.read.result': { en: 'Read result', 'zh-CN': '读取结果' },
+  'conv.read.imageResult': { en: 'Image attachment', 'zh-CN': '图片附件' },
+  'conv.read.imageAttached': {
+    en: 'Image loaded into model context; inline image payload preview is omitted in the timeline.',
+    'zh-CN': '图片已加载至模型上下文；时间线省略二进制载荷预览。',
+  },
+  'conv.read.imageUnsupported': {
+    en: 'Active model ({model}) does not accept image inputs; metadata note returned only.',
+    'zh-CN': '当前模型（{model}）不支持图片输入，仅返回提示信息。',
+  },
   'conv.read.nothingYet': { en: 'Nothing read yet.', 'zh-CN': '尚无读取内容。' },
   'conv.read.noOutput': { en: 'No content output.', 'zh-CN': '无内容输出。' },
   'conv.read.withArtifacts': { en: 'Read result (with artifact references)', 'zh-CN': '读取结果（含产物引用）' },

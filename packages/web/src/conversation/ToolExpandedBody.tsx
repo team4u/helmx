@@ -472,6 +472,22 @@ function ReadToolBody({ tool, resultFetch }: ToolBodyProps): ReactNode {
       </>
     )
   }
+  if (data.mimeType !== undefined || data.imageUnsupportedByModel !== undefined) {
+    return (
+      <>
+        <div className="trace-section-label">{t('conv.read.imageResult')}</div>
+        <div className="trace-code-head">
+          {data.mimeType !== undefined ? <Badge tone="neutral">{data.mimeType}</Badge> : null}
+          <span className="trace-tool-note">
+            {data.imageUnsupportedByModel !== undefined
+              ? t('conv.read.imageUnsupported', { model: data.imageUnsupportedByModel })
+              : t('conv.read.imageAttached')}
+          </span>
+        </div>
+        <RawToolData tool={tool} resultFetch={resultFetch} />
+      </>
+    )
+  }
   if (data.content === undefined) {
     return (
       <>

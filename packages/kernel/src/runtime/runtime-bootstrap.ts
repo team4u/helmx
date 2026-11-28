@@ -9,9 +9,10 @@
  * - Open the underlying durable execution `Harness` and wire dynamic `models`/`redact` slots.
  */
 
-import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
+import { BACKGROUND_CONTEXT, type Context } from '@earendil-works/chord/context'
 import type { Models, ModelsStore, Provider } from '@earendil-works/pi-ai'
-import { Harness, createRegistry, type Registry, type SessionEnd } from '@earendil-works/pi-durable'
+import { Harness, createRegistry, type EnvTarget as HarnessEnvTarget, type Registry, type SessionEnd } from '@earendil-works/pi-durable'
+import type { ExecutionEnv } from '@earendil-works/pi-durable/env'
 import { HelmxError, type PluginBuildProvider, type PluginPackageManagerProvider } from '@helmx/protocol'
 import { CredentialService, ProviderService, ensureDataDir, resolveDataDir } from '../services/index.js'
 import {
@@ -83,6 +84,9 @@ export interface BootstrappedKernelContext {
   emitDiagnostic: KernelDiagnosticEmitter
   setModels(m: Models): void
   setCompactionModelResolver(fn: () => CompactionModelResolution): void
+  setEnvResolver(
+    fn: (target: HarnessEnvTarget, context: Context) => ExecutionEnv | undefined | Promise<ExecutionEnv | undefined>,
+  ): void
   redactReport(fn: (text: string) => string): void
   setFatalStorageHandler(
     fn: (source: 'harness' | 'store', error: unknown) => void,
@@ -166,6 +170,11 @@ export async function bootstrapKernelRuntime(
     current: () => ({ model: undefined, isDisabled: () => false }),
   }
   const compactionWrappedCache = new WeakMap<Models, Models>()
+  const envResolverSlot: {
+    current: (target: HarnessEnvTarget, context: Context) => ExecutionEnv | undefined | Promise<ExecutionEnv | undefined>
+  } = {
+    current: () => undefined,
+  }
 
   const harness = await Harness.open(
     database.storage,
@@ -176,6 +185,7 @@ export async function bootstrapKernelRuntime(
           () => compactionResolverSlot.current(),
           compactionWrappedCache,
         ),
+      env: (target, context) => envResolverSlot.current(target, context),
       registry,
       settings: {
         followUpMode: 'all',
@@ -235,6 +245,9 @@ export async function bootstrapKernelRuntime(
     },
     setCompactionModelResolver: (fn: () => CompactionModelResolution) => {
       compactionResolverSlot.current = fn
+    },
+    setEnvResolver: (fn) => {
+      envResolverSlot.current = fn
     },
     redactReport: (fn: (text: string) => string) => {
       redactSlot.current = fn

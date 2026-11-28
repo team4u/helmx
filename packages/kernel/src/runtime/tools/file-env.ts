@@ -1,39 +1,17 @@
 /**
- * Unified execution environment adapters for file tools (`read`/`write`/`edit`). Local (`node:fs`) and remote
- * (`EnvFabric`) branches used to be duplicated line-by-line and are unified here into common operation interfaces
- * and a single tool template with identical behavior:
- *
- * - Local implementation: uses `node:fs/promises` (`canonicalProbe` uses `realpath`; resolution failures like
- *   missing/dangling symlink/EACCES are treated as missing so real `mkdir`/`writeFile` errors surface loudly);
- *   mutex queue uses `localWithFileMutationQueue` (key prefix matches `NodeExecutionEnv.id`, ensuring mutual
- *   exclusion between both local entry points);
- * - Remote implementation: delegates to `EnvFabric` `ExecutionEnv` RPC (`guards.requireRemoteEnv` rejects missing
- *   `EnvFabric` or offline nodes explicitly, never falling back silently to Hub's disk); unwraps `Result` inside the
- *   adapter and throws on failure (outer template formats redacted `*_failed` text uniformly); mutex queue uses
- *   `envWithFileMutationQueue` (shares canonical-path mutex queues per target node with plugin APIs so updates to
- *   the same file never get lost; see `env/file-mutation-queue.ts`);
- * - Read classification messages (directory/special file/size cap) are defined in one place and shared by local
- *   preflight, local post-open verification, and remote `fileInfo` without drift.
+ * Unified execution environment adapters for `write`/`edit`: local (`node:fs`) and remote (`EnvFabric`)
+ * paths share one writable interface and `env/file-mutation-queue` canonical lock semantics.
+ * Remote guards (`guards.requireRemoteEnv`) reject missing `EnvFabric` or offline nodes explicitly without
+ * silently falling back to Hub's local disk.
  */
 import type { Context } from '@earendil-works/chord/context'
 import type { ExecutionEnv } from '@earendil-works/pi-durable/env'
-import { constants as fsConstants } from 'node:fs'
-import { mkdir, open, readFile, realpath, stat, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, realpath, writeFile } from 'node:fs/promises'
 import { targetPathShape, type TargetPlatform } from '@helmx/protocol'
 import { envWithFileMutationQueue, localWithFileMutationQueue } from '../../env/file-mutation-queue.js'
 import { nodePathForShape, resolveTargetPath } from './target-path.js'
 import { requireRemoteEnv, type FileOpAction } from './guards.js'
 import type { HelmxToolDeps } from '../tool-deps.js'
-
-/** Single-file byte cap for `read` (explicit cap aligned with spill preview limit). */
-export const READ_FILE_MAX_BYTES = 128 * 1024
-
-/** Shared `read` classification messages (used across local preflight, post-open re-check, and remote `fileInfo`).
- * Note: `'is directory'` and `'not ordinary file'` wording are preserved for compatibility with existing test checks. */
-const readDirectoryText = (raw: string): string => `read_failed: ${raw} is directory; read only supports regular files`
-const fileTooLargeText = (raw: string, size: number): string =>
-  `file_too_large: ${raw} is ${size} bytes, exceeding the ${READ_FILE_MAX_BYTES}-byte cap for read. ` +
-  'Redirect command output via bash to a file and read it paginated with read_artifact, or slice with head/tail/sed.'
 
 /** Canonical probe result shape (aligned with `ExecutionEnv.canonicalPath` `Result`). */
 type CanonicalProbeResult =
@@ -56,22 +34,6 @@ interface WritableFileEnv {
   ensureDir(path: string, context: Context): Promise<void>
   /** Read-modify-write mutex window (shared local/remote canonical namespace; see `env/file-mutation-queue.ts`). */
   withMutationQueue<T>(path: string, fn: () => Promise<T>, context: Context): Promise<T>
-}
-
-/**
- * Unified readable execution environment for `read`: classification errors (directory/special file/oversized)
- * return tool-level error text, while genuine IO/resolution failures throw (formatted by outer template as `read_failed`).
- * `displayPath`: canonicalized path remotely, lexical absolute path locally (preserved contract).
- */
-interface ReadableFileEnv {
-  readText(
-    lexicalAbs: string,
-    raw: string,
-    context: Context,
-  ): Promise<
-    | { ok: true; content: string; displayPath: string }
-    | { ok: false; errorText: string }
-  >
 }
 
 /** Local write/edit implementation: in-process `node:fs`; errors propagate as-is. */
@@ -122,80 +84,6 @@ function remoteWritableEnv(env: ExecutionEnv): WritableFileEnv {
     },
     withMutationQueue: (path, fn, context) => envWithFileMutationQueue(env, path, fn, context),
   }
-}
-
-/** Local read implementation: `stat` preflight + authoritative `fstat` re-check on the same open fd. */
-function localReadableEnv(): ReadableFileEnv {
-  return {
-    async readText(lexicalAbs, raw, _context) {
-      // In-process `fs.stat` (follows symlinks) classifies directories/special files/size caps cleanly before opening,
-      // then opens fd once and validates via `fstat` on the exact same fd so a swap between `stat` and `open` is caught.
-      const info = await stat(lexicalAbs)
-      if (info.isDirectory()) return { ok: false, errorText: readDirectoryText(raw) }
-      if (!info.isFile()) {
-        return { ok: false, errorText: `read_failed: ${raw} is not ordinary file (special file)` }
-      }
-      if (info.size > READ_FILE_MAX_BYTES) return { ok: false, errorText: fileTooLargeText(raw, info.size) }
-      // Follow symlinks on open (same privilege boundary as bash: symlinks are the user's filesystem reality);
-      // re-verify the opened fd with `fstat` in case the target changed after preflight.
-      const handle = await open(lexicalAbs, fsConstants.O_RDONLY)
-      try {
-        const statInfo = await handle.stat()
-        if (!statInfo.isFile()) {
-          return { ok: false, errorText: `read_failed: ${raw} is not ordinary file after open; read rejected` }
-        }
-        if (statInfo.size > READ_FILE_MAX_BYTES) {
-          return { ok: false, errorText: fileTooLargeText(raw, statInfo.size) }
-        }
-        return {
-          ok: true,
-          content: await handle.readFile({ encoding: 'utf8' }),
-          displayPath: lexicalAbs,
-        }
-      } finally {
-        await handle.close()
-      }
-    },
-  }
-}
-
-/** Remote read implementation: `env` RPC `canonicalPath` + `fileInfo` + `readTextFile`. */
-function remoteReadableEnv(env: ExecutionEnv): ReadableFileEnv {
-  return {
-    async readText(lexicalAbs, raw, context) {
-      // Resolve symlinks via `canonicalPath` first: `fileInfo` has `lstat` semantics (`kind='symlink'`), so
-      // canonicalizing aligns symlink-following semantics with local; missing/dangling targets throw (`read_failed`).
-      const targetRealR = await env.canonicalPath(lexicalAbs, context)
-      if (!targetRealR.ok) throw new Error(targetRealR.error.message)
-      const targetReal = targetRealR.value
-      const infoR = await env.fileInfo(targetReal, context)
-      if (!infoR.ok) throw new Error(infoR.error.message)
-      if (infoR.value.kind === 'directory') return { ok: false, errorText: readDirectoryText(raw) }
-      if (infoR.value.kind !== 'file') {
-        return { ok: false, errorText: `read_failed: ${raw} is not ordinary file (kind=${infoR.value.kind})` }
-      }
-      if (infoR.value.size > READ_FILE_MAX_BYTES) {
-        return { ok: false, errorText: fileTooLargeText(raw, infoR.value.size) }
-      }
-      const contentR = await env.readTextFile(targetReal, context)
-      if (!contentR.ok) throw new Error(contentR.error.message)
-      return { ok: true, content: contentR.value, displayPath: targetReal }
-    },
-  }
-}
-
-/** Construct `read` execution environment: guards remote nodes first (explicit error text), local uses `node:fs`. */
-export function readableEnvFor(
-  deps: HelmxToolDeps,
-  nodeId: string,
-  base: string,
-): { error: string } | { env: ReadableFileEnv } {
-  if (nodeId !== 'local') {
-    const remote = requireRemoteEnv(deps.envFabric, nodeId, base, 'read')
-    if ('error' in remote) return { error: remote.error }
-    return { env: remoteReadableEnv(remote.env) }
-  }
-  return { env: localReadableEnv() }
 }
 
 /** Construct `write`/`edit` execution environment: guards remote nodes first (explicit error text), local uses `node:fs`. */

@@ -15,11 +15,13 @@ export interface HelmxToolDeps {
   hubUrl: string
   /** Text redaction (global registered secret -> `[REDACTED]`; one-way only). */
   redact(text: string): string
+  /** Streaming redactor preserving partial secrets split across arrival chunks. */
+  createStreamingRedactor?: () => { push(text: string): string; flush(): string }
   /** Managed process token (read on each call via getter; omits `HELMX_TOKEN` if unset or disposed). */
   processToken?: () => string | undefined
   /** Artifact service (matches `services.ArtifactService`: async `get`/`readContent`/`readBuffer`). */
   artifacts: Pick<ArtifactService, 'spill' | 'get' | 'readContent' | 'readBuffer'> &
-    Partial<Pick<ArtifactService, 'writeUploaded' | 'readSlice'>>
+    Partial<Pick<ArtifactService, 'writeUploaded' | 'readSlice' | 'writeSpillArtifact'>>
   /** Cross-platform node execution substrate (targets remote `(nodeId, cwd)`; defaults to local only). */
   envFabric?: EnvFabric
   /** `conversationId ->` bound compute node ID (defaults to `'local'`; backed by authoritative store snapshot). */

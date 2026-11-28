@@ -275,30 +275,40 @@ test('replay: safe read-only tools read and read_artifact automatically replay t
     bytes: Buffer.from('ARTIFACT_REPLAY_OK_CONTENT\n', 'utf8'),
   })
 
-  const origSpill = r1.artifacts.spill.bind(r1.artifacts)
+  const origEnvForTarget = r1.envFabric.envForTarget.bind(r1.envFabric)
   let readEntered!: () => void
   const waitReadEntered = new Promise<void>((resolve) => {
     readEntered = resolve
   })
-  let allowSpillReturn!: () => void
-  const gateSpill = new Promise<void>((resolve) => {
-    allowSpillReturn = resolve
+  let allowReadReturn!: () => void
+  const gateRead = new Promise<void>((resolve) => {
+    allowReadReturn = resolve
   })
-  r1.artifacts.spill = (async (...args: Parameters<typeof origSpill>) => {
-    if (String(args[1]).startsWith('read-')) {
-      readEntered()
-      await gateSpill
-    }
-    return origSpill(...args)
-  }) as typeof r1.artifacts.spill
+  r1.envFabric.envForTarget = ((target: Parameters<typeof origEnvForTarget>[0]) => {
+    const baseEnv = origEnvForTarget(target)
+    const origOpen = baseEnv.openBinaryReader.bind(baseEnv)
+    return Object.assign(Object.create(baseEnv) as typeof baseEnv, {
+      openBinaryReader: async (
+        path: Parameters<typeof origOpen>[0],
+        opts: Parameters<typeof origOpen>[1],
+        ctx: Parameters<typeof origOpen>[2],
+      ) => {
+        if (path.endsWith('note.txt')) {
+          readEntered()
+          await gateRead
+        }
+        return origOpen(path, opts, ctx)
+      },
+    })
+  }) as typeof r1.envFabric.envForTarget
 
   f1.setResponses([fauxAssistantMessage([fauxToolCall('read', { path: 'note.txt' }, { id: 'read-gate-1' })], { stopReason: 'toolUse' })])
   void r1.conversations.submitInput(1, 'read note.txt').catch(() => {})
   await waitReadEntered
-  // Start close() so Harness aborts ToolTask's abortSignal first, then release spill to make wrapToolExecute throw AbortError.
+  // Start close() so Harness aborts ToolTask's abortSignal first, then release openBinaryReader gate to make read throw AbortError.
   const closePromise1 = r1.close()
   await delay(80)
-  allowSpillReturn()
+  allowReadReturn()
   await closePromise1
 
   let capturedReadContext: TranscriptContext | undefined
@@ -397,13 +407,19 @@ const models = createModels()
 models.setProvider(faux.provider)
 faux.setResponses([fauxAssistantMessage([fauxToolCall('read', { path: 'note.txt' }, { id: 'read-sigkill-1' })], { stopReason: 'toolUse' })])
 const runtime = await KernelRuntime.open({ dataDir, cwd: dataDir, model: 'faux/faux-1', models, autoResume: true })
-const origSpill = runtime.artifacts.spill.bind(runtime.artifacts)
-runtime.artifacts.spill = async (...args) => {
-  if (String(args[1]).startsWith('read-')) {
-    process.stdout.write('READY_READ\\n')
-    await new Promise(() => {})
-  }
-  return origSpill(...args)
+const origEnvForTarget = runtime.envFabric.envForTarget.bind(runtime.envFabric)
+runtime.envFabric.envForTarget = (target) => {
+  const baseEnv = origEnvForTarget(target)
+  const origOpen = baseEnv.openBinaryReader.bind(baseEnv)
+  return Object.assign(Object.create(baseEnv), {
+    openBinaryReader: async (path, opts, ctx) => {
+      if (typeof path === 'string' && path.endsWith('note.txt')) {
+        process.stdout.write('READY_READ\\n')
+        await new Promise(() => {})
+      }
+      return origOpen(path, opts, ctx)
+    },
+  })
 }
 void runtime.conversations.submitInput(1, 'read file').catch(() => {})
 await new Promise(() => {})

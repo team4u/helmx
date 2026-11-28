@@ -86,7 +86,7 @@ function scanLineStarts(original: string): number[] {
 }
 
 /** Line number containing `offset` (1-based): binary-searches ascending `lineStarts` for last start <= `offset`. */
-function lineAt(lineStarts: number[], offset: number): number {
+function lineAt(lineStarts: readonly number[], offset: number): number {
   let lo = 0
   let hi = lineStarts.length - 1
   while (lo < hi) {
@@ -125,14 +125,6 @@ function trimUnchangedContext(skeleton: readonly SkeletonRow[]): SkeletonRow[] {
   return rows
 }
 
-/** Raw (unredacted) `±EDIT_CONTEXT_LINES` line window around the replaced span, before and after the edit. */
-interface RawEditWindow {
-  windowStartLine: number
-  windowEndLine: number
-  rawOldWindow: string
-  rawNewWindow: string
-}
-
 /** Raw line-level diff outcome: exact line numbers and counts from the unredacted window (text is attached later). */
 interface RawDiffSkeleton {
   rows: SkeletonRow[]
@@ -144,9 +136,27 @@ interface RawDiffSkeleton {
   budgetExceeded: boolean
 }
 
-/** Redacted line slices of the window, aligned 1:1 with raw line numbers (redaction preserved the line count). */
-interface RedactedWindow {
-  startLine: number
+/** One disjoint merged `±EDIT_CONTEXT_LINES` window covering one or more non-overlapping edits. */
+export interface EditReplacedSpan {
+  readonly matchOffset: number
+  readonly replacedLength: number
+  readonly insertedLength: number
+}
+
+interface MergedDiffWindow {
+  readonly oldStartLine: number
+  readonly oldEndLine: number
+  readonly newStartLine: number
+  readonly newLineCount: number
+  readonly rawOldWindow: string
+  readonly rawNewWindow: string
+  readonly skeleton: RawDiffSkeleton
+}
+
+/** Redacted line slices of a window, aligned 1:1 with raw line numbers (redaction preserved line count). */
+interface RedactedWindowSlice {
+  oldStartLine: number
+  newStartLine: number
   oldLines: string[]
   newLines: string[]
 }
@@ -166,43 +176,30 @@ function assertReplacedSpanInBounds(original: string, matchOffset: number, repla
   }
 }
 
-function buildRawEditWindow(
-  original: string,
-  updated: string,
-  matched: { lineStarts: number[]; firstLine: number; lastLine: number },
-  span: { matchOffset: number; replacedLength: number },
-): RawEditWindow {
-  const totalLines = matched.lineStarts.length
-  const matchEnd = span.matchOffset + span.replacedLength
-  const windowStartLine = Math.max(1, matched.firstLine - EDIT_CONTEXT_LINES)
-  const windowEndLine = Math.min(matched.lastLine + EDIT_CONTEXT_LINES, totalLines)
-  const windowStartOffset = matched.lineStarts[windowStartLine - 1]!
-  const windowEndOffset = windowEndLine < totalLines ? matched.lineStarts[windowEndLine]! : original.length
-  const rawOldWindow = original.slice(windowStartOffset, windowEndOffset)
-  // Length of the replacement text inside `updated`: the edit only changes length by (new text - old text).
-  const insertedLength = updated.length - original.length + span.replacedLength
-  const rawNewWindow =
-    original.slice(windowStartOffset, span.matchOffset) +
-    updated.slice(span.matchOffset, span.matchOffset + insertedLength) +
-    original.slice(matchEnd, windowEndOffset)
-  return { windowStartLine, windowEndLine, rawOldWindow, rawNewWindow }
-}
-
 /**
  * Raw line-level skeleton and counts. `diffLines` runs under `maxEditLength` (returns `undefined` when exceeded) so
  * huge diffs never stall the kernel; the full-span fallback keeps counts consistent with the skeleton.
  */
-function buildRawDiffSkeleton(rawOldWindow: string, rawNewWindow: string, windowStartLine: number): RawDiffSkeleton {
+function buildRawDiffSkeleton(
+  rawOldWindow: string,
+  rawNewWindow: string,
+  oldWindowStartLine: number,
+  newWindowStartLine: number,
+): RawDiffSkeleton {
   const changes = diffLines(rawOldWindow, rawNewWindow, {
     maxEditLength: EDIT_DIFF_MAX_EDIT_LENGTH,
     timeout: 250,
   })
-  if (changes === undefined) return fullSpanSkeleton(rawOldWindow, rawNewWindow, windowStartLine)
-  return hunkSkeleton(changes, windowStartLine)
+  if (changes === undefined) return fullSpanSkeleton(rawOldWindow, rawNewWindow, oldWindowStartLine, newWindowStartLine)
+  return hunkSkeleton(changes, oldWindowStartLine, newWindowStartLine)
 }
 
-function hunkSkeleton(changes: readonly Change[], windowStartLine: number): RawDiffSkeleton {
-  const builder = new SkeletonBuilder(windowStartLine)
+function hunkSkeleton(
+  changes: readonly Change[],
+  oldWindowStartLine: number,
+  newWindowStartLine: number,
+): RawDiffSkeleton {
+  const builder = new SkeletonBuilder(oldWindowStartLine, newWindowStartLine)
   for (const change of changes) {
     const lineCount = splitLineTexts(change.value).length
     if (change.added === true) builder.add(lineCount)
@@ -216,19 +213,24 @@ function hunkSkeleton(changes: readonly Change[], windowStartLine: number): RawD
  * Algorithmic budget exceeded: fall back to full-span replacement — strip the common prefix/suffix lines, remove
  * the rest of the old window and add the rest of the new one (valid though non-minimal; counts match the skeleton).
  */
-function fullSpanSkeleton(rawOldWindow: string, rawNewWindow: string, windowStartLine: number): RawDiffSkeleton {
+function fullSpanSkeleton(
+  rawOldWindow: string,
+  rawNewWindow: string,
+  oldWindowStartLine: number,
+  newWindowStartLine: number,
+): RawDiffSkeleton {
   const oldLines = splitLineTexts(rawOldWindow)
   const newLines = splitLineTexts(rawNewWindow)
   const prefix = commonPrefixLineCount(oldLines, newLines)
   const suffix = commonSuffixLineCount(oldLines, newLines, prefix)
-  const builder = new SkeletonBuilder(windowStartLine)
+  const builder = new SkeletonBuilder(oldWindowStartLine, newWindowStartLine)
   builder.context(prefix)
   builder.remove(oldLines.length - prefix - suffix)
   builder.add(newLines.length - prefix - suffix)
   builder.context(suffix)
   // The first replaced line is the first line after the common prefix, whichever side changed.
   const skeleton = builder.toSkeleton(true)
-  return { ...skeleton, firstChanged: windowStartLine + prefix }
+  return { ...skeleton, firstChanged: newWindowStartLine + prefix }
 }
 
 function commonPrefixLineCount(oldLines: readonly string[], newLines: readonly string[]): number {
@@ -259,9 +261,9 @@ class SkeletonBuilder {
   private oldLine: number
   private newLine: number
 
-  constructor(windowStartLine: number) {
-    this.oldLine = windowStartLine
-    this.newLine = windowStartLine
+  constructor(oldWindowStartLine: number, newWindowStartLine: number) {
+    this.oldLine = oldWindowStartLine
+    this.newLine = newWindowStartLine
   }
 
   add(lineCount: number): void {
@@ -307,23 +309,23 @@ class SkeletonBuilder {
   }
 }
 
-function sliceRedactedWindow(redOriginal: string, redUpdated: string, window: RawEditWindow): RedactedWindow {
-  const newWindowCount = countLines(window.rawNewWindow)
+function sliceRedactedWindow(
+  redOldLines: readonly string[],
+  redNewLines: readonly string[],
+  window: MergedDiffWindow,
+): RedactedWindowSlice {
   return {
-    startLine: window.windowStartLine,
-    // Slice the window directly from the redacted full texts (earlier lines before the window stay aligned).
-    oldLines: splitLineTexts(redOriginal).slice(window.windowStartLine - 1, window.windowEndLine),
-    newLines: splitLineTexts(redUpdated).slice(
-      window.windowStartLine - 1,
-      window.windowStartLine - 1 + newWindowCount,
-    ),
+    oldStartLine: window.oldStartLine,
+    newStartLine: window.newStartLine,
+    oldLines: redOldLines.slice(window.oldStartLine - 1, window.oldEndLine),
+    newLines: redNewLines.slice(window.newStartLine - 1, window.newStartLine - 1 + window.newLineCount),
   }
 }
 
 /** Window line text for a skeleton row: from the new slice when added, otherwise from the old slice. */
-function windowRowText(entry: SkeletonRow, window: RedactedWindow): string {
-  if (entry.kind === 'add') return window.newLines[entry.newLine - window.startLine]!
-  return window.oldLines[entry.oldLine - window.startLine]!
+function windowRowText(entry: SkeletonRow, window: RedactedWindowSlice): string {
+  if (entry.kind === 'add') return window.newLines[entry.newLine - window.newStartLine]!
+  return window.oldLines[entry.oldLine - window.oldStartLine]!
 }
 
 /** Truncate an oversized row for display (counts unaffected); backs up 1 code unit to avoid splitting UTF-16 surrogates. */
@@ -346,38 +348,165 @@ function toToolDiffRow(entry: SkeletonRow, text: string): ToolDiffRow {
   }
 }
 
-/** Enforce the display budgets on post-redaction text: rows, per-row chars, cumulative chars; any cut sets `truncated`. */
-function renderDiffRows(
-  skeleton: readonly SkeletonRow[],
-  window: RedactedWindow,
-  budgetExceeded: boolean,
+/** Enforce the display budgets across merged diff windows: rows, per-row chars, cumulative chars; any cut sets `truncated`. */
+function renderMultiWindowRows(
+  windows: ReadonlyArray<{ window: MergedDiffWindow; slice: RedactedWindowSlice }>,
 ): { rows: ToolDiffRow[]; truncated: boolean } {
   const rows: ToolDiffRow[] = []
   let usedChars = 0
-  let truncated = budgetExceeded
-  for (const entry of trimUnchangedContext(skeleton)) {
-    if (rows.length >= TOOL_DIFF_MAX_ROWS) {
-      truncated = true
-      break
+  let truncated = false
+  for (const { window, slice } of windows) {
+    if (window.skeleton.budgetExceeded) truncated = true
+    for (const entry of trimUnchangedContext(window.skeleton.rows)) {
+      if (rows.length >= TOOL_DIFF_MAX_ROWS) {
+        truncated = true
+        return { rows, truncated }
+      }
+      const row = truncateRowForDisplay(windowRowText(entry, slice))
+      if (usedChars + row.text.length > TOOL_DIFF_MAX_TEXT_CHARS) {
+        truncated = true
+        return { rows, truncated }
+      }
+      usedChars += row.text.length
+      truncated = truncated || row.truncated
+      rows.push(toToolDiffRow(entry, row.text))
     }
-    const row = truncateRowForDisplay(windowRowText(entry, window))
-    if (usedChars + row.text.length > TOOL_DIFF_MAX_TEXT_CHARS) {
-      truncated = true
-      break
-    }
-    usedChars += row.text.length
-    truncated = truncated || row.truncated
-    rows.push(toToolDiffRow(entry, row.text))
   }
   return { rows, truncated }
 }
 
+function buildMergedDiffWindows(
+  original: string,
+  updated: string,
+  lineStarts: readonly number[],
+  spans: readonly EditReplacedSpan[],
+): MergedDiffWindow[] {
+  const totalLines = lineStarts.length
+  interface WindowGroup {
+    oldStartLine: number
+    oldEndLine: number
+    spans: EditReplacedSpan[]
+  }
+  const groups: WindowGroup[] = []
+  for (const span of spans) {
+    const firstLine = lineAt(lineStarts, span.matchOffset)
+    const lastLine = lineAt(lineStarts, span.matchOffset + span.replacedLength - 1)
+    const oldStartLine = Math.max(1, firstLine - EDIT_CONTEXT_LINES)
+    const oldEndLine = Math.min(lastLine + EDIT_CONTEXT_LINES, totalLines)
+    const prev = groups[groups.length - 1]
+    if (prev !== undefined && oldStartLine <= prev.oldEndLine + 1) {
+      prev.oldEndLine = Math.max(prev.oldEndLine, oldEndLine)
+      prev.spans.push(span)
+    } else {
+      groups.push({ oldStartLine, oldEndLine, spans: [span] })
+    }
+  }
+
+  let cumCharDelta = 0
+  let cumLineDelta = 0
+  return groups.map((group) => {
+    const charDeltaBefore = cumCharDelta
+    let groupCharDelta = 0
+    for (const s of group.spans) groupCharDelta += s.insertedLength - s.replacedLength
+    cumCharDelta += groupCharDelta
+
+    const oldStartOffset = lineStarts[group.oldStartLine - 1]!
+    const oldEndOffset = group.oldEndLine < totalLines ? lineStarts[group.oldEndLine]! : original.length
+    const rawOldWindow = original.slice(oldStartOffset, oldEndOffset)
+    const newStartOffset = oldStartOffset + charDeltaBefore
+    const newEndOffset = oldEndOffset + cumCharDelta
+    const rawNewWindow = updated.slice(newStartOffset, newEndOffset)
+
+    const newStartLine = Math.max(1, group.oldStartLine + cumLineDelta)
+    const skeleton = buildRawDiffSkeleton(rawOldWindow, rawNewWindow, group.oldStartLine, newStartLine)
+    cumLineDelta += skeleton.addedLines - skeleton.removedLines
+    return {
+      oldStartLine: group.oldStartLine,
+      oldEndLine: group.oldEndLine,
+      newStartLine,
+      newLineCount: countLines(rawNewWindow),
+      rawOldWindow,
+      rawNewWindow,
+      skeleton,
+    }
+  })
+}
+
 /**
- * Compute `ToolEditDiff` from before/after full texts and matched span (pure, zero IO).
- *
- * `redact` requirement: placeholders must not introduce newlines (true for `[REDACTED]` in `SecretStash`).
- * Preserving line count across redaction confirms no secret spanned a newline so redacted window lines correspond
- * 1:1 with real line numbers; on mismatch, falls back by contract to `rows = []` rather than fabricating.
+ * Compute `ToolEditDiff` across one or more non-overlapping replacement spans (pure, zero IO).
+ * Spans must be sorted ascending and cover disjoint valid ranges of `original`.
+ */
+export function computeMultiEditDiff(
+  original: string,
+  updated: string,
+  spans: ReadonlyArray<EditReplacedSpan>,
+  redact: (text: string) => string,
+): ToolEditDiff {
+  if (spans.length === 0) {
+    throw new Error('Edit diff precondition failed: spans must not be empty')
+  }
+  let expectedDelta = 0
+  for (let i = 0; i < spans.length; i += 1) {
+    const span = spans[i]!
+    assertReplacedSpanInBounds(original, span.matchOffset, span.replacedLength)
+    if (!Number.isInteger(span.insertedLength) || span.insertedLength < 0) {
+      throw new Error(`Edit diff precondition failed: invalid insertedLength ${span.insertedLength}`)
+    }
+    if (i > 0) {
+      const prev = spans[i - 1]!
+      if (prev.matchOffset + prev.replacedLength > span.matchOffset) {
+        throw new Error('Edit diff precondition failed: spans must be sorted and non-overlapping')
+      }
+    }
+    expectedDelta += span.insertedLength - span.replacedLength
+  }
+  if (updated.length - original.length !== expectedDelta) {
+    throw new Error(
+      `Edit diff precondition failed: updated length delta (${updated.length - original.length}) disagrees with spans (${expectedDelta})`,
+    )
+  }
+
+  const lineStarts = scanLineStarts(original)
+  const totalLines = lineStarts.length
+  const firstLine = lineAt(lineStarts, spans[0]!.matchOffset)
+  if (updated === original) {
+    return { rows: [], addedLines: 0, removedLines: 0, firstChangedLine: firstLine, truncated: false }
+  }
+
+  const windows = buildMergedDiffWindows(original, updated, lineStarts, spans)
+  let addedLines = 0
+  let removedLines = 0
+  let rawFirstChanged = 0
+  for (const w of windows) {
+    addedLines += w.skeleton.addedLines
+    removedLines += w.skeleton.removedLines
+    if (rawFirstChanged === 0 && w.skeleton.firstChanged > 0) {
+      rawFirstChanged = w.skeleton.firstChanged
+    }
+  }
+  const firstChangedLine =
+    rawFirstChanged === 0 ? firstLine : Math.min(rawFirstChanged, Math.max(1, countLines(updated)))
+  const counts = { addedLines, removedLines, firstChangedLine }
+
+  // Redact full texts first so multi-line secrets crossing window boundaries are fully caught.
+  const redOriginal = redact(original)
+  const redUpdated = redact(updated)
+  if (countLines(redOriginal) !== totalLines || countLines(redUpdated) !== countLines(updated)) {
+    return { rows: [], ...counts, truncated: true }
+  }
+  const redOldLines = splitLineTexts(redOriginal)
+  const redNewLines = splitLineTexts(redUpdated)
+  const rendered = renderMultiWindowRows(
+    windows.map((w) => ({
+      window: w,
+      slice: sliceRedactedWindow(redOldLines, redNewLines, w),
+    })),
+  )
+  return { rows: rendered.rows, ...counts, truncated: rendered.truncated }
+}
+
+/**
+ * Compute `ToolEditDiff` for a single replacement span (delegates to {@link computeMultiEditDiff}).
  */
 export function computeEditDiff(
   original: string,
@@ -387,41 +516,6 @@ export function computeEditDiff(
   redact: (text: string) => string,
 ): ToolEditDiff {
   assertReplacedSpanInBounds(original, matchOffset, replacedLength)
-  const lineStarts = scanLineStarts(original)
-  const totalLines = lineStarts.length
-  const firstLine = lineAt(lineStarts, matchOffset)
-  // No-op (`oldText === newText`): no diff rows to display; line number points to the matched span.
-  if (updated === original) {
-    return { rows: [], addedLines: 0, removedLines: 0, firstChangedLine: firstLine, truncated: false }
-  }
-  const matched = {
-    lineStarts,
-    firstLine,
-    lastLine: lineAt(lineStarts, matchOffset + replacedLength - 1),
-  }
-  const window = buildRawEditWindow(original, updated, matched, { matchOffset, replacedLength })
-  const skeleton = buildRawDiffSkeleton(window.rawOldWindow, window.rawNewWindow, window.windowStartLine)
-  // Clamp `firstChangedLine` to the actual new-file line count (handles EOF deletions; empty files clamp to 1).
-  const firstChangedLine =
-    skeleton.firstChanged === 0 ? firstLine : Math.min(skeleton.firstChanged, Math.max(1, countLines(updated)))
-  const counts = {
-    addedLines: skeleton.addedLines,
-    removedLines: skeleton.removedLines,
-    firstChangedLine,
-  }
-
-  // Redact full texts first so multi-line secrets crossing window boundaries are fully caught.
-  const redOriginal = redact(original)
-  const redUpdated = redact(updated)
-  if (countLines(redOriginal) !== totalLines || countLines(redUpdated) !== countLines(updated)) {
-    // Full-text redaction changed line count (secret contained newlines): window lines no longer align with real lines.
-    // Honest fallback: return no rows (never leak), keeping raw counts and firstChangedLine.
-    return { rows: [], ...counts, truncated: true }
-  }
-  const rendered = renderDiffRows(
-    skeleton.rows,
-    sliceRedactedWindow(redOriginal, redUpdated, window),
-    skeleton.budgetExceeded,
-  )
-  return { rows: rendered.rows, ...counts, truncated: rendered.truncated }
+  const insertedLength = updated.length - original.length + replacedLength
+  return computeMultiEditDiff(original, updated, [{ matchOffset, replacedLength, insertedLength }], redact)
 }

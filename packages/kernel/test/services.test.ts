@@ -1517,6 +1517,15 @@ test('artifacts: spill 32KiB threshold, 4KiB UTF-8 safe preview, secret redactio
   await assert.rejects(() => artifacts.spill(1, '   ', 'x'), /callId/)
   await assert.rejects(() => artifacts.spill(1, '.', 'x'), /callId/)
   await assert.rejects(() => artifacts.spill(1, '..', 'x'), /callId/)
+
+  // writeSpillArtifact persists full redacted spill content unconditionally (including >32KiB or <=32KiB)
+  const fullPayload = `header super-secret-value\n${'m'.repeat(40 * 1024)}\ntail-line`
+  const directMeta = await artifacts.writeSpillArtifact(9, 'bash-call-9', fullPayload)
+  assert.equal(directMeta.kind, 'spill')
+  const directRead = await artifacts.readContent(directMeta.id)
+  assert.ok(!directRead.includes('super-secret-value'))
+  assert.ok(directRead.includes('[REDACTED]'))
+  assert.ok(directRead.endsWith('\ntail-line'))
 })
 
 test('artifacts: redacts text artifacts on register, preserves binary bytes, and rejects forged metadata paths', { timeout: 60_000 }, async () => {

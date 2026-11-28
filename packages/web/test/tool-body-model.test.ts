@@ -145,6 +145,32 @@ test('readBodyData：正文始终来自 resultText（不消费 presentationMeta.
   const fallback = readBodyData(trace({ toolName: 'read', input: { path: 'a.md' }, resultText: '# t' }))
   assert.equal(fallback.content, '# t')
   assert.equal(fallback.language, 'markdown')
+
+  const img = readBodyData(
+    trace({
+      toolName: 'read',
+      input: { path: 'pic.png' },
+      resultText: '[image: image/png]',
+      presentationMeta: { path: '/abs/pic.png', nodeId: 'local', mimeType: 'image/png' },
+    }),
+  )
+  assert.equal(img.mimeType, 'image/png')
+  assert.equal(img.imageUnsupportedByModel, undefined)
+
+  const unsupported = readBodyData(
+    trace({
+      toolName: 'read',
+      input: { path: 'pic.png' },
+      resultText: '[image omitted]',
+      presentationMeta: {
+        path: '/abs/pic.png',
+        nodeId: 'local',
+        mimeType: 'image/png',
+        imageUnsupportedByModel: 'text-only-model',
+      },
+    }),
+  )
+  assert.equal(unsupported.imageUnsupportedByModel, 'text-only-model')
 })
 
 test('bashBodyData：命令来自入参；exitCode/timedOut 仅类型收窄', { timeout: 60_000 }, () => {

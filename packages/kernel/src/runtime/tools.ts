@@ -39,8 +39,8 @@ export {
   type ShellRunResult,
 } from './tools/shell-exec.js'
 export { buildToolEnv, buildManagedEnv, executionScopeHash } from './tools/managed-env.js'
-export { createReadTool, createWriteTool, createEditTool } from './tools/file-ops.js'
-export { READ_FILE_MAX_BYTES } from './tools/file-env.js'
+export { createReadTool } from './tools/read-tool.js'
+export { createWriteTool, createEditTool } from './tools/file-ops.js'
 export {
   createRegisterArtifactTool,
   createReadArtifactTool,

@@ -220,6 +220,7 @@ export function assembleRuntimeServices(
     defaultCwd: init.cwd,
     get hubUrl(): string { return runtime.hubUrl },
     redact: (t) => options.stashService.redact(t),
+    createStreamingRedactor: () => options.stashService.createStreamingRedactor(),
     processToken: () => runtime.processToken,
     artifacts: artifactsSvc,
     envFabric,

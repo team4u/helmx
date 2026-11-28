@@ -26,6 +26,7 @@ import { join } from 'node:path'
 import { WebSocket } from 'ws'
 import { createBirpc } from 'birpc'
 import { BACKGROUND_CONTEXT, type Context } from '@earendil-works/chord/context'
+import { LineScanner, type LineScan } from '@earendil-works/pi-durable/env'
 import type { NodeRegisterInput, NodeRegisterResult } from '@helmx/protocol'
 import type { HubConnectionLocal } from '../src/env/registry.js'
 import { attachNodeWsGateway, createEnvFabric, type EnvFabric } from '../src/env/index.js'
@@ -107,12 +108,17 @@ function makeRecordingFileEnv(files: Map<string, string>): {
         record('canonicalPath', path)
         return { ok: true, value: path }
       },
+      async exists(path: string, _context: Context) {
+        record('exists', path)
+        return { ok: true, value: files.has(path) }
+      },
       async fileInfo(path: string, _context: Context) {
         record('fileInfo', path)
-        if (!files.has(path)) {
+        const content = files.get(path)
+        if (content === undefined) {
           return { ok: false, error: { code: 'not_found', message: `ENOENT: ${path}` } }
         }
-        return { ok: true, value: { kind: 'file', size: 16 } }
+        return { ok: true, value: { kind: 'file', size: Buffer.byteLength(content, 'utf8') } }
       },
       async readTextFile(path: string, _context: Context) {
         record('readTextFile', path)
@@ -121,6 +127,31 @@ function makeRecordingFileEnv(files: Map<string, string>): {
           return { ok: false, error: { code: 'not_found', message: `ENOENT: ${path}` } }
         }
         return { ok: true, value: content }
+      },
+      async openBinaryReader(path: string, _opts: { noFollow?: boolean } | undefined, _context: Context) {
+        record('openBinaryReader', path)
+        const content = files.get(path)
+        if (content === undefined) {
+          return { ok: false, error: { code: 'not_found', message: `ENOENT: ${path}` } }
+        }
+        const bytes = Buffer.from(content, 'utf8')
+        return {
+          ok: true,
+          value: {
+            async info() {
+              return { ok: true, value: { name: path, path, kind: 'file', size: bytes.length, mtimeMs: 1 } }
+            },
+            async read(offset: number, length: number) {
+              return { ok: true, value: bytes.subarray(offset, offset + length) }
+            },
+            async scanLines(scanOpts: { startLine: number; endLine?: number }): Promise<{ ok: true; value: LineScan }> {
+              const scanner = new LineScanner(scanOpts.startLine, scanOpts.endLine)
+              scanner.push(bytes)
+              return { ok: true, value: scanner.finish() }
+            },
+            async close() {},
+          },
+        }
       },
       async writeFile(path: string, content: string, _context: Context) {
         record('writeFile', path)
@@ -360,18 +391,18 @@ describe('read/write/edit: win32 target POSIX-view normalization (parity with ba
     const tool = createReadTool(deps)
     const rel = await tool.execute({ path: 'note.md' }, makeApi('/mnt/d/proj'), BACKGROUND_CONTEXT)
     assert.equal(!!rel.isError, false)
-    assert.ok(recorder.calls.some((c) => c.method === 'readTextFile' && c.path === 'D:\\proj\\note.md'))
+    assert.ok(recorder.calls.some((c) => c.method === 'openBinaryReader' && c.path === 'D:\\proj\\note.md'))
     // Absolute POSIX-view path (cross-drive): normalized deterministically as well.
     const abs = await tool.execute({ path: '/mnt/d/other/abs.md' }, makeApi('/mnt/d/proj'), BACKGROUND_CONTEXT)
     assert.equal(!!abs.isError, false)
-    assert.ok(recorder.calls.some((c) => c.method === 'readTextFile' && c.path === 'D:\\other\\abs.md'))
+    assert.ok(recorder.calls.some((c) => c.method === 'openBinaryReader' && c.path === 'D:\\other\\abs.md'))
   })
 
   it('read and bash parity: same conversation cwd derives identical normalized base directory (D:\\proj)', { timeout: 60_000 }, async () => {
     const files = new Map<string, string>([['D:\\proj\\note.md', '# win']])
     const recorder = makeRecordingFileEnv(files)
     const shell = makeRecordingShellEnv()
-    // Same target env: bash uses exec; file tools use canonicalPath/readTextFile, etc.
+    // Same target env: bash uses exec; file tools use canonicalPath/openBinaryReader/readTextFile, etc.
     const combinedEnv = { ...recorder.env, exec: shell.env.exec }
     const fabric = makePlatformFabric({ platform: 'win32', env: combinedEnv })
     const deps = await makeDeps(join(rootDir, 'rw2'), fabric, () => 'win-node')
@@ -386,7 +417,7 @@ describe('read/write/edit: win32 target POSIX-view normalization (parity with ba
     )
     assert.equal(!!read.isError, false)
     const bashBase = shell.execCalls[0]!.cwd
-    const readPath = recorder.calls.find((c) => c.method === 'readTextFile')!.path
+    const readPath = recorder.calls.find((c) => c.method === 'openBinaryReader')!.path
     assert.ok(
       readPath.startsWith(`${bashBase}\\`),
       `read must resolve under the same normalized base directory as bash: bash=${bashBase} read=${readPath}`,
@@ -474,7 +505,7 @@ describe('read/write/edit: win32 target POSIX-view normalization (parity with ba
       BACKGROUND_CONTEXT,
     )
     assert.equal(!!read.isError, false)
-    assert.ok(recorder.calls.some((c) => c.method === 'readTextFile' && c.path === '/mnt/d/proj/note.md'))
+    assert.ok(recorder.calls.some((c) => c.method === 'openBinaryReader' && c.path === '/mnt/d/proj/note.md'))
   })
 
   it('remote platform unknown falls back to existing shape-based resolution (win32-shaped paths pass straight through)', { timeout: 60_000 }, async () => {
@@ -491,7 +522,7 @@ describe('read/write/edit: win32 target POSIX-view normalization (parity with ba
       BACKGROUND_CONTEXT,
     )
     assert.equal(!!read.isError, false)
-    assert.ok(recorder.calls.some((c) => c.method === 'readTextFile' && c.path === 'C:\\workspace\\note.md'))
+    assert.ok(recorder.calls.some((c) => c.method === 'openBinaryReader' && c.path === 'C:\\workspace\\note.md'))
   })
 })
 

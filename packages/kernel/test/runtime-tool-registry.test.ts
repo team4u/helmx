@@ -1283,6 +1283,41 @@ describe('RuntimeToolRegistry and wrapToolExecute unit tests', { timeout: 60_000
     assert.match(((rawDetailsRes['output'] as Array<{ text: string }>)[0] ?? { text: '' }).text, /accessor/)
   })
 
+  it('prepareToolResultWith: exempts self-bounded read/read_artifact/bash from outer spill while enforcing redaction and schema guard', { timeout: 60_000 }, async () => {
+    let spillCalls = 0
+    const artifacts = {
+      spill: async (_convId: number, _id: string, text: string) => {
+        spillCalls += 1
+        return { text: `spilled:${text.slice(0, 8)}`, artifact: { id: 'spill-1' } }
+      },
+    }
+    const redact = (t: string) => t.replaceAll('SECRET', '[REDACTED]')
+    const largeText = `${'a'.repeat(40_000)} SECRET`
+    for (const toolName of ['read', 'read_artifact', 'bash']) {
+      const guarded = await prepareToolResultWith(
+        artifacts,
+        redact,
+        1,
+        { output: [{ type: 'text', text: largeText }] },
+        { toolName },
+      )
+      assert.equal(spillCalls, 0, `${toolName} must skip outer spill`)
+      const outText = (guarded.output?.[0] as { text: string }).text
+      assert.ok(outText.includes('[REDACTED]') && !outText.includes('SECRET'))
+      assert.equal(outText.length, largeText.length + '[REDACTED]'.length - 'SECRET'.length)
+    }
+
+    const spilledPlugin = await prepareToolResultWith(
+      artifacts,
+      redact,
+      1,
+      { output: [{ type: 'text', text: largeText }] },
+      { toolName: 'other_tool' },
+    )
+    assert.equal(spillCalls, 1, 'non-exempt tool still passes through outer spill')
+    assert.equal((spilledPlugin.output?.[0] as { text: string }).text, 'spilled:aaaaaaaa')
+  })
+
   it('guardToolExecutionResult: validates and redacts rest envelope fields without JSON.stringify, preserving output/diagnostics/usage/control and rejecting non-JSON disguises', { timeout: 60_000 }, () => {
     const redact = (s: string) => s.replaceAll('SECRET', '[REDACTED]')
 

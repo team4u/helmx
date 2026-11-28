@@ -484,24 +484,15 @@ export class ArtifactService {
   }
 
   /**
-   * Oversized tool-output spill:
-   * - `<= 32 KiB`: returned verbatim (no artifact created);
-   * - `> 32 KiB`: writes full content to `tool-spill-<callId>.txt` (through stash redaction) and
-   *   returns a 4 KiB head preview + truncation marker + tail summary + artifact reference.
+   * Persist an already-validated and redacted spill artifact without truncating to a preview.
+   * Shared by both `spill()` (32 KiB preview policy) and `writeSpillArtifact()` (`bash` full tail capture).
    */
-  async spill(conversationId: number, callId: string, text: string): Promise<SpillResult> {
-    this.assertConversationId(conversationId)
-    if (typeof text !== 'string') throw new Error('spill text must be a string')
-    if (typeof callId !== 'string' || callId === '') throw new Error('callId cannot be empty')
-    if (!CALL_ID_PATTERN.test(callId) || callId.includes('..')) {
-      throw new Error(`invalid callId: ${callId}`)
-    }
-    // Redact content first: existing secret placeholders remain untouched while registered secrets are scrubbed.
-    const safeText = this.stash !== undefined ? this.stash.redact(text) : text
-    const totalBytes = Buffer.byteLength(safeText, 'utf8')
-    if (totalBytes <= SPILL_THRESHOLD_BYTES) {
-      return { text: safeText }
-    }
+  private async persistValidatedSpill(
+    conversationId: number,
+    callId: string,
+    safeText: string,
+    totalBytes: number,
+  ): Promise<ArtifactMetadata> {
     return this.runOnConversationChain(conversationId, async () => {
       const fileName = toSpillFileName(callId)
       const absPath = join(this.convDir(conversationId), fileName)
@@ -517,14 +508,53 @@ export class ArtifactService {
         createdAt: Date.now(),
       }
       this.repository.put(metadata)
-      const head = truncateUtf8Safe(safeText, PREVIEW_HEAD_BYTES)
-      const tail = truncateUtf8Tail(safeText, 256)
-      const text2 =
-        `${head}\n\n...[output too long, truncated. Full result (${totalBytes} bytes) written to artifact]...\n\n` +
-        `--- tail summary ---\n${tail}\n\n` +
-        `[Artifact] id=${metadata.id} path=${metadata.path} (call tool read_artifact to get full text)`
-      return { text: text2, artifact: metadata }
+      return metadata
     })
+  }
+
+  private validateAndRedactSpill(conversationId: number, callId: string, text: string): {
+    safeText: string
+    totalBytes: number
+  } {
+    this.assertConversationId(conversationId)
+    if (typeof text !== 'string') throw new Error('spill text must be a string')
+    if (typeof callId !== 'string' || callId === '') throw new Error('callId cannot be empty')
+    if (!CALL_ID_PATTERN.test(callId) || callId.includes('..')) {
+      throw new Error(`invalid callId: ${callId}`)
+    }
+    // Redact content first: existing secret placeholders remain untouched while registered secrets are scrubbed.
+    const safeText = this.stash !== undefined ? this.stash.redact(text) : text
+    return { safeText, totalBytes: Buffer.byteLength(safeText, 'utf8') }
+  }
+
+  /**
+   * Persist full output directly as a `spill` artifact (redacted, serialized on the conversation chain)
+   * without returning a 4 KiB head preview. Used by tools like `bash` that manage their own tail retention.
+   */
+  async writeSpillArtifact(conversationId: number, callId: string, text: string): Promise<ArtifactMetadata> {
+    const { safeText, totalBytes } = this.validateAndRedactSpill(conversationId, callId, text)
+    return this.persistValidatedSpill(conversationId, callId, safeText, totalBytes)
+  }
+
+  /**
+   * Oversized tool-output spill:
+   * - `<= 32 KiB`: returned verbatim (no artifact created);
+   * - `> 32 KiB`: writes full content to `tool-spill-<callId>.txt` (through stash redaction) and
+   *   returns a 4 KiB head preview + truncation marker + tail summary + artifact reference.
+   */
+  async spill(conversationId: number, callId: string, text: string): Promise<SpillResult> {
+    const { safeText, totalBytes } = this.validateAndRedactSpill(conversationId, callId, text)
+    if (totalBytes <= SPILL_THRESHOLD_BYTES) {
+      return { text: safeText }
+    }
+    const metadata = await this.persistValidatedSpill(conversationId, callId, safeText, totalBytes)
+    const head = truncateUtf8Safe(safeText, PREVIEW_HEAD_BYTES)
+    const tail = truncateUtf8Tail(safeText, 256)
+    const text2 =
+      `${head}\n\n...[output too long, truncated. Full result (${totalBytes} bytes) written to artifact]...\n\n` +
+      `--- tail summary ---\n${tail}\n\n` +
+      `[Artifact] id=${metadata.id} path=${metadata.path} (call tool read_artifact to get full text)`
+    return { text: text2, artifact: metadata }
   }
 
   /**

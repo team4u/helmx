@@ -479,8 +479,8 @@ describe('real tool execution', { timeout: 60_000 }, () => {
   it('executes bash tool, spills oversized output to artifact, and supports pagination via read_artifact', { timeout: 60_000 }, async () => {
     const kernel = await openRuntime(join(root, 't11'))
     try {
-      // Model runs bash generating >32KiB output, then summarizes.
-      const bigCommand = 'python3 -c "print(\'A\'*40000)"'
+      // Model runs bash generating >50KiB output (triggers spill), then summarizes.
+      const bigCommand = 'python3 -c "print(\'A\'*60000)"'
       kernel.__faux.setResponses([
         fauxAssistantMessage([fauxToolCall('bash', { command: bigCommand })], { stopReason: 'toolUse' }),
         fauxAssistantMessage('done'),
