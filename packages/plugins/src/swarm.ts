@@ -21,7 +21,6 @@ import {
   INDEX_DOC_NAME,
   SWARM_PLUGIN_ID,
   SWARM_SKILL_ID,
-  SWARM_TOOL_NAMES,
   asConversationUpsertEvent,
   assertIndexDoc,
   resolveSwarmConfig,
@@ -112,7 +111,6 @@ export function createSwarmPlugin(): PluginDefinition {
       registerSwarmActions(ctx, coordinator)
       ctx.provide<DispatchToolsCapability>('helmx.dispatch-tools', {
         toolNames: ['swarm_dispatch_worker'],
-        orchestrationTools: [...SWARM_TOOL_NAMES],
       })
       ctx.provide<ConversationDepthCapability>(CONVERSATION_DEPTH_CAPABILITY_ID, {
         depthOf(conversationId) {

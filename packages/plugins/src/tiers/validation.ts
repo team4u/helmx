@@ -3,15 +3,11 @@ import {
   HelmxError,
   MODEL_TIER_DESCRIPTION_MAX_LENGTH,
   MODEL_TIER_PREFIX,
-  ORCHESTRATOR_TIER_DEFAULT_MAX_STEPS,
-  ORCHESTRATOR_TIER_MAX_STEPS_LIMIT,
   escapeXml,
-  isOrchestratorTier,
   isValidModelTierId,
   parseModelTierRef,
   type ModelCatalog,
   type ModelTierCatalogEntry,
-  type ModelTierKind,
   type ModelTierSpec,
   type PluginInUseItem,
   type Profile,
@@ -69,77 +65,21 @@ export function normalizeTierSpec(raw: unknown, tierId?: string): ModelTierSpec 
     throw new HelmxError('validation_error', `Tier '${tierId ?? ''}' definition must be an object`, 400)
   }
   const obj = raw as Record<string, unknown>
-  if (obj.kind !== undefined && obj.kind !== 'single' && obj.kind !== 'orchestrator') {
-    throw new HelmxError(
-      'validation_error',
-      `Invalid tier kind '${String(obj.kind)}'; valid values: single | orchestrator`,
-      400,
-      { kind: obj.kind },
-    )
+  for (const key of Object.keys(obj)) {
+    if (key !== 'model' && key !== 'thinkingLevel' && key !== 'description') {
+      throw new HelmxError('validation_error', `Unsupported property '${key}' on model tier specification`, 400, { field: key })
+    }
   }
-  const kind: ModelTierKind = obj.kind === 'orchestrator' ? 'orchestrator' : 'single'
   const model = assertConcreteModelRef(obj.model, tierId ? `tiers.${tierId}.model` : 'model')
   const thinkingLevel = normalizeOptionalText(obj.thinkingLevel, 'thinkingLevel', 32)
   if (thinkingLevel !== undefined && !VALID_THINKING_SET.has(thinkingLevel)) {
     throw new HelmxError('validation_error', `Invalid thinkingLevel '${thinkingLevel}'; valid values: ${TIER_THINKING_LEVELS.join(' | ')}`, 400, { thinkingLevel })
   }
   const description = normalizeOptionalText(obj.description, 'description', MODEL_TIER_DESCRIPTION_MAX_LENGTH)
-
-  if (kind === 'single') {
-    if (obj.executorModel !== undefined && obj.executorModel !== null && String(obj.executorModel).trim() !== '') {
-      throw new HelmxError('validation_error', "executorModel is only allowed when kind === 'orchestrator'", 400)
-    }
-    if (
-      obj.executorThinkingLevel !== undefined &&
-      obj.executorThinkingLevel !== null &&
-      String(obj.executorThinkingLevel).trim() !== ''
-    ) {
-      throw new HelmxError('validation_error', "executorThinkingLevel is only allowed when kind === 'orchestrator'", 400)
-    }
-    if (obj.maxExecutionSteps !== undefined && obj.maxExecutionSteps !== null) {
-      throw new HelmxError('validation_error', "maxExecutionSteps is only allowed when kind === 'orchestrator'", 400)
-    }
-    return { model, ...(thinkingLevel ? { thinkingLevel } : {}), ...(description ? { description } : {}) }
-  }
-
-  const executorModel = assertConcreteModelRef(
-    obj.executorModel,
-    tierId ? `tiers.${tierId}.executorModel` : 'executorModel',
-  )
-  const executorThinkingLevel = normalizeOptionalText(obj.executorThinkingLevel, 'executorThinkingLevel', 32)
-  if (executorThinkingLevel !== undefined && !VALID_THINKING_SET.has(executorThinkingLevel)) {
-    throw new HelmxError(
-      'validation_error',
-      `Invalid executorThinkingLevel '${executorThinkingLevel}'; valid values: ${TIER_THINKING_LEVELS.join(' | ')}`,
-      400,
-      { executorThinkingLevel },
-    )
-  }
-  let maxExecutionSteps: number = ORCHESTRATOR_TIER_DEFAULT_MAX_STEPS
-  if (obj.maxExecutionSteps !== undefined && obj.maxExecutionSteps !== null) {
-    if (
-      typeof obj.maxExecutionSteps !== 'number' ||
-      !Number.isInteger(obj.maxExecutionSteps) ||
-      obj.maxExecutionSteps < 0 ||
-      obj.maxExecutionSteps > ORCHESTRATOR_TIER_MAX_STEPS_LIMIT
-    ) {
-      throw new HelmxError(
-        'validation_error',
-        `maxExecutionSteps must be an integer between 0 and ${ORCHESTRATOR_TIER_MAX_STEPS_LIMIT} (0 = unlimited)`,
-        400,
-        { maxExecutionSteps: obj.maxExecutionSteps },
-      )
-    }
-    maxExecutionSteps = obj.maxExecutionSteps
-  }
   return {
-    kind: 'orchestrator',
     model,
-    ...(thinkingLevel ? { thinkingLevel } : {}),
-    executorModel,
-    ...(executorThinkingLevel ? { executorThinkingLevel } : {}),
-    maxExecutionSteps,
-    ...(description ? { description } : {}),
+    ...(thinkingLevel !== undefined ? { thinkingLevel } : {}),
+    ...(description !== undefined ? { description } : {}),
   }
 }
 
@@ -222,9 +162,6 @@ export function assertTargetModelNotDisabled(catalog: ModelCatalog, modelRef: st
 
 export function assertTierSpecModelsNotDisabled(catalog: ModelCatalog, spec: ModelTierSpec): void {
   assertTargetModelNotDisabled(catalog, spec.model)
-  if (isOrchestratorTier(spec) && spec.executorModel !== undefined && spec.executorModel !== '') {
-    assertTargetModelNotDisabled(catalog, spec.executorModel)
-  }
 }
 
 export function findTierReferences(
@@ -265,32 +202,6 @@ export function projectTierEntries(tiers: Readonly<Record<string, ModelTierSpec>
   return Object.entries(tiers).map(([id, spec]) => {
     const entry = modelMap.get(spec.model)
     const thinkingLevels = catalog.thinkingLevels[spec.model]
-    if (isOrchestratorTier(spec)) {
-      const execRef = spec.executorModel ?? ''
-      const execEntry = modelMap.get(execRef)
-      const executorThinkingLevels = catalog.thinkingLevels[execRef]
-      const disabled = entry?.disabled === true || execEntry?.disabled === true
-      const available =
-        entry !== undefined &&
-        entry.available === true &&
-        execEntry !== undefined &&
-        execEntry.available === true &&
-        !disabled
-      return {
-        id,
-        kind: 'orchestrator',
-        model: spec.model,
-        ...(spec.thinkingLevel ? { thinkingLevel: spec.thinkingLevel } : {}),
-        executorModel: execRef,
-        ...(spec.executorThinkingLevel ? { executorThinkingLevel: spec.executorThinkingLevel } : {}),
-        ...(spec.maxExecutionSteps !== undefined ? { maxExecutionSteps: spec.maxExecutionSteps } : {}),
-        ...(spec.description ? { description: spec.description } : {}),
-        available,
-        ...(disabled ? { disabled: true } : {}),
-        ...(thinkingLevels ? { thinkingLevels } : {}),
-        ...(executorThinkingLevels ? { executorThinkingLevels } : {}),
-      }
-    }
     const disabled = entry?.disabled === true
     return {
       id,
@@ -305,8 +216,7 @@ export function projectTierEntries(tiers: Readonly<Record<string, ModelTierSpec>
 }
 
 export function renderModelTiersCatalogSection(entries: ReadonlyArray<ModelTierCatalogEntry>): string | undefined {
-  // Dual-phase orchestrator tiers are restricted to human-owned sessions and must stay invisible to agents.
-  const usable = entries.filter((e) => !isOrchestratorTier(e) && e.available && e.disabled !== true)
+  const usable = entries.filter((e) => e.available && e.disabled !== true)
   if (usable.length === 0) return undefined
   const rows = usable.map((t) => {
     const effort = t.thinkingLevel ? ` effort="${escapeXml(t.thinkingLevel)}"` : ''
@@ -318,7 +228,6 @@ export function renderModelTiersCatalogSection(entries: ReadonlyArray<ModelTierC
     ...rows,
     'Guidelines:',
     "- Pick model=\"tier/<id>\" (never agentType or profileId) according to task complexity, speed, and cost when delegating work or switching worker models; omit effort to inherit the tier's preset thinking level.",
-    '- In a top-level conversation, call `switch_model({ model: "tier/<id>" })` (or a concrete `provider/modelId`) to temporarily relay the current turn to another model; the original model restores automatically after the turn.',
     '- Load the "model-tiers" skill on demand for multi-tier collaboration patterns and template management.',
     '</available_model_tiers>',
   ].join('\n')

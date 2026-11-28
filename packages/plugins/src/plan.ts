@@ -9,6 +9,10 @@ import {
   type PluginDefinition,
 } from '@helmx/protocol'
 import { loadManagedSkillAsset, resolvePluginClientAssets } from './asset-paths.js'
+import {
+  PLAN_MODE_ACTIVE_CAPABILITY_ID,
+  type PlanModeActiveCapability,
+} from './contracts.js'
 import { resolveTargetConversationId } from './shared-helpers.js'
 import {
   PLAN_BADGES_DOC,
@@ -156,6 +160,10 @@ export function createPlanPlugin(options: PlanPluginOptions = {}): PluginDefinit
 
       registerPlanHooks(ctx, state)
       registerPlanTools(ctx, state, getExecutionModel)
+
+      ctx.provide<PlanModeActiveCapability>(PLAN_MODE_ACTIVE_CAPABILITY_ID, {
+        isPlanning: (conversationId) => state.getRecord(conversationId)?.mode === 'planning',
+      })
 
       const conversationIdProp = {
         type: 'integer',

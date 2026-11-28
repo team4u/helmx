@@ -15,7 +15,7 @@ Use `builtin:plan` for controlled read-only codebase exploration, structured req
 
 ## Read-Only Planning Sandbox & Tools
 
-While `mode === "planning"`, `before_turn` enforces a strict tool whitelist of **8 tools only**: `read`, `read_artifact`, `load_skill`, `ask_user`, `bash`, `run_action`, `plan_save`, and `plan_propose` (`update_steps` is NOT included in `/plan` mode). All file-editing and delegation tools (`write`, `edit`, `register_artifact`, `subagent`, `SubagentWorkflow`, `cleanup_worktree`, `update_memory`, `swarm_*`, `switch_model`) are stripped until approval or exit.
+While `mode === "planning"`, `before_turn` enforces a strict tool whitelist of **8 tools only**: `read`, `read_artifact`, `load_skill`, `ask_user`, `bash`, `run_action`, `plan_save`, and `plan_propose` (`update_steps` is NOT included in `/plan` mode). All file-editing and delegation tools (`write`, `edit`, `register_artifact`, `subagent`, `SubagentWorkflow`, `cleanup_worktree`, `update_memory`, `swarm_*`) are stripped until approval or exit.
 
 1. **`bash` & `run_action` (model-level read-only planning constraints)**:
    - Native `bash` and `run_action` remain available during planning under model-level read-only constraints (no static shell validator).

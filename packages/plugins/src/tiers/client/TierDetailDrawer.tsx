@@ -1,5 +1,5 @@
 /** Right-side detail drawer for creating or editing a single model tier (`builtin:tiers`). */
-import { useId, type KeyboardEvent, type ReactNode } from 'react'
+import type { KeyboardEvent, ReactNode } from 'react'
 import type { HostModelsSlice } from '@helmx/protocol/browser'
 import {
   Badge,
@@ -7,9 +7,7 @@ import {
   Callout,
   DetailDrawer,
   Field,
-  HelmxIcon,
   Input,
-  SegmentedControl,
   Stack,
   Textarea,
   type BadgeTone,
@@ -20,12 +18,11 @@ import {
   resolveDefaultChainThinkingLevel,
   type ModelPickerControlCopy,
 } from '@helmx/plugin-client'
-import {
-  ORCHESTRATOR_MAX_STEPS_LIMIT,
-  type StarterTierPreset,
-  type TierAvailabilityStatus,
-  type TierFormDraft,
-  type TierItemView,
+import type {
+  StarterTierPreset,
+  TierAvailabilityStatus,
+  TierFormDraft,
+  TierItemView,
 } from './models.ts'
 import { TIERS_COPY as C, tiersPickModelWithHint } from './copy.ts'
 
@@ -82,19 +79,11 @@ export function TierDetailDrawer({
   onRequestDelete,
   onClose,
 }: TierDetailDrawerProps): ReactNode {
-  const maxStepsId = useId()
   const missingEditingTarget = mode === 'edit' && editingItem === undefined
-  const isOrch = draft.kind === 'orchestrator'
   const availablePresets =
     mode === 'create' ? starterPresets.filter((preset) => !existingIds.has(preset.id)) : []
 
   const displayThinkingLevel = resolveDefaultChainThinkingLevel(hostModels, draft.model, draft.thinkingLevel, 'tier')
-  const displayExecThinkingLevel = resolveDefaultChainThinkingLevel(
-    hostModels,
-    draft.executorModel,
-    draft.executorThinkingLevel,
-    'tier',
-  )
   const placeholder =
     !draft.model && draft.suggestedThinkingLevel
       ? tiersPickModelWithHint(draft.suggestedThinkingLevel, locale)
@@ -102,11 +91,6 @@ export function TierDetailDrawer({
   const buttonTitle = draft.model
     ? (displayThinkingLevel && displayThinkingLevel !== 'off' ? `${draft.model} · ${displayThinkingLevel}` : draft.model)
     : placeholder
-  const execButtonTitle = draft.executorModel
-    ? (displayExecThinkingLevel && displayExecThinkingLevel !== 'off'
-        ? `${draft.executorModel} · ${displayExecThinkingLevel}`
-        : draft.executorModel)
-    : t(C.pickModel)
 
   const statusBadge = editingItem !== undefined ? STATUS_BADGE[editingItem.status] : undefined
   const canSave = !busy && (mode === 'create' || dirty)
@@ -208,146 +192,40 @@ export function TierDetailDrawer({
               </div>
             )}
 
-            {mode === 'create' ? (
-              <div className="tiers-form-head-row">
-                <Field label={t(C.fieldId)} required className="tiers-head-id-field">
-                  <Input
-                    type="text"
-                    prefix="tier/"
-                    mono
-                    value={draft.id}
-                    disabled={busy}
-                    placeholder={t(C.fieldIdPlaceholder)}
-                    onChange={(e) => onChange({ id: e.target.value })}
-                  />
-                </Field>
-                <Field label={t(C.tierKindAria)} htmlFor={false} className="tiers-head-mode-field">
-                  <SegmentedControl
-                    size="md"
-                    aria-label={`${t(C.tierKindAria)}${draft.id.trim() ? ` · tier/${draft.id.trim()}` : ''}`}
-                    value={draft.kind}
-                    disabled={busy}
-                    onValueChange={(nextValue) =>
-                      onChange({ kind: nextValue === 'orchestrator' ? 'orchestrator' : 'single' })
-                    }
-                    items={[
-                      { value: 'single', label: t(C.tierKindSingle) },
-                      { value: 'orchestrator', label: t(C.tierKindOrchestrator) },
-                    ]}
-                  />
-                </Field>
-              </div>
-            ) : (
-              <div className="tiers-mode-row" role="group" aria-label={t(C.tierKindAria)}>
-                <span className="helmx-field-label">{t(C.tierKindAria)}</span>
-                <SegmentedControl
-                  size="sm"
-                  aria-label={`${t(C.tierKindAria)}${draft.id.trim() ? ` · tier/${draft.id.trim()}` : ''}`}
-                  value={draft.kind}
+            {mode === 'create' && (
+              <Field label={t(C.fieldId)} required hint={t(C.fieldIdHint)}>
+                <Input
+                  type="text"
+                  prefix="tier/"
+                  mono
+                  value={draft.id}
                   disabled={busy}
-                  onValueChange={(nextValue) =>
-                    onChange({ kind: nextValue === 'orchestrator' ? 'orchestrator' : 'single' })
-                  }
-                  items={[
-                    { value: 'single', label: t(C.tierKindSingle) },
-                    { value: 'orchestrator', label: t(C.tierKindOrchestrator) },
-                  ]}
-                />
-              </div>
-            )}
-
-            {!isOrch ? (
-              <Field label={t(C.fieldModel)} required>
-                <ModelPickerControl
-                  variant="field"
-                  size="md"
-                  buttonAriaLabel={`${t(C.fieldModel)}${draft.id.trim() ? ` · tier/${draft.id.trim()}` : ''}`}
-                  effectiveModel={draft.model || undefined}
-                  activeThinkingLevel={displayThinkingLevel}
-                  placeholderLabel={placeholder}
-                  buttonTitle={buttonTitle}
-                  resetLabel={t(C.clearModel)}
-                  resetTitle={t(C.clearModel)}
-                  enableShortcut={false}
-                  allowTiers={false}
-                  disabled={busy}
-                  copy={pickerCopy}
-                  onNotice={onNotice}
-                  onApply={(model, level) => onChange({ model, thinkingLevel: level ?? '' })}
-                  onResetDefault={() => onChange({ model: '', thinkingLevel: '' })}
+                  placeholder={t(C.fieldIdPlaceholder)}
+                  onChange={(e) => onChange({ id: e.target.value })}
                 />
               </Field>
-            ) : (
-              <div className="tiers-orchestrator-fields">
-                <Field label={t(C.fieldPlannerModel)} required>
-                  <ModelPickerControl
-                    variant="field"
-                    size="md"
-                    buttonAriaLabel={`${t(C.fieldPlannerModel)}${draft.id.trim() ? ` · tier/${draft.id.trim()}` : ''}`}
-                    effectiveModel={draft.model || undefined}
-                    activeThinkingLevel={displayThinkingLevel}
-                    placeholderLabel={placeholder}
-                    buttonTitle={buttonTitle}
-                    resetLabel={t(C.clearModel)}
-                    resetTitle={t(C.clearModel)}
-                    enableShortcut={false}
-                    allowTiers={false}
-                    disabled={busy}
-                    copy={pickerCopy}
-                    onNotice={onNotice}
-                    onApply={(model, level) => onChange({ model, thinkingLevel: level ?? '' })}
-                    onResetDefault={() => onChange({ model: '', thinkingLevel: '' })}
-                  />
-                </Field>
-                <div className="tiers-orch-connector" aria-hidden="true">
-                  <HelmxIcon name="arrow-down" size={12} />
-                </div>
-                <Field label={t(C.fieldExecutorModel)} required>
-                  <ModelPickerControl
-                    variant="field"
-                    size="md"
-                    buttonAriaLabel={`${t(C.fieldExecutorModel)}${draft.id.trim() ? ` · tier/${draft.id.trim()}` : ''}`}
-                    effectiveModel={draft.executorModel || undefined}
-                    activeThinkingLevel={displayExecThinkingLevel}
-                    placeholderLabel={t(C.pickModel)}
-                    buttonTitle={execButtonTitle}
-                    resetLabel={t(C.clearModel)}
-                    resetTitle={t(C.clearModel)}
-                    enableShortcut={false}
-                    allowTiers={false}
-                    disabled={busy}
-                    copy={pickerCopy}
-                    onNotice={onNotice}
-                    onApply={(model, level) => onChange({ executorModel: model, executorThinkingLevel: level ?? '' })}
-                    onResetDefault={() => onChange({ executorModel: '', executorThinkingLevel: '' })}
-                  />
-                </Field>
-                <div className="tiers-steps-row">
-                  <div className="tiers-steps-label-col">
-                    <label htmlFor={maxStepsId} className="helmx-field-label">
-                      {t(C.fieldMaxSteps)}
-                    </label>
-                    <span className="tiers-steps-hint">{t(C.fieldMaxStepsHint)}</span>
-                  </div>
-                  <div className="tiers-steps-control">
-                    <Input
-                      id={maxStepsId}
-                      type="number"
-                      size="sm"
-                      mono
-                      className="tiers-steps-input"
-                      min={0}
-                      max={ORCHESTRATOR_MAX_STEPS_LIMIT}
-                      value={draft.maxExecutionSteps}
-                      disabled={busy}
-                      placeholder={t(C.fieldMaxStepsPlaceholder)}
-                      onChange={(e) => onChange({ maxExecutionSteps: e.target.value })}
-                    />
-                    <span className="tiers-steps-unit">{t(C.fieldMaxStepsUnit)}</span>
-                  </div>
-                </div>
-              </div>
             )}
+
+            <Field label={t(C.fieldModel)} required>
+              <ModelPickerControl
+                variant="field"
+                size="md"
+                buttonAriaLabel={`${t(C.fieldModel)}${draft.id.trim() ? ` · tier/${draft.id.trim()}` : ''}`}
+                effectiveModel={draft.model || undefined}
+                activeThinkingLevel={displayThinkingLevel}
+                placeholderLabel={placeholder}
+                buttonTitle={buttonTitle}
+                resetLabel={t(C.clearModel)}
+                resetTitle={t(C.clearModel)}
+                enableShortcut={false}
+                allowTiers={false}
+                disabled={busy}
+                copy={pickerCopy}
+                onNotice={onNotice}
+                onApply={(model, level) => onChange({ model, thinkingLevel: level ?? '' })}
+                onResetDefault={() => onChange({ model: '', thinkingLevel: '' })}
+              />
+            </Field>
 
             <Field
               className="tiers-desc-field"

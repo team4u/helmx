@@ -1,5 +1,5 @@
 /**
- * @helmx/plugins 聚合出口：十六个内置插件的生产者侧工厂与公开契约。
+ * @helmx/plugins 聚合出口：十七个内置插件的生产者侧工厂与公开契约。
  *
  * 消费方向（包拓扑铁律）：本包只依赖 @helmx/protocol 与外部 SDK，绝不依赖
  * @helmx/kernel 实现；产品组合（注册顺序与缺省启停）由 @helmx/hub 负责。
@@ -26,24 +26,32 @@ export {
   TIERS_SCREEN_ID,
   MODEL_TIERS_SKILL_ID,
   TIER_THINKING_LEVELS,
-  TIERS_BORROW_KV,
-  TIERS_BORROW_SESSION_DOC,
-  TIERS_SWITCH_MODEL_TOOL,
-  TIERS_INPUT_META_KEY,
-  TIERS_BORROW_ELIGIBLE_SCOPE,
-  TIER_BORROW_SESSION_VIEW_SCHEMA,
-  SWITCH_MODEL_META_SCHEMA,
   type TierTemplate,
   type TiersStateDoc,
   type TiersPluginConfig,
   type TierThinkingLevel,
-  type TierBorrowPhase,
-  type TierBorrowSource,
-  type TierBorrowRecord,
-  type TierBorrowSessionView,
-  type SwitchModelPresentationMeta,
-  type ClearBorrowResult,
 } from './tiers.js';
+export {
+  createDuoPlugin,
+  DUO_PLUGIN_ID,
+  DUO_SKILL_ID,
+  DUO_PROFILES_DOC,
+  DUO_SESSION_DOC,
+  DUO_PROFILES_KV,
+  DUO_CONV_CONFIGS_KV,
+  DUO_STATES_KV,
+  DUO_EXIT_PLAN_MODE_TOOL,
+  DUO_HAND_BACK_TOOL,
+  DUO_DEFAULT_MAX_STEPS,
+  DUO_MAX_STEPS_LIMIT,
+  DUO_SESSION_VIEW_SCHEMA,
+  DUO_TRANSITION_META_SCHEMA,
+  type DuoPhase,
+  type DuoProfileConfig,
+  type DuoProfilesDocSnapshot,
+  type DuoSessionView,
+  type DuoTransitionMeta,
+} from './duo.js';
 export {
   createTitlePlugin,
   TITLE_PLUGIN_ID,

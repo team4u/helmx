@@ -424,3 +424,35 @@ export interface AcquireWorktreeResult {
   baseCommit: string
   nodeId: string
 }
+
+/** 能力契约：默认子代理执行模型解析（供 workflow / swarm 在子代理/Worker 未显式指定模型时继承）。 */
+export const DEFAULT_CHILD_MODEL_CAPABILITY_ID = 'helmx.default-child-model' as const
+
+export interface DefaultChildModelCapability {
+  resolveDefaultChildModel(parentConversationId: number): { model: string; thinkingLevel?: string } | undefined
+}
+
+/** 能力契约：只读 Plan Mode 活跃探测（供 duo 等多阶段插件让渡优先级）。 */
+export const PLAN_MODE_ACTIVE_CAPABILITY_ID = 'helmx.plan-mode-active' as const
+
+export interface PlanModeActiveCapability {
+  isPlanning(conversationId: number): boolean
+}
+
+/** 能力契约：规划阶段允许保留的协调/编排工具白名单（如 Swarm Coordinator 工具集）。 */
+export const PLANNING_ORCHESTRATION_TOOLS_CAPABILITY_ID = 'helmx.planning-orchestration-tools' as const
+
+export interface PlanningOrchestrationToolsCapability {
+  readonly toolNames: readonly string[]
+}
+
+/** 宿主内部分发事件：/plan 审批通过后触发（供 duo 等监听阶段切换）。 */
+export const PLAN_APPROVED_EVENT = 'plan.approved' as const
+
+export interface PlanApprovedEventPayload {
+  conversationId: number
+  modelSwitched: boolean
+  model?: string
+  thinkingLevel?: string
+  filePath?: string
+}

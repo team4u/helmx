@@ -10,6 +10,10 @@ import {
   type PluginToolResultEnvelope,
 } from '@helmx/protocol'
 import {
+  PLAN_APPROVED_EVENT,
+  type PlanApprovedEventPayload,
+} from '../contracts.js'
+import {
   PLAN_HANDOFF_MAX_BYTES,
   PLAN_MARKDOWN_MAX_BYTES,
   PLAN_PLUGIN_ID,
@@ -435,15 +439,23 @@ async function applyApprovalModelSwitch(params: {
   selectedModel?: string
   selectedThinkingLevel?: string
   clearPendingOnly: () => Promise<void>
-}): Promise<{ ok: true; appliedExecutionModel?: string } | { ok: false; result: PluginToolResultEnvelope }> {
+}): Promise<
+  | { ok: true; appliedExecutionModel?: string; appliedThinkingLevel?: string }
+  | { ok: false; result: PluginToolResultEnvelope }
+> {
   const { ctx, conversationId, effectiveDraft, selectedModel, selectedThinkingLevel, clearPendingOnly } = params
   if (selectedModel === undefined) return { ok: true }
   try {
-    await ctx.host.updateConversation(conversationId, {
+    await ctx.host.setConversationRuntimeModel(conversationId, {
       model: selectedModel,
       ...(selectedThinkingLevel !== undefined ? { thinkingLevel: selectedThinkingLevel } : {}),
+      resetOnRunEnd: true,
     })
-    return { ok: true, appliedExecutionModel: selectedModel }
+    return {
+      ok: true,
+      appliedExecutionModel: selectedModel,
+      ...(selectedThinkingLevel !== undefined ? { appliedThinkingLevel: selectedThinkingLevel } : {}),
+    }
   } catch (err) {
     await clearPendingOnly()
     return {
@@ -591,7 +603,7 @@ async function settlePlanProposal(params: {
     clearPendingOnly,
   })
   if (!modelSwitch.ok) return modelSwitch.result
-  const { appliedExecutionModel } = modelSwitch
+  const { appliedExecutionModel, appliedThinkingLevel } = modelSwitch
 
   const artifactRes = await createApprovedPlanArtifact({
     ctx,
@@ -624,6 +636,15 @@ async function settlePlanProposal(params: {
     }
     await persistRecordOrRollback(state, conversationId, latest, nextRecord)
   }
+
+  const approvedPayload: PlanApprovedEventPayload = {
+    conversationId,
+    modelSwitched: appliedExecutionModel !== undefined,
+    ...(appliedExecutionModel !== undefined ? { model: appliedExecutionModel } : {}),
+    ...(appliedThinkingLevel !== undefined ? { thinkingLevel: appliedThinkingLevel } : {}),
+    filePath: artifact.name,
+  }
+  await ctx.host.emitEvent(PLAN_APPROVED_EVENT, approvedPayload, { broadcast: false })
 
   if (!handoffUsed) {
     const modelClause =

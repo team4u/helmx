@@ -54,6 +54,10 @@ import { PluginHost, type PluginHostBackend } from '@helmx/kernel'
 import { pluginToolResult } from '@helmx/kernel/testing'
 import { createPluginBuildProvider } from '@helmx/plugin-build'
 import {
+  PLAN_MODE_ACTIVE_CAPABILITY_ID,
+  type PlanModeActiveCapability,
+} from '../src/contracts.js'
+import {
   PLAN_BADGES_DOC,
   PLAN_COMMAND_ID,
   PLAN_COMMAND_SLASH,
@@ -137,6 +141,7 @@ function makeUnsupportedBackendBase(): PluginHostBackend {
     getConversation: () => unsupportedHostCapability('host.getConversation'),
     getConversationDetail: () => unsupportedHostCapability('host.getConversationDetail'),
     updateConversation: () => unsupportedHostCapability('host.updateConversation'),
+    setConversationRuntimeModel: () => unsupportedHostCapability('host.setConversationRuntimeModel'),
     abortConversation: () => unsupportedHostCapability('host.abortConversation'),
     getConversationOwnership: () => unsupportedHostCapability('host.getConversationOwnership'),
     markConversationOwnership: () => unsupportedHostCapability('host.markConversationOwnership'),
@@ -186,12 +191,24 @@ interface PlanHarness {
   cancelledAsks: Array<{ askId: string; reason: 'cancelled' | 'superseded' }>
   createdArtifacts: Array<{ conversationId: number; name: string; text: string; artifact: ArtifactMetadata }>
   updateCalls: Array<{ id: number; patch: ConversationPatch }>
+  runtimeModelCalls: Array<{
+    id: number
+    target: { model: string; thinkingLevel?: string; resetOnRunEnd?: boolean } | null
+  }>
   emittedEvents: Array<{ type: string; payload: unknown }>
   pendingAsks: Map<string, PendingAskEntry>
   setCreateAskHandler(fn: ((spec: AskCreateSpec) => Promise<AskResult>) | undefined): void
   setCancelAskError(err: Error | undefined): void
   setUpdateConversationHandler(
     fn: ((id: number, patch: ConversationPatch) => Promise<ConversationSummary>) | undefined,
+  ): void
+  setRuntimeModelHandler(
+    fn:
+      | ((
+          id: number,
+          target: { model: string; thinkingLevel?: string; resetOnRunEnd?: boolean } | null,
+        ) => Promise<ConversationSummary>)
+      | undefined,
   ): void
   setCreateArtifactHandler(
     fn:
@@ -242,6 +259,10 @@ async function openPlanHarness(options: {
   const cancelledAsks: Array<{ askId: string; reason: 'cancelled' | 'superseded' }> = []
   const createdArtifacts: Array<{ conversationId: number; name: string; text: string; artifact: ArtifactMetadata }> = []
   const updateCalls: Array<{ id: number; patch: ConversationPatch }> = []
+  const runtimeModelCalls: Array<{
+    id: number
+    target: { model: string; thinkingLevel?: string; resetOnRunEnd?: boolean } | null
+  }> = []
   const emittedEvents: Array<{ type: string; payload: unknown }> = []
   const listeners = new Map<string, Set<(payload: unknown) => Promise<void> | void>>()
   const pendingAsks = new Map<string, PendingAskEntry>()
@@ -251,6 +272,12 @@ async function openPlanHarness(options: {
   let cancelAskError: Error | undefined
   let customUpdateConversation:
     | ((id: number, patch: ConversationPatch) => Promise<ConversationSummary>)
+    | undefined
+  let customRuntimeModel:
+    | ((
+        id: number,
+        target: { model: string; thinkingLevel?: string; resetOnRunEnd?: boolean } | null,
+      ) => Promise<ConversationSummary>)
     | undefined
   let customCreateArtifact:
     | ((conversationId: number, input: { name: string; bytes: Uint8Array; mimeType?: string }) => Promise<ArtifactMetadata>)
@@ -289,6 +316,26 @@ async function openPlanHarness(options: {
         stateChangeSeq: existing.stateChangeSeq + 1,
         updatedAt: Date.now(),
       }
+      conversations.set(id, updated)
+      return structuredClone(updated)
+    },
+    async setConversationRuntimeModel(id, target) {
+      runtimeModelCalls.push({ id, target: structuredClone(target) })
+      if (customRuntimeModel !== undefined) {
+        return customRuntimeModel(id, target)
+      }
+      const existing = conversations.get(id)
+      if (!existing) throw new HelmxError('not_found', `Conversation ${id} not found`, 404, { conversationId: id })
+      const updated: ConversationSummary =
+        target === null
+          ? { ...existing, runtimeModelOverride: false, updatedAt: Date.now() }
+          : {
+              ...existing,
+              model: target.model,
+              ...(target.thinkingLevel !== undefined ? { thinkingLevel: target.thinkingLevel } : {}),
+              runtimeModelOverride: true,
+              updatedAt: Date.now(),
+            }
       conversations.set(id, updated)
       return structuredClone(updated)
     },
@@ -400,6 +447,7 @@ async function openPlanHarness(options: {
     cancelledAsks,
     createdArtifacts,
     updateCalls,
+    runtimeModelCalls,
     emittedEvents,
     pendingAsks,
     setCreateAskHandler: (fn) => {
@@ -410,6 +458,9 @@ async function openPlanHarness(options: {
     },
     setUpdateConversationHandler: (fn) => {
       customUpdateConversation = fn
+    },
+    setRuntimeModelHandler: (fn) => {
+      customRuntimeModel = fn
     },
     setCreateArtifactHandler: (fn) => {
       customCreateArtifact = fn
@@ -931,7 +982,8 @@ test('hooks: onBeforeTurn strips plan tools in normal/ineligible mode and enforc
       makeToolSpec('cleanup_worktree'),
       makeToolSpec('update_memory'),
       makeToolSpec('swarm_dispatch_worker'),
-      makeToolSpec('switch_model'),
+      makeToolSpec('exit_plan_mode'),
+      makeToolSpec('hand_back_to_planner'),
       makeToolSpec(PLAN_TOOL_SAVE),
       makeToolSpec(PLAN_TOOL_PROPOSE),
     ]
@@ -998,7 +1050,8 @@ test('hooks: onBeforeTurn strips plan tools in normal/ineligible mode and enforc
       assert.equal(names.includes('register_artifact'), false)
       assert.equal(names.includes('subagent'), false)
       assert.equal(names.includes('SubagentWorkflow'), false)
-      assert.equal(names.includes('switch_model'), false)
+      assert.equal(names.includes('exit_plan_mode'), false)
+      assert.equal(names.includes('hand_back_to_planner'), false)
       assert.ok(names.every((n) => PLAN_MODE_TOOL_WHITELIST.has(n)))
       const section = planningOutcome.value.sections.find((s) => s.id === PLAN_MODE_SECTION_ID)
       assert.ok(section !== undefined)
@@ -1405,7 +1458,7 @@ test('plan_propose: approve and approve_handoff with executionModel selection (s
     )
 
     // 1) approve_handoff + executionModel failure (409 model_disabled) -> stays planning, creates NO artifact
-    harness.setUpdateConversationHandler(async () => {
+    harness.setRuntimeModelHandler(async () => {
       throw new HelmxError('model_disabled', 'Model tier/strong target is disabled', 409)
     })
     const pModelFail = harness.host.executeTool(
@@ -1439,17 +1492,18 @@ test('plan_propose: approve and approve_handoff with executionModel selection (s
       executionModel: 'tier/strong',
     })
 
-    // 2) approve_handoff + executionModel + executionThinkingLevel success -> updateConversation FIRST (with thinkingLevel), then artifact, then normal + flush + control.handoff
-    harness.setUpdateConversationHandler(undefined)
+    // 2) approve_handoff + executionModel + executionThinkingLevel success -> setConversationRuntimeModel FIRST (with resetOnRunEnd: true), then artifact, then normal + plan.approved + flush + control.handoff
+    harness.setRuntimeModelHandler(undefined)
     const callOrder: string[] = []
     const origUpdate = harness.conversations.get(1)!
     assert.ok(origUpdate)
-    harness.setUpdateConversationHandler(async (id, patch) => {
-      callOrder.push('updateConversation')
+    harness.setRuntimeModelHandler(async (id, target) => {
+      callOrder.push('setConversationRuntimeModel')
       const updated = {
         ...harness.conversations.get(id)!,
-        model: patch.model ?? 'faux/strong',
-        ...(patch.thinkingLevel !== undefined ? { thinkingLevel: patch.thinkingLevel } : {}),
+        model: target?.model ?? 'faux/strong',
+        ...(target?.thinkingLevel !== undefined ? { thinkingLevel: target.thinkingLevel } : {}),
+        runtimeModelOverride: target !== null,
       }
       harness.conversations.set(id, updated)
       return updated
@@ -1490,13 +1544,22 @@ test('plan_propose: approve and approve_handoff with executionModel selection (s
     })
     const resModelOk = await pModelOk
     assert.equal(resModelOk.isError, undefined)
-    assert.deepEqual(callOrder, ['updateConversation', 'createArtifact'])
-    assert.deepEqual(harness.updateCalls.at(-1)?.patch, {
+    assert.deepEqual(callOrder, ['setConversationRuntimeModel', 'createArtifact'])
+    assert.deepEqual(harness.runtimeModelCalls.at(-1)?.target, {
       model: 'tier/strong',
       thinkingLevel: 'high',
+      resetOnRunEnd: true,
     })
     assert.equal(harness.conversations.get(1)?.model, 'tier/strong')
     assert.equal(harness.conversations.get(1)?.thinkingLevel, 'high')
+    const approvedEvents1 = harness.emittedEvents.filter((e) => e.type === 'plan.approved')
+    assert.deepEqual(approvedEvents1.at(-1)?.payload, {
+      conversationId: 1,
+      modelSwitched: true,
+      model: 'tier/strong',
+      thinkingLevel: 'high',
+      filePath: 'plan-v1.md',
+    })
     assert.equal(harness.createdArtifacts[0]?.name, 'plan-v1.md')
     assert.equal(resModelOk.presentationMeta?.['outcome'], 'approved_handoff')
     assert.equal(resModelOk.presentationMeta?.['artifactId'], 'art-handoff-1')
@@ -1511,8 +1574,8 @@ test('plan_propose: approve and approve_handoff with executionModel selection (s
     assert.equal(harness.readSessionDoc(1).approved?.executionModel, 'tier/strong')
     assert.equal(harness.readBadgesDoc().byConversation['1']?.tone, 'neutral')
 
-    // 3) Plain `approve` (without model switch and with model override + blank thinkingLevel omitted) + `approve_handoff` (no model switch) <= 128 KiB
-    harness.setUpdateConversationHandler(undefined)
+    // 3) Plain `approve` (without model switch -> emits modelSwitched: false, and with model override + blank thinkingLevel omitted) + `approve_handoff` <= 128 KiB
+    harness.setRuntimeModelHandler(undefined)
     harness.setCreateArtifactHandler(undefined)
     await harness.host.invokeAction(PLAN_PLUGIN_ID, 'set_mode', { conversationId: 1, mode: 'planning' })
     await harness.host.executeTool(
@@ -1533,8 +1596,13 @@ test('plan_propose: approve and approve_handoff with executionModel selection (s
     assert.equal(resPlain.presentationMeta?.['artifactName'], 'plan-v2.md')
     assert.equal(resPlain.presentationMeta?.['executionModel'], undefined)
     assert.equal(harness.readSessionDoc(1).approved?.handoffUsed, false)
+    assert.deepEqual(harness.emittedEvents.filter((e) => e.type === 'plan.approved').at(-1)?.payload, {
+      conversationId: 1,
+      modelSwitched: false,
+      filePath: 'plan-v2.md',
+    })
 
-    // Plain `approve` WITH executionModel override and blank thinkingLevel omits thinkingLevel in updateConversation
+    // Plain `approve` WITH executionModel override and blank thinkingLevel omits thinkingLevel in setConversationRuntimeModel
     await harness.host.invokeAction(PLAN_PLUGIN_ID, 'set_mode', { conversationId: 1, mode: 'planning' })
     const pSameSessionWithModel = harness.host.executeTool(
       PLAN_TOOL_PROPOSE,
@@ -1551,11 +1619,15 @@ test('plan_propose: approve and approve_handoff with executionModel selection (s
     assert.equal(resSameModel.control, undefined)
     assert.equal(resSameModel.presentationMeta?.['outcome'], 'approved')
     assert.equal(resSameModel.presentationMeta?.['executionModel'], 'tier/balanced')
-    assert.deepEqual(harness.updateCalls.at(-1)?.patch, { model: 'tier/balanced' })
+    assert.deepEqual(harness.runtimeModelCalls.at(-1)?.target, {
+      model: 'tier/balanced',
+      resetOnRunEnd: true,
+    })
     assert.equal(harness.conversations.get(1)?.model, 'tier/balanced')
     assert.equal(harness.readSessionDoc(1).approved?.executionModel, 'tier/balanced')
 
     // approve_handoff with huge feedback still enforces <= 128 KiB handoff cap
+    harness.setRuntimeModelHandler(undefined)
     await harness.host.invokeAction(PLAN_PLUGIN_ID, 'set_mode', { conversationId: 1, mode: 'planning' })
     const pHugeHandoff = harness.host.executeTool(
       PLAN_TOOL_PROPOSE,
@@ -1997,3 +2069,23 @@ test('plan_propose rolls back in-memory KV record if flushKv() throws during app
     await harness.close()
   }
 })
+
+test('capability: helmx.plan-mode-active reflects live planning status across toggles and approvals', TIMEOUT, async () => {
+  const harness = await openPlanHarness({
+    seedConversations: [makeConversationSummary({ id: 1, stateChangeSeq: 1 })],
+  })
+  try {
+    const cap = harness.host.consumeCapability<PlanModeActiveCapability>(PLAN_MODE_ACTIVE_CAPABILITY_ID)[0]?.impl
+    assert.ok(cap !== undefined, 'builtin:plan must provide helmx.plan-mode-active')
+    assert.equal(cap.isPlanning(1), false)
+
+    await harness.host.invokeAction(PLAN_PLUGIN_ID, 'set_mode', { conversationId: 1, mode: 'planning' })
+    assert.equal(cap.isPlanning(1), true)
+
+    await harness.host.invokeAction(PLAN_PLUGIN_ID, 'toggle', { conversationId: 1 })
+    assert.equal(cap.isPlanning(1), false)
+  } finally {
+    await harness.close()
+  }
+})
+
