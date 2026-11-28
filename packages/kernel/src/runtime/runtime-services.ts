@@ -274,6 +274,7 @@ export function assembleRuntimeServices(
     // Context usage: window resolved from live `Models` registry (never fabricated when unknown).
     models: () => models.models,
     isClosed: () => runtime.isClosing,
+    hasRuntimeModelOverride: (id) => conversations.hasRuntimeModelOverride(id),
     events: {
       onSummaryChanged: (summary) => {
         if (options.store.getConv(summary.id) === undefined || options.store.isDeleted(summary.id)) return
@@ -338,7 +339,8 @@ export function assembleRuntimeServices(
     currentRunInputs: (id) => tracker.currentRunInputs(id),
     redact: (t) => options.stashService.redact(t),
     artifacts: artifactsSvc,
-    onAfterRunBoundary: (id) => conversations.alignRuntimeModelOnRunEnd(id),
+    shouldResetRuntimeModelOnRunEnd: (id) => conversations.hasAutoResetRuntimeModel(id),
+    onAfterRunBoundary: (id) => conversations.resetRuntimeModelOnRunEnd(id),
     onHookDiagnostic: ({ source, message, error }) => {
       init.emitDiagnostic({ level: 'warn', source, message, error })
     },
@@ -393,8 +395,7 @@ export function assembleRuntimeServices(
     modelThinkingLevelOf: (ref) => models.modelThinkingLevelOf(ref),
     models: () => models.models,
     parseModelRefOrThrow: (ref) => models.parseModelRefOrThrow(ref),
-    resolveModelRef: (ref, opts) => models.resolveModelRef(ref, opts),
-    isConversationWorking: (id) => tracker.summaryOf(id).status === 'working',
+    resolveModelRef: (ref) => models.resolveModelRef(ref),
     assertModelEnabled: (provider, modelId) => models.assertModelEnabled(provider, modelId),
     trustedPlatformOf: trustedPlatformFromEnvFabric(envFabric),
   })

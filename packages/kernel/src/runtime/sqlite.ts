@@ -36,7 +36,6 @@ CREATE TABLE IF NOT EXISTS helmx_conversations (
   cwd TEXT NOT NULL,
   model TEXT NOT NULL DEFAULT '',
   model_override TEXT,
-  model_tier TEXT,
   thinking_level TEXT NOT NULL DEFAULT '',
   thinking_level_override TEXT,
   unread INTEGER NOT NULL DEFAULT 0,

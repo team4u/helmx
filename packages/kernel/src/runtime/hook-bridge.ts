@@ -89,7 +89,9 @@ interface HookBridgeOptions {
   readonly artifacts: {
     spill(conversationId: number, id: string, text: string): Promise<{ artifact?: unknown; text: string }>
   }
-  /** Optional `afterResponse` boundary callback to restore planner runtime model before queued `followUp` turns start. */
+  /** Optional predicate returning whether a transient `resetOnRunEnd` runtime model override is active. */
+  readonly shouldResetRuntimeModelOnRunEnd?: (conversationId: number) => boolean
+  /** Optional run-end boundary callback to restore baseline runtime model before queued `followUp` turns start. */
   readonly onAfterRunBoundary?: (conversationId: number) => Promise<void>
   /** Optional diagnostic sink for non-fatal hook bridge boundary errors. */
   readonly onHookDiagnostic?: (info: { source: string; message: string; error: unknown }) => void
@@ -190,21 +192,13 @@ export class HookBridge {
                 message.stopReason === 'toolUse' &&
                 message.content.some((part) => part.type === 'toolCall')
               if (hasToolCalls) return
-              if (
-                message.stopReason !== 'stop' &&
-                message.stopReason !== 'length' &&
-                message.stopReason !== 'toolUse'
-              ) {
-                return
-              }
-              const summary = this.options.safeSummary(api.conversationId)
-              if (summary?.modelTier === undefined || summary.modelTier === '') return
+              if (this.options.shouldResetRuntimeModelOnRunEnd?.(api.conversationId) !== true) return
               return this.options
                 .onAfterRunBoundary?.(api.conversationId)
                 .catch((error) => {
                   this.options.onHookDiagnostic?.({
                     source: 'hook_bridge.after_response',
-                    message: `failed to reset orchestrator runtime model before run end (conversation ${api.conversationId})`,
+                    message: `failed to reset transient runtime model before run end (conversation ${api.conversationId})`,
                     error,
                   })
                 })

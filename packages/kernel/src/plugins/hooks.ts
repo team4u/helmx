@@ -100,7 +100,9 @@ function checkConversationSummary(v: unknown): string | null {
     reqArray(v, 'tags') ??
     reqString(v, 'cwd') ??
     strAllowEmpty(v, 'model') ??
-    optString(v, 'modelTier') ??
+    (v.runtimeModelOverride === undefined || typeof v.runtimeModelOverride === 'boolean'
+      ? null
+      : 'field runtimeModelOverride must be a boolean if present') ??
     (['working', 'blocked', 'done', 'idle', 'error'].includes(String(v.status))
       ? null
       : 'field status must be one of working|blocked|done|idle|error') ??

@@ -101,12 +101,9 @@ export function isSkillAvailable(
 /** Reserved provider prefix for semantic model tiers (`tier/<id>`). Kernel rejects custom/runtime providers using this ID. */
 export const MODEL_TIER_PREFIX = 'tier' as const
 
-/** Model tier flavor: single-model alias or human-only dual-phase orchestrator (`planner <-> executor`). */
-export type ModelTierKind = 'single' | 'orchestrator'
-
-/** Default and maximum execution steps before an orchestrator tier requires planner review (`0` = unlimited). */
-export const ORCHESTRATOR_TIER_DEFAULT_MAX_STEPS = 30 as const
-export const ORCHESTRATOR_TIER_MAX_STEPS_LIMIT = 100 as const
+/**
+ * Validated thinking levels (`MODEL_THINKING_LEVELS`) are shared via `conversation.ts`.
+ */
 
 /** Allowed model tier identifier pattern (lowercase slug, 1..63 chars). */
 const MODEL_TIER_ID_PATTERN = /^[a-z0-9][a-z0-9_-]{0,62}$/
@@ -119,10 +116,7 @@ export function isValidModelTierId(id: string): boolean {
   return MODEL_TIER_ID_PATTERN.test(id)
 }
 
-/** Whether a model tier spec/catalog entry represents a dual-phase orchestrator tier. */
-export function isOrchestratorTier(spec: Pick<ModelTierSpec, 'kind'> | undefined): boolean {
-  return spec?.kind === 'orchestrator'
-}
+/** Model tier binding (`tier/<id>`). */
 
 /**
  * Parse a `tier/<id>` model reference; returns the raw `<id>` segment (non-empty)
@@ -137,18 +131,10 @@ export function parseModelTierRef(ref: string): string | undefined {
 
 /** One model tier binding registered into the kernel ModelRegistry at runtime. */
 export interface ModelTierSpec {
-  /** Tier kind (`'single'` when omitted; `'orchestrator'` for human-only dual-phase planner/executor tiers). */
-  kind?: ModelTierKind
-  /** Concrete target model reference in `'provider/modelId'` format (planner model when `kind === 'orchestrator'`; must not point to `'tier/*'`). */
+  /** Concrete target model reference in `'provider/modelId'` format (must not point to `'tier/*'`). */
   model: string
-  /** Optional default thinking level (planner thinking level when `kind === 'orchestrator'`). */
+  /** Optional default thinking level. */
   thinkingLevel?: string
-  /** Concrete executor model in `'provider/modelId'` format (required iff `kind === 'orchestrator'`). */
-  executorModel?: string
-  /** Optional executor thinking level (allowed only when `kind === 'orchestrator'`). */
-  executorThinkingLevel?: string
-  /** Optional max execution steps in a single execution phase before checkpointing back to planner (`0..100`, `0` = unlimited, default `30`; allowed only when `kind === 'orchestrator'`). */
-  maxExecutionSteps?: number
   /** Optional concise routing description for humans and agents (<= 240 chars). */
   description?: string
 }
@@ -157,14 +143,12 @@ export interface ModelTierSpec {
 export interface ModelTierCatalogEntry extends ModelTierSpec {
   /** Tier identifier (addressed as `tier/<id>`). */
   id: string
-  /** True iff the target model (and `executorModel` for orchestrator tiers) exists in the current catalog, has valid auth (available), and is not disabled. */
+  /** True iff the target model exists in the current catalog, has valid auth (available), and is not disabled. */
   available: boolean
-  /** True iff the target model (or `executorModel` for orchestrator tiers) is explicitly disabled in config.json.disabledModels. */
+  /** True iff the target model is explicitly disabled in config.json.disabledModels. */
   disabled?: boolean
   /** Supported thinking levels of the target model (omitted when target model is absent from catalog). */
   thinkingLevels?: string[]
-  /** Supported thinking levels of `executorModel` for orchestrator tiers (omitted when absent from catalog). */
-  executorThinkingLevels?: string[]
 }
 
 /** Public model catalog entry of `GET /api/models`. */

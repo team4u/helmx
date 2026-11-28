@@ -620,6 +620,21 @@ test('assertJsonSafe and REQUEST_SCHEMAS: shared strict JSON validation and comp
   }
   assert.ok(REQUEST_SCHEMA_PATTERNS.id.test('plugin:demo_1'))
   assert.doesNotThrow(() => validateOrThrow(REQUEST_SCHEMAS.conversationInput, { text: 'hello', whenBusy: 'steer' }, 'input body'))
+  assert.doesNotThrow(() =>
+    validateOrThrow(
+      REQUEST_SCHEMAS.conversationInput,
+      { text: 'hello', model: 'tier/fast', thinkingLevel: 'high' },
+      'input body',
+    ),
+  )
+  assert.throws(
+    () => validateOrThrow(REQUEST_SCHEMAS.conversationInput, { text: 'hello', model: 'invalid-no-slash' }, 'input body'),
+    (err: unknown) => err instanceof HelmxError && err.code === 'validation_error',
+  )
+  assert.throws(
+    () => validateOrThrow(REQUEST_SCHEMAS.conversationInput, { text: 'hello', thinkingLevel: 'ultra' }, 'input body'),
+    (err: unknown) => err instanceof HelmxError && err.code === 'validation_error',
+  )
   assert.throws(
     () => validateOrThrow(REQUEST_SCHEMAS.conversationInput, { text: 'hello', unknown: 1 }, 'input body'),
     (err: unknown) => err instanceof HelmxError && err.code === 'validation_error',

@@ -124,7 +124,7 @@ function dispatchConversationJsonRoutes(
       handle: async (input, ctx) => {
         const id = input.conversationId as number
         const wait = input.wait === true
-        const { text, whenBusy, whenPendingAsk, origin, meta, attachments, replaceFromEntryId } =
+        const { text, whenBusy, whenPendingAsk, origin, meta, attachments, replaceFromEntryId, model, thinkingLevel } =
           parseInputBody(ctx.body)
         const { submissionId } = await kernel.conversations.submitInput(id, text, {
           ...(origin !== undefined ? { origin } : {}),
@@ -133,6 +133,8 @@ function dispatchConversationJsonRoutes(
           ...(meta !== undefined ? { meta } : {}),
           ...(attachments !== undefined ? { attachments } : {}),
           ...(replaceFromEntryId !== undefined ? { replaceFromEntryId } : {}),
+          ...(model !== undefined ? { model } : {}),
+          ...(thinkingLevel !== undefined ? { thinkingLevel } : {}),
         })
         if (!wait) return coreOperationResponse({ status: 202, body: { submissionId } })
         return coreOperationResponse({

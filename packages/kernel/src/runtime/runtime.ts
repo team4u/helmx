@@ -234,7 +234,7 @@ export class KernelRuntime {
     this.init.setCompactionModelResolver(() => ({
       model: this.models.defaultCompactionModel,
       thinkingLevel: this.models.defaultCompactionThinkingLevel,
-      resolveModelRef: (ref, opts) => this.models.resolveModelRef(ref, opts),
+      resolveModelRef: (ref) => this.models.resolveModelRef(ref),
       modelThinkingLevel: (providerId, modelId) =>
         this.models.modelThinkingLevelOf({ provider: providerId, modelId }),
       isDisabled: (providerId, modelId) => this.models.isModelDisabled(providerId, modelId),
@@ -640,7 +640,21 @@ export class KernelRuntime {
 
   private async dispatchTurnSettled(payload: TurnSettledPayload, consumed: ConversationInput[]): Promise<void> {
     const convId = payload.conversation.id
-    const turnEvent: TurnSettledPayload = { ...payload, inputs: consumed }
+    if (this.conversations.hasAutoResetRuntimeModel(convId)) {
+      try {
+        await this.conversations.resetRuntimeModelOnRunEnd(convId)
+      } catch (error) {
+        this.emitDiagnostic({
+          level: 'warn',
+          source: 'runtime.turn_settled',
+          message: `failed to reset transient runtime model at turn settlement (conversation ${convId})`,
+          error,
+          conversationId: convId,
+        })
+      }
+    }
+    const latestConversation = this.safeSummary(convId) ?? payload.conversation
+    const turnEvent: TurnSettledPayload = { ...payload, conversation: latestConversation, inputs: consumed }
     try {
       const outcome = await this.svc.hookBridge.runHookChain('turn_settled', turnEvent)
       if (outcome?.action === 'handled') return

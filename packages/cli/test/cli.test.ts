@@ -261,6 +261,25 @@ test('conversations create/send/abort/update/delete paths, bodies, and --current
   const sendHit = hub.recorded.hits.find((h) => h.path === '/api/conversations/7/input')!
   assert.deepEqual(sendHit.body, { text: '你好 世界', whenBusy: 'followUp', origin: 'agent' })
 
+  const sentWithModel = await runCliCaptured(
+    ['send', '7', 'think once', '--model', 'tier/deep', '--thinking', 'high', '--json'],
+    env,
+  )
+  assert.equal(sentWithModel.code, 0, sentWithModel.err)
+  assert.deepEqual(hub.recorded.hits.at(-1)?.body, {
+    text: 'think once',
+    model: 'tier/deep',
+    thinkingLevel: 'high',
+  })
+
+  const badSendModel = await runCliCaptured(['send', '7', 'x', '--model', 'noslash', '--json'], env)
+  assert.equal(badSendModel.code, 1)
+  assert.equal(parseCliError(badSendModel).code, 'invalid_flag_value')
+
+  const badSendThinking = await runCliCaptured(['send', '7', 'x', '--thinking', 'ultra', '--json'], env)
+  assert.equal(badSendThinking.code, 1)
+  assert.equal(parseCliError(badSendThinking).code, 'invalid_flag_value')
+
   const sentCurrent = await runCliCaptured(['send', '--current', 'hi', '--json'], { ...env, HELMX_CONVERSATION_ID: '7' })
   assert.equal(sentCurrent.code, 0, sentCurrent.err)
   assert.equal(hub.recorded.hits.at(-1)?.path, '/api/conversations/7/input')
@@ -2799,7 +2818,7 @@ const SCHEMA_CLI_MAPPINGS: Readonly<Record<string, SchemaCliMapping>> = {
   },
   conversationInput: {
     command: ['send'],
-    aliases: { attachments: 'attach', replaceFromEntryId: 'replace-from' },
+    aliases: { attachments: 'attach', replaceFromEntryId: 'replace-from', thinkingLevel: 'thinking' },
     positionals: { text: '<text>' },
   },
   askAnswer: {

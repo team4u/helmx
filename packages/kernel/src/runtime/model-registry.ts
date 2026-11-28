@@ -36,7 +36,7 @@ import {
 } from './model-config-helpers.js'
 import { ModelTiersCoordinator, type ModelTiersCapabilityHost } from './model-tiers-coordinator.js'
 import { RuntimeProviderTracker } from './model-runtime-providers.js'
-import { buildModels, listModelCatalog, listModelProviders, type ModelRefResolutionMode, type ResolvedModelRef } from './models.js'
+import { buildModels, listModelCatalog, listModelProviders, type ResolvedModelRef } from './models.js'
 
 export type {
   ModelDefaultsPatch,
@@ -200,8 +200,8 @@ export class ModelRegistry {
     return this.tiersCoordinator.getRegisteredTiers()
   }
 
-  resolveModelRef(ref: string, opts?: { mode?: ModelRefResolutionMode }): ResolvedModelRef {
-    return this.tiersCoordinator.resolveModelRef(ref, opts)
+  resolveModelRef(ref: string): ResolvedModelRef {
+    return this.tiersCoordinator.resolveModelRef(ref)
   }
 
   listModelProviders() {
@@ -265,7 +265,7 @@ export class ModelRegistry {
     const checkEnabled = (providerId: string, modelId: string): void => this.assertModelEnabled(providerId, modelId)
     const trimmed = model?.trim()
     if (trimmed !== undefined && trimmed !== '') {
-      const ref = this.resolveModelRef(trimmed, { mode: 'human_conversation' })
+      const ref = this.resolveModelRef(trimmed)
       if (ref.tierId !== undefined) {
         checkEnabled(MODEL_TIER_PREFIX, ref.tierId)
       } else {
@@ -274,7 +274,7 @@ export class ModelRegistry {
     }
     const trimmedCompaction = compactionModel?.trim()
     if (trimmedCompaction !== undefined && trimmedCompaction !== '') {
-      const ref = this.resolveModelRef(trimmedCompaction, { mode: 'single_only' })
+      const ref = this.resolveModelRef(trimmedCompaction)
       checkEnabled(ref.provider, ref.modelId)
     }
     const normalizeLevel = (rawLevel: string | undefined): string | undefined => {
@@ -406,12 +406,8 @@ export class ModelRegistry {
       }
     }
     if (providerId === MODEL_TIER_PREFIX) {
-      const resolved = this.resolveModelRef(`${MODEL_TIER_PREFIX}/${modelId}`, { mode: 'human_conversation' })
+      const resolved = this.resolveModelRef(`${MODEL_TIER_PREFIX}/${modelId}`)
       assertConcreteEnabled(resolved.provider, resolved.modelId)
-      if (resolved.executorCanonicalRef !== undefined) {
-        const execParts = parseModelRefOrThrow(resolved.executorCanonicalRef)
-        assertConcreteEnabled(execParts.provider, execParts.modelId)
-      }
       return
     }
     assertConcreteEnabled(providerId, modelId)

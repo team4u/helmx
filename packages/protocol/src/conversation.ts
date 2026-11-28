@@ -75,10 +75,10 @@ export interface ConversationSummary {
   cwd: string
   /** Currently effective model 'provider/model'. */
   model: string
-  /** Explicit model override ('provider/model' or symbolic orchestrator 'tier/<id>'); inherits Profile / global default when omitted. */
+  /** Explicit model override ('provider/model' or symbolic 'tier/<id>'); inherits Profile / global default when omitted. */
   modelOverride?: string
-  /** Active symbolic orchestrator model tier ('tier/<id>') governing this conversation (whether via override or inheritance); omitted for regular models and frozen single tiers. */
-  modelTier?: string
+  /** Transient UI/status indicator that the active runtime model/thinking is temporarily overridden relative to the configured baseline. */
+  runtimeModelOverride?: boolean
   /** Current thinking level (off/minimal/low/medium/high/xhigh/max); empty string means unset. */
   thinkingLevel: string
   /** Explicit thinking-level override; inherits Profile / global default when omitted. */

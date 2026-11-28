@@ -81,7 +81,16 @@ export class TrackerSummary {
     const lastEntryId = this.core.lastEntryIds.get(conversationId) ?? meta.lastEntryId ?? 0
     const pendingAskSince =
       pendingAsks > 0 ? this.core.store.earliestPendingAskCreatedAt?.(conversationId) : undefined
-    const summary = summaryOf({ meta, status, pendingAskCount: pendingAsks, doing, lastError, lastEntryId, pendingAskSince })
+    const summary = summaryOf({
+      meta,
+      status,
+      pendingAskCount: pendingAsks,
+      doing,
+      lastError,
+      lastEntryId,
+      pendingAskSince,
+      runtimeModelOverride: this.core.hasRuntimeModelOverride?.(conversationId),
+    })
     const usage = this.usage.cachedOrSchedule(conversationId)
     return usage === undefined ? summary : { ...summary, contextUsage: usage }
   }

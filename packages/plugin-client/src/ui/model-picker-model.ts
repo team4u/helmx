@@ -235,6 +235,14 @@ export interface ModelPickerControlCopy {
   defaultLabel: string
   /** Optional segmented tab label for the default persistent model-switch mode. */
   defaultModeLabel?: string
+  /** Optional segmented tab label for the one-turn override mode (`nextTurnMode`). */
+  nextTurnModeLabel?: string
+  /** Optional footer hint when one-turn override mode is active. */
+  nextTurnModeHint?: string
+  /** Optional badge text shown on the trigger pill when a one-turn override is staged. */
+  nextTurnBadge?: string
+  /** Optional button label/title to clear a staged one-turn override. */
+  clearNextTurnLabel?: string
   /** Optional aria-label for the mode switcher segmented bar. */
   modeBarAria?: string
   searchAria: string
@@ -272,6 +280,10 @@ export const DEFAULT_MODEL_PICKER_COPY: Readonly<ModelPickerControlCopy> = Objec
   levelSuffix: ' · {level}',
   defaultLabel: 'Default model',
   defaultModeLabel: 'Switch model',
+  nextTurnModeLabel: 'Next turn only',
+  nextTurnModeHint: 'Applies to the next message only (restores baseline after turn ends)',
+  nextTurnBadge: 'Next turn',
+  clearNextTurnLabel: 'Clear one-turn override',
   modeBarAria: 'Model selection mode',
   searchAria: 'Search models',
   searchPlaceholder: 'Search models…',

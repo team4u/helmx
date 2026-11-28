@@ -251,7 +251,7 @@ export const CONVERSATION_CORE_OPERATIONS = [
         { field: 'conversationId', required: false, label: 'id' },
         { field: 'text', required: true, label: 'text' },
       ],
-      flagAliases: { attachments: 'attach', replaceFromEntryId: 'replace-from' },
+      flagAliases: { attachments: 'attach', replaceFromEntryId: 'replace-from', thinkingLevel: 'thinking' },
     },
     action: {
       exposeToPrompt: false,
