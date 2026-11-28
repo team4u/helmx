@@ -30,8 +30,78 @@ import remarkGfm from 'remark-gfm'
 type MarkdownAstNode = {
   type?: string
   depth?: number
+  value?: string
   children?: MarkdownAstNode[]
   data?: { hProperties?: Record<string, unknown> }
+}
+
+export const GITHUB_ALERT_TYPES = ['note', 'tip', 'important', 'warning', 'caution'] as const
+export type GithubAlertType = (typeof GITHUB_ALERT_TYPES)[number]
+
+const GITHUB_ALERT_TYPE_SET: ReadonlySet<string> = new Set(GITHUB_ALERT_TYPES)
+
+export function isGithubAlertType(value: unknown): value is GithubAlertType {
+  return typeof value === 'string' && GITHUB_ALERT_TYPE_SET.has(value)
+}
+
+const GITHUB_ALERT_MARKER_RE = /^\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\][ \t]*(?:\r?\n|$)/i
+const TRAILING_NEWLINE_RE = /\r?\n$/
+
+/**
+ * Annotate GitHub-style alert blockquotes (`> [!NOTE]`, `> [!TIP]`, `> [!IMPORTANT]`,
+ * `> [!WARNING]`, `> [!CAUTION]`) with `data-alert` and strip the leading marker line.
+ * Runs after `remarkGfm` and before `remarkBreaks` so single-line break conversion never
+ * inserts a leading `<br>` at the start of the alert body.
+ */
+export function remarkGithubAlerts() {
+  return (tree: unknown): void => {
+    const visit = (node: MarkdownAstNode): void => {
+      if (node.type === 'blockquote' && Array.isArray(node.children) && node.children.length > 0) {
+        const firstChild = node.children[0]
+        if (
+          firstChild !== undefined &&
+          firstChild.type === 'paragraph' &&
+          Array.isArray(firstChild.children) &&
+          firstChild.children.length > 0
+        ) {
+          const firstInline = firstChild.children[0]
+          if (firstInline !== undefined && firstInline.type === 'text' && typeof firstInline.value === 'string') {
+            const match = GITHUB_ALERT_MARKER_RE.exec(firstInline.value)
+            if (match !== null) {
+              const remainder = firstInline.value.slice(match[0].length)
+              const consumedNewline = TRAILING_NEWLINE_RE.test(match[0])
+              const secondInline = firstChild.children[1]
+              const hasSameLineInlineSibling =
+                remainder === '' &&
+                !consumedNewline &&
+                secondInline !== undefined &&
+                secondInline.type !== 'break'
+
+              if (!hasSameLineInlineSibling) {
+                const alertType = match[1]!.toLowerCase() as GithubAlertType
+                if (remainder.length > 0) {
+                  firstInline.value = remainder
+                } else {
+                  const removeCount = !consumedNewline && secondInline?.type === 'break' ? 2 : 1
+                  firstChild.children.splice(0, removeCount)
+                  if (firstChild.children.length === 0) {
+                    node.children.shift()
+                  }
+                }
+                node.data ??= {}
+                node.data.hProperties = {
+                  ...node.data.hProperties,
+                  'data-alert': alertType,
+                }
+              }
+            }
+          }
+        }
+      }
+      for (const child of node.children ?? []) visit(child)
+    }
+    visit(tree as MarkdownAstNode)
+  }
 }
 
 export interface HeadingIndicesOptions {
@@ -86,6 +156,8 @@ export function countHeadingsUpToH3(source: string): number {
 
 /** Container prefixes (blockquote / list markers / indentation): strip layer by layer before judging the line start. */
 const CONTAINER_PREFIX_PATTERN = /^(?: {0,3}> ?| {1,8}|[-*+] |\d{1,9}[.\)] )/
+const BLOCKQUOTE_PREFIX_PATTERN = /^ {0,3}>/
+const GITHUB_ALERT_HEADER_PATTERN = /^\[!(?:NOTE|TIP|IMPORTANT|WARNING|CAUTION)\][ \t]*$/i
 const RAW_HTML_BLOCK_START_PATTERN = /^ {0,3}<[A-Za-z!?/]/
 /** Three or more backticks/tildes (up to 3 leading spaces) form a fence-opening candidate. */
 const FENCE_MARKER_PATTERN = /^ {0,3}(`{3,}|~{3,})/
@@ -149,8 +221,12 @@ export function splitStreamingMarkdownBlocks(text: string): string[] {
         // prefixes might be a reference/footnote definition (labels span lines, ']' may be
         // escaped; line-level detection is unsafe); raw HTML blocks can continue across blank
         // lines. Both make block-wise parsing non-equivalent — render whole-document on sight
-        // (same-shaped text inside a trusted fence is literal content and skipped).
-        if (stripContainerPrefixes(line).startsWith('[')) return [text]
+        // (same-shaped text inside a trusted fence is literal content and skipped; standalone
+        // GitHub alert headers like `> [!NOTE]` cannot open link definitions and keep splitting).
+        const stripped = stripContainerPrefixes(line)
+        const isGithubAlertHeader =
+          BLOCKQUOTE_PREFIX_PATTERN.test(line) && GITHUB_ALERT_HEADER_PATTERN.test(stripped)
+        if (stripped.startsWith('[') && !isGithubAlertHeader) return [text]
         if (RAW_HTML_BLOCK_START_PATTERN.test(line)) return [text]
         if (afterBlankLine && lineStart > blockStart && !LIST_ITEM_CONTINUATION_PATTERN.test(line)) {
           const candidate = text.slice(blockStart, lineStart)

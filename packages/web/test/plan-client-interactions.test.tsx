@@ -41,9 +41,17 @@ import {
 } from '../../plugins/src/plan/client/types.ts'
 import {
   PLAN_COPY,
+  planDiffSkippedLabel,
+  planDiffTabLabel,
   planOutcomeLabel,
   planSaveStatsLabel,
 } from '../../plugins/src/plan/client/copy.ts'
+import {
+  MAX_PLAN_DIFF_DP_CELLS,
+  MAX_PLAN_DIFF_LINES,
+  PLAN_DIFF_CONTEXT_LINES,
+  computePlanDraftDiff,
+} from '../../plugins/src/plan/client/diff.ts'
 import {
   isPlanEligibleConversation,
   parsePlanSessionView,
@@ -337,6 +345,22 @@ describe('plan-client-interactions', () => {
         mode: 'planning',
         awaitingApproval: false,
         draft: { title: 'Auth Plan', markdown: '# Steps', version: 2, updatedAt: 1000 },
+        previousDraft: { title: 'Auth Plan v1', markdown: '# Initial', version: 1, updatedAt: 900 },
+      }),
+      {
+        mode: 'planning',
+        awaitingApproval: false,
+        draft: { title: 'Auth Plan', markdown: '# Steps', version: 2, updatedAt: 1000 },
+        previousDraft: { title: 'Auth Plan v1', markdown: '# Initial', version: 1, updatedAt: 900 },
+      },
+    )
+    // Suppresses previousDraft when version matches draft.version or draft is missing
+    assert.deepEqual(
+      parsePlanSessionView({
+        mode: 'planning',
+        awaitingApproval: false,
+        draft: { title: 'Auth Plan', markdown: '# Steps', version: 2, updatedAt: 1000 },
+        previousDraft: { title: 'Same Version', markdown: '# Initial', version: 2, updatedAt: 900 },
       }),
       {
         mode: 'planning',
@@ -344,6 +368,22 @@ describe('plan-client-interactions', () => {
         draft: { title: 'Auth Plan', markdown: '# Steps', version: 2, updatedAt: 1000 },
       },
     )
+    assert.deepEqual(
+      parsePlanSessionView({
+        mode: 'normal',
+        awaitingApproval: false,
+        previousDraft: { title: 'Orphan', markdown: '# Old', version: 1, updatedAt: 900 },
+      }),
+      { mode: 'normal', awaitingApproval: false },
+    )
+
+    assert.equal(planDiffTabLabel(2, 'en'), 'Diff v2')
+    assert.equal(planDiffTabLabel(2, 'zh-CN'), '对比 v2')
+    assert.equal(planDiffSkippedLabel(1, 'en'), '… 1 unchanged line omitted …')
+    assert.equal(planDiffSkippedLabel(4, 'en'), '… 4 unchanged lines omitted …')
+    assert.equal(planDiffSkippedLabel(4, 'zh-CN'), '… 省略 4 行未改动内容 …')
+    assert.equal(planDiffTabLabel(1, 'zh-CN').includes('规划'), false)
+    assert.equal(planDiffSkippedLabel(2, 'zh-CN').includes('规划'), false)
 
     assert.equal(parsePlanToolPresentationMeta(undefined), undefined)
     assert.equal(parsePlanToolPresentationMeta({ kind: 'propose', title: 'X', version: 1, outcome: 'bogus' }), undefined)
@@ -1198,6 +1238,241 @@ describe('plan-client-interactions', () => {
       assert.match(noConvMount.host.textContent ?? '', /Select a conversation/)
     } finally {
       await noConvMount.unmount()
+    }
+  })
+
+  test('computePlanDraftDiff & PlanWorkbenchPanel: revision diff switcher, hunk folding, oversized guard, and viewMode resets', { timeout: 60_000 }, async () => {
+    // 1. Pure computePlanDraftDiff: identical body with title change
+    const titleOnly = computePlanDraftDiff(
+      { title: 'Old Title', markdown: 'Line 1\r\nLine 2' },
+      { title: 'New Title', markdown: 'Line 1\nLine 2' },
+    )
+    assert.equal(titleOnly.kind, 'diff')
+    if (titleOnly.kind === 'diff') {
+      assert.equal(titleOnly.titleChanged, true)
+      assert.equal(titleOnly.addedLines, 0)
+      assert.equal(titleOnly.removedLines, 0)
+      assert.equal(titleOnly.hasChanges, true)
+      assert.deepEqual(titleOnly.hunks, [])
+      assert.equal(titleOnly.trailingSkipped, 0)
+    }
+
+    // Identical title and markdown -> hasChanges: false
+    const noChanges = computePlanDraftDiff(
+      { title: 'Same', markdown: 'A\nB' },
+      { title: 'Same', markdown: 'A\nB' },
+    )
+    assert.equal(noChanges.kind, 'diff')
+    if (noChanges.kind === 'diff') {
+      assert.equal(noChanges.hasChanges, false)
+      assert.deepEqual(noChanges.hunks, [])
+      assert.equal(noChanges.trailingSkipped, 0)
+    }
+
+    // Context folding with PLAN_DIFF_CONTEXT_LINES = 3
+    assert.equal(PLAN_DIFF_CONTEXT_LINES, 3)
+    const manyPrev = Array.from({ length: 20 }, (_, i) => `line ${i + 1}`)
+    const manyNext = [...manyPrev]
+    manyNext[5] = 'line 6 updated'
+    manyNext[15] = 'line 16 updated'
+    manyNext.splice(16, 0, 'line 16b added')
+    const folded = computePlanDraftDiff(
+      { title: 'Plan', markdown: manyPrev.join('\n') },
+      { title: 'Plan', markdown: manyNext.join('\n') },
+    )
+    assert.equal(folded.kind, 'diff')
+    if (folded.kind === 'diff') {
+      assert.equal(folded.addedLines, 3)
+      assert.equal(folded.removedLines, 2)
+      assert.equal(folded.hunks.length, 2)
+      assert.equal(folded.hunks[0]!.skippedBefore, 2)
+      assert.equal(folded.hunks[1]!.skippedBefore, 3)
+      assert.equal(folded.trailingSkipped, 1)
+    }
+
+    // Budget exceeded -> too_large; huge doc with tiny middle edit still succeeds via prefix/suffix trim
+    const largePrev = Array.from({ length: MAX_PLAN_DIFF_LINES + 10 }, (_, i) => `old-${i}`).join('\n')
+    const largeNext = Array.from({ length: MAX_PLAN_DIFF_LINES + 10 }, (_, i) => `new-${i}`).join('\n')
+    assert.deepEqual(computePlanDraftDiff({ title: 'A', markdown: largePrev }, { title: 'B', markdown: largeNext }), {
+      kind: 'too_large',
+      prevLineCount: MAX_PLAN_DIFF_LINES + 10,
+      nextLineCount: MAX_PLAN_DIFF_LINES + 10,
+    })
+    assert.ok(MAX_PLAN_DIFF_DP_CELLS === 2_500_000)
+
+    const trimmedPrev = Array.from({ length: 2000 }, (_, i) => `shared-${i}`)
+    const trimmedNext = [...trimmedPrev]
+    trimmedNext[1000] = 'edited-1000'
+    const trimmedRes = computePlanDraftDiff(
+      { title: 'A', markdown: trimmedPrev.join('\n') },
+      { title: 'A', markdown: trimmedNext.join('\n') },
+    )
+    assert.equal(trimmedRes.kind, 'diff')
+
+    // 2. PlanWorkbenchPanel DOM integration
+    const spy = makeSpyCtx({ conversationId: 50 })
+    const harness = createSessionDocHarness({
+      [`${PLAN_PLUGIN_ID}/${PLAN_SESSION_DOC}/50`]: {
+        hasValue: true,
+        deleted: false,
+        connected: true,
+        value: {
+          mode: 'planning',
+          awaitingApproval: false,
+          draft: {
+            title: 'Plan v1',
+            markdown: '# First',
+            version: 1,
+            updatedAt: 1_700_000_000_000,
+          },
+        },
+      },
+      [`${PLAN_PLUGIN_ID}/${PLAN_SESSION_DOC}/51`]: {
+        hasValue: true,
+        deleted: false,
+        connected: true,
+        value: {
+          mode: 'planning',
+          awaitingApproval: false,
+          draft: {
+            title: 'Conv 51 Plan',
+            markdown: '# Conv 51 Preview',
+            version: 2,
+            updatedAt: 1_700_000_000_100,
+          },
+          previousDraft: {
+            title: 'Conv 51 Plan Old',
+            markdown: '# Conv 51 Old',
+            version: 1,
+            updatedAt: 1_700_000_000_000,
+          },
+        },
+      },
+    })
+
+    const mounted = await mountWithSessionHost(
+      spy,
+      e(components.PlanWorkbenchPanel, { conversation: makeConv(50) }),
+      harness,
+    )
+    try {
+      // No previousDraft -> zero SegmentedControl
+      assert.ok(mounted.host.querySelector('.plan-view-bar') === null)
+
+      // Push v3 with previousDraft v1 -> view bar renders inside card body (NOT inside Card.actions)
+      const prevLines = Array.from({ length: 16 }, (_, i) => `Item ${i + 1}`)
+      const nextLines = [...prevLines]
+      nextLines[2] = 'Item 3 revised'
+      nextLines[13] = 'Item 14 revised'
+      nextLines.push('Item 17 added')
+      await act(async () => {
+        harness.setDocValue(50, {
+          mode: 'planning',
+          awaitingApproval: false,
+          draft: {
+            title: 'Plan v3 Updated',
+            markdown: nextLines.join('\n'),
+            version: 3,
+            updatedAt: 1_700_000_000_500,
+          },
+          previousDraft: {
+            title: 'Plan v1',
+            markdown: prevLines.join('\n'),
+            version: 1,
+            updatedAt: 1_700_000_000_000,
+          },
+        })
+      })
+
+      const cardActions = mounted.host.querySelector('.helmx-card-actions')
+      assert.ok(cardActions !== null)
+      assert.ok(cardActions.querySelector('[role="tablist"]') === null, 'SegmentedControl must stay out of Card.actions')
+
+      const viewBar = mounted.host.querySelector('.plan-view-bar')
+      assert.ok(viewBar !== null)
+      assert.equal(viewBar.querySelector('.plan-diff-stat-add')?.textContent, '+3')
+      assert.equal(viewBar.querySelector('.plan-diff-stat-del')?.textContent, '-2')
+
+      const tabs = Array.from(viewBar.querySelectorAll<HTMLButtonElement>('[role="tab"]'))
+      assert.equal(tabs.length, 2)
+      assert.equal(tabs[0]!.textContent, 'Preview')
+      assert.equal(tabs[1]!.textContent, 'Diff v1')
+      assert.ok(mounted.host.querySelector('.plan-markdown') !== null, 'Preview is active by default')
+
+      // Switch to Diff v1
+      await act(async () => {
+        tabs[1]!.click()
+      })
+      assert.ok(mounted.host.querySelector('.plan-markdown') === null)
+      const titleChange = mounted.host.querySelector('.plan-diff-title-change')
+      assert.ok(titleChange !== null)
+      assert.match(titleChange.textContent ?? '', /Plan v1/)
+      assert.match(titleChange.textContent ?? '', /Plan v3 Updated/)
+      const diffView = mounted.host.querySelector('.plan-diff-view')
+      assert.ok(diffView !== null)
+      assert.ok(diffView.querySelectorAll('.plan-diff-hunk-gap').length >= 1)
+      assert.equal(diffView.querySelectorAll('.plan-diff-row--add').length, 3)
+      assert.equal(diffView.querySelectorAll('.plan-diff-row--remove').length, 2)
+      assert.equal(EMOJI_RE.test(mounted.host.textContent ?? ''), false)
+
+      // Entering Edit mode and cancelling resets viewMode back to Preview
+      const editBtn = Array.from(mounted.host.querySelectorAll<HTMLButtonElement>('button')).find((b) =>
+        (b.textContent ?? '').trim() === 'Edit',
+      )
+      assert.ok(editBtn !== undefined)
+      await act(async () => {
+        editBtn.click()
+      })
+      const cancelBtn = Array.from(mounted.host.querySelectorAll<HTMLButtonElement>('button')).find((b) =>
+        (b.textContent ?? '').trim() === 'Cancel',
+      )
+      assert.ok(cancelBtn !== undefined)
+      await act(async () => {
+        cancelBtn.click()
+      })
+      assert.ok(mounted.host.querySelector('.plan-markdown') !== null, 'cancelling Edit must restore Preview mode')
+
+      // Switch to Diff again, then switch conversationId -> resets viewMode to Preview
+      await act(async () => {
+        mounted.host.querySelectorAll<HTMLButtonElement>('.plan-view-bar [role="tab"]')[1]!.click()
+      })
+      assert.ok(mounted.host.querySelector('.plan-diff-view') !== null)
+      await mounted.rerender(e(components.PlanWorkbenchPanel, { conversation: makeConv(51) }))
+      assert.ok(mounted.host.querySelector('.plan-markdown') !== null, 'switching conversation must reset viewMode to Preview')
+      assert.match(mounted.host.querySelector('.plan-markdown')?.textContent ?? '', /Conv 51 Preview/)
+
+      // Dropping previousDraft while in diff mode resets viewMode cleanly and oversized diff shows info callout
+      await act(async () => {
+        mounted.host.querySelectorAll<HTMLButtonElement>('.plan-view-bar [role="tab"]')[1]!.click()
+      })
+      assert.ok(mounted.host.querySelector('.plan-diff-view') !== null)
+      await act(async () => {
+        harness.setDocValue(51, {
+          mode: 'planning',
+          awaitingApproval: false,
+          draft: { title: 'Reset v1', markdown: '# Reset body', version: 1, updatedAt: 1_700_000_000_200 },
+        })
+      })
+      assert.ok(mounted.host.querySelector('.plan-view-bar') === null)
+      assert.ok(mounted.host.querySelector('.plan-markdown') !== null)
+
+      // Oversized diff fallback
+      await act(async () => {
+        harness.setDocValue(51, {
+          mode: 'planning',
+          awaitingApproval: false,
+          draft: { title: 'Huge v2', markdown: largeNext, version: 2, updatedAt: 1_700_000_000_300 },
+          previousDraft: { title: 'Huge v1', markdown: largePrev, version: 1, updatedAt: 1_700_000_000_200 },
+        })
+      })
+      await act(async () => {
+        mounted.host.querySelectorAll<HTMLButtonElement>('.plan-view-bar [role="tab"]')[1]!.click()
+      })
+      const callout = mounted.host.querySelector('.callout')
+      assert.ok(callout !== null)
+      assert.match(callout.textContent ?? '', /Diff is too large/)
+    } finally {
+      await mounted.unmount()
     }
   })
 

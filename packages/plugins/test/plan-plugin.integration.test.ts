@@ -295,7 +295,13 @@ test('T3 & T4: /plan <task> first turn transforms input, derives clean title, en
         planModeSection.includes('`run_action`') &&
         planModeSection.includes('ask_user') &&
         planModeSection.includes('plan_save') &&
-        planModeSection.includes('plan_propose'),
+        planModeSection.includes('plan_propose') &&
+        planModeSection.includes('## Goal') &&
+        planModeSection.includes('## User Review Required') &&
+        planModeSection.includes('## Proposed Changes') &&
+        planModeSection.includes('[MODIFY]') &&
+        planModeSection.includes('## Verification Plan') &&
+        planModeSection.includes('DO NOT paste or re-summarize'),
     )
     assert.equal(planReq.toolNames.includes('bash'), true)
     assert.equal(planReq.toolNames.includes('run_action'), true)
@@ -1199,6 +1205,10 @@ test('T9: builtin:plan bootstraps managed skill plan and removes it cleanly from
       'ask_user',
       PLAN_TOOL_SAVE,
       PLAN_TOOL_PROPOSE,
+      'User Review Required',
+      '[MODIFY]',
+      'Verification Plan',
+      'previousDraft',
       'builtin:plan.get',
       'builtin:plan.toggle',
       'builtin:plan.set_mode',
@@ -1236,6 +1246,88 @@ test('T9: builtin:plan bootstraps managed skill plan and removes it cleanly from
 
     await kernel.plugins.enable(PLAN_PLUGIN_ID)
     assert.ok((await readSkillsSection()).includes('id="plan"'), 're-enabled builtin:plan must restore plan in <available_skills>')
+  } finally {
+    await env.close()
+  }
+})
+
+test('T10: idempotent plan_save and anchored previousDraft baseline persist cleanly across propose -> revise -> multi-save -> approve', TIMEOUT, async () => {
+  const env = await openPlanIntegrationEnv()
+  try {
+    const { kernel } = env.app
+    const conv = await kernel.conversations.createConversation({ title: 'T10 Revision Diff' })
+    const cid = conv.id
+    await kernel.plugins.invokeAction(PLAN_PLUGIN_ID, 'set_mode', { conversationId: cid, mode: 'planning' })
+
+    env.faux.setResponses([
+      () =>
+        fauxAssistantMessage(
+          [fauxToolCall(PLAN_TOOL_SAVE, { title: 'Rollout', markdown: '# v1\nStep 1' })],
+          { stopReason: 'toolUse' },
+        ),
+      () =>
+        fauxAssistantMessage(
+          [fauxToolCall(PLAN_TOOL_SAVE, { title: 'Rollout', markdown: '# v1\nStep 1' })],
+          { stopReason: 'toolUse' },
+        ),
+      () =>
+        fauxAssistantMessage(
+          [fauxToolCall(PLAN_TOOL_SAVE, { title: 'Rollout v2', markdown: '# v2\nStep 1\nStep 2' })],
+          { stopReason: 'toolUse' },
+        ),
+      () =>
+        fauxAssistantMessage(
+          [fauxToolCall(PLAN_TOOL_PROPOSE, { summary: 'Propose v2' })],
+          { stopReason: 'toolUse' },
+        ),
+      () => fauxAssistantMessage('Awaiting revision.'),
+    ])
+    await kernel.conversations.submitInput(cid, 'draft v1, duplicate, save v2, propose')
+    await waitFor(() => kernel.asks.listAsks('pending').length === 1)
+
+    const duringAsk = readPlanSession(kernel, cid) as PlanSessionView & Record<string, unknown>
+    assert.equal(duringAsk.draft?.version, 2)
+    assert.equal(duringAsk.previousDraft?.version, 1)
+    assert.equal('lastProposedVersion' in duringAsk, false)
+
+    const ask = kernel.asks.listAsks('pending')[0]!
+    await kernel.asks.answerAsk(ask.id, { decision: 'revise', feedback: 'Add step 3' }, ask.expectedStateSeq)
+    await kernel.conversations.waitForIdle(cid)
+
+    env.faux.setResponses([
+      () =>
+        fauxAssistantMessage(
+          [fauxToolCall(PLAN_TOOL_SAVE, { title: 'Rollout v3', markdown: '# v3\nStep 1\nStep 2\nStep 3a' })],
+          { stopReason: 'toolUse' },
+        ),
+      () =>
+        fauxAssistantMessage(
+          [fauxToolCall(PLAN_TOOL_SAVE, { title: 'Rollout v4', markdown: '# v4\nStep 1\nStep 2\nStep 3b' })],
+          { stopReason: 'toolUse' },
+        ),
+      () =>
+        fauxAssistantMessage(
+          [fauxToolCall(PLAN_TOOL_PROPOSE, { summary: 'Propose v4' })],
+          { stopReason: 'toolUse' },
+        ),
+      () => fauxAssistantMessage('Approved v4.'),
+    ])
+    await kernel.conversations.submitInput(cid, 'revise across v3 and v4 then propose')
+    await waitFor(() => kernel.asks.listAsks('pending').length === 1)
+
+    const beforeApprove = readPlanSession(kernel, cid)
+    assert.equal(beforeApprove.draft?.version, 4)
+    assert.equal(beforeApprove.previousDraft?.version, 2)
+
+    const ask2 = kernel.asks.listAsks('pending')[0]!
+    await kernel.asks.answerAsk(ask2.id, { decision: 'approve' }, ask2.expectedStateSeq)
+    await kernel.conversations.waitForIdle(cid)
+
+    const afterApprove = readPlanSession(kernel, cid)
+    assert.equal(afterApprove.mode, 'normal')
+    assert.equal(afterApprove.draft?.version, 4)
+    assert.equal(afterApprove.previousDraft?.version, 2)
+    assert.equal(afterApprove.approved?.version, 4)
   } finally {
     await env.close()
   }

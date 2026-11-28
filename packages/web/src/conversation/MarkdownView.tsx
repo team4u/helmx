@@ -1,16 +1,17 @@
-import { createContext, Fragment, memo, useContext, useEffect, useMemo, useRef, useState } from 'react'
+import { Children, createContext, Fragment, memo, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import Markdown, { type Components, type Options } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import remarkBreaks from 'remark-breaks'
 import { SyntaxCode } from './SyntaxCode.js'
 import type { CodeLineRange } from './syntax-code-model.js'
-import { CopyButton, HelmxIcon } from '@helmx/ui'
+import { CopyButton, HelmxIcon, type HelmxIconName } from '@helmx/ui'
 import { markdownUrlTransform, parseArtifactUrl } from '@helmx/plugin-client'
 import type { MarkdownViewProps } from '@helmx/plugin-client'
 import { useConversationSummary, useConversationTreeWorkspaces, useStoreActions } from '../lib/store-context.js'
 import { LazyMount } from '../ui/LazyMount.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
+import type { WebMessageKey } from '../i18n/catalog.js'
 import { CodeBlockRenderer } from './CodeBlockRenderer.js'
 import { artifactsApi, conversationsApi } from '../lib/api.js'
 import {
@@ -20,13 +21,24 @@ import {
 } from './workspace-file-url.js'
 import {
   countHeadingsUpToH3,
+  isGithubAlertType,
+  remarkGithubAlerts,
   remarkHeadingIndices,
   splitStreamingMarkdownBlocks,
+  type GithubAlertType,
 } from './markdown-model.js'
 
+const GITHUB_ALERT_META: Record<GithubAlertType, { icon: HelmxIconName; labelKey: WebMessageKey }> = {
+  note: { icon: 'info', labelKey: 'conv.markdown.alertNote' },
+  tip: { icon: 'sparkles', labelKey: 'conv.markdown.alertTip' },
+  important: { icon: 'alert-circle', labelKey: 'conv.markdown.alertImportant' },
+  warning: { icon: 'alert-triangle', labelKey: 'conv.markdown.alertWarning' },
+  caution: { icon: 'shield-alert', labelKey: 'conv.markdown.alertCaution' },
+}
+
 /** 整篇渲染（非流式与 gate 回退路径）复用同一无状态插件组；breaks 路径追加 remark-breaks（用户手输正文单换行即换行）。 */
-const wholeDocumentRemarkPlugins = [remarkGfm, remarkHeadingIndices]
-const wholeDocumentBreaksRemarkPlugins = [remarkGfm, remarkBreaks, remarkHeadingIndices]
+const wholeDocumentRemarkPlugins = [remarkGfm, remarkGithubAlerts, remarkHeadingIndices]
+const wholeDocumentBreaksRemarkPlugins = [remarkGfm, remarkGithubAlerts, remarkBreaks, remarkHeadingIndices]
 
 /**
  * 流式尾部块媒体抑制上下文：流式输出期间，仅尾部仍在增长的块设为 true，
@@ -332,8 +344,8 @@ const StreamingMarkdownBlock = memo(function StreamingMarkdownBlock({
   breaks,
 }: StreamingMarkdownBlockProps): ReactNode {
   const remarkPlugins: Options['remarkPlugins'] = breaks
-    ? [remarkGfm, remarkBreaks, [remarkHeadingIndices, { offset: headingOffset }]]
-    : [remarkGfm, [remarkHeadingIndices, { offset: headingOffset }]]
+    ? [remarkGfm, remarkGithubAlerts, remarkBreaks, [remarkHeadingIndices, { offset: headingOffset }]]
+    : [remarkGfm, remarkGithubAlerts, [remarkHeadingIndices, { offset: headingOffset }]]
   return (
     <DeferWorkspaceMediaContext.Provider value={deferMediaFetch}>
       <Markdown remarkPlugins={remarkPlugins} urlTransform={markdownUrlTransform} components={components}>
@@ -390,6 +402,25 @@ export const MarkdownView = memo(function MarkdownView({
       return <pre className="msg-md-pre-fallback code-block-pre selectable">{children}</pre>
     },
     code: ({ className, children }) => <code className={className}>{children}</code>,
+    blockquote: ({ children, ...rest }) => {
+      const rawAlert = (rest as Record<string, unknown>)['data-alert']
+      if (isGithubAlertType(rawAlert)) {
+        const meta = GITHUB_ALERT_META[rawAlert]
+        const hasBodyContent = Children.toArray(children).some(
+          (child) => typeof child !== 'string' || child.trim() !== '',
+        )
+        return (
+          <div className={`md-alert md-alert--${rawAlert}`} data-alert={rawAlert} role="note">
+            <div className="md-alert-title">
+              <HelmxIcon name={meta.icon} size={13} />
+              <span>{t(meta.labelKey)}</span>
+            </div>
+            <div className="md-alert-body">{hasBodyContent ? children : null}</div>
+          </div>
+        )
+      }
+      return <blockquote>{children}</blockquote>
+    },
     table: ({ children }) => (
       <div className="msg-md-table-wrap">
         <table>{children}</table>

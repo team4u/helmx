@@ -77,6 +77,7 @@ export interface PlanSessionView {
   mode: PlanMode
   awaitingApproval: boolean
   draft?: PlanDraftSummary
+  previousDraft?: PlanDraftSummary
   approved?: PlanApprovedInfo
 }
 
@@ -123,6 +124,8 @@ export interface PlanConversationRecord {
   mode: PlanMode
   pendingAskId?: string
   draft?: PlanDraftSummary
+  previousDraft?: PlanDraftSummary
+  lastProposedVersion?: number
   approved?: PlanApprovedInfo
 }
 
@@ -194,6 +197,7 @@ export const PLAN_SESSION_VIEW_SCHEMA: JsonSchema = {
     mode: { type: 'string', enum: ['normal', 'planning'] },
     awaitingApproval: { type: 'boolean' },
     draft: PLAN_DRAFT_SCHEMA,
+    previousDraft: PLAN_DRAFT_SCHEMA,
     approved: PLAN_APPROVED_SCHEMA,
   },
   required: ['mode', 'awaitingApproval'],

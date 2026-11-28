@@ -114,6 +114,93 @@
   margin-bottom: 0;
 }
 
+/* GitHub-style alerts (Quiet Surface subtle box + semantic left accent) */
+.msg-ai-body .md-alert {
+  margin: 10px 0;
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  background: var(--bg-subtle);
+  color: var(--prose-fg);
+}
+
+.msg-ai-body .md-alert-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.4;
+  margin-bottom: 4px;
+}
+
+.msg-ai-body .md-alert-title:has(+ .md-alert-body:empty) {
+  margin-bottom: 0;
+}
+
+.msg-ai-body .md-alert-body > :first-child {
+  margin-top: 0;
+}
+
+.msg-ai-body .md-alert-body > :last-child {
+  margin-bottom: 0;
+}
+
+.msg-ai-body .md-alert-body:empty {
+  display: none;
+}
+
+.msg-ai-body .md-alert--note {
+  border-color: var(--border);
+  border-left-color: var(--accent);
+  background: var(--bg-subtle);
+}
+
+.msg-ai-body .md-alert--note .md-alert-title {
+  color: var(--accent);
+}
+
+.msg-ai-body .md-alert--important {
+  border-color: var(--accent-border);
+  border-left-color: var(--accent);
+  background: var(--accent-bg);
+}
+
+.msg-ai-body .md-alert--important .md-alert-title {
+  color: var(--accent);
+}
+
+.msg-ai-body .md-alert--tip {
+  border-color: var(--ok-border);
+  border-left-color: var(--ok);
+  background: var(--ok-bg);
+}
+
+.msg-ai-body .md-alert--tip .md-alert-title {
+  color: var(--ok);
+}
+
+.msg-ai-body .md-alert--warning {
+  border-color: var(--warn-border);
+  border-left-color: var(--warn);
+  background: var(--warn-bg);
+}
+
+.msg-ai-body .md-alert--warning .md-alert-title {
+  color: var(--warn);
+}
+
+.msg-ai-body .md-alert--caution {
+  border-color: var(--err-border);
+  border-left-color: var(--err);
+  background: var(--err-bg);
+}
+
+.msg-ai-body .md-alert--caution .md-alert-title {
+  color: var(--err);
+}
+
 .msg-ai-body code:not(pre code) {
   font-family: var(--font-mono);
   font-size: 13px;
@@ -177,6 +264,7 @@
 .msg-ai-body > ul:first-child,
 .msg-ai-body > ol:first-child,
 .msg-ai-body > blockquote:first-child,
+.msg-ai-body > .md-alert:first-child,
 .msg-ai-body > .code-block-wrap:first-child,
 .msg-ai-body > .msg-md-table-wrap:first-child,
 .msg-ai-body > table:not(.helmx-table):first-child,
@@ -193,6 +281,7 @@
 .msg-ai-body > ul:last-child,
 .msg-ai-body > ol:last-child,
 .msg-ai-body > blockquote:last-child,
+.msg-ai-body > .md-alert:last-child,
 .msg-ai-body > .code-block-wrap:last-child,
 .msg-ai-body > .msg-md-table-wrap:last-child,
 .msg-ai-body > table:not(.helmx-table):last-child,

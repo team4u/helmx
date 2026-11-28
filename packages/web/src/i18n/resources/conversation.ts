@@ -247,6 +247,11 @@ export const conversationMessages = {
   'conv.outline.emptyMessage': { en: '(empty message)', 'zh-CN': '（空消息）' },
 
   // --- Code blocks ---------------------------------------------------------------------
+  'conv.markdown.alertNote': { en: 'Note', 'zh-CN': '说明' },
+  'conv.markdown.alertTip': { en: 'Tip', 'zh-CN': '提示' },
+  'conv.markdown.alertImportant': { en: 'Important', 'zh-CN': '重要' },
+  'conv.markdown.alertWarning': { en: 'Warning', 'zh-CN': '警告' },
+  'conv.markdown.alertCaution': { en: 'Caution', 'zh-CN': '警示' },
   'conv.codeblock.renderFailed': { en: 'Code block extension render failed', 'zh-CN': '代码块扩展渲染失败' },
   'conv.codeblock.retryLoading': { en: 'Retry loading', 'zh-CN': '重试加载' },
   'conv.codeblock.loadingRenderer': { en: 'Loading {language} renderer...', 'zh-CN': '正在加载 {language} 渲染组件...' },

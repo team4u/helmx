@@ -81,6 +81,14 @@ export const PLAN_COPY = {
   editTitleLabel: { en: 'Plan title', 'zh-CN': '计划标题' },
   editMarkdownLabel: { en: 'Plan markdown', 'zh-CN': '计划内容' },
   loadLatestDraft: { en: 'Load latest', 'zh-CN': '加载最新版' },
+  viewModePreview: { en: 'Preview', 'zh-CN': '预览' },
+  viewModeAria: { en: 'Plan draft view mode', 'zh-CN': '计划草稿视图模式' },
+  diffNoChanges: { en: 'No content changes from the previous draft.', 'zh-CN': '与上一版草稿相比无内容变化。' },
+  diffTooLarge: {
+    en: 'Diff is too large to render inline; switch to Preview to read the full draft.',
+    'zh-CN': '差异内容过大，暂不支持行内对比，请切回「预览」查看完整草稿。',
+  },
+  diffTitleChanged: { en: 'Title changed', 'zh-CN': '标题变更' },
   approvedSectionTitle: { en: 'Latest Approved Plan', 'zh-CN': '最近已批准计划' },
   approvedKvPlan: { en: 'Plan', 'zh-CN': '计划' },
   approvedKvArtifact: { en: 'Artifact', 'zh-CN': '产物' },
@@ -194,4 +202,22 @@ export function planActionFailedNotice(
   locale: HelmxLocale = DEFAULT_HELMX_LOCALE,
 ): string {
   return isZh(locale) ? `${actionLabel}失败：${message}` : `${actionLabel} failed: ${message}`
+}
+
+export function planDiffTabLabel(
+  prevVersion: number,
+  locale: HelmxLocale = DEFAULT_HELMX_LOCALE,
+): string {
+  return isZh(locale) ? `对比 v${prevVersion}` : `Diff v${prevVersion}`
+}
+
+export function planDiffSkippedLabel(
+  count: number,
+  locale: HelmxLocale = DEFAULT_HELMX_LOCALE,
+): string {
+  if (isZh(locale)) {
+    return `… 省略 ${count} 行未改动内容 …`
+  }
+  const lineUnit = count === 1 ? 'line' : 'lines'
+  return `… ${count} unchanged ${lineUnit} omitted …`
 }

@@ -18,7 +18,10 @@ import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import type { PluginUiContribution } from '@helmx/protocol'
 import {
+  GITHUB_ALERT_TYPES,
   countHeadingsUpToH3,
+  isGithubAlertType,
+  remarkGithubAlerts,
   remarkHeadingIndices,
   splitStreamingMarkdownBlocks,
 } from '../src/conversation/markdown-model.js'
@@ -96,13 +99,21 @@ interface MountedView {
   unmount: () => void
 }
 
-async function mountView(initial: { text: string; streaming?: boolean }): Promise<MountedView> {
-  const store = makeTestStore({ uiContributions: counterContributions })
+async function mountView(initial: {
+  text: string
+  streaming?: boolean
+  breaks?: boolean
+  locale?: 'en' | 'zh-CN'
+}): Promise<MountedView> {
+  const store = makeTestStore({
+    uiContributions: counterContributions,
+    ...(initial.locale !== undefined ? { locale: initial.locale } : {}),
+  })
   const host = document.createElement('div')
   document.body.appendChild(host)
   const root = createRoot(host)
   // 异步 act：冲洗净位内的插件模块加载状态更新，保证后续计数与 DOM 断言确定性
-  const render = async (props: { text: string; streaming?: boolean }): Promise<void> => {
+  const render = async (props: { text: string; streaming?: boolean; breaks?: boolean }): Promise<void> => {
     await act(async () => {
       root.render(
         React.createElement(
@@ -616,5 +627,160 @@ describe('MarkdownView 流式分块渲染', { timeout: 60_000 }, () => {
     assert.equal(pluginStats.mounts, 3, '三个 cnt 代码块各自恰好一次挂载')
     assert.ok(pluginStats.renders <= 9, `渲染计数远小于帧数×代码块数（实际 ${pluginStats.renders} 次 / ${frames.length} 帧）`)
     view.unmount()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 5. GitHub Alerts (`remarkGithubAlerts` + `MarkdownView` + 流式分块兼容)
+// ---------------------------------------------------------------------------
+
+describe('MarkdownView GitHub Alerts 与流式分块兼容', { timeout: 60_000 }, () => {
+  let restoreClientEnv: (() => void) | undefined
+  before(() => { restoreClientEnv = installSeededClientEnv() })
+  after(() => { restoreClientEnv?.() })
+
+  test('isGithubAlertType 与 remarkGithubAlerts 边界语义', { timeout: 60_000 }, () => {
+    assert.deepEqual([...GITHUB_ALERT_TYPES], ['note', 'tip', 'important', 'warning', 'caution'])
+    assert.equal(isGithubAlertType('note'), true)
+    assert.equal(isGithubAlertType('caution'), true)
+    assert.equal(isGithubAlertType('unknown'), false)
+    assert.equal(isGithubAlertType(null), false)
+    assert.equal(typeof remarkGithubAlerts, 'function')
+  })
+
+  test('渲染 5 类 GitHub Alert（大小写不敏感、多段落、breaks={true}、仅标记帧、双语标题）', { timeout: 60_000 }, async () => {
+    const cases: Array<{ marker: string; type: string; enTitle: string; zhTitle: string }> = [
+      { marker: 'NOTE', type: 'note', enTitle: 'Note', zhTitle: '说明' },
+      { marker: 'tip', type: 'tip', enTitle: 'Tip', zhTitle: '提示' },
+      { marker: 'Important', type: 'important', enTitle: 'Important', zhTitle: '重要' },
+      { marker: 'WARNING', type: 'warning', enTitle: 'Warning', zhTitle: '警告' },
+      { marker: 'cAuTiOn', type: 'caution', enTitle: 'Caution', zhTitle: '警示' },
+    ]
+
+    for (const c of cases) {
+      const view = await mountView({ text: `> [!${c.marker}]\n> Body for ${c.type}`, locale: 'en' })
+      try {
+        const alertEl = view.host.querySelector(`.md-alert.md-alert--${c.type}[data-alert="${c.type}"][role="note"]`)
+        assert.ok(alertEl !== null, `expected .md-alert--${c.type}`)
+        assert.equal(alertEl.querySelector('.md-alert-title')?.textContent, c.enTitle)
+        assert.equal(alertEl.querySelector('.md-alert-body')?.textContent?.trim(), `Body for ${c.type}`)
+        assert.ok(view.host.querySelector('blockquote') === null)
+      } finally {
+        view.unmount()
+      }
+
+      const zhView = await mountView({ text: `> [!${c.marker}]\n> 中文内容`, locale: 'zh-CN' })
+      try {
+        const alertEl = zhView.host.querySelector(`.md-alert--${c.type}`)
+        assert.ok(alertEl !== null)
+        assert.equal(alertEl.querySelector('.md-alert-title')?.textContent, c.zhTitle)
+      } finally {
+        zhView.unmount()
+      }
+    }
+
+    // 多段落（> [!WARNING]\n>\n> Para 1\n>\n> Para 2）
+    const multiPara = await mountView({ text: '> [!WARNING]\n>\n> First paragraph\n>\n> Second paragraph' })
+    try {
+      const paras = multiPara.host.querySelectorAll('.md-alert--warning .md-alert-body p')
+      assert.equal(paras.length, 2)
+      assert.equal(paras[0]!.textContent, 'First paragraph')
+      assert.equal(paras[1]!.textContent, 'Second paragraph')
+    } finally {
+      multiPara.unmount()
+    }
+
+    // breaks={true} 时不产生前导 <br>，正文内部换行正常保留 <br>
+    const breaksView = await mountView({ text: '> [!NOTE]\n> Line 1\n> Line 2', breaks: true })
+    try {
+      const bodyP = breaksView.host.querySelector('.md-alert--note .md-alert-body p')
+      assert.ok(bodyP !== null)
+      assert.equal(bodyP.firstChild?.nodeName, '#text')
+      assert.equal(bodyP.querySelectorAll('br').length, 1)
+    } finally {
+      breaksView.unmount()
+    }
+
+    // 换行后直接接行内格式（> [!NOTE]\n> *bold*）与双空格硬换行（> [!TIP]  \n> *emph*）
+    const nextLineInline = await mountView({ text: '> [!NOTE]\n> *italic* next line', breaks: true })
+    try {
+      const alertEl = nextLineInline.host.querySelector('.md-alert--note')
+      assert.ok(alertEl !== null)
+      assert.equal(alertEl.querySelector('.md-alert-body em')?.textContent, 'italic')
+    } finally {
+      nextLineInline.unmount()
+    }
+
+    const hardBreakAlert = await mountView({ text: '> [!TIP]  \n> *hard* break' })
+    try {
+      const alertEl = hardBreakAlert.host.querySelector('.md-alert--tip')
+      assert.ok(alertEl !== null)
+      assert.equal(alertEl.querySelector('.md-alert-body em')?.textContent, 'hard')
+      assert.equal(alertEl.querySelectorAll('.md-alert-body br').length, 0)
+    } finally {
+      hardBreakAlert.unmount()
+    }
+
+    // 仅标记帧（流式初帧 `> [!TIP]`）
+    const markerOnly = await mountView({ text: '> [!TIP]' })
+    try {
+      const alertEl = markerOnly.host.querySelector('.md-alert--tip')
+      assert.ok(alertEl !== null)
+      assert.equal(alertEl.querySelector('.md-alert-body')?.innerHTML, '')
+    } finally {
+      markerOnly.unmount()
+    }
+  })
+
+  test('非 Alert 引用（同行内文/行内语法、未知类型、普通引用）保持原样 <blockquote>', { timeout: 60_000 }, async () => {
+    const nonAlerts = [
+      '> [!NOTE] inline text on same line',
+      '> [!NOTE] *inline emphasis*',
+      '> [!NOTE] `inline code`',
+      '> [!UNKNOWN]\n> Body text',
+      '> Regular blockquote\n> second line',
+    ]
+    for (const md of nonAlerts) {
+      const view = await mountView({ text: md })
+      try {
+        assert.ok(view.host.querySelector('.md-alert') === null, `expected regular blockquote for: ${md}`)
+        assert.ok(view.host.querySelector('blockquote') !== null, `expected <blockquote> for: ${md}`)
+      } finally {
+        view.unmount()
+      }
+    }
+  })
+
+  test('splitStreamingMarkdownBlocks 与流式冻结：GitHub Alert 不破坏前缀代码块身份，链接定义仍安全回退', { timeout: 60_000 }, async () => {
+    // 1. splitStreamingMarkdownBlocks 允许 Alert 正常分块，同时对 `> [!NOTE]: url` 与非引用的 `[!NOTE]` 继续整篇回退
+    const doc = `${longPara('前置段落')}\n\n\`\`\`cnt\nALERT-CODE\n\`\`\`\n\n> [!IMPORTANT]\n> Critical note\n\n${longPara('尾段')}`
+    const blocks = splitStreamingMarkdownBlocks(doc)
+    assert.ok(blocks.length > 1, 'GitHub Alert header must not collapse streaming blocks to whole-document mode')
+    assertJoinRoundtrip(doc, blocks)
+
+    const defInQuote = `${longPara('前置段落')}\n\n> [!NOTE]: https://example.com\n\n${longPara('尾段')}`
+    assert.equal(splitStreamingMarkdownBlocks(defInQuote).length, 1, 'blockquote link ref definition must still fall back')
+
+    const unquotedMarker = `${longPara('前置段落')}\n\n[!NOTE]\n\n${longPara('尾段')}`
+    assert.equal(splitStreamingMarkdownBlocks(unquotedMarker).length, 1, 'unquoted [!NOTE] must still fall back')
+
+    // 2. 流式渲染期间保持前缀 CountingCodeBlock 挂载身份，最终 DOM 与整篇渲染逐字节等价
+    resetPluginStats()
+    const prefix = `${longPara('前置段落')}\n\n\`\`\`cnt\nALERT-CODE\n\`\`\`\n\n> [!IMPORTANT]\n> Critical note`
+    const streamView = await mountView({ text: prefix, streaming: true })
+    assert.equal(pluginStats.mounts, 1)
+    const rendersBeforeTail = pluginStats.renders
+
+    const full = `${prefix}\n\n${longPara('追加尾段')}`
+    await streamView.render({ text: full, streaming: true })
+    assert.equal(pluginStats.mounts, 1, '前缀代码块保持身份')
+    assert.equal(pluginStats.renders, rendersBeforeTail, '前缀代码块不重复解析')
+    assert.ok(streamView.host.querySelector('.md-alert--important[data-alert="important"]') !== null)
+
+    await streamView.render({ text: full, streaming: false })
+    const wholeView = await mountView({ text: full })
+    assert.equal(streamView.host.innerHTML, wholeView.host.innerHTML, '流式 Alert 最终 DOM 必须与整篇等价')
+    streamView.unmount()
+    wholeView.unmount()
   })
 })

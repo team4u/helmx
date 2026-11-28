@@ -68,6 +68,20 @@ export interface PlanStateManager {
   stopAll(): Promise<void>
 }
 
+export function resolveNextPreviousDraft(
+  current: PlanConversationRecord | undefined,
+): PlanDraftSummary | undefined {
+  if (current?.draft === undefined) return undefined
+  if (
+    current.lastProposedVersion !== undefined &&
+    current.previousDraft?.version === current.lastProposedVersion &&
+    current.draft.version !== current.lastProposedVersion
+  ) {
+    return current.previousDraft
+  }
+  return current.draft
+}
+
 export function createEmptyPlanSessionView(): PlanSessionView {
   return { mode: 'normal', awaitingApproval: false }
 }
@@ -75,10 +89,17 @@ export function createEmptyPlanSessionView(): PlanSessionView {
 export function toPlanSessionView(record: PlanConversationRecord | undefined): PlanSessionView {
   if (record === undefined) return createEmptyPlanSessionView()
   const awaitingApproval = record.mode === 'planning' && record.pendingAskId !== undefined
+  const previousDraft =
+    record.previousDraft !== undefined &&
+    record.draft !== undefined &&
+    record.previousDraft.version !== record.draft.version
+      ? record.previousDraft
+      : undefined
   return {
     mode: record.mode,
     awaitingApproval,
     ...(record.draft !== undefined ? { draft: record.draft } : {}),
+    ...(previousDraft !== undefined ? { previousDraft } : {}),
     ...(record.approved !== undefined ? { approved: record.approved } : {}),
   }
 }
@@ -341,6 +362,8 @@ export function createPlanStateManager(deps: {
       mode: nextMode,
       ...(keepPendingAskId !== undefined ? { pendingAskId: keepPendingAskId } : {}),
       ...(latest?.draft !== undefined ? { draft: latest.draft } : {}),
+      ...(latest?.previousDraft !== undefined ? { previousDraft: latest.previousDraft } : {}),
+      ...(latest?.lastProposedVersion !== undefined ? { lastProposedVersion: latest.lastProposedVersion } : {}),
       ...(latest?.approved !== undefined ? { approved: latest.approved } : {}),
     }
     writeRecord(conversationId, nextRecord)
@@ -430,17 +453,26 @@ export function createPlanStateManager(deps: {
       if (!validated.ok) {
         throw new HelmxError('validation_error', validated.message, 400, { conversationId })
       }
+      if (
+        current?.draft !== undefined &&
+        current.draft.title === validated.title &&
+        current.draft.markdown === validated.markdown
+      ) {
+        return toPlanSessionView(current)
+      }
       const draft: PlanDraftSummary = {
         title: validated.title,
         markdown: validated.markdown,
         version: currentVersion + 1,
         updatedAt: Date.now(),
       }
+      const previousDraft = resolveNextPreviousDraft(current)
       const nextRecord: PlanConversationRecord = {
         ...current,
         conversationId,
         mode,
         draft,
+        ...(previousDraft !== undefined ? { previousDraft } : {}),
       }
       writeRecord(conversationId, nextRecord)
       try {

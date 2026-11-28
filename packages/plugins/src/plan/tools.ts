@@ -25,7 +25,7 @@ import {
   type PlanDraftSummary,
   type PlanToolPresentationMeta,
 } from './contracts.js'
-import type { PlanStateManager } from './state.js'
+import { resolveNextPreviousDraft, type PlanStateManager } from './state.js'
 import { errorMessageOf } from '../shared-helpers.js'
 
 const utf8Encoder = new TextEncoder()
@@ -283,6 +283,7 @@ async function preparePlanningAsk(params: {
       conversationId,
       mode: 'planning',
       pendingAskId: askId,
+      lastProposedVersion: draft.version,
     }
     await persistRecordOrRollback(state, conversationId, current, nextRecord)
     return {
@@ -683,7 +684,7 @@ function registerPlanSaveTool(ctx: HelmxPluginContext, state: PlanStateManager):
     description:
       'Save or update the current plan draft (plan mode only, top-level human conversations only).',
     promptGuidelines: [
-      'Use plan_save only while in plan mode to record or refine a self-contained implementation plan before calling plan_propose.',
+      'Use plan_save only while in plan mode to record or refine a self-contained, review-friendly Markdown implementation plan before calling plan_propose; do not duplicate the plan body in chat.',
     ],
     inputSchema: {
       type: 'object',
@@ -727,6 +728,25 @@ function registerPlanSaveTool(ctx: HelmxPluginContext, state: PlanStateManager):
           return toolError('plan_save is only allowed while in planning mode.')
         }
 
+        if (
+          current?.draft !== undefined &&
+          current.draft.title === title &&
+          current.draft.markdown === markdown
+        ) {
+          const lineCount = markdown.split(/\r?\n/).length
+          const charCount = markdown.length
+          return {
+            output: `Plan draft v${current.draft.version} ("${title}") is unchanged (${lineCount} lines, ${charCount} chars). It is already visible in the Plan panel—do not repeat the plan body in chat; call \`${PLAN_TOOL_PROPOSE}\` when ready for user approval.`,
+            presentationMeta: {
+              kind: 'save',
+              title,
+              version: current.draft.version,
+              lineCount,
+              charCount,
+            },
+          }
+        }
+
         const nextVersion = (current?.draft?.version ?? 0) + 1
         const draft: PlanDraftSummary = {
           title,
@@ -734,18 +754,20 @@ function registerPlanSaveTool(ctx: HelmxPluginContext, state: PlanStateManager):
           version: nextVersion,
           updatedAt: Date.now(),
         }
+        const previousDraft = resolveNextPreviousDraft(current)
         const nextRecord: PlanConversationRecord = {
           ...current,
           conversationId,
           mode: 'planning',
           draft,
+          ...(previousDraft !== undefined ? { previousDraft } : {}),
         }
         await persistRecordOrRollback(state, conversationId, current, nextRecord)
 
         const lineCount = markdown.split(/\r?\n/).length
         const charCount = markdown.length
         return {
-          output: `Saved plan draft v${nextVersion}: "${title}" (${lineCount} lines, ${charCount} chars). Call \`${PLAN_TOOL_PROPOSE}\` when ready for user approval.`,
+          output: `Saved plan draft v${nextVersion}: "${title}" (${lineCount} lines, ${charCount} chars). It is now visible in the Plan panel—do not repeat the plan body in chat; call \`${PLAN_TOOL_PROPOSE}\` when ready for user approval.`,
           presentationMeta: {
             kind: 'save',
             title,
@@ -769,7 +791,7 @@ function registerPlanProposeTool(
     description:
       'Submit the current saved plan draft for human approval via AskDoc (plan mode only).',
     promptGuidelines: [
-      'Call plan_propose only after saving a self-contained draft with plan_save; pass a concise plain-text summary (1-300 chars, no code fences).',
+      'Call plan_propose only after saving a self-contained draft with plan_save; pass a concise plain-text summary (1-300 chars, no code fences) and avoid repeating the full plan in your chat reply.',
     ],
     inputSchema: {
       type: 'object',

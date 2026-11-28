@@ -81,7 +81,7 @@ import {
   type PlanPluginOptions,
   type PlanSessionView,
 } from '../src/plan.js'
-import { MAX_PLAN_BADGE_ENTRIES, createPlanStateManager } from '../src/plan/state.js'
+import { MAX_PLAN_BADGE_ENTRIES, createPlanStateManager, resolveNextPreviousDraft } from '../src/plan/state.js'
 import {
   MemoryConfigStore,
   MemoryDocStore,
@@ -1009,6 +1009,11 @@ test('hooks: onBeforeTurn strips plan tools in normal/ineligible mode and enforc
       assert.match(section.text, /plan_save/)
       assert.match(section.text, /plan_propose/)
       assert.match(section.text, /self-contained/i)
+      assert.match(section.text, /User Review Required/)
+      assert.match(section.text, /Proposed Changes/)
+      assert.match(section.text, /\[MODIFY\].*\[NEW\].*\[DELETE\]/)
+      assert.match(section.text, /Verification Plan/)
+      assert.match(section.text, /DO NOT paste or re-summarize/)
     }
   } finally {
     await harness.close()
@@ -1088,20 +1093,159 @@ test('plan_save: enforces planning mode, bounds, redaction, version bump, flush,
     assert.deepEqual(formattedV1.details, v1.presentationMeta)
 
     // Check KV & sessionDoc & badges
+    assert.match(String(v1.output), /Plan panel/)
+    assert.match(String(v1.output), /do not repeat the plan body in chat/i)
     const sessionV1 = harness.readSessionDoc(1)
     assert.equal(sessionV1.mode, 'planning')
     assert.equal(sessionV1.draft?.version, 1)
+    assert.equal(sessionV1.previousDraft, undefined)
     assert.equal(sessionV1.draft?.title, 'Auth [REDACTED]')
     assert.equal(sessionV1.draft?.markdown.includes('SECRET_TOKEN'), false)
 
-    // Save v2 bumps version
+    // Identical plan_save (even with secret redaction) is idempotent: no version bump, no KV flush
+    const flushesBeforeSame = harness.kvStore.flushCount
+    const v1Same = (await harness.host.executeTool(
+      PLAN_TOOL_SAVE,
+      { title: 'Auth SECRET_TOKEN', markdown: '# Step 1\nUse SECRET_TOKEN safely\n# Step 2' },
+      { conversationId: 1 },
+    )) as PluginToolResultEnvelope
+    assert.equal(v1Same.isError, undefined)
+    assert.match(String(v1Same.output), /unchanged/i)
+    assert.deepEqual(v1Same.presentationMeta, {
+      kind: 'save',
+      title: 'Auth [REDACTED]',
+      version: 1,
+      lineCount: 3,
+      charCount: '# Step 1\nUse [REDACTED] safely\n# Step 2'.length,
+    })
+    assert.equal(harness.kvStore.flushCount, flushesBeforeSame)
+    assert.equal(harness.readSessionDoc(1).draft?.version, 1)
+    assert.equal(harness.readSessionDoc(1).previousDraft, undefined)
+
+    // Save v2 bumps version and preserves v1 as previousDraft
     const v2 = (await harness.host.executeTool(
       PLAN_TOOL_SAVE,
       { title: 'Auth Plan v2', markdown: 'Line 1\nLine 2' },
       { conversationId: 1 },
     )) as PluginToolResultEnvelope
     assert.equal((v2.presentationMeta as { version?: number }).version, 2)
-    assert.equal(harness.readSessionDoc(1).draft?.version, 2)
+    const sessionV2 = harness.readSessionDoc(1)
+    assert.equal(sessionV2.draft?.version, 2)
+    assert.equal(sessionV2.previousDraft?.version, 1)
+    assert.equal(sessionV2.previousDraft?.title, 'Auth [REDACTED]')
+  } finally {
+    await harness.close()
+  }
+})
+
+test('previousDraft & lastProposedVersion: anchored baseline across proposals, idempotent update_draft, and schema safety', TIMEOUT, async () => {
+  // Pure helper unit assertions
+  assert.equal(resolveNextPreviousDraft(undefined), undefined)
+  assert.equal(resolveNextPreviousDraft({ conversationId: 1, mode: 'planning' }), undefined)
+  const v1Draft = { title: 'T1', markdown: 'M1', version: 1, updatedAt: 1 }
+  const v2Draft = { title: 'T2', markdown: 'M2', version: 2, updatedAt: 2 }
+  const v3Draft = { title: 'T3', markdown: 'M3', version: 3, updatedAt: 3 }
+  assert.deepEqual(resolveNextPreviousDraft({ conversationId: 1, mode: 'planning', draft: v1Draft }), v1Draft)
+  // After proposing v2, v2 -> v3 sets previousDraft = v2; then v3 -> v4 anchors previousDraft at v2
+  assert.deepEqual(
+    resolveNextPreviousDraft({
+      conversationId: 1,
+      mode: 'planning',
+      draft: v3Draft,
+      previousDraft: v2Draft,
+      lastProposedVersion: 2,
+    }),
+    v2Draft,
+  )
+  // Once proposed again at v3, v3 -> v4 moves baseline to v3 (even if previousDraft was v2)
+  assert.deepEqual(
+    resolveNextPreviousDraft({
+      conversationId: 1,
+      mode: 'planning',
+      draft: v3Draft,
+      previousDraft: v2Draft,
+      lastProposedVersion: 3,
+    }),
+    v3Draft,
+  )
+
+  const harness = await openPlanHarness({
+    seedConversations: [makeConversationSummary({ id: 1, stateChangeSeq: 12 })],
+  })
+  try {
+    await harness.host.invokeAction(PLAN_PLUGIN_ID, 'set_mode', { conversationId: 1, mode: 'planning' })
+    await harness.host.executeTool(PLAN_TOOL_SAVE, { title: 'P1', markdown: '# Step 1' }, { conversationId: 1 })
+    await harness.host.executeTool(PLAN_TOOL_SAVE, { title: 'P2', markdown: '# Step 1\n# Step 2' }, { conversationId: 1 })
+    assert.equal(harness.readSessionDoc(1).previousDraft?.version, 1)
+
+    // Propose v2 -> anchors lastProposedVersion = 2 in KV while keeping previousDraft = v1 in view (never leaking lastProposedVersion)
+    const p1 = harness.host.executeTool(
+      PLAN_TOOL_PROPOSE,
+      { summary: 'First proposal at v2' },
+      { conversationId: 1 },
+    ) as Promise<PluginToolResultEnvelope>
+    await waitFor(() => harness.createdAsks.length === 1)
+    const kvDuringAsk = harness.kvStore.getParsed<PlanConversationRecord>(PLAN_PLUGIN_ID, PLAN_KV_NAMESPACE, '1')
+    assert.equal(kvDuringAsk?.lastProposedVersion, 2)
+    const viewDuringAsk = harness.readSessionDoc(1) as PlanSessionView & Record<string, unknown>
+    assert.equal(viewDuringAsk.previousDraft?.version, 1)
+    assert.equal('lastProposedVersion' in viewDuringAsk, false)
+
+    harness.answerAsk(harness.createdAsks[0]!.id!, { decision: 'revise', feedback: 'Expand step 2' })
+    await p1
+
+    // First post-proposal edit (v3): previousDraft advances to v2 (the proposed baseline)
+    await harness.host.executeTool(PLAN_TOOL_SAVE, { title: 'P3', markdown: '# Step 1\n# Step 2a' }, { conversationId: 1 })
+    assert.equal(harness.readSessionDoc(1).draft?.version, 3)
+    assert.equal(harness.readSessionDoc(1).previousDraft?.version, 2)
+
+    // Second pre-proposal edit (v4): previousDraft stays anchored at v2!
+    await harness.host.executeTool(PLAN_TOOL_SAVE, { title: 'P4', markdown: '# Step 1\n# Step 2b' }, { conversationId: 1 })
+    assert.equal(harness.readSessionDoc(1).draft?.version, 4)
+    assert.equal(harness.readSessionDoc(1).previousDraft?.version, 2)
+
+    // Idempotent update_draft keeps v4 and previousDraft v2 without bumping version, while stale expectedVersion still rejects 409
+    await assertRejectsCode(
+      () =>
+        harness.host.invokeAction(PLAN_PLUGIN_ID, 'update_draft', {
+          conversationId: 1,
+          title: 'P4',
+          markdown: '# Step 1\n# Step 2b',
+          expectedVersion: 3,
+        }),
+      'plan_draft_conflict',
+    )
+    const unchangedView = (await harness.host.invokeAction(PLAN_PLUGIN_ID, 'update_draft', {
+      conversationId: 1,
+      title: 'P4',
+      markdown: '# Step 1\n# Step 2b',
+      expectedVersion: 4,
+    })) as PlanSessionView
+    assert.equal(unchangedView.draft?.version, 4)
+    assert.equal(unchangedView.previousDraft?.version, 2)
+
+    // Propose v4 -> anchors lastProposedVersion = 4, keeps previousDraft = v2 during review
+    const p2 = harness.host.executeTool(
+      PLAN_TOOL_PROPOSE,
+      { summary: 'Second proposal at v4' },
+      { conversationId: 1 },
+    ) as Promise<PluginToolResultEnvelope>
+    await waitFor(() => harness.createdAsks.length === 2)
+    assert.equal(harness.kvStore.getParsed<PlanConversationRecord>(PLAN_PLUGIN_ID, PLAN_KV_NAMESPACE, '1')?.lastProposedVersion, 4)
+    assert.equal(harness.readSessionDoc(1).previousDraft?.version, 2)
+
+    harness.answerAsk(harness.createdAsks[1]!.id!, { decision: 'revise', feedback: 'Tweak again' })
+    await p2
+
+    // Next edit (v5) shifts previousDraft to v4
+    await harness.host.executeTool(PLAN_TOOL_SAVE, { title: 'P5', markdown: '# Step 1\n# Step 2c' }, { conversationId: 1 })
+    assert.equal(harness.readSessionDoc(1).draft?.version, 5)
+    assert.equal(harness.readSessionDoc(1).previousDraft?.version, 4)
+
+    // get action validates against PLAN_SESSION_VIEW_SCHEMA cleanly
+    const getView = (await harness.host.invokeAction(PLAN_PLUGIN_ID, 'get', { conversationId: 1 })) as PlanSessionView
+    assert.equal(getView.draft?.version, 5)
+    assert.equal(getView.previousDraft?.version, 4)
   } finally {
     await harness.close()
   }

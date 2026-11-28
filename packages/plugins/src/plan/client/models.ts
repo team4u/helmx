@@ -110,11 +110,17 @@ export function parsePlanSessionView(raw: unknown): PlanSessionView | undefined 
   if (mode !== 'normal' && mode !== 'planning') return undefined
   const awaitingApproval = typeof raw['awaitingApproval'] === 'boolean' ? raw['awaitingApproval'] : false
   const draft = parsePlanDraftSummary(raw['draft'])
+  const rawPreviousDraft = parsePlanDraftSummary(raw['previousDraft'])
+  const previousDraft =
+    draft !== undefined && rawPreviousDraft !== undefined && rawPreviousDraft.version !== draft.version
+      ? rawPreviousDraft
+      : undefined
   const approved = parsePlanApprovedInfo(raw['approved'])
   return {
     mode,
     awaitingApproval,
     ...(draft !== undefined ? { draft } : {}),
+    ...(previousDraft !== undefined ? { previousDraft } : {}),
     ...(approved !== undefined ? { approved } : {}),
   }
 }

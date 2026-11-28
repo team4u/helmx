@@ -5,7 +5,7 @@
  * latest approved artifact metadata, and mode toggle.
  * Exports only React components and TS types (Fast Refresh compliant).
  */
-import { useEffect, useRef, useState } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { WorkbenchPanelProps } from '@helmx/protocol/browser'
 import {
@@ -22,6 +22,7 @@ import {
   KvGrid,
   LoadingState,
   MonoId,
+  SegmentedControl,
   Stack,
   Textarea,
   formatCompactTimestamp,
@@ -37,11 +38,14 @@ import {
 import {
   PLAN_COPY,
   planActionFailedNotice,
+  planDiffSkippedLabel,
+  planDiffTabLabel,
   planModeLabel,
   planStaleDraftWarning,
   planUpdatedLabel,
   planVersionLabel,
 } from './copy.ts'
+import { computePlanDraftDiff } from './diff.ts'
 import { isPlanEligibleConversation, parsePlanSessionView } from './models.ts'
 import { PLAN_SESSION_DOC, type PlanSessionView } from './types.ts'
 
@@ -71,9 +75,11 @@ function PlanWorkbenchPanelInner({ conversationId }: { conversationId: number })
     view: PlanSessionView
   } | null>(null)
   const [editing, setEditing] = useState<EditingDraftState | null>(null)
+  const [viewMode, setViewMode] = useState<'preview' | 'diff'>('preview')
 
   useEffect(() => {
     setEditing(null)
+    setViewMode('preview')
   }, [conversationId])
 
   useEffect(() => {
@@ -153,7 +159,22 @@ function PlanWorkbenchPanelInner({ conversationId }: { conversationId: number })
   )
 
   const draft = effectiveView.draft
+  const previousDraft = effectiveView.previousDraft
   const approved = effectiveView.approved
+
+  useEffect(() => {
+    if (editing !== null || previousDraft === undefined) {
+      setViewMode('preview')
+    }
+  }, [editing, previousDraft])
+
+  const diffResult = useMemo(
+    () =>
+      draft !== undefined && previousDraft !== undefined
+        ? computePlanDraftDiff(previousDraft, draft)
+        : null,
+    [draft, previousDraft],
+  )
 
   const draftSubtitle =
     draft !== undefined ? (
@@ -364,14 +385,92 @@ function PlanWorkbenchPanelInner({ conversationId }: { conversationId: number })
                     </Button>
                   </Stack>
                 </form>
-              ) : draft.markdown.trim() !== '' ? (
-                <MarkdownView
-                  className="plan-markdown selectable"
-                  text={draft.markdown}
-                  conversationId={conversationId}
-                />
               ) : (
-                <div className="text-muted">{t(PLAN_COPY.draftEmptyMarkdown)}</div>
+                <>
+                  {previousDraft !== undefined && diffResult !== null ? (
+                    <div className="plan-view-bar">
+                      <SegmentedControl<'preview' | 'diff'>
+                        size="sm"
+                        aria-label={t(PLAN_COPY.viewModeAria)}
+                        value={viewMode}
+                        onValueChange={(next) => setViewMode(next)}
+                        items={[
+                          { value: 'preview', label: t(PLAN_COPY.viewModePreview) },
+                          { value: 'diff', label: planDiffTabLabel(previousDraft.version, locale) },
+                        ]}
+                      />
+                      {diffResult.kind === 'diff' ? (
+                        <span className="plan-diff-stats tabular-nums">
+                          <span className="plan-diff-stat-add">+{diffResult.addedLines}</span>
+                          <span className="plan-diff-stat-del">-{diffResult.removedLines}</span>
+                        </span>
+                      ) : null}
+                    </div>
+                  ) : null}
+                  {viewMode === 'diff' && previousDraft !== undefined && diffResult !== null ? (
+                    diffResult.kind === 'too_large' ? (
+                      <Callout tone="info">{t(PLAN_COPY.diffTooLarge)}</Callout>
+                    ) : !diffResult.hasChanges ? (
+                      <div className="text-muted">{t(PLAN_COPY.diffNoChanges)}</div>
+                    ) : (
+                      <Stack gap="xs">
+                        {diffResult.titleChanged ? (
+                          <div className="plan-diff-title-change">
+                            <span className="plan-diff-title-label">{t(PLAN_COPY.diffTitleChanged)}</span>
+                            <span className="plan-diff-title-prev">{diffResult.prevTitle}</span>
+                            <HelmxIcon name="arrow-right" size={12} />
+                            <span className="plan-diff-title-next">{diffResult.nextTitle}</span>
+                          </div>
+                        ) : null}
+                        {diffResult.hunks.length > 0 ? (
+                          <div className="plan-diff-view selectable">
+                            {diffResult.hunks.map((hunk, hunkIdx) => (
+                              <Fragment key={hunkIdx}>
+                                {hunk.skippedBefore > 0 ? (
+                                  <div className="plan-diff-hunk-gap">
+                                    {planDiffSkippedLabel(hunk.skippedBefore, locale)}
+                                  </div>
+                                ) : null}
+                                {hunk.rows.map((row, rowIdx) => (
+                                  <div
+                                    key={`${hunkIdx}-${rowIdx}`}
+                                    className={
+                                      row.kind === 'add'
+                                        ? 'plan-diff-row plan-diff-row--add'
+                                        : row.kind === 'remove'
+                                          ? 'plan-diff-row plan-diff-row--remove'
+                                          : 'plan-diff-row'
+                                    }
+                                  >
+                                    <span className="plan-diff-ln tabular-nums">{row.oldLine ?? ''}</span>
+                                    <span className="plan-diff-ln tabular-nums">{row.newLine ?? ''}</span>
+                                    <span className="plan-diff-sign">
+                                      {row.kind === 'add' ? '+' : row.kind === 'remove' ? '-' : ' '}
+                                    </span>
+                                    <code className="plan-diff-code">{row.text === '' ? ' ' : row.text}</code>
+                                  </div>
+                                ))}
+                              </Fragment>
+                            ))}
+                            {diffResult.trailingSkipped > 0 ? (
+                              <div className="plan-diff-hunk-gap">
+                                {planDiffSkippedLabel(diffResult.trailingSkipped, locale)}
+                              </div>
+                            ) : null}
+                          </div>
+                        ) : null}
+                      </Stack>
+                    )
+                  ) : draft.markdown.trim() !== '' ? (
+                    <MarkdownView
+                      className="plan-markdown selectable"
+                      text={draft.markdown}
+                      conversationId={conversationId}
+                    />
+                  ) : (
+                    <div className="text-muted">{t(PLAN_COPY.draftEmptyMarkdown)}</div>
+                  )}
+                </>
               )}
             </Card>
           ) : (

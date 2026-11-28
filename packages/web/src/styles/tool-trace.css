@@ -404,11 +404,16 @@
 .thinking-expanded-body .msg-ai-body ul,
 .thinking-expanded-body .msg-ai-body ol,
 .thinking-expanded-body .msg-ai-body pre,
-.thinking-expanded-body .msg-ai-body blockquote {
+.thinking-expanded-body .msg-ai-body blockquote,
+.thinking-expanded-body .msg-ai-body .md-alert {
   margin: 0 0 8px;
   max-width: 100%;
   width: 100%;
   box-sizing: border-box;
+}
+
+.thinking-expanded-body .msg-ai-body .md-alert {
+  padding: 6px 10px;
 }
 
 .thinking-expanded-body .msg-ai-body .code-block-wrap .code-block-pre {
@@ -425,11 +430,11 @@
   max-width: 100%;
 }
 
-.thinking-expanded-body .msg-ai-body > :is(h1, h2, h3, h4, p):first-child {
+.thinking-expanded-body .msg-ai-body > :is(h1, h2, h3, h4, p, .md-alert):first-child {
   margin-top: 0;
 }
 
-.thinking-expanded-body .msg-ai-body > :is(p, ul, ol, pre, blockquote, .code-block-wrap):last-child {
+.thinking-expanded-body .msg-ai-body > :is(p, ul, ol, pre, blockquote, .md-alert, .code-block-wrap):last-child {
   margin-bottom: 0;
 }
 

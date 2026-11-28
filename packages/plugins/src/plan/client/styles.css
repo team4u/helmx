@@ -60,6 +60,11 @@
   padding: 1px 4px;
 }
 
+.plan-tray-preview.msg-ai-body .md-alert {
+  margin: 6px 0;
+  padding: 6px 10px;
+}
+
 .plan-tray-preview.msg-ai-body > :first-child {
   margin-top: 0;
 }
@@ -126,6 +131,141 @@
   font-size: 12.5px;
   line-height: 1.55;
   resize: vertical;
+}
+
+/* ---- Workbench draft revision diff switcher & line diff ---- */
+.plan-view-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.plan-diff-stats {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+.plan-diff-stat-add {
+  color: var(--code-token-addition);
+}
+
+.plan-diff-stat-del {
+  color: var(--code-token-deletion);
+}
+
+.plan-diff-title-change {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  background: var(--bg-subtle);
+  font-size: 12px;
+  color: var(--fg-secondary);
+}
+
+.plan-diff-title-label {
+  font-weight: 600;
+  color: var(--fg-muted);
+}
+
+.plan-diff-title-prev {
+  text-decoration: line-through;
+  color: var(--code-token-deletion);
+}
+
+.plan-diff-title-next {
+  font-weight: 500;
+  color: var(--code-token-addition);
+}
+
+.plan-diff-view {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--code-border);
+  border-radius: var(--radius-xs);
+  background: var(--code-bg);
+  overflow: hidden;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.plan-diff-hunk-gap {
+  padding: 4px 10px;
+  font-family: var(--font-sans);
+  font-size: 11px;
+  color: var(--fg-muted);
+  background: var(--diff-gutter-bg);
+  border-top: 1px solid var(--diff-gutter-border);
+  border-bottom: 1px solid var(--diff-gutter-border);
+}
+
+.plan-diff-hunk-gap:first-child {
+  border-top: none;
+}
+
+.plan-diff-hunk-gap:last-child {
+  border-bottom: none;
+}
+
+.plan-diff-row {
+  display: grid;
+  grid-template-columns: 3.2em 3.2em 1.3em minmax(0, 1fr);
+  align-items: stretch;
+  width: 100%;
+}
+
+.plan-diff-row--add {
+  background: var(--diff-add-bg);
+}
+
+.plan-diff-row--remove {
+  background: var(--diff-remove-bg);
+}
+
+.plan-diff-ln {
+  padding: 0 6px;
+  text-align: right;
+  color: var(--fg-muted);
+  background: var(--diff-gutter-bg);
+  border-right: 1px solid var(--diff-gutter-border);
+  user-select: none;
+  white-space: nowrap;
+}
+
+.plan-diff-sign {
+  text-align: center;
+  user-select: none;
+  color: var(--fg-muted);
+}
+
+.plan-diff-row--add .plan-diff-sign {
+  color: var(--code-token-addition);
+}
+
+.plan-diff-row--remove .plan-diff-sign {
+  color: var(--code-token-deletion);
+}
+
+.plan-diff-code {
+  padding: 0 8px 0 4px;
+  font-family: inherit;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  min-width: 0;
+  color: var(--fg);
 }
 
 /* ---- Timeline 26px tool trace row（悬停/焦点高亮由宿主 .trace-block-head 整行提供） ---- */
