@@ -43,6 +43,20 @@ export const BOARD_BADGES_DOC_NAME = 'board-badges'
 export const BOARD_VIEW_DOC_NAME = 'board-view'
 export const ACTIVE_SWARM_GROUP_SECTION_ID = 'swarm.active_group'
 
+export const SWARM_TOOL_NAMES = [
+  'swarm_create_group',
+  'swarm_update_group',
+  'swarm_dispatch_worker',
+  'swarm_board_post',
+  'swarm_board_read',
+  'swarm_board_status',
+  'swarm_abort_worker',
+  'swarm_switch_worker_model',
+  'swarm_inspect_worker',
+  'swarm_archive_worker',
+  'swarm_close_group',
+] as const
+
 export const RESERVED_MEMBER_NAMES = new Set(['coordinator', 'all', 'system'])
 export const MEMBER_NAME_PATTERN = '^[a-z][a-z0-9_-]{0,31}$'
 export const GROUP_ID_PATTERN = '^[A-Za-z0-9_-]{1,64}$'

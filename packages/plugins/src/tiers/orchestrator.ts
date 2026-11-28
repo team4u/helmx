@@ -16,6 +16,7 @@ import {
   isOrchestratorTier,
   parseModelTierRef,
   type ConversationSummary,
+  type DispatchToolsCapability,
   type HelmxPluginContext,
   type HookPayloadMap,
   type HookResult,
@@ -55,23 +56,24 @@ const SECTION_PREFIX = 'tiers.orchestrator.'
 
 export const ORCHESTRATOR_PLAN_SECTION = [
   '<orchestrator_planning_mode>',
-  'This conversation runs in two phases: you are currently in the Planning Phase as the higher-reasoning Planner, and `exit_plan_mode` switches this same conversation in place to the faster, lower-cost Executor (which sees the conversation so far plus your plan). Every new user message starts in the Planning Phase; so does any Executor hand-back (`hand_back_to_planner`). Where this section conflicts with earlier investigate-then-edit instructions, this section wins; it never overrides safety rules or explicit user rules.',
-  'File-editing, progress-tracking, and delegation tools (`write`, `edit`, `register_artifact`, `update_steps`, `subagent`, `SubagentWorkflow`, `swarm_*`, etc.) are disabled in this phase.',
+  'This conversation runs in two phases: you are currently in the Planning Phase as the higher-reasoning Planner, and `exit_plan_mode` switches this same conversation in place to the faster, lower-cost Executor (which sees the conversation so far plus your plan). Every new user message and every asynchronous agent/Swarm wakeup starts in the Planning Phase; so does any Executor hand-back (`hand_back_to_planner`). Where this section conflicts with earlier investigate-then-edit instructions, this section wins; it never overrides safety rules or explicit user rules.',
+  'Direct workspace mutation and progress tools (`write`, `edit`, `register_artifact`, `update_steps`) are disabled in this phase. When enabled, orchestration and delegation tools (`subagent`, `SubagentWorkflow`, `swarm_*`, etc.) remain available in this phase so you can coordinate multi-agent work directly.',
   '',
   'Match the depth of planning to the request:',
   '- Small follow-ups whose steps are already settled (apply a change already proposed, fix a typo, rerun a command, send/post drafted content): do NOT re-investigate—call `exit_plan_mode` immediately with a 1-2 sentence plan. The Executor can work out standard tool/command usage on its own.',
   '- Substantive tasks with open decisions: investigate only what you need to make every decision.',
   '',
-  'When to stay in Planning vs exit to Execution:',
-  '- Answer directly without calling `exit_plan_mode` when the request requires no action (pure questions, reviews, explanations, or read-only research).',
-  '- Route EVERY action with side effects—any file edit, git/host mutation, or write/mutating `run_action` / external effect—to the Executor via `exit_plan_mode`, however small.',
-  '- If the user explicitly asked to see or approve the plan first, present the plan in text and stop without calling `exit_plan_mode`; otherwise hand off at once.',
+  'Choose the right path (stay in Planning vs exit to Execution):',
+  '- Pure questions, reviews, explanations, or read-only research requiring no edits: answer directly without calling `exit_plan_mode`.',
+  '- Single-stream edits, small fixes, write/mutating `run_action` / external effects, or final single-branch merge & verification: MUST call `exit_plan_mode` to switch this conversation in place to the Executor (reuses the hot Prompt Cache with zero cold-start spawn overhead—NEVER spawn a subagent or Swarm just for a trivial single-stream edit).',
+  '- Multi-stream parallel work, Swarm collaboration, or isolated context-heavy research: stay in the Planning Phase and orchestrate directly as the high-reasoning coordinator (`subagent`, `SubagentWorkflow`, or `swarm_*`). Spawned workers and subagents default automatically to the Executor model; reserve explicit `model` overrides strictly for genuinely high-difficulty subtasks or critical audits.',
+  '- If the user explicitly asked to see or approve the plan first, present the plan in text and stop without calling `exit_plan_mode`; otherwise act or hand off at once.',
   '',
   'Planning rules:',
-  '1. Investigate strictly read-only: use `read`, `read_artifact`, and `load_skill` to inspect files and artifacts, `bash` strictly for read-only observation (code search, builds, typecheck, tests, `git status`/`log`/`diff`), and `run_action` strictly for read-only queries (`list`, `describe`, and read-only inspection actions). Never edit files, redirect output into workspace files, create commits, or mutate external/host state in this phase.',
-  '2. Make every engineering decision you can settle from the codebase and conventions (interpretation, design, APIs, order of work, verification). Use `ask_user` only for genuine requirement ambiguity or high-impact user choices—never leave unresolved design decisions for the Executor.',
-  '3. Write the plan for a competent engineer who is less capable than you and cannot ask follow-up questions: name exact file paths, symbols, concrete changes, pitfalls noticed, and exact verification commands with what their output must show. Nothing you know that is not written in the plan or conversation survives the switch. For non-trivial plans, end with a short `Re-plan if:` list naming task-specific signs that the plan is wrong and the Executor must hand back rather than improvise.',
-  '4. Call `exit_plan_mode({ plan })` alone as the sole tool call of that step—never call it in parallel with `read`, `bash`, `run_action`, or `ask_user`.',
+  '1. Keep your own inspection strictly read-only: use `read`, `read_artifact`, and `load_skill` to inspect files and artifacts, `bash` strictly for read-only observation (code search, builds, typecheck, tests, `git status`/`log`/`diff`), and `run_action` strictly for read-only queries (`list`, `describe`, and read-only inspection actions). Never edit files, redirect output into workspace files, create commits, or mutate external/host state directly in this phase.',
+  '2. Make every engineering decision you can settle from the codebase and conventions (interpretation, design, APIs, order of work, verification). Use `ask_user` only for genuine requirement ambiguity or high-impact user choices—never leave unresolved design decisions for the Executor or workers.',
+  '3. When handing off via `exit_plan_mode`, write the plan for a competent engineer who is less capable than you and cannot ask follow-up questions: name exact file paths, symbols, concrete changes, pitfalls noticed, and exact verification commands with what their output must show. Nothing you know that is not written in the plan or conversation survives the switch. For non-trivial plans, end with a short `Re-plan if:` list naming task-specific signs that the plan is wrong and the Executor must hand back rather than improvise.',
+  '4. Call `exit_plan_mode({ plan })` alone as the sole tool call of that step—never call it in parallel with `read`, `bash`, `run_action`, `ask_user`, or orchestration tools.',
   '',
   'Planner review (when `hand_back_to_planner` returns a `[plan review]` result):',
   "- You are reviewing, not executing. Compare what the Executor did against the plan (and any mid-execution user message), verify read-only what you need to, then either call `exit_plan_mode` with only the remaining steps (if on track), call `exit_plan_mode` with a corrected plan (if off track or requirements changed), or report completion and stop if the task is already complete and verified. Do not do the Executor's work yourself.",
@@ -81,7 +83,7 @@ export const ORCHESTRATOR_PLAN_SECTION = [
 export const ORCHESTRATOR_EXECUTE_SECTION = [
   '<orchestrator_execution_mode>',
   "You are in the Execution Phase of a dual-phase orchestrator session. Carry out the plan from the Planner's `exit_plan_mode` call carefully and verify all changes against its verification criteria.",
-  '1. Implement the plan using available workspace tools. Any subagents or workflows you spawn in this session automatically run on your Executor model—omit `model` overrides when calling them.',
+  '1. Implement the plan directly using available workspace tools. Any subagents, workflows, or workers you spawn default to your Executor model unless explicitly overridden.',
   '2. Call `hand_back_to_planner({ reason, summary })` instead of improvising when: (a) any `Re-plan if:` condition in the plan triggers, (b) you discover a blocking flaw in the plan or hit repeated verification failures requiring redesign, (c) you need user clarification or an architectural/design decision not settled by the plan, or (d) a mid-execution user message (`steer`) changes requirements, scope, or design (pause further edits and report what you have changed so far; only handle trivial in-scope nudges directly).',
   '3. Call `hand_back_to_planner` alone as the sole tool call of that step—never in parallel with file edits, commands, or subagents. Include concrete completed edits, exact verification outputs, and open blockers or remaining steps in `summary`.',
   '4. Once all planned steps are implemented and verified, reply directly to the user to finish—do NOT call `hand_back_to_planner` just to report normal completion.',
@@ -309,6 +311,25 @@ function stripOrchestratorToolsFromTurn(turn: HookPayloadMap['before_turn']): Ho
   }
 }
 
+function collectPlanningOrchestrationTools(ctx: HelmxPluginContext): Set<string> {
+  const allowed = new Set<string>()
+  for (const entry of ctx.consume<DispatchToolsCapability>('helmx.dispatch-tools')) {
+    const impl = entry.impl
+    if (impl === null || typeof impl !== 'object') continue
+    if (Array.isArray(impl.toolNames)) {
+      for (const name of impl.toolNames) {
+        if (typeof name === 'string' && name.length > 0) allowed.add(name)
+      }
+    }
+    if (Array.isArray(impl.orchestrationTools)) {
+      for (const name of impl.orchestrationTools) {
+        if (typeof name === 'string' && name.length > 0) allowed.add(name)
+      }
+    }
+  }
+  return allowed
+}
+
 function toolError(message: string): PluginToolResultEnvelope {
   return { output: message, isError: true }
 }
@@ -368,16 +389,20 @@ export function createTierOrchestratorManager(deps: {
             { model: rawModel, tierId: explicitTierId },
           )
         }
+        return { action: 'continue' }
+      }
+      if (request.resume !== undefined) {
+        return { action: 'continue' }
       }
       const nextRequest: HookPayloadMap['agent_spawn'] = {
         ...request,
         model: active.executorModel,
       }
-      const execEffort = active.spec.executorThinkingLevel?.trim() ?? ''
-      if (execEffort !== '') {
-        nextRequest.effort = execEffort
-      } else {
-        delete nextRequest.effort
+      if (request.effort === undefined) {
+        const execEffort = active.spec.executorThinkingLevel?.trim() ?? ''
+        if (execEffort !== '') {
+          nextRequest.effort = execEffort
+        }
       }
       return {
         action: 'transform',
@@ -426,7 +451,7 @@ export function createTierOrchestratorManager(deps: {
     },
 
     handleInput(payload: HookPayloadMap['input']): HookResult<HookPayloadMap['input']> | Promise<HookResult<HookPayloadMap['input']>> {
-      if (stopping || payload.input.origin !== 'human') return { action: 'continue' }
+      if (stopping) return { action: 'continue' }
       const existingFast = store.get(payload.conversationId)
       const convFast = getConversationOrUndefined(ctx.host, payload.conversationId)
       const activeFast = convFast !== undefined ? resolveActiveOrchestrator(convFast, readTiersState()) : undefined
@@ -497,6 +522,14 @@ export function createTierOrchestratorManager(deps: {
             activeRunKey: runKey,
           })
           await store.saveRecord(convId, record)
+          if (runChangedDuringExec) {
+            await restorePlannerRuntimeModelIfNeeded(
+              ctx,
+              getConversationOrUndefined(ctx.host, convId) ?? turn.conversation,
+              active,
+              true,
+            )
+          }
         } else if (record.phase === 'planning') {
           const nextMaxSteps = active.spec.maxExecutionSteps ?? ORCHESTRATOR_TIER_DEFAULT_MAX_STEPS
           const needsRefresh =
@@ -518,7 +551,10 @@ export function createTierOrchestratorManager(deps: {
         }
 
         if (record.phase === 'planning') {
-          const tools = turn.tools.filter((tool) => ORCHESTRATOR_PLAN_TOOL_WHITELIST.has(tool.name))
+          const orchestrationTools = collectPlanningOrchestrationTools(ctx)
+          const tools = turn.tools.filter(
+            (tool) => ORCHESTRATOR_PLAN_TOOL_WHITELIST.has(tool.name) || orchestrationTools.has(tool.name),
+          )
           const sections = [
             ...stripOrchestratorSections(turn.sections),
             { id: ORCHESTRATOR_PLAN_SECTION_ID, text: ORCHESTRATOR_PLAN_SECTION },

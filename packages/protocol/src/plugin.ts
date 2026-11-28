@@ -438,9 +438,14 @@ export interface ProvidedCapability<T = unknown> {
   readonly impl: T
 }
 
-/** Well-known `'helmx.dispatch-tools'` capability contract: declares tool names unlocking cross-Profile collaboration catalogs. */
+/**
+ * Well-known `'helmx.dispatch-tools'` capability contract:
+ * - `toolNames`: dispatch/spawn entry tools (unlocks `<available_profiles>` in `builtin:profile` and stripped at max subagent depth);
+ * - `orchestrationTools`: optional companion orchestration/coordination tools exposed alongside `toolNames` in orchestrator Planning Phase.
+ */
 export interface DispatchToolsCapability {
   readonly toolNames: readonly string[]
+  readonly orchestrationTools?: readonly string[]
 }
 
 /** Well-known `'helmx.model-tiers'` capability contract: provides a live model-tier table consumed by kernel ModelRegistry. */

@@ -9,6 +9,7 @@
  */
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import type { Harness } from '@earendil-works/pi-durable'
+import type { Models } from '@earendil-works/pi-ai'
 import type {
   ConversationOwnership,
   ConversationSummary,
@@ -18,8 +19,10 @@ import { HelmxError, isPlainObject } from '@helmx/protocol'
 import type { SecretStash } from '../services/index.js'
 import type { ConversationTracker } from './conversations.js'
 import type { EventHub } from './events.js'
+import { findActiveOrchestratorTier, type ConversationProfileService } from './conversation-profile.js'
 import { requireConv } from './conversation-require.js'
 import { assertValidConversationOwnership } from './guards/conversation-guards.js'
+import { clampThinkingLevelForModel } from './models.js'
 import { asEntryId, getSdkConversation, readSdkEntryPage } from './sdk-ids.js'
 import { resolveCleanForkAnchor } from './spawn-fork.js'
 import type { HelmxStore } from './store.js'
@@ -30,6 +33,9 @@ interface ConversationContextOpsHost {
   readonly tracker: ConversationTracker
   readonly events: EventHub
   readonly stash: SecretStash
+  readonly profileAlignment: ConversationProfileService
+  readonly models: () => Models
+  readonly assertModelEnabled: (provider: string, modelId: string) => void
   readonly isClosed: () => boolean
   readonly alignConversationModel: (id: number) => Promise<void>
   readonly withOwnership: (summary: ConversationSummary) => ConversationSummary
@@ -189,6 +195,30 @@ export class ConversationContextOps {
       }
     }
     const { meta: sourceMeta, conversation: sourceConv } = await this.conversationForContextOp(id)
+    // Forked children always receive parentConversationId and therefore cannot be orchestrator-tier conversations:
+    // unwrap an active orchestrator tier via `subagent_inherit` and freeze concrete executorModel + executorThinkingLevel
+    // before forking so follow-up profile/tag updates (e.g. Swarm worker dispatch) never fall back to global/profile defaults.
+    const inheritedOrchestratorTier =
+      sourceMeta.modelTier !== undefined && sourceMeta.modelTier !== ''
+        ? sourceMeta.modelTier
+        : sourceMeta.modelOverride === undefined && explicitParentId !== undefined
+          ? findActiveOrchestratorTier(this.host.store, explicitParentId)
+          : undefined
+    let forkedModelOverride = sourceMeta.modelOverride
+    let forkedThinkingLevelOverride = sourceMeta.thinkingLevelOverride
+    if (inheritedOrchestratorTier !== undefined) {
+      const resolvedTier = this.host.profileAlignment.resolveRef(inheritedOrchestratorTier, 'subagent_inherit')
+      this.host.assertModelEnabled(resolvedTier.provider, resolvedTier.modelId)
+      forkedModelOverride = resolvedTier.canonicalRef
+      forkedThinkingLevelOverride =
+        resolvedTier.tierThinkingLevel !== undefined
+          ? clampThinkingLevelForModel(
+              this.host.models(),
+              { provider: resolvedTier.provider, modelId: resolvedTier.modelId },
+              resolvedTier.tierThinkingLevel,
+            )
+          : undefined
+    }
     let entryId: number
     if (explicitEntryId !== undefined) {
       // Verify exact entry existence (min=max=entryId limit 1; missing yields 404).
@@ -217,12 +247,6 @@ export class ConversationContextOps {
         : `${baseTitle} (fork)`
     const effectiveOwnedBy: ConversationOwnership =
       explicitOwnedBy ?? (sourceMeta.ownedBy === 'helmx' ? 'helmx' : 'human')
-    // Forked children always receive parentConversationId and therefore cannot be orchestrator-tier conversations:
-    // drop symbolic orchestrator `modelTier` / matching `modelOverride` so `alignConversationModel` unwraps via `subagent_inherit`.
-    const forkedModelOverride =
-      sourceMeta.modelOverride !== undefined && sourceMeta.modelOverride === sourceMeta.modelTier
-        ? undefined
-        : sourceMeta.modelOverride
     this.host.store.upsertConv({
       id: newId,
       title,
@@ -234,7 +258,9 @@ export class ConversationContextOps {
       cwd: sourceMeta.cwd,
       model: sourceMeta.model,
       thinkingLevel: sourceMeta.thinkingLevel,
-      thinkingLevelOverride: sourceMeta.thinkingLevelOverride,
+      ...(forkedThinkingLevelOverride !== undefined && forkedThinkingLevelOverride !== ''
+        ? { thinkingLevelOverride: forkedThinkingLevelOverride }
+        : {}),
       ...(forkedModelOverride !== undefined ? { modelOverride: forkedModelOverride } : {}),
       unread: false,
       pinned: false,

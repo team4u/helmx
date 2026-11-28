@@ -26,7 +26,7 @@ import {
   type ModelRefResolutionMode,
   type ResolvedModelRef,
 } from './models.js'
-import type { ConversationProfileService } from './conversation-profile.js'
+import { findActiveOrchestratorTier, type ConversationProfileService } from './conversation-profile.js'
 import { asSdkThinkingLevel, getSdkConversation } from './sdk-ids.js'
 import type { ConvMeta, HelmxStore } from './store.js'
 import { normalizeSessionCwd, trustedPlatformFromEnvFabric, type TrustedNodePlatformSource } from './target-cwd.js'
@@ -115,6 +115,14 @@ export class ConversationLifecycleService {
           ? `${MODEL_TIER_PREFIX}/${resolvedInit.tierId}`
           : resolvedInit.canonicalRef
       initTierThinking = resolvedInit.isOrchestratorTier ? undefined : resolvedInit.tierThinkingLevel
+    } else if (init.parentConversationId !== undefined) {
+      const parentOrchestratorTier = findActiveOrchestratorTier(this.host.store, init.parentConversationId)
+      if (parentOrchestratorTier !== undefined) {
+        const resolvedParentTier = this.host.profileAlignment.resolveRef(parentOrchestratorTier, 'subagent_inherit')
+        this.assertResolvedModelEnabled(resolvedParentTier)
+        frozenModelOverride = resolvedParentTier.canonicalRef
+        initTierThinking = resolvedParentTier.tierThinkingLevel
+      }
     }
     const effectiveDetails = await this.host.profileAlignment.resolveEffectiveModelDetails(
       frozenModelOverride,

@@ -48,6 +48,26 @@ interface ConversationProfileHost {
   readonly scheduleContextUsageRefresh?: (id: number) => void
 }
 
+/** Walk non-deleted ancestor chain to find an active orchestrator `modelTier`, if any. */
+export function findActiveOrchestratorTier(
+  store: HelmxStore,
+  startConversationId: number | undefined,
+): string | undefined {
+  if (startConversationId === undefined) return undefined
+  const visited = new Set<number>()
+  let cur: number | undefined = startConversationId
+  while (cur !== undefined && !visited.has(cur)) {
+    visited.add(cur)
+    const meta = store.getConv(cur)
+    if (meta === undefined || store.isDeleted(meta.id)) return undefined
+    if (meta.modelTier !== undefined && meta.modelTier !== '') {
+      return meta.modelTier
+    }
+    cur = meta.parentConversationId
+  }
+  return undefined
+}
+
 export class ConversationProfileService {
   /** Serialize configuration mutations per conversation so inheritance refreshes and explicit overrides do not clobber each other. */
   private readonly conversationChanges = createKeyedMutex<number>()

@@ -21,6 +21,7 @@ import {
   INDEX_DOC_NAME,
   SWARM_PLUGIN_ID,
   SWARM_SKILL_ID,
+  SWARM_TOOL_NAMES,
   asConversationUpsertEvent,
   assertIndexDoc,
   resolveSwarmConfig,
@@ -111,6 +112,7 @@ export function createSwarmPlugin(): PluginDefinition {
       registerSwarmActions(ctx, coordinator)
       ctx.provide<DispatchToolsCapability>('helmx.dispatch-tools', {
         toolNames: ['swarm_dispatch_worker'],
+        orchestrationTools: [...SWARM_TOOL_NAMES],
       })
       ctx.provide<ConversationDepthCapability>(CONVERSATION_DEPTH_CAPABILITY_ID, {
         depthOf(conversationId) {
@@ -221,7 +223,7 @@ export function createSwarmPlugin(): PluginDefinition {
 }
 
 export {
-  SWARM_PLUGIN_ID, SWARM_SKILL_ID, COORDINATOR_TAG, WORKER_TAG, ARCHIVED_COORDINATOR_TAG, ARCHIVED_WORKER_TAG,
+  SWARM_PLUGIN_ID, SWARM_SKILL_ID, SWARM_TOOL_NAMES, COORDINATOR_TAG, WORKER_TAG, ARCHIVED_COORDINATOR_TAG, ARCHIVED_WORKER_TAG,
   COORDINATOR_SCOPE, PARTICIPANT_SCOPE, BOARD_REPORT_RENDERER, BOARD_WAKEUP_RENDERER,
   INDEX_DOC_NAME, BOARD_BADGES_DOC_NAME, BOARD_VIEW_DOC_NAME,
   resolveSwarmConfig, assertIndexDoc, assertCollabGroupRecord, assertBoardPost, assertMemberName, assertGroupId,

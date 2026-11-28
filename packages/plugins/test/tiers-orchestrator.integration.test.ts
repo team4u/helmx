@@ -28,6 +28,8 @@ import {
   TIERS_SWITCH_MODEL_TOOL,
   type TierOrchestratorSessionView,
 } from '../src/tiers.js'
+import { SWARM_PLUGIN_ID, SWARM_TOOL_NAMES } from '../src/swarm.js'
+import { WORKFLOW_PLUGIN_ID } from '../src/workflow.js'
 import { ORCHESTRATOR_PLAN_TOOL_WHITELIST } from '../src/tiers/contracts.js'
 import {
   ORCHESTRATOR_EXECUTE_SECTION,
@@ -390,13 +392,16 @@ test('machine invisibility: orchestrator tiers stay invisible in catalog, reject
     assert.equal(childSnap.thinkingLevel, 'low')
     assert.equal(childSnap.modelTier, undefined)
 
-    // Forking a human orchestrator conversation drops symbolic orchestrator modelTier / override
+    // Forking a human orchestrator conversation drops symbolic modelTier and freezes concrete executorModel + executorThinkingLevel
     env.faux.setResponses([fauxAssistantMessage('seed')])
     await kernel.conversations.submitInput(conv.id, 'seed forkable turn')
     await kernel.conversations.waitForIdle(conv.id)
     const forked = await kernel.conversations.forkConversation(conv.id)
     assert.equal(forked.modelTier, undefined)
-    assert.equal(forked.modelOverride, undefined)
+    assert.equal(forked.model, 'faux/fast')
+    assert.equal(forked.modelOverride, 'faux/fast')
+    assert.equal(forked.thinkingLevel, 'low')
+    assert.equal(forked.thinkingLevelOverride, 'low')
 
     // Restore Profile cleanly
     await kernel.profiles.save({ ...existingAssistant, model: undefined })
@@ -495,21 +500,29 @@ test('full planner -> native bash & read-only run_action -> exit_plan_mode -> ex
     assert.equal(observed.length, 5)
     assert.equal(stepSnapshots.length, 5)
 
-    // Verify Step 1 (Planner initial: 7-tool whitelist with bash, run_action, exit_plan_mode; update_steps & write/dispatch stripped)
+    // Verify Step 1 (Planner initial: pure 7-tool whitelist + active helmx.dispatch-tools orchestration tools; write/edit/update_steps stripped)
     assert.equal(observed[0]?.modelId, 'faux/flagship')
     assert.equal(observed[0]?.reasoning, 'high')
     assert.equal(ORCHESTRATOR_PLAN_TOOL_WHITELIST.size, 7)
-    assert.ok(observed[0]?.toolNames.every((name) => ORCHESTRATOR_PLAN_TOOL_WHITELIST.has(name)))
+    const allowedInPlanning = new Set<string>([
+      ...ORCHESTRATOR_PLAN_TOOL_WHITELIST,
+      'subagent',
+      'SubagentWorkflow',
+      'workflow_steer',
+      ...SWARM_TOOL_NAMES,
+    ])
+    assert.ok(observed[0]?.toolNames.every((name) => allowedInPlanning.has(name)))
     assert.ok(observed[0]?.toolNames.includes('bash'))
     assert.ok(observed[0]?.toolNames.includes('run_action'))
     assert.ok(observed[0]?.toolNames.includes('ask_user'))
     assert.ok(observed[0]?.toolNames.includes(TIERS_EXIT_PLAN_MODE_TOOL))
+    assert.ok(observed[0]?.toolNames.includes('subagent'))
+    assert.ok(observed[0]?.toolNames.includes('SubagentWorkflow'))
+    assert.ok(observed[0]?.toolNames.includes('swarm_create_group'))
     assert.ok(!observed[0]?.toolNames.includes('update_steps'))
     assert.ok(!observed[0]?.toolNames.includes('write'))
     assert.ok(!observed[0]?.toolNames.includes('edit'))
     assert.ok(!observed[0]?.toolNames.includes('register_artifact'))
-    assert.ok(!observed[0]?.toolNames.includes('subagent'))
-    assert.ok(!observed[0]?.toolNames.includes('SubagentWorkflow'))
     assert.ok(!observed[0]?.toolNames.includes(TIERS_HAND_BACK_TOOL))
     assert.ok(!observed[0]?.toolNames.includes(TIERS_SWITCH_MODEL_TOOL))
     assert.ok(observed[0]?.systemPrompt.includes(ORCHESTRATOR_PLAN_SECTION))
@@ -806,13 +819,14 @@ test('maxExecutionSteps = 0 disables forced step-limit cutoff across multi-step 
   }
 })
 
-test('agent_spawn hook locks subagents, specialist Profiles, explicit overrides, resume, fork, and nested grandchildren to executorModel while suppressing tiers.catalog', { timeout: 60_000 }, async () => {
+test('agent_spawn hook defaults omitted model to executorModel across tree, honors explicit concrete/single-tier overrides and resume model, and rejects orchestrator tiers', { timeout: 60_000 }, async () => {
   const env = await openOrchestratorEnv({ defaultModel: 'faux/workhorse' })
   try {
     const { kernel } = env.app
     await kernel.plugins.invokeAction(TIERS_PLUGIN_ID, 'set', {
       id: 'coder',
       model: 'faux/workhorse',
+      thinkingLevel: 'medium',
       description: 'Single coder tier',
     })
     await kernel.plugins.invokeAction(TIERS_PLUGIN_ID, 'set', {
@@ -864,11 +878,14 @@ test('agent_spawn hook locks subagents, specialist Profiles, explicit overrides,
       recordFaux('plain-child'),
       recordFaux('specialist-child'),
       recordFaux('override-child'),
-      recordFaux('resumed-child'),
+      recordFaux('resumed-elevated-child'),
       recordFaux('tier-override-child'),
-      recordFaux('grandchild'),
-      recordFaux('forked-child'),
-      recordFaux('no-effort-child'),
+      recordFaux('grandchild-default'),
+      recordFaux('grandchild-override'),
+      recordFaux('forked-default-child'),
+      recordFaux('forked-override-child'),
+      recordFaux('no-effort-default-child'),
+      recordFaux('no-effort-explicit-effort-child'),
     ])
     await kernel.conversations.submitInput(rootConv.id, 'seed turn')
     await kernel.conversations.waitForIdle(rootConv.id)
@@ -876,7 +893,7 @@ test('agent_spawn hook locks subagents, specialist Profiles, explicit overrides,
     let plainChildId: number | undefined
     let noEffortChildId: number | undefined
 
-    // a) Plain subagent (no model, allowing depth 2 so nested grandchild test can spawn under it) -> executorModel + executorThinkingLevel
+    // a) Plain subagent (no model, allowing depth 2 so nested grandchild tests can spawn under it) -> executorModel + executorThinkingLevel
     await kernel.agentSpawn.spawnAgent({
       parentConversationId: rootConv.id,
       prompt: 'plain child task',
@@ -903,59 +920,77 @@ test('agent_spawn hook locks subagents, specialist Profiles, explicit overrides,
         : undefined
     assert.equal(childCatalog, undefined, 'child under orchestrator tree must suppress <available_model_tiers>')
 
-    // b) Specialist Profile bound to flagship -> still locked to executorModel + executorThinkingLevel
+    // b) Specialist Profile bound to flagship (omitted model) -> defaults to executorModel + executorThinkingLevel
     await kernel.agentSpawn.spawnAgent({
       parentConversationId: rootConv.id,
       agentType: 'specialist',
       prompt: 'specialist child task',
     })
 
-    // c) Explicit flagship model + high effort AND resume -> locked to executorModel + executorThinkingLevel
+    // c) Explicit concrete model + high effort -> HONORED, and resuming without model preserves the elevated model!
     await kernel.agentSpawn.spawnAgent({
       parentConversationId: rootConv.id,
-      agentId: 'child-a',
+      agentId: 'child-elevated',
       model: 'faux/flagship',
       effort: 'high',
-      prompt: 'explicit override attempt',
+      prompt: 'explicit elevation task',
     })
     await kernel.agentSpawn.spawnAgent({
       parentConversationId: rootConv.id,
-      resume: 'child-a',
-      model: 'faux/flagship',
-      effort: 'high',
-      prompt: 'resumed override attempt',
+      resume: 'child-elevated',
+      prompt: 'resumed elevated task without model override',
     })
 
-    // d) Explicit single tier model -> locked to executorModel + executorThinkingLevel
+    // d) Explicit single tier model -> HONORED (faux/workhorse + medium preset)
     await kernel.agentSpawn.spawnAgent({
       parentConversationId: rootConv.id,
       model: 'tier/coder',
-      prompt: 'tier coder override attempt',
+      prompt: 'tier coder override task',
     })
 
-    // e) Nested grandchild spawned from child -> walks child -> rootConv -> still locked to executorModel
+    // e) Nested grandchild without model -> defaults to executorModel; with explicit model -> HONORED
+    await kernel.agentSpawn.spawnAgent({
+      parentConversationId: plainChildId!,
+      prompt: 'nested grandchild default task',
+    })
     await kernel.agentSpawn.spawnAgent({
       parentConversationId: plainChildId!,
       model: 'faux/flagship',
       effort: 'high',
-      prompt: 'nested grandchild task',
+      prompt: 'nested grandchild elevated task',
     })
 
-    // f) Forked subagent under orchestrator root -> locked to executorModel + executorThinkingLevel
+    // f) Forked subagent without model -> defaults to executorModel; with explicit model -> HONORED
+    await kernel.agentSpawn.spawnAgent({
+      parentConversationId: rootConv.id,
+      fork: true,
+      prompt: 'forked default child task',
+    })
     await kernel.agentSpawn.spawnAgent({
       parentConversationId: rootConv.id,
       fork: true,
       model: 'faux/flagship',
       effort: 'high',
-      prompt: 'forked child task',
+      prompt: 'forked elevated child task',
     })
 
-    assert.equal(spawnObserved.length, 7)
-    for (const [idx, call] of spawnObserved.entries()) {
-      assert.equal(call.modelId, 'faux/fast', `spawn call #${idx} must run on executorModel faux/fast`)
-      assert.equal(call.reasoning, 'low', `spawn call #${idx} must run on executorThinkingLevel low`)
-      assert.equal(call.hasCatalog, false, `spawn call #${idx} must suppress tiers.catalog`)
+    assert.equal(spawnObserved.length, 9)
+    // Default spawns: plain (0), specialist (1), grandchild-default (5), forked-default (7)
+    for (const idx of [0, 1, 5, 7]) {
+      assert.equal(spawnObserved[idx]?.modelId, 'faux/fast', `default spawn #${idx} must run on executorModel faux/fast`)
+      assert.equal(spawnObserved[idx]?.reasoning, 'low', `default spawn #${idx} must run on executorThinkingLevel low`)
+      assert.equal(spawnObserved[idx]?.hasCatalog, false, `spawn #${idx} must suppress tiers.catalog`)
     }
+    // Explicit flagship elevations: override (2), resumed-elevated (3), grandchild-override (6), forked-override (8)
+    for (const idx of [2, 3, 6, 8]) {
+      assert.equal(spawnObserved[idx]?.modelId, 'faux/flagship', `elevated spawn #${idx} must honor explicit faux/flagship`)
+      assert.equal(spawnObserved[idx]?.reasoning, 'high', `elevated spawn #${idx} must honor explicit high effort`)
+      assert.equal(spawnObserved[idx]?.hasCatalog, false, `spawn #${idx} must suppress tiers.catalog`)
+    }
+    // Explicit single tier/coder (4)
+    assert.equal(spawnObserved[4]?.modelId, 'faux/workhorse')
+    assert.equal(spawnObserved[4]?.reasoning, 'medium')
+    assert.equal(spawnObserved[4]?.hasCatalog, false)
 
     // g) Malformed ref & explicit orchestrator tier still fail honestly rather than being silently rewritten
     await assertRejectsCode(
@@ -976,13 +1011,22 @@ test('agent_spawn hook locks subagents, specialist Profiles, explicit overrides,
         }),
       'orchestrator_tier_human_only',
     )
+    await assertRejectsCode(
+      () =>
+        kernel.agentSpawn.spawnAgent({
+          parentConversationId: rootConv.id,
+          resume: 'child-elevated',
+          model: 'tier/auto-exec',
+          prompt: 'orchestrator model not allowed on resume',
+        }),
+      'orchestrator_tier_human_only',
+    )
 
-    // h) Orchestrator without executorThinkingLevel clears caller effort rather than leaking `high`
+    // h) Orchestrator without executorThinkingLevel leaves thinkingLevelOverride unset when effort omitted,
+    //    and honors explicit effort on executorModel when model is omitted
     await kernel.agentSpawn.spawnAgent({
       parentConversationId: rootNoEffort.id,
-      model: 'faux/flagship',
-      effort: 'high',
-      prompt: 'clear caller effort',
+      prompt: 'default without effort',
       onResolved: (info) => {
         noEffortChildId = info.conversationId
       },
@@ -991,9 +1035,16 @@ test('agent_spawn hook locks subagents, specialist Profiles, explicit overrides,
     const noEffortChildSnap = kernel.conversations.getConversation(noEffortChildId!)
     assert.equal(noEffortChildSnap.model, 'faux/fast')
     assert.equal(noEffortChildSnap.thinkingLevelOverride, undefined)
-    assert.equal(spawnObserved.length, 8)
-    assert.equal(spawnObserved[7]?.modelId, 'faux/fast')
-    assert.notEqual(spawnObserved[7]?.reasoning, 'high')
+    assert.equal(spawnObserved[9]?.modelId, 'faux/fast')
+    assert.notEqual(spawnObserved[9]?.reasoning, 'high')
+
+    await kernel.agentSpawn.spawnAgent({
+      parentConversationId: rootNoEffort.id,
+      effort: 'medium',
+      prompt: 'default model with explicit effort',
+    })
+    assert.equal(spawnObserved[10]?.modelId, 'faux/fast')
+    assert.equal(spawnObserved[10]?.reasoning, 'medium')
   } finally {
     await env.close()
   }
@@ -1109,6 +1160,590 @@ test('one-turn borrow works on orchestrator conversations (explicit override & i
     } finally {
       await kernel.profiles.save({ ...existingAssistant, model: undefined })
     }
+  } finally {
+    await env.close()
+  }
+})
+
+test('planning phase dynamically exposes helmx.dispatch-tools (workflow + all 11 swarm tools), unlocks <available_profiles>, removes tools on plugin disable, and preserves strict /plan precedence', { timeout: 60_000 }, async () => {
+  const env = await openOrchestratorEnv()
+  try {
+    const { kernel } = env.app
+    await kernel.plugins.invokeAction(TIERS_PLUGIN_ID, 'set', {
+      id: 'orch-plan-tools',
+      kind: 'orchestrator',
+      model: 'faux/flagship',
+      thinkingLevel: 'high',
+      executorModel: 'faux/fast',
+      executorThinkingLevel: 'low',
+    })
+    const assistant = await kernel.profiles.get('assistant')
+    assert.ok(assistant !== undefined)
+    await kernel.profiles.save({
+      ...assistant,
+      id: 'reviewer',
+      name: 'Reviewer',
+      system: 'Code review specialist.',
+    })
+
+    const conv = await kernel.conversations.createConversation({ title: 'planner-orch-tools', model: 'tier/orch-plan-tools' })
+    const observed: ObservedCall[] = []
+
+    // 1. Initial Planning Phase: workflow + swarm_create_group exposed, <available_profiles> unlocked, direct mutation tools stripped
+    env.faux.setResponses([
+      captureStep(observed, conv.id, () => fauxAssistantMessage('Planning ready.')),
+    ])
+    await kernel.conversations.submitInput(conv.id, 'Plan parallel work')
+    await kernel.conversations.waitForIdle(conv.id)
+    assert.equal(observed.length, 1)
+    assert.ok(observed[0]!.toolNames.includes('subagent'))
+    assert.ok(observed[0]!.toolNames.includes('SubagentWorkflow'))
+    assert.ok(observed[0]!.toolNames.includes('swarm_create_group'))
+    assert.ok(observed[0]!.toolNames.includes(TIERS_EXIT_PLAN_MODE_TOOL))
+    assert.ok(!observed[0]!.toolNames.includes('write'))
+    assert.ok(!observed[0]!.toolNames.includes('edit'))
+    assert.ok(!observed[0]!.toolNames.includes('register_artifact'))
+    assert.ok(!observed[0]!.toolNames.includes('update_steps'))
+    assert.ok(!observed[0]!.toolNames.includes(TIERS_SWITCH_MODEL_TOOL))
+    assert.ok(!observed[0]!.toolNames.includes('cleanup_worktree'))
+    assert.ok(observed[0]!.systemPrompt.includes('<available_profiles>'), 'Planning Phase must unlock <available_profiles>')
+    assert.ok(observed[0]!.systemPrompt.includes('reviewer'))
+
+    // 2. Activate a Swarm group on the orchestrator conversation: all coordinator Swarm tools are exposed in Planning Phase
+    const createdGroup = (await kernel.plugins.invokeAction(
+      SWARM_PLUGIN_ID,
+      'create_group',
+      { title: 'Planner Squad' },
+      { conversationId: conv.id },
+    )) as { groupId: string }
+    const coordSwarmTools = SWARM_TOOL_NAMES.filter((name) => name !== 'swarm_create_group')
+
+    env.faux.setResponses([
+      captureStep(observed, conv.id, () => fauxAssistantMessage('Swarm coordinator planning ready.')),
+    ])
+    await kernel.conversations.submitInput(conv.id, 'Coordinate swarm workers')
+    await kernel.conversations.waitForIdle(conv.id)
+    assert.equal(observed.length, 2)
+    for (const toolName of coordSwarmTools) {
+      assert.ok(
+        observed[1]!.toolNames.includes(toolName),
+        `active Swarm coordinator in Planning Phase must expose ${toolName}`,
+      )
+    }
+    assert.ok(!observed[1]!.toolNames.includes('swarm_create_group'), 'active coordinator hides swarm_create_group')
+    assert.ok(!observed[1]!.toolNames.includes('write'))
+    assert.ok(!observed[1]!.toolNames.includes('edit'))
+    assert.ok(observed[1]!.systemPrompt.includes('<available_profiles>'))
+
+    // 3. Strict /plan precedence: strips ALL dispatch & orchestration tools (workflow + swarm) and suppresses <available_profiles>
+    env.faux.setResponses([
+      captureStep(observed, conv.id, () => fauxAssistantMessage('Strict read-only plan reply.')),
+    ])
+    await kernel.conversations.submitInput(conv.id, '/plan draft a read-only architecture plan')
+    await kernel.conversations.waitForIdle(conv.id)
+    assert.equal(observed.length, 3)
+    assert.ok(observed[2]!.systemPrompt.includes('<plan_mode>'))
+    assert.ok(!observed[2]!.systemPrompt.includes('<orchestrator_planning_mode>'))
+    assert.ok(!observed[2]!.systemPrompt.includes('<available_profiles>'), '/plan must suppress <available_profiles>')
+    for (const forbidden of ['subagent', 'SubagentWorkflow', ...SWARM_TOOL_NAMES, TIERS_EXIT_PLAN_MODE_TOOL, 'write', 'edit']) {
+      assert.ok(!observed[2]!.toolNames.includes(forbidden), `/plan must strip ${forbidden}`)
+    }
+
+    // Close group & exit /plan via reset so we can test disabling workflow & swarm plugins cleanly
+    await kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'close_group', { groupId: createdGroup.groupId }, { conversationId: conv.id })
+    await kernel.conversations.resetConversation(conv.id)
+
+    // 4. Disabling builtin:workflow immediately removes subagent/SubagentWorkflow from Planning Phase (no phantom tools)
+    await kernel.plugins.disable(WORKFLOW_PLUGIN_ID)
+    env.faux.setResponses([
+      captureStep(observed, conv.id, () => fauxAssistantMessage('Workflow disabled planning.')),
+    ])
+    await kernel.conversations.submitInput(conv.id, 'Plan without workflow plugin')
+    await kernel.conversations.waitForIdle(conv.id)
+    assert.equal(observed.length, 4)
+    assert.ok(!observed[3]!.toolNames.includes('subagent'))
+    assert.ok(!observed[3]!.toolNames.includes('SubagentWorkflow'))
+    assert.ok(observed[3]!.toolNames.includes('swarm_create_group'))
+
+    // 5. Disabling builtin:swarm immediately removes all swarm_* tools from Planning Phase too
+    await kernel.plugins.disable(SWARM_PLUGIN_ID)
+    env.faux.setResponses([
+      captureStep(observed, conv.id, () => fauxAssistantMessage('Swarm disabled planning.')),
+    ])
+    await kernel.conversations.submitInput(conv.id, 'Plan without swarm plugin')
+    await kernel.conversations.waitForIdle(conv.id)
+    assert.equal(observed.length, 5)
+    for (const swarmTool of SWARM_TOOL_NAMES) {
+      assert.ok(!observed[4]!.toolNames.includes(swarmTool))
+    }
+    assert.ok(!observed[4]!.systemPrompt.includes('<available_profiles>'))
+    assert.ok(observed[4]!.toolNames.includes(TIERS_EXIT_PLAN_MODE_TOOL))
+  } finally {
+    await env.close()
+  }
+})
+
+test('swarm_dispatch_worker (create & forkFrom coordinator) inherits executorModel, honors explicit elevation, rejects orchestrator tiers, keeps depth-1 board tools, and wakes coordinator on Planner', { timeout: 60_000 }, async () => {
+  const env = await openOrchestratorEnv({ defaultModel: 'faux/workhorse' })
+  try {
+    const { kernel } = env.app
+    await kernel.plugins.invokeAction(TIERS_PLUGIN_ID, 'set', {
+      id: 'strong',
+      model: 'faux/workhorse',
+      thinkingLevel: 'medium',
+      description: 'Single strong tier',
+    })
+    await kernel.plugins.invokeAction(TIERS_PLUGIN_ID, 'set', {
+      id: 'auto-swarm',
+      kind: 'orchestrator',
+      model: 'faux/flagship',
+      thinkingLevel: 'high',
+      executorModel: 'faux/fast',
+      executorThinkingLevel: 'low',
+    })
+
+    const assistant = await kernel.profiles.get('assistant')
+    assert.ok(assistant !== undefined)
+    await kernel.profiles.save({
+      ...assistant,
+      id: 'specialist',
+      name: 'Specialist',
+      model: 'faux/flagship',
+      thinkingLevel: 'high',
+    })
+
+    const coordConv = await kernel.conversations.createConversation({
+      title: 'swarm-orch-coord',
+      model: 'tier/auto-swarm',
+    })
+    assert.equal(coordConv.model, 'faux/flagship')
+    assert.equal(coordConv.modelTier, 'tier/auto-swarm')
+
+    // Seed 1 planner turn on coordinator so forkFrom: 'coordinator' has a clean anchor
+    env.faux.setResponses([fauxAssistantMessage('Coordinator context seeded.')])
+    await kernel.conversations.submitInput(coordConv.id, 'Seed coordinator planning context')
+    await kernel.conversations.waitForIdle(coordConv.id)
+
+    const { groupId } = (await kernel.plugins.invokeAction(
+      SWARM_PLUGIN_ID,
+      'create_group',
+      { title: 'Executor Inheritance Squad' },
+      { conversationId: coordConv.id },
+    )) as { groupId: string }
+
+    const callsByActor = new Map<string, ObservedCall[]>()
+    const setActorResponses = (
+      queues: Record<string, Array<() => ReturnType<typeof fauxAssistantMessage>>>,
+    ) => {
+      const cursors = new Map<string, number>()
+      const dispatch = (
+        context: TranscriptContext,
+        options: SimpleStreamOptions | undefined,
+        _state: unknown,
+        model: Model<string>,
+      ) => {
+        const sections = extractSystemSections(context.messages)
+        const systemPrompt = Object.values(sections).join('\n')
+        const entry: ObservedCall = {
+          modelId: `${model.provider}/${model.id}`,
+          reasoning: options?.reasoning,
+          systemPrompt,
+          toolNames: getCurrentTools(context.messages).map((t) => t.name),
+        }
+        // Identify caller by role/name in <active_swarm_group> (known immediately, no race with dispatch_worker return)
+        const workerMatch = /<active_swarm_group[^>]*role="worker" name="([^"]+)"/.exec(systemPrompt)
+        const actor = workerMatch ? workerMatch[1]! : 'coordinator'
+        const list = callsByActor.get(actor) ?? []
+        list.push(entry)
+        callsByActor.set(actor, list)
+        const queue = queues[actor]
+        const idx = cursors.get(actor) ?? 0
+        cursors.set(actor, idx + 1)
+        const step = queue?.[idx]
+        return step ? step() : fauxAssistantMessage(`${actor} fallback`)
+      }
+      env.faux.setResponses(Array.from({ length: 16 }, () => dispatch))
+    }
+
+    const isSettled = (convId: number): boolean => {
+      const s = kernel.conversations.getConversation(convId).status
+      return s === 'idle' || s === 'done'
+    }
+
+    // 1. Fresh worker (`createConversation` path) with specialist Profile (bound to flagship/high) and omitted model:
+    //    must inherit coordinator's executorModel (`faux/fast`) + executorThinkingLevel (`low`) AND keep board tools!
+    setActorResponses({
+      'worker-create': [
+        () =>
+          fauxAssistantMessage(
+            [
+              fauxToolCall(
+                'swarm_board_post',
+                { to: ['coordinator'], wake: true, kind: 'done', body: 'Create worker done on executor.' },
+                { id: 'w-create-post' },
+              ),
+            ],
+            { stopReason: 'toolUse' },
+          ),
+        () => fauxAssistantMessage('Create worker settled.'),
+      ],
+      coordinator: [() => fauxAssistantMessage('Coordinator Planner received report.')],
+    })
+    const wCreate = (await kernel.plugins.invokeAction(
+      SWARM_PLUGIN_ID,
+      'dispatch_worker',
+      {
+        groupId,
+        name: 'worker-create',
+        profileId: 'specialist',
+        prompt: 'Implement slice A',
+      },
+      { conversationId: coordConv.id },
+    )) as { workerConversationId: number }
+
+    // Verify immediate conversation snapshot + wait for worker & coordinator wakeup to settle
+    const createSnap = kernel.conversations.getConversation(wCreate.workerConversationId)
+    assert.equal(createSnap.model, 'faux/fast', 'createConversation worker must inherit executorModel over specialist Profile')
+    assert.equal(createSnap.modelOverride, 'faux/fast')
+    assert.equal(createSnap.thinkingLevel, 'low')
+    assert.equal(createSnap.modelTier, undefined)
+
+    await waitFor(
+      async () =>
+        (callsByActor.get('worker-create')?.length ?? 0) >= 2 &&
+        (callsByActor.get('coordinator')?.length ?? 0) >= 1 &&
+        kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0 &&
+        isSettled(wCreate.workerConversationId) &&
+        isSettled(coordConv.id),
+      { timeoutMs: 15_000 },
+    )
+    const createWorkerCall = callsByActor.get('worker-create')![0]!
+    assert.equal(createWorkerCall.modelId, 'faux/fast')
+    assert.equal(createWorkerCall.reasoning, 'low')
+    // Depth-1 Swarm worker keeps board communication tools while having dispatch entry tools stripped
+    for (const keepTool of ['swarm_board_post', 'swarm_board_read', 'swarm_board_status', 'swarm_inspect_worker']) {
+      assert.ok(createWorkerCall.toolNames.includes(keepTool), `depth-1 Swarm worker must keep ${keepTool}`)
+    }
+    for (const stripTool of ['swarm_dispatch_worker', 'subagent', 'SubagentWorkflow']) {
+      assert.ok(!createWorkerCall.toolNames.includes(stripTool), `depth-1 Swarm worker must strip ${stripTool}`)
+    }
+    // Coordinator wakeup from Swarm report must land back on Planner (faux/flagship, high) in Planning Phase!
+    const coordWakeupCall = callsByActor.get('coordinator')![0]!
+    assert.equal(coordWakeupCall.modelId, 'faux/flagship')
+    assert.equal(coordWakeupCall.reasoning, 'high')
+    assert.ok(coordWakeupCall.systemPrompt.includes(ORCHESTRATOR_PLAN_SECTION))
+    assert.ok(coordWakeupCall.toolNames.includes('swarm_dispatch_worker'))
+    assert.ok(!coordWakeupCall.toolNames.includes('write'))
+
+    // 2. Forked worker (`forkFrom: 'coordinator'` path) with specialist Profile and omitted model:
+    //    must unwrap coordinator's orchestrator tier to executorModel (`faux/fast`) + `low` (NOT planner or specialist flagship!)
+    setActorResponses({
+      'worker-fork': [
+        () =>
+          fauxAssistantMessage(
+            [
+              fauxToolCall(
+                'swarm_board_post',
+                { to: ['coordinator'], wake: false, kind: 'done', body: 'Fork worker done.' },
+                { id: 'w-fork-post' },
+              ),
+            ],
+            { stopReason: 'toolUse' },
+          ),
+        () => fauxAssistantMessage('Fork worker settled.'),
+      ],
+    })
+    const wFork = (await kernel.plugins.invokeAction(
+      SWARM_PLUGIN_ID,
+      'dispatch_worker',
+      {
+        groupId,
+        name: 'worker-fork',
+        forkFrom: 'coordinator',
+        profileId: 'specialist',
+        prompt: 'Implement slice B from forked context',
+      },
+      { conversationId: coordConv.id },
+    )) as { workerConversationId: number }
+
+    const forkSnap = kernel.conversations.getConversation(wFork.workerConversationId)
+    assert.equal(forkSnap.model, 'faux/fast', 'forkFrom coordinator worker must inherit executorModel even with specialist Profile')
+    assert.equal(forkSnap.modelOverride, 'faux/fast')
+    assert.equal(forkSnap.thinkingLevel, 'low')
+    assert.equal(forkSnap.modelTier, undefined)
+
+    await waitFor(
+      async () =>
+        (callsByActor.get('worker-fork')?.length ?? 0) >= 2 &&
+        kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0 &&
+        isSettled(wFork.workerConversationId),
+      { timeoutMs: 15_000 },
+    )
+    const forkWorkerCall = callsByActor.get('worker-fork')![0]!
+    assert.equal(forkWorkerCall.modelId, 'faux/fast')
+    assert.equal(forkWorkerCall.reasoning, 'low')
+    for (const keepTool of ['swarm_board_post', 'swarm_board_read', 'swarm_board_status', 'swarm_inspect_worker']) {
+      assert.ok(forkWorkerCall.toolNames.includes(keepTool), `forked depth-1 Swarm worker must keep ${keepTool}`)
+    }
+    for (const stripTool of ['swarm_dispatch_worker', 'subagent', 'SubagentWorkflow']) {
+      assert.ok(!forkWorkerCall.toolNames.includes(stripTool), `forked depth-1 Swarm worker must strip ${stripTool}`)
+    }
+
+    // 3. Explicit concrete model elevation on create path -> honored (`faux/flagship`, `high`)
+    setActorResponses({
+      'worker-elevated': [
+        () =>
+          fauxAssistantMessage(
+            [
+              fauxToolCall(
+                'swarm_board_post',
+                { to: ['coordinator'], wake: false, kind: 'done', body: 'Elevated audit done.' },
+                { id: 'w-elev-post' },
+              ),
+            ],
+            { stopReason: 'toolUse' },
+          ),
+        () => fauxAssistantMessage('Elevated worker settled.'),
+      ],
+    })
+    const wElev = (await kernel.plugins.invokeAction(
+      SWARM_PLUGIN_ID,
+      'dispatch_worker',
+      {
+        groupId,
+        name: 'worker-elevated',
+        model: 'faux/flagship',
+        effort: 'high',
+        prompt: 'High-difficulty security audit',
+      },
+      { conversationId: coordConv.id },
+    )) as { workerConversationId: number }
+    const elevSnap = kernel.conversations.getConversation(wElev.workerConversationId)
+    assert.equal(elevSnap.model, 'faux/flagship')
+    assert.equal(elevSnap.thinkingLevel, 'high')
+    await waitFor(
+      async () =>
+        (callsByActor.get('worker-elevated')?.length ?? 0) >= 2 &&
+        kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0 &&
+        isSettled(wElev.workerConversationId),
+      { timeoutMs: 15_000 },
+    )
+    assert.equal(callsByActor.get('worker-elevated')![0]!.modelId, 'faux/flagship')
+    assert.equal(callsByActor.get('worker-elevated')![0]!.reasoning, 'high')
+
+    // 4. Explicit single tier on forkFrom coordinator path -> honored (`faux/workhorse`, `medium`)
+    setActorResponses({
+      'worker-tier': [
+        () =>
+          fauxAssistantMessage(
+            [
+              fauxToolCall(
+                'swarm_board_post',
+                { to: ['coordinator'], wake: false, kind: 'done', body: 'Tier worker done.' },
+                { id: 'w-tier-post' },
+              ),
+            ],
+            { stopReason: 'toolUse' },
+          ),
+        () => fauxAssistantMessage('Tier worker settled.'),
+      ],
+    })
+    const wTier = (await kernel.plugins.invokeAction(
+      SWARM_PLUGIN_ID,
+      'dispatch_worker',
+      {
+        groupId,
+        name: 'worker-tier',
+        forkFrom: 'coordinator',
+        model: 'tier/strong',
+        prompt: 'Single-tier workhorse task',
+      },
+      { conversationId: coordConv.id },
+    )) as { workerConversationId: number }
+    const tierSnap = kernel.conversations.getConversation(wTier.workerConversationId)
+    assert.equal(tierSnap.model, 'faux/workhorse')
+    assert.equal(tierSnap.thinkingLevel, 'medium')
+    await waitFor(
+      async () =>
+        (callsByActor.get('worker-tier')?.length ?? 0) >= 2 &&
+        kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0 &&
+        isSettled(wTier.workerConversationId),
+      { timeoutMs: 15_000 },
+    )
+    assert.equal(callsByActor.get('worker-tier')![0]!.modelId, 'faux/workhorse')
+    assert.equal(callsByActor.get('worker-tier')![0]!.reasoning, 'medium')
+
+    // 5. Reject explicit orchestrator tier on both create and forkFrom paths with 400 orchestrator_tier_human_only
+    await assertRejectsCode(
+      () =>
+        kernel.plugins.invokeAction(
+          SWARM_PLUGIN_ID,
+          'dispatch_worker',
+          {
+            groupId,
+            name: 'worker-bad-create',
+            model: 'tier/auto-swarm',
+            prompt: 'must fail',
+          },
+          { conversationId: coordConv.id },
+        ),
+      'orchestrator_tier_human_only',
+    )
+    await assertRejectsCode(
+      () =>
+        kernel.plugins.invokeAction(
+          SWARM_PLUGIN_ID,
+          'dispatch_worker',
+          {
+            groupId,
+            name: 'worker-bad-fork',
+            forkFrom: 'coordinator',
+            model: 'tier/auto-swarm',
+            prompt: 'must fail',
+          },
+          { conversationId: coordConv.id },
+        ),
+      'orchestrator_tier_human_only',
+    )
+
+    await kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'close_group', { groupId }, { conversationId: coordConv.id })
+  } finally {
+    await env.close()
+  }
+})
+
+test('non-human agent wakeups (idle & queued followUp during execution) and runChangedDuringExec restore planning phase and plannerModel', { timeout: 60_000 }, async () => {
+  const env = await openOrchestratorEnv()
+  try {
+    const { kernel } = env.app
+    await kernel.plugins.invokeAction(TIERS_PLUGIN_ID, 'set', {
+      id: 'auto-wakeup',
+      kind: 'orchestrator',
+      model: 'faux/flagship',
+      thinkingLevel: 'high',
+      executorModel: 'faux/fast',
+      executorThinkingLevel: 'low',
+      maxExecutionSteps: 8,
+    })
+
+    const conv = await kernel.conversations.createConversation({ title: 'agent-wakeup-orch', model: 'tier/auto-wakeup' })
+
+    // 1. Idle orchestrator conversation whose runtime model drifted to executorModel:
+    //    waking with origin: 'agent' (e.g. Swarm board report) must normalize to planning + plannerModel BEFORE turn starts!
+    await kernel.conversations.setConversationRuntimeModel(conv.id, {
+      model: 'faux/fast',
+      thinkingLevel: 'low',
+    })
+    assert.equal(kernel.conversations.getConversation(conv.id).model, 'faux/fast')
+
+    const observedIdleWake: ObservedCall[] = []
+    env.faux.setResponses([
+      captureStep(observedIdleWake, conv.id, () => fauxAssistantMessage('Planner handled idle agent wakeup.')),
+    ])
+    await kernel.conversations.submitInput(conv.id, '<swarm_board_report>slice done</swarm_board_report>', {
+      origin: 'agent',
+    })
+    await kernel.conversations.waitForIdle(conv.id)
+    assert.equal(observedIdleWake.length, 1)
+    assert.equal(observedIdleWake[0]?.modelId, 'faux/flagship')
+    assert.equal(observedIdleWake[0]?.reasoning, 'high')
+    assert.ok(observedIdleWake[0]?.toolNames.includes(TIERS_EXIT_PLAN_MODE_TOOL))
+    assert.ok(!observedIdleWake[0]?.toolNames.includes('write'))
+    assert.ok(observedIdleWake[0]?.systemPrompt.includes(ORCHESTRATOR_PLAN_SECTION))
+
+    // 2. Queued non-human followUp (`origin: 'agent', whenBusy: 'followUp'`) arriving while coordinator is in Execution Phase:
+    //    must reset phase to planning AND restore plannerModel before the followUp run starts!
+    const observedQueued: ObservedCall[] = []
+    const inExecGate = deferred<void>()
+    const releaseExec = deferred<void>()
+    env.faux.setResponses([
+      captureStep(observedQueued, conv.id, () =>
+        fauxAssistantMessage(
+          [fauxToolCall(TIERS_EXIT_PLAN_MODE_TOOL, { plan: 'Run executor step' }, { id: 'exit-wake-1' })],
+          { stopReason: 'toolUse' },
+        ),
+      ),
+      captureStep(observedQueued, conv.id, async () => {
+        inExecGate.resolve()
+        await releaseExec.promise
+        return fauxAssistantMessage('Executor finished Run 1.')
+      }),
+      captureStep(observedQueued, conv.id, () => fauxAssistantMessage('Planner handled queued agent followUp.')),
+    ])
+
+    await kernel.conversations.submitInput(conv.id, 'Execute single-stream change')
+    await inExecGate.promise
+    await kernel.conversations.submitInput(conv.id, '<swarm_board_report>peer finished</swarm_board_report>', {
+      origin: 'agent',
+      whenBusy: 'followUp',
+    })
+    releaseExec.resolve()
+
+    await kernel.conversations.waitForIdle(conv.id)
+    await waitFor(async () => observedQueued.length === 3, { timeoutMs: 10_000 })
+
+    assert.equal(observedQueued[0]?.modelId, 'faux/flagship')
+    assert.equal(observedQueued[0]?.reasoning, 'high')
+    assert.equal(observedQueued[1]?.modelId, 'faux/fast')
+    assert.equal(observedQueued[1]?.reasoning, 'low')
+    assert.equal(observedQueued[2]?.modelId, 'faux/flagship', 'queued agent followUp must restore Planner model')
+    assert.equal(observedQueued[2]?.reasoning, 'high', 'queued agent followUp must restore Planner thinkingLevel')
+    assert.ok(observedQueued[2]?.toolNames.includes(TIERS_EXIT_PLAN_MODE_TOOL))
+    assert.ok(!observedQueued[2]?.toolNames.includes('write'))
+    assert.ok(observedQueued[2]?.systemPrompt.includes(ORCHESTRATOR_PLAN_SECTION))
+
+    // 3. Direct defense-in-depth verification: `runChangedDuringExec` in `before_turn` restores runtime plannerModel
+    //    even if `afterResponse` was bypassed and runtime model is still stuck on executorModel
+    const convDirect = await kernel.conversations.createConversation({
+      title: 'direct-run-changed',
+      model: 'tier/auto-wakeup',
+    })
+    // Seed planning record with activeRunKey = 'run-1'
+    await kernel.plugins.runHook('before_turn', {
+      conversation: kernel.conversations.getConversation(convDirect.id),
+      inputs: [{ id: 'run-1', text: 'start', origin: 'human', createdAt: Date.now() }],
+      messages: [],
+      sections: [],
+      tools: [{ name: TIERS_EXIT_PLAN_MODE_TOOL, description: 'exit', inputSchema: {} }],
+    } as never)
+    // Transition record to execution phase (switches runtime model to faux/fast + low)
+    const exitResult = (await kernel.plugins.executeTool(
+      TIERS_EXIT_PLAN_MODE_TOOL,
+      { plan: 'Direct transition to execution' },
+      { conversationId: convDirect.id },
+    )) as { isError?: boolean }
+    assert.notEqual(exitResult.isError, true)
+    assert.equal(kernel.conversations.getConversation(convDirect.id).model, 'faux/fast')
+    assert.equal(
+      (
+        kernel.plugins.getPublicSessionDoc(TIERS_PLUGIN_ID, TIERS_ORCHESTRATOR_SESSION_DOC, convDirect.id)
+          .value as TierOrchestratorSessionView | null
+      )?.phase,
+      'execution',
+    )
+    // Simulate next queued run (`run-2`, origin: 'agent') hitting before_turn directly while runtime model is still faux/fast
+    const hookRes = await kernel.plugins.runHook('before_turn', {
+      conversation: kernel.conversations.getConversation(convDirect.id),
+      inputs: [{ id: 'run-2', text: 'swarm wakeup', origin: 'agent', createdAt: Date.now() }],
+      messages: [],
+      sections: [],
+      tools: [
+        { name: 'read', description: 'read', inputSchema: {} },
+        { name: 'write', description: 'write', inputSchema: {} },
+        { name: TIERS_EXIT_PLAN_MODE_TOOL, description: 'exit', inputSchema: {} },
+      ],
+    } as never)
+    assert.equal(hookRes.action, 'transform')
+    const afterDirect = kernel.conversations.getConversation(convDirect.id)
+    assert.equal(afterDirect.model, 'faux/flagship', 'runChangedDuringExec must restore runtime plannerModel')
+    assert.equal(afterDirect.thinkingLevel, 'high', 'runChangedDuringExec must restore plannerThinkingLevel')
+    assert.equal(
+      (
+        kernel.plugins.getPublicSessionDoc(TIERS_PLUGIN_ID, TIERS_ORCHESTRATOR_SESSION_DOC, convDirect.id)
+          .value as TierOrchestratorSessionView | null
+      )?.phase,
+      'planning',
+    )
   } finally {
     await env.close()
   }

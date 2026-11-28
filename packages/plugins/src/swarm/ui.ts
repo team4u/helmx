@@ -5,23 +5,10 @@ import {
   COORDINATOR_SCOPE,
   HISTORY_PARTICIPANT_SCOPE,
   PARTICIPANT_SCOPE,
+  SWARM_TOOL_NAMES,
 } from './contracts.js'
 
 export const SWARM_WORKBENCH_PANEL_ID = 'groups' as const
-
-const SWARM_TOOL_NAMES = [
-  'swarm_create_group',
-  'swarm_update_group',
-  'swarm_dispatch_worker',
-  'swarm_board_post',
-  'swarm_board_read',
-  'swarm_board_status',
-  'swarm_abort_worker',
-  'swarm_switch_worker_model',
-  'swarm_inspect_worker',
-  'swarm_archive_worker',
-  'swarm_close_group',
-] as const
 
 export function registerSwarmUi(ctx: HelmxPluginContext): void {
   ctx.ui.toolView({

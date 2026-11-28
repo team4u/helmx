@@ -26,7 +26,7 @@ import {
   type SavedWorkflowSummary,
   type WorkflowRunSessionDocState,
 } from './contracts.js'
-import { registerWorkflowActions } from './workflow/actions.js'
+import { WORKFLOW_STEER_TOOL_NAME, registerWorkflowActions } from './workflow/actions.js'
 import { readWorkflowSkillAsset } from './workflow/assets.js'
 import { createBackgroundPolicy, createBackgroundReporter } from './workflow/background.js'
 import {
@@ -180,6 +180,7 @@ export function createWorkflowPlugin(): PluginDefinition {
       })
       ctx.provide<DispatchToolsCapability>('helmx.dispatch-tools', {
         toolNames: ['subagent', 'SubagentWorkflow'],
+        orchestrationTools: [WORKFLOW_STEER_TOOL_NAME],
       })
 
       ctx.provide<PluginSearchProvider>(HELMX_SEARCH_CAPABILITY_ID, {

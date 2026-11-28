@@ -178,27 +178,6 @@ export class ConversationService {
       abortConversation: (id) => this.abortConversation(id),
     })
 
-    this.contextOps = new ConversationContextOps({
-      harness,
-      store,
-      tracker,
-      events,
-      stash,
-      isClosed: this.o.isClosed,
-      alignConversationModel: (id) => this.alignConversationModel(id),
-      withOwnership: (summary) => this.withOwnership(summary),
-      assertMutationGuard: (id, guard) => this.assertMutationGuard(id, guard),
-    })
-
-    this.detailOps = new ConversationDetailService({
-      harness,
-      store,
-      stash,
-      getConversation: (id) => this.getConversation(id),
-      collectRewindIntervals: (conv) => this.rewind.collectRewindIntervals(conv),
-      ensureContextUsage: (id) => this.tracker.ensureContextUsage(id),
-    })
-
     this.profileAlignment = new ConversationProfileService({
       harness,
       store,
@@ -214,6 +193,30 @@ export class ConversationService {
       isConversationWorking: this.o.isConversationWorking,
       // Context window and thresholds may change after model/Profile alignment: trigger context usage recalculation.
       scheduleContextUsageRefresh: (id) => this.tracker.scheduleContextUsageRefresh(id),
+    })
+
+    this.contextOps = new ConversationContextOps({
+      harness,
+      store,
+      tracker,
+      events,
+      stash,
+      profileAlignment: this.profileAlignment,
+      models: this.o.models,
+      assertModelEnabled: this.o.assertModelEnabled,
+      isClosed: this.o.isClosed,
+      alignConversationModel: (id) => this.alignConversationModel(id),
+      withOwnership: (summary) => this.withOwnership(summary),
+      assertMutationGuard: (id, guard) => this.assertMutationGuard(id, guard),
+    })
+
+    this.detailOps = new ConversationDetailService({
+      harness,
+      store,
+      stash,
+      getConversation: (id) => this.getConversation(id),
+      collectRewindIntervals: (conv) => this.rewind.collectRewindIntervals(conv),
+      ensureContextUsage: (id) => this.tracker.ensureContextUsage(id),
     })
 
     this.inputPipeline = new ConversationInputPipeline({

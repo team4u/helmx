@@ -357,7 +357,7 @@ export function createTiersPlugin(): PluginDefinition {
         description:
           'Exit the Planning Phase and switch this conversation in place to the Executor model (which sees the conversation so far plus this plan). Call once the plan is ready, alone as the sole tool call of the step.',
         promptGuidelines: [
-          'Call exit_plan_mode({ plan }) alone (never in parallel with other tools) for any task requiring edits or side-effect actions—use 1-2 sentences for trivial settled follow-ups, or a complete plan with verification criteria and a Re-plan if: list for substantive work. Skip it for pure questions or when the user asked to approve the plan first.',
+          'Call exit_plan_mode({ plan }) alone (never in parallel with other tools) for single-stream edits, side-effect actions, or final merge/verification—use 1-2 sentences for trivial settled follow-ups, or a complete plan with verification criteria and a Re-plan if: list for substantive work. Skip it for pure questions, when the user asked to approve the plan first, or when staying in Planning Phase to orchestrate parallel subagents/Swarm.',
         ],
         scope: TIERS_BORROW_ELIGIBLE_SCOPE,
         inputSchema: {
