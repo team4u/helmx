@@ -12,8 +12,9 @@ export const MERMAID_COPY = {
   zoomOutTitle: { en: 'Zoom out (-)', 'zh-CN': '缩小 (-)' },
   resetTitle: { en: 'Reset zoom & position (0 / 1)', 'zh-CN': '重置缩放与位置 (0 / 1)' },
   reset: { en: 'Reset', 'zh-CN': '重置' },
-  viewSource: { en: 'View source', 'zh-CN': '查看源码' },
-  viewDiagram: { en: 'View diagram', 'zh-CN': '查看图形' },
+  viewModeAria: { en: 'Preview view mode', 'zh-CN': '预览视图模式' },
+  viewDiagram: { en: 'Diagram', 'zh-CN': '图形' },
+  viewSource: { en: 'Source', 'zh-CN': '源码' },
   closeTitle: { en: 'Close (Esc)', 'zh-CN': '关闭 (Esc)' },
   close: { en: 'Close', 'zh-CN': '关闭' },
 } as const satisfies Record<string, LocalizedText>

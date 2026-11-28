@@ -127,6 +127,7 @@ export function WorkspaceFilePreviewModal({
               />
             ) : null}
             <SegmentedControl<'rich' | 'source'>
+              size="sm"
               value={view}
               onValueChange={(v) => setView(v)}
               aria-label={t('conv.artifact.viewModeAria')}

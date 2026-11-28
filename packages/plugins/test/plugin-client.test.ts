@@ -781,6 +781,7 @@ function createComponentHarness<P>(initialProps: P) {
     IconButton: (props: Record<string, unknown>) => ({ type: 'IconButton', props }),
     Badge: (props: Record<string, unknown>) => ({ type: 'Badge', props }),
     LoadingState: (props: Record<string, unknown>) => ({ type: 'LoadingState', props }),
+    SegmentedControl: (props: Record<string, unknown>) => ({ type: 'SegmentedControl', props }),
     ModalDialog: (props: Record<string, unknown>) => ({ type: 'ModalDialog', props }),
     Dialog: (props: Record<string, unknown>) => ({ type: 'Dialog', props }),
     DialogPortal: (props: Record<string, unknown>) => ({ type: 'DialogPortal', props }),
@@ -1225,6 +1226,38 @@ test('MermaidPreviewModal 编译产物状态：独立按需加载 mermaid，失�
         (n) => n.type === 'div' && n.props.className === 'mermaid-svg-layer',
       )[0]
       assert.ok(svgLayer, '弹窗重试成功后应渲染 SVG 图层')
+
+      // 顶栏 HIG 规范：SegmentedControl(size="sm") 切换图形/源码 + CopyButton(btn btn-secondary btn-sm)
+      const settledModal = collectNodes(tree, (n) => n.type === harness.ui.ModalDialog)[0]
+      assert.ok(settledModal, '应渲染 ModalDialog 节点')
+      const headerSegCtrl = collectNodes(
+        settledModal.props.headerActions,
+        (n) => n.type === harness.ui.SegmentedControl,
+      )[0]
+      assert.ok(headerSegCtrl, 'headerActions 内应渲染 SegmentedControl')
+      assert.equal(headerSegCtrl.props.size, 'sm')
+      assert.equal(headerSegCtrl.props.value, 'diagram')
+      const headerCopyBtn = collectNodes(
+        settledModal.props.headerActions,
+        (n) => n.type === harness.ui.CopyButton,
+      )[0]
+      assert.ok(headerCopyBtn, 'headerActions 内应渲染 CopyButton')
+      assert.equal(headerCopyBtn.props.className, 'btn btn-secondary btn-sm')
+
+      assert.equal(typeof headerSegCtrl.props.onValueChange, 'function')
+      ;(headerSegCtrl.props.onValueChange as (v: 'diagram' | 'source') => void)('source')
+      tree = harness.render(mod.MermaidPreviewModal)
+      const sourcePre = collectNodes(
+        tree,
+        (n) => n.type === 'pre' && String(n.props.className ?? '').includes('mermaid-source-pre'),
+      )[0]
+      assert.ok(sourcePre, '切换到 source 后应展示 .mermaid-source-pre 源码块')
+      const sourceModal = collectNodes(tree, (n) => n.type === harness.ui.ModalDialog)[0]
+      const sourceSegCtrl = collectNodes(
+        sourceModal?.props.headerActions,
+        (n) => n.type === harness.ui.SegmentedControl,
+      )[0]
+      assert.equal(sourceSegCtrl?.props.value, 'source')
 
       // unmount stale 守卫：独立模块实例在 loadMermaid() 在途期间卸载，迟到解析不得写回状态
       const staleHarness = createComponentHarness({

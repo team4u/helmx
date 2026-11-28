@@ -97,6 +97,7 @@ export function ArtifactPreviewModal({ artifactId, conversationId, onClose, inli
           ) : null}
           {markdown ? (
             <SegmentedControl<'rich' | 'source'>
+              size="sm"
               value={view}
               onValueChange={(v) => setView(v)}
               aria-label={t('conv.artifact.viewModeAria')}

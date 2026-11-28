@@ -26,7 +26,7 @@ export function ConversationPaneError({ conversationId, detailError, isSplit, on
       <div className="pane-error-row">
         <p>{t('conv.pane.loadFailed', { id: conversationId, error: detailError })}</p>
         <span className="pane-error-actions">
-          <Button onClick={onRetry}>{t('common.retry')}</Button>
+          <Button size="sm" onClick={onRetry}>{t('common.retry')}</Button>
           {isDrawer && onCloseDrawer !== undefined ? (
             <Button size="sm" variant="ghost" className="conversation-drawer-close-btn" aria-label={t('conv.pane.closeDrawerAria')} onClick={onCloseDrawer}>{t('common.close')}</Button>
           ) : isSplit && onCloseSplit !== undefined ? <CloseSplitButton onCloseSplit={onCloseSplit} /> : null}

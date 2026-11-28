@@ -18,6 +18,7 @@ const { HostStoreProviders } = await import('./helpers/host-store.js')
 const e = React.createElement
 ;(globalThis as Record<string, unknown>).React = React
 const { ConversationTimeline } = await import('../src/conversation/ConversationTimeline.js')
+const { ConversationPaneError } = await import('../src/conversation/conversation-pane/ConversationPaneStates.js')
 
 // ---------------------------------------------------------------------------
 // 1. 状态判定纯函数：isAssistantTurnBusy
@@ -320,6 +321,7 @@ test('ConversationTimeline：含工具调用的多段回合，复制按钮只复
 
     const copyBtn = host.querySelector<HTMLButtonElement>('.msg-ai-block .msg-ai-footer .msg-hover-bar button[aria-label="Copy"]')
     assert.ok(copyBtn !== null, '助手回合底部存在复制按钮')
+    assert.equal(copyBtn.classList.contains('btn-icon-xs'), true, '助手回合复制按钮使用 btn-icon-xs 对齐同行 IconButton')
     await act(async () => {
       copyBtn.click()
       await Promise.resolve()
@@ -474,6 +476,104 @@ test('ConversationTimeline：运行中/阻塞回合与首 token 前等待行显�
     assert.ok(host.querySelector('.msg-live-elapsed') === null, 'missing runStartedAt must not fabricate 0s')
   } finally {
     resetServerClock()
+    act(() => root.unmount())
+    host.remove()
+  }
+})
+
+test('HIG 尺码对齐：人类消息复制按钮、失败回合行与 ConversationPaneError 同行操作按钮尺码一致', { timeout: 60_000 }, async () => {
+  const errConv: ConversationSummary = {
+    id: 1,
+    title: '尺码对齐检查',
+    profileId: 'default',
+    tags: [],
+    cwd: '/workspace',
+    model: '',
+    thinkingLevel: '',
+    status: 'error',
+    lastError: 'model_error: timeout',
+    stateChangeSeq: 1,
+    completionSeq: 0,
+    unread: false,
+    pinned: false,
+    pendingAskCount: 0,
+    createdAt: 100,
+    updatedAt: 200,
+  }
+  const entries: ConversationEntry[] = [
+    { id: '1', kind: 'helmx.input', data: { text: '请重试一次', origin: 'human' } },
+  ]
+
+  const host = document.createElement('div')
+  document.body.appendChild(host)
+  const root = createRoot(host)
+  try {
+    await act(async () => {
+      root.render(
+        e(
+          HostStoreProviders,
+          { value: makeMockStore({ conversations: [errConv] }) },
+          e(ConversationTimeline, {
+            conversation: errConv,
+            detailEntries: entries,
+            onRequestEdit: () => {},
+          }),
+        ),
+      )
+    })
+
+    const humanCopyBtn = host.querySelector<HTMLButtonElement>('.msg-human-footer .msg-hover-bar button[aria-label="Copy"]')
+    assert.ok(humanCopyBtn !== null, '人类消息悬浮条存在复制按钮')
+    assert.equal(humanCopyBtn.classList.contains('btn-icon-xs'), true, '人类消息复制按钮使用 btn-icon-xs 对齐同行 IconButton')
+
+    const failedButtons = [...host.querySelectorAll<HTMLButtonElement>('.callout.callout-error button')]
+    assert.equal(failedButtons.length, 2, '失败回合行同时渲染立即重试与编辑重发两个操作按钮')
+    for (const btn of failedButtons) {
+      assert.equal(btn.classList.contains('btn-xs'), true, '失败回合行两个按钮均使用 btn-xs 对齐 22px')
+    }
+
+    await act(async () => {
+      root.render(
+        e(
+          HostStoreProviders,
+          { value: makeMockStore({ conversations: [errConv] }) },
+          e(ConversationPaneError, {
+            conversationId: 1,
+            detailError: 'network timeout',
+            isDrawer: true,
+            onCloseDrawer: () => {},
+            onRetry: () => {},
+          }),
+        ),
+      )
+    })
+    const drawerErrBtns = [...host.querySelectorAll<HTMLButtonElement>('.pane-error-actions button')]
+    assert.equal(drawerErrBtns.length, 2, '抽屉加载失败态包含重试与关闭按钮')
+    for (const btn of drawerErrBtns) {
+      assert.equal(btn.classList.contains('btn-sm'), true, 'ConversationPaneError 重试与抽屉关闭按钮均使用 btn-sm 对齐 28px')
+    }
+
+    await act(async () => {
+      root.render(
+        e(
+          HostStoreProviders,
+          { value: makeMockStore({ conversations: [errConv] }) },
+          e(ConversationPaneError, {
+            conversationId: 1,
+            detailError: 'network timeout',
+            isSplit: true,
+            onCloseSplit: () => {},
+            onRetry: () => {},
+          }),
+        ),
+      )
+    })
+    const splitErrBtns = [...host.querySelectorAll<HTMLButtonElement>('.pane-error-actions button')]
+    assert.equal(splitErrBtns.length, 2, '分屏加载失败态包含重试与关闭分屏按钮')
+    for (const btn of splitErrBtns) {
+      assert.equal(btn.classList.contains('btn-sm'), true, 'ConversationPaneError 重试与分屏关闭按钮均使用 btn-sm 对齐 28px')
+    }
+  } finally {
     act(() => root.unmount())
     host.remove()
   }

@@ -108,7 +108,7 @@ export function TurnErrorNotice({
             {' '}
             <Button
               variant="ghost"
-              size="sm"
+              size="xs"
               icon={<HelmxIcon name="edit" size={12} />}
               title={t('conv.turnFailed.editLatest')}
               aria-label={t('conv.turnFailed.editLatest')}

@@ -185,6 +185,10 @@ test('Markdown 富文本预览复用会话大纲：显示章节数量并精确�
   const root = mount(host, store, 'art-outline', 7)
   await flush()
 
+  assert.ok(
+    document.querySelector('.helmx-tabs-segmented.helmx-tabs-sm') !== null,
+    'Markdown 产物预览视图切换器必须使用 size="sm"',
+  )
   const trigger = document.querySelector<HTMLButtonElement>('.conversation-outline-trigger')
   assert.ok(trigger !== null, 'Markdown 预览应显示大纲按钮')
   assert.match(trigger.textContent ?? '', /3/, '大纲角标应显示章节数量')

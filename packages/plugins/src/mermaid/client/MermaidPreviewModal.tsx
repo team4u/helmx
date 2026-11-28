@@ -8,6 +8,7 @@ import {
   IconButton,
   LoadingState,
   ModalDialog,
+  SegmentedControl,
 } from '@helmx/ui'
 import { usePluginContext, usePluginLocale, usePluginTranslator } from '@helmx/plugin-client'
 import { renderMermaidSvg } from './mermaid-loader.ts'
@@ -105,10 +106,17 @@ export function MermaidPreviewModal({ code, svg, onClose }: { code: string; svg?
           <IconButton variant="secondary" size="sm" icon="zoom-in" onClick={() => zoomBy(STEP)} label={t(C.zoomInTitle)} />
           <IconButton variant="secondary" size="sm" icon="zoom-out" onClick={() => zoomBy(-STEP)} label={t(C.zoomOutTitle)} />
           <Button variant="secondary" size="sm" onClick={resetView} title={t(C.resetTitle)}>{t(C.reset)}</Button>
-          <Button variant="secondary" size="sm" onClick={() => setView((v) => (v === 'diagram' ? 'source' : 'diagram'))}>
-            {view === 'diagram' ? t(C.viewSource) : t(C.viewDiagram)}
-          </Button>
-          <CopyButton text={code} label={t(C.copySource)} />
+          <SegmentedControl<'diagram' | 'source'>
+            size="sm"
+            value={view}
+            onValueChange={(v) => setView(v)}
+            aria-label={t(C.viewModeAria)}
+            items={[
+              { value: 'diagram', label: t(C.viewDiagram) },
+              { value: 'source', label: t(C.viewSource) },
+            ]}
+          />
+          <CopyButton text={code} label={t(C.copySource)} className="btn btn-secondary btn-sm" />
         </div>
       }
     >

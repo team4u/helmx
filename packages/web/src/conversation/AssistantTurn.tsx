@@ -264,7 +264,7 @@ function AssistantTurnContent({
           ) : null}
           {showHoverBar ? (
             <span className="msg-hover-bar">
-              {lastText !== '' ? <CopyButton text={lastText} /> : null}
+              {lastText !== '' ? <CopyButton text={lastText} className="btn btn-ghost btn-icon-xs" /> : null}
               {isLatestTurn && onRegenerate !== undefined && !hasBackgroundActivity ? (
                 <IconButton
                   icon={<HelmxIcon name="rotate-cw" size={12} />}

@@ -684,6 +684,10 @@ describe('WorkspaceFilePreviewModal', { timeout: 60_000 }, () => {
 
     try {
       await flush()
+      assert.ok(
+        document.querySelector('.helmx-tabs-segmented.helmx-tabs-sm') !== null,
+        'Markdown preview mode switcher uses sm SegmentedControl',
+      )
       const chips = [...document.querySelectorAll<HTMLButtonElement>('button.attachment-chip')]
       const apiChip = chips.find((c) => (c.textContent ?? '').includes('API'))
       const rootChip = chips.find((c) => (c.textContent ?? '').includes('Root'))

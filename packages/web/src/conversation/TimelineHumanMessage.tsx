@@ -144,7 +144,7 @@ export const TimelineHumanMessage = memo(function TimelineHumanMessage({
       ) : null}
       <div className="msg-human-footer">
         <span className="msg-hover-bar">
-          <CopyButton text={item.text} />
+          <CopyButton text={item.text} className="btn btn-ghost btn-icon-xs" />
           {item.origin === 'human' ? (
             <IconButton
               icon={<HelmxIcon name="edit" size={12} />}
