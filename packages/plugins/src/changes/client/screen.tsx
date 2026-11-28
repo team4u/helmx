@@ -28,7 +28,6 @@ import {
 } from '@helmx/ui'
 import {
   useConversation,
-  useConversations,
   usePluginContext,
   usePluginLocale,
   usePlugins,
@@ -36,9 +35,7 @@ import {
 } from '@helmx/plugin-client'
 import type {
   GitDiffFileResult,
-  WorkspaceDiffScope,
   WorkspaceInspectResult,
-  WorktreeDiffScope,
 } from '../../contracts-types.js'
 import {
   CHG_COPY,
@@ -50,7 +47,10 @@ import {
 } from './copy.ts'
 import { DiffViewer } from './DiffViewer.tsx'
 import {
+  buildFileCacheKey,
   filterFiles,
+  normalizeWorkspaceScopeParam,
+  normalizeWorktreeScopeParam,
   parseGitDiffFileResult,
   parseWorkspaceInspectResult,
   parseWorktreeInspectResult,
@@ -71,43 +71,11 @@ function parsePositiveIntParam(raw: string | undefined): number | undefined {
   return Number.isSafeInteger(num) && num > 0 ? num : undefined
 }
 
-function normalizeWorktreeScopeParam(raw: string | undefined): WorktreeDiffScope {
-  return raw === 'committed' || raw === 'uncommitted' ? raw : 'all'
-}
-
-function normalizeWorkspaceScopeParam(raw: string | undefined): WorkspaceDiffScope {
-  if (raw === 'unpushed' || raw === 'commit' || raw === 'since') return raw
-  return 'working'
-}
-
-function buildFileCacheKey(parts: {
-  targetKey: string
-  head?: string
-  dirtyCount: number
-  scope: string
-  commit?: string
-  base?: string
-  filePath: string
-  refreshSeq: number
-}): string {
-  return [
-    parts.targetKey,
-    parts.head ?? '',
-    String(parts.dirtyCount),
-    parts.scope,
-    parts.commit ?? '',
-    parts.base ?? '',
-    parts.filePath,
-    String(parts.refreshSeq),
-  ].join('\u0000')
-}
-
 export function ChangesInspectorScreen(props: ChangesInspectorScreenProps): ReactNode {
   const ctx = usePluginContext()
   const locale = usePluginLocale()
   const t = (text: LocalizedText): string => resolveLocalizedText(text, locale)
   const screenScope = useScreenParams()
-  const conversations = useConversations()
   const { plugins } = usePlugins()
 
   const worktreeEnabled = useMemo(
@@ -171,14 +139,9 @@ export function ChangesInspectorScreen(props: ChangesInspectorScreenProps): Reac
   const activeSelection = useMemo<ChangesTargetSelection | undefined>(() => {
     if (paramWt !== undefined) return { kind: 'worktree', worktreeId: paramWt }
     if (paramConv !== undefined) return { kind: 'workspace', conversationId: paramConv }
-    const withCwd =
-      conversations.find((c) => !c.tags.includes('archived') && c.cwd.trim() !== '') ??
-      conversations.find((c) => c.cwd.trim() !== '')
-    if (withCwd !== undefined) return { kind: 'workspace', conversationId: withCwd.id }
-    const activeWt = worktrees.find((w) => w.status === 'active') ?? worktrees[0]
-    if (activeWt !== undefined) return { kind: 'worktree', worktreeId: activeWt.id }
+    if (ctx.conversationId !== undefined) return { kind: 'workspace', conversationId: ctx.conversationId }
     return undefined
-  }, [paramWt, paramConv, conversations, worktrees])
+  }, [paramWt, paramConv, ctx.conversationId])
 
   const targetKey =
     activeSelection === undefined
@@ -190,44 +153,6 @@ export function ChangesInspectorScreen(props: ChangesInspectorScreenProps): Reac
   const worktreeScope = normalizeWorktreeScopeParam(params['scope'])
   const workspaceScope = normalizeWorkspaceScopeParam(params['scope'])
   const activeScope = activeSelection?.kind === 'worktree' ? worktreeScope : workspaceScope
-
-  const targetOptions = useMemo<SelectOption<string>[]>(() => {
-    const opts: SelectOption<string>[] = []
-    const seen = new Set<string>()
-    for (const c of conversations) {
-      if (c.cwd.trim() === '') continue
-      const value = `conv:${c.id}`
-      seen.add(value)
-      const labelTitle = c.title.trim() !== '' ? c.title.trim() : `#${c.id}`
-      opts.push({
-        value,
-        label: `${labelTitle} (${c.nodeId || 'local'})`,
-        icon: 'folder',
-        meta: `#${c.id}`,
-      })
-    }
-    if (worktreeEnabled) {
-      for (const wt of worktrees) {
-        if (wt.status !== 'active' && wt.id !== paramWt) continue
-        const value = `wt:${wt.id}`
-        seen.add(value)
-        opts.push({
-          value,
-          label: `${wt.branch} (${wt.nodeId})`,
-          icon: 'git-branch',
-          meta: wt.status === 'removed' ? 'removed' : 'worktree',
-        })
-      }
-    }
-    if (targetKey !== '' && !seen.has(targetKey)) {
-      opts.unshift({
-        value: targetKey,
-        label: activeSelection?.kind === 'worktree' ? activeSelection.worktreeId : `#${activeSelection?.conversationId}`,
-        icon: activeSelection?.kind === 'worktree' ? 'git-branch' : 'folder',
-      })
-    }
-    return opts
-  }, [conversations, worktrees, worktreeEnabled, targetKey, activeSelection, paramWt])
 
   const [summaryLoading, setSummaryLoading] = useState(false)
   const [summaryError, setSummaryError] = useState<string | undefined>(undefined)
@@ -299,6 +224,65 @@ export function ChangesInspectorScreen(props: ChangesInspectorScreenProps): Reac
 
   const currentWorktree = worktreeData?.key === summaryScopeKey ? worktreeData.data : undefined
   const currentWorkspace = workspaceData?.key === summaryScopeKey ? workspaceData.data : undefined
+
+  const matchedWorktreeRecord = useMemo(
+    () =>
+      activeSelection?.kind === 'worktree'
+        ? (currentWorktree?.record ?? worktrees.find((w) => w.id === activeSelection.worktreeId))
+        : undefined,
+    [activeSelection, currentWorktree, worktrees],
+  )
+
+  const scopedConversationId = useMemo(() => {
+    if (activeSelection?.kind === 'workspace') return activeSelection.conversationId
+    if (matchedWorktreeRecord !== undefined) {
+      if (matchedWorktreeRecord.parentConversationId > 0) return matchedWorktreeRecord.parentConversationId
+      if (matchedWorktreeRecord.conversationId !== undefined && matchedWorktreeRecord.conversationId > 0) {
+        return matchedWorktreeRecord.conversationId
+      }
+    }
+    return ctx.conversationId
+  }, [activeSelection, matchedWorktreeRecord, ctx.conversationId])
+
+  const targetOptions = useMemo<SelectOption<string>[]>(() => {
+    const opts: SelectOption<string>[] = []
+    const seen = new Set<string>()
+    if (scopedConversationId !== undefined) {
+      const value = `conv:${scopedConversationId}`
+      seen.add(value)
+      opts.push({
+        value,
+        label: t(CHG_COPY.workbenchCurrentWorkspace),
+        icon: 'folder',
+        meta: `#${scopedConversationId}`,
+      })
+    }
+    if (worktreeEnabled) {
+      for (const wt of worktrees) {
+        const belongsToConversation =
+          scopedConversationId !== undefined &&
+          wt.status === 'active' &&
+          (wt.parentConversationId === scopedConversationId || wt.conversationId === scopedConversationId)
+        if (!belongsToConversation && wt.id !== paramWt) continue
+        const value = `wt:${wt.id}`
+        seen.add(value)
+        opts.push({
+          value,
+          label: wt.nodeId && wt.nodeId !== 'local' ? `${wt.branch} (${wt.nodeId})` : wt.branch,
+          icon: 'git-branch',
+          meta: wt.status === 'removed' ? 'removed' : 'worktree',
+        })
+      }
+    }
+    if (targetKey !== '' && !seen.has(targetKey)) {
+      opts.unshift({
+        value: targetKey,
+        label: activeSelection?.kind === 'worktree' ? activeSelection.worktreeId : `#${activeSelection?.conversationId}`,
+        icon: activeSelection?.kind === 'worktree' ? 'git-branch' : 'folder',
+      })
+    }
+    return opts
+  }, [scopedConversationId, worktrees, worktreeEnabled, targetKey, activeSelection, paramWt, locale])
 
   const watchedConvId =
     activeSelection?.kind === 'workspace'
@@ -663,31 +647,33 @@ export function ChangesInspectorScreen(props: ChangesInspectorScreenProps): Reac
             ) : undefined
           }
         >
-          <div className="chg-target-select-wrap">
-            <Select
-              size="sm"
-              aria-label={t(CHG_COPY.targetPlaceholder)}
-              placeholder={t(CHG_COPY.targetPlaceholder)}
-              value={targetKey}
-              options={targetOptions}
-              popoverClassName="helmx-select-popover-wide"
-              onChange={(ev) => {
-                const next = ev.target.value
-                setSearchQuery('')
-                if (next.startsWith('wt:')) {
-                  updateParams(
-                    { wt: next.slice(3), conv: undefined, scope: undefined, commit: undefined, base: undefined, file: undefined },
-                    { push: true },
-                  )
-                } else if (next.startsWith('conv:')) {
-                  updateParams(
-                    { conv: next.slice(5), wt: undefined, scope: undefined, commit: undefined, base: undefined, file: undefined },
-                    { push: true },
-                  )
-                }
-              }}
-            />
-          </div>
+          {targetOptions.length > 1 ? (
+            <div className="chg-target-select-wrap">
+              <Select
+                size="sm"
+                aria-label={t(CHG_COPY.targetPlaceholder)}
+                placeholder={t(CHG_COPY.targetPlaceholder)}
+                value={targetKey}
+                options={targetOptions}
+                popoverClassName="helmx-select-popover-wide"
+                onChange={(ev) => {
+                  const next = ev.target.value
+                  setSearchQuery('')
+                  if (next.startsWith('wt:')) {
+                    updateParams(
+                      { wt: next.slice(3), conv: undefined, scope: undefined, commit: undefined, base: undefined, file: undefined },
+                      { push: true },
+                    )
+                  } else if (next.startsWith('conv:')) {
+                    updateParams(
+                      { conv: next.slice(5), wt: undefined, scope: undefined, commit: undefined, base: undefined, file: undefined },
+                      { push: true },
+                    )
+                  }
+                }}
+              />
+            </div>
+          ) : null}
           {activeSelection !== undefined ? (
             <SegmentedControl
               size="sm"

@@ -23,7 +23,7 @@ export const CHG_COPY = {
   loadingFile: L('Loading file diff…', '正在加载单文件差异…'),
   retry: L('Retry', '重试'),
   refresh: L('Refresh', '刷新'),
-  openChanges: L('Open changes', '打开改动'),
+  expandSplit: L('Open in split view', '分屏检视'),
   viewChanges: L('View changes', '查看改动'),
   searchFiles: L('Filter changed files…', '筛选变更文件…'),
   noFiles: L('No changes in this scope', '当前范围内无改动'),
@@ -85,11 +85,11 @@ export const CHG_COPY = {
   nextFile: L('Next file', '下一个文件'),
   wrapLines: L('Wrap lines', '自动换行'),
   unwrapLines: L('Horizontal scroll', '横向滚动'),
-  workbenchWorkspaceTitle: L('Workspace changes', '当前工作区改动'),
-  workbenchWorktreesTitle: L('Managed worktrees', '关联受管工作树'),
+  workbenchCurrentWorkspace: L('Current workspace', '当前工作区'),
+  workbenchTargetLabel: L('Change target', '检视目标'),
   workbenchNoChanges: L('Working tree is clean', '工作区干净，暂无未提交改动'),
   workbenchViewCommits: L('Inspect recent commits', '查看最近提交'),
-  workbenchTruncatedHint: L('Showing top files; open Changes view for full list.', '仅展示部分条目；打开检视台查看完整清单。'),
+  workbenchTruncatedHint: L('Showing top files; open in split view for full list.', '仅展示部分条目；点击分屏检视查看完整清单。'),
   heldBadge: L('Held', '已加锁'),
 } as const
 

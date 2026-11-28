@@ -33,6 +33,21 @@ import {
   type WordSegment,
 } from './diff-model.ts'
 
+export interface DiffContentProps {
+  filePath: string
+  status?: GitDiffFileStatus
+  loading?: boolean
+  error?: string
+  result?: GitDiffFileResult
+  diffBase: 'baseCommit' | 'HEAD' | 'upstream' | 'commit'
+  baseCommit?: string
+  selectedCommit?: string
+  wrapLines: boolean
+  onRetry?: () => void
+  /** Wrapper class for loading/error/special state callouts (defaults to `chg-viewer-state`). */
+  stateClassName?: string
+}
+
 export interface DiffViewerProps {
   filePath?: string
   oldPath?: string
@@ -109,6 +124,176 @@ function DiffLineRow({ row }: { row: DecoratedHunkRow }): ReactNode {
   )
 }
 
+export function DiffContent(props: DiffContentProps): ReactNode {
+  const locale = usePluginLocale()
+  const t = (text: LocalizedText): string => resolveLocalizedText(text, locale)
+  const {
+    filePath,
+    status,
+    loading,
+    error,
+    result,
+    diffBase,
+    baseCommit,
+    selectedCommit,
+    wrapLines,
+    onRetry,
+    stateClassName = 'chg-viewer-state',
+  } = props
+  const [expandedFileKey, setExpandedFileKey] = useState<string | undefined>(undefined)
+
+  const currentKey = `${filePath}\u0000${diffBase}\u0000${baseCommit ?? ''}\u0000${selectedCommit ?? ''}`
+  const expanded = expandedFileKey === currentKey
+
+  const decoratedHunks = useMemo(() => {
+    if (result === undefined || (result.kind !== 'diff' && result.kind !== 'untracked')) return []
+    return decorateHunksWithWordDiff(result.hunks)
+  }, [result])
+
+  const totalRows = useMemo(
+    () => decoratedHunks.reduce((sum, h) => sum + h.rows.length, 0),
+    [decoratedHunks],
+  )
+
+  const effectiveStatus = (result !== undefined && 'status' in result ? result.status : undefined) ?? status ?? 'M'
+  const gitCommand =
+    effectiveStatus === 'U' ? undefined : formatInspectGitCommand({ filePath, diffBase, baseCommit, selectedCommit })
+
+  if (loading && result === undefined) {
+    return (
+      <div className={stateClassName}>
+        <LoadingState label={t(CHG_COPY.loadingFile)} />
+      </div>
+    )
+  }
+
+  if (error !== undefined) {
+    return (
+      <div className={stateClassName}>
+        <Callout tone="err">
+          <div className="chg-state-stack">
+            <div className="break-word">{error}</div>
+            {onRetry !== undefined ? (
+              <Button variant="secondary" size="xs" icon="rotate-cw" onClick={onRetry}>
+                {t(CHG_COPY.retry)}
+              </Button>
+            ) : null}
+          </div>
+        </Callout>
+      </div>
+    )
+  }
+
+  if (result === undefined) return null
+
+  if (result.kind === 'binary') {
+    return (
+      <div className={stateClassName}>
+        <Callout tone="warn" title={t(CHG_COPY.binaryFileTitle)}>
+          <div className="chg-state-stack">
+            <div>{t(CHG_COPY.binaryFileDesc)}</div>
+            {result.size !== undefined ? (
+              <div className="mono text-muted">{chgBytesLabel(result.size)}</div>
+            ) : null}
+            {gitCommand !== undefined ? <CopyButton text={gitCommand} label={t(CHG_COPY.copyCommand)} /> : null}
+          </div>
+        </Callout>
+      </div>
+    )
+  }
+
+  if (result.kind === 'too_large') {
+    return (
+      <div className={stateClassName}>
+        <Callout tone="warn" title={t(CHG_COPY.tooLargeTitle)}>
+          <div className="chg-state-stack">
+            <div>
+              {result.reason === 'line_budget_exceeded'
+                ? t(CHG_COPY.tooLargeLineReason)
+                : t(CHG_COPY.tooLargeByteReason)}
+            </div>
+            <div className="chg-too-large-stats mono tabular-nums">
+              <span className="chg-stat-add">{`+${result.additions}`}</span>
+              <span className="chg-stat-del">{`−${result.deletions}`}</span>
+              {result.size !== undefined ? <span className="text-muted">{chgBytesLabel(result.size)}</span> : null}
+            </div>
+            {gitCommand !== undefined ? (
+              <div className="chg-command-row">
+                <code className="mono chg-command-code">{gitCommand}</code>
+                <CopyButton text={gitCommand} label={t(CHG_COPY.copyCommand)} />
+              </div>
+            ) : null}
+          </div>
+        </Callout>
+      </div>
+    )
+  }
+
+  if (result.kind === 'special_file') {
+    return (
+      <div className={stateClassName}>
+        <Callout tone="warn" title={t(CHG_COPY.specialFileTitle)}>
+          <div>{chgSpecialFileDetail(result.fileKind, locale)}</div>
+        </Callout>
+      </div>
+    )
+  }
+
+  if (result.kind === 'absent') {
+    return (
+      <div className={stateClassName}>
+        <EmptyState compact title={t(CHG_COPY.absentFileTitle)} />
+      </div>
+    )
+  }
+
+  if (result.kind === 'unchanged' || decoratedHunks.length === 0) {
+    return (
+      <div className={stateClassName}>
+        <EmptyState compact title={t(CHG_COPY.unchangedFileTitle)} />
+      </div>
+    )
+  }
+
+  let remainingBudget = expanded ? Number.MAX_SAFE_INTEGER : FOLD_THRESHOLD_ROWS
+  const hiddenCount = Math.max(0, totalRows - FOLD_THRESHOLD_ROWS)
+
+  return (
+    <div className={`chg-diff-surface selectable${wrapLines ? ' is-wrap' : ''}`}>
+      {result.kind === 'untracked' ? (
+        <div className="chg-diff-banner">{t(CHG_COPY.untrackedBadge)}</div>
+      ) : null}
+      <div className="chg-diff-table">
+        {decoratedHunks.map((hunk, hIdx) => {
+          if (remainingBudget <= 0) return null
+          const slice = hunk.rows.slice(0, remainingBudget)
+          remainingBudget -= slice.length
+          return (
+            <Fragment key={hIdx}>
+              <div className="chg-diff-hunk mono">{hunk.header}</div>
+              {slice.map((row, rIdx) => (
+                <DiffLineRow key={`${hIdx}:${rIdx}`} row={row} />
+              ))}
+            </Fragment>
+          )
+        })}
+        {hiddenCount > 0 ? (
+          <div className="chg-diff-fold-bar">
+            <Button
+              variant="inline"
+              size="xs"
+              icon={expanded ? 'chevron-up' : 'chevron-down'}
+              onClick={() => setExpandedFileKey((cur) => (cur === currentKey ? undefined : currentKey))}
+            >
+              {expanded ? chgCollapseDiff(locale) : chgExpandRemaining(hiddenCount, locale)}
+            </Button>
+          </div>
+        ) : null}
+      </div>
+    </div>
+  )
+}
+
 export function DiffViewer(props: DiffViewerProps): ReactNode {
   const locale = usePluginLocale()
   const t = (text: LocalizedText): string => resolveLocalizedText(text, locale)
@@ -129,21 +314,7 @@ export function DiffViewer(props: DiffViewerProps): ReactNode {
     onRetry,
     onBack,
   } = props
-  const [expandedFileKey, setExpandedFileKey] = useState<string | undefined>(undefined)
   const [wrapLines, setWrapLines] = useState(false)
-
-  const currentKey = `${filePath ?? ''}\u0000${diffBase}\u0000${baseCommit ?? ''}\u0000${selectedCommit ?? ''}`
-  const expanded = expandedFileKey === currentKey
-
-  const decoratedHunks = useMemo(() => {
-    if (result === undefined || (result.kind !== 'diff' && result.kind !== 'untracked')) return []
-    return decorateHunksWithWordDiff(result.hunks)
-  }, [result])
-
-  const totalRows = useMemo(
-    () => decoratedHunks.reduce((sum, h) => sum + h.rows.length, 0),
-    [decoratedHunks],
-  )
 
   if (filePath === undefined) {
     return (
@@ -158,131 +329,7 @@ export function DiffViewer(props: DiffViewerProps): ReactNode {
   const { dir, name } = splitFilePath(filePath)
   const additions = result !== undefined && 'additions' in result ? result.additions : undefined
   const deletions = result !== undefined && 'deletions' in result ? result.deletions : undefined
-  const gitCommand =
-    effectiveStatus === 'U' ? undefined : formatInspectGitCommand({ filePath, diffBase, baseCommit, selectedCommit })
   const showPager = totalFiles !== undefined && totalFiles > 1 && fileIndex !== undefined && fileIndex >= 0
-
-  let renderedBody: ReactNode = null
-  if (loading && result === undefined) {
-    renderedBody = (
-      <div className="chg-viewer-state">
-        <LoadingState label={t(CHG_COPY.loadingFile)} />
-      </div>
-    )
-  } else if (error !== undefined) {
-    renderedBody = (
-      <div className="chg-viewer-state">
-        <Callout tone="err">
-          <div className="chg-state-stack">
-            <div className="break-word">{error}</div>
-            {onRetry !== undefined ? (
-              <Button variant="secondary" size="xs" icon="rotate-cw" onClick={onRetry}>
-                {t(CHG_COPY.retry)}
-              </Button>
-            ) : null}
-          </div>
-        </Callout>
-      </div>
-    )
-  } else if (result !== undefined) {
-    if (result.kind === 'binary') {
-      renderedBody = (
-        <div className="chg-viewer-state">
-          <Callout tone="warn" title={t(CHG_COPY.binaryFileTitle)}>
-            <div className="chg-state-stack">
-              <div>{t(CHG_COPY.binaryFileDesc)}</div>
-              {result.size !== undefined ? (
-                <div className="mono text-muted">{chgBytesLabel(result.size)}</div>
-              ) : null}
-              {gitCommand !== undefined ? <CopyButton text={gitCommand} label={t(CHG_COPY.copyCommand)} /> : null}
-            </div>
-          </Callout>
-        </div>
-      )
-    } else if (result.kind === 'too_large') {
-      renderedBody = (
-        <div className="chg-viewer-state">
-          <Callout tone="warn" title={t(CHG_COPY.tooLargeTitle)}>
-            <div className="chg-state-stack">
-              <div>
-                {result.reason === 'line_budget_exceeded'
-                  ? t(CHG_COPY.tooLargeLineReason)
-                  : t(CHG_COPY.tooLargeByteReason)}
-              </div>
-              <div className="chg-too-large-stats mono tabular-nums">
-                <span className="chg-stat-add">{`+${result.additions}`}</span>
-                <span className="chg-stat-del">{`−${result.deletions}`}</span>
-                {result.size !== undefined ? <span className="text-muted">{chgBytesLabel(result.size)}</span> : null}
-              </div>
-              {gitCommand !== undefined ? (
-                <div className="chg-command-row">
-                  <code className="mono chg-command-code">{gitCommand}</code>
-                  <CopyButton text={gitCommand} label={t(CHG_COPY.copyCommand)} />
-                </div>
-              ) : null}
-            </div>
-          </Callout>
-        </div>
-      )
-    } else if (result.kind === 'special_file') {
-      renderedBody = (
-        <div className="chg-viewer-state">
-          <Callout tone="warn" title={t(CHG_COPY.specialFileTitle)}>
-            <div>{chgSpecialFileDetail(result.fileKind, locale)}</div>
-          </Callout>
-        </div>
-      )
-    } else if (result.kind === 'absent') {
-      renderedBody = (
-        <div className="chg-viewer-state">
-          <EmptyState compact title={t(CHG_COPY.absentFileTitle)} />
-        </div>
-      )
-    } else if (result.kind === 'unchanged' || (decoratedHunks.length === 0 && (result.kind === 'diff' || result.kind === 'untracked'))) {
-      renderedBody = (
-        <div className="chg-viewer-state">
-          <EmptyState compact title={t(CHG_COPY.unchangedFileTitle)} />
-        </div>
-      )
-    } else {
-      let remainingBudget = expanded ? Number.MAX_SAFE_INTEGER : FOLD_THRESHOLD_ROWS
-      const hiddenCount = Math.max(0, totalRows - FOLD_THRESHOLD_ROWS)
-      renderedBody = (
-        <div className={`chg-diff-surface selectable${wrapLines ? ' is-wrap' : ''}`}>
-          {result.kind === 'untracked' ? (
-            <div className="chg-diff-banner">{t(CHG_COPY.untrackedBadge)}</div>
-          ) : null}
-          <div className="chg-diff-table">
-            {decoratedHunks.map((hunk, hIdx) => {
-              if (remainingBudget <= 0) return null
-              const slice = hunk.rows.slice(0, remainingBudget)
-              remainingBudget -= slice.length
-              return (
-                <Fragment key={hIdx}>
-                  <div className="chg-diff-hunk mono">{hunk.header}</div>
-                  {slice.map((row, rIdx) => (
-                    <DiffLineRow key={`${hIdx}:${rIdx}`} row={row} />
-                  ))}
-                </Fragment>
-              )
-            })}
-            {hiddenCount > 0 ? (
-              <div className="chg-diff-fold-bar">
-                <Button
-                  variant="inline"
-                  size="xs"
-                  icon={expanded ? 'chevron-up' : 'chevron-down'}
-                  onClick={() => setExpandedFileKey((cur) => (cur === currentKey ? undefined : currentKey))}
-                >
-                  {expanded ? chgCollapseDiff(locale) : chgExpandRemaining(hiddenCount, locale)}
-                </Button>
-              </div>
-            ) : null}
-          </div>
-        </div>
-      )
-    }
-  }
 
   return (
     <div className="chg-viewer">
@@ -354,7 +401,20 @@ export function DiffViewer(props: DiffViewerProps): ReactNode {
           <CopyButton text={filePath} label={t(CHG_COPY.copyPath)} className="btn btn-ghost btn-xs" />
         </div>
       </div>
-      <div className="chg-viewer-body">{renderedBody}</div>
+      <div className="chg-viewer-body">
+        <DiffContent
+          filePath={filePath}
+          status={status}
+          loading={loading}
+          error={error}
+          result={result}
+          diffBase={diffBase}
+          baseCommit={baseCommit}
+          selectedCommit={selectedCommit}
+          wrapLines={wrapLines}
+          onRetry={onRetry}
+        />
+      </div>
     </div>
   )
 }

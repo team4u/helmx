@@ -407,51 +407,131 @@
 .chg-wb-panel {
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  padding: 2px 4px;
+  gap: 10px;
+  padding: 2px;
   min-width: 0;
 }
 
-.chg-wb-head {
+.chg-wb-bar {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-.chg-wb-title-row {
-  display: inline-flex;
-  align-items: center;
   gap: 6px;
   min-width: 0;
 }
 
-.chg-wb-title {
-  font-size: 12.5px;
-  font-weight: 600;
-  color: var(--fg);
+.chg-wb-bar-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
 }
 
-.chg-wb-section {
+.chg-wb-controls-row {
   display: flex;
   flex-direction: column;
   gap: 6px;
   min-width: 0;
 }
 
-.chg-wb-stats-row {
+.chg-wb-meta-row {
   display: flex;
   align-items: center;
-  gap: 8px;
+  flex-wrap: wrap;
+  gap: 6px;
   font-size: 11.5px;
+  min-width: 0;
 }
 
 .chg-wb-files {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 3px;
   min-width: 0;
+}
+
+.chg-wb-file-item {
+  display: flex;
+  flex-direction: column;
+  border-radius: var(--radius-xs);
+  min-width: 0;
+}
+
+.chg-wb-file-item.is-expanded {
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+}
+
+.chg-wb-file-item.is-expanded > .chg-file-row {
+  background: var(--bg-subtle);
+  border-bottom: 1px solid var(--border);
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.chg-wb-chevron {
+  color: var(--fg-muted);
+  flex-shrink: 0;
+}
+
+.chg-wb-diff-drawer {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.chg-wb-diff-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+  min-width: 0;
+}
+
+.chg-wb-diff-path {
+  font-size: 11px;
+  color: var(--fg-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.chg-wb-diff-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.chg-wb-diff-state {
+  padding: 10px 8px;
+}
+
+.chg-wb-diff-drawer .chg-diff-surface {
+  border: none;
+  border-radius: 0;
+}
+
+.chg-wb-diff-drawer .chg-diff-row {
+  grid-template-columns: 2.8em minmax(0, 1fr);
+}
+
+.chg-wb-diff-drawer .chg-diff-num-old,
+.chg-wb-diff-drawer .chg-diff-num-new {
+  display: none;
+}
+
+.chg-wb-diff-drawer .chg-diff-num-single {
+  display: block;
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  padding: 0 5px 0 3px;
 }
 
 /* Sibling slots (Workflow & Swarm) */

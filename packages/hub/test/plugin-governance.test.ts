@@ -505,7 +505,7 @@ test('createHelmx 全部 16 个内置插件的只读契约投影完整暴露 pre
     )
 
     const changesManifest = kernel.plugins.getManifest('builtin:changes')
-    assert.equal(changesManifest.ui.find((u) => u.surface === 'sidebar.item')?.spec.id, 'changes-inspector')
+    assert.equal(changesManifest.ui.find((u) => u.surface === 'sidebar.item'), undefined)
     assert.equal(changesManifest.ui.find((u) => u.surface === 'screen')?.spec.id, 'inspector')
     assert.equal(changesManifest.ui.find((u) => u.surface === 'workbench.panel')?.spec.id, 'changes')
     assert.equal(changesManifest.ui.filter((u) => u.surface === 'plugin.slot').length, 3)

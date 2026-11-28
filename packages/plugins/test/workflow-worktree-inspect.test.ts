@@ -4,7 +4,8 @@
  * - 纯逻辑（builtin:workflow parsers.ts）：parseWorkflowArgsInput；
  * - DOM 交互（WorkflowWorkbenchPanel + builtin:changes slots.tsx）：
  *   1) 工作流节点卡与独立子代理卡各只渲染一处只读 worktree-inspect（切换节点详情不卸载）；
- *   2) 点击「View changes」通过 ctx.openSplitScreen 打开 `screen:builtin:changes/inspector?wt=...`，且不触发抽屉、无写操作按钮；
+ *   2) 会话上下文内点击「View changes」直接通过 ctx.openWorkbench('plugin:builtin:changes/changes', { wt })
+ *      切至工作台「改动」页签，无会话上下文时回退 ctx.openSplitScreen，且均不触发子会话抽屉、无写操作按钮；
  *   3) completed run（含 saved 与内联）Radix Popover 重放表单：空白沿用原 args、JSON 覆盖、非法 JSON 拦截、双击防重。
  */
 import assert from 'node:assert/strict'
@@ -12,6 +13,7 @@ import { test } from 'node:test'
 import type { WorkflowNodeState, WorkflowRunSummary } from '../src/contracts.js'
 import {
   React,
+  SDK,
   act,
   createWorkflowHostHarness,
   importChangesClientModule,
@@ -153,7 +155,7 @@ test('parseWorkflowArgsInput：空串无 args；合法 JSON 透传；非法 JSON
 // 2. DOM 集成：Changes 只读插槽（View changes）与 Replay Popover
 // ---------------------------------------------------------------------------
 
-test('工作流节点卡 WorktreeInspectSlot 只读分屏打开改动 + 展开详情不重复；completed run Replay Popover 表单', { timeout: 60_000 }, async () => {
+test('工作流节点卡 WorktreeInspectSlot 工作台切签看改动 + 展开详情不重复；completed run Replay Popover 表单', { timeout: 60_000 }, async () => {
   const parent = makeConvSummary(1, { cwd: '/repo' })
   const wtNode = node({
     id: 'c1',
@@ -194,13 +196,11 @@ test('工作流节点卡 WorktreeInspectSlot 只读分屏打开改动 + 展开�
     assert.equal(slotBar.querySelectorAll('button').length, 1, '插槽仅保留单一「View changes」只读入口')
     assert.equal(h.log.actions.length, 0)
 
-    // 点击「View changes」通过 split screen 打开 Changes Inspector
+    // 点击「View changes」在会话上下文中直接切换工作台至 `plugin:builtin:changes/changes`
     await act(async () => { buttonByText(ui.container, 'View changes').click() })
-    assert.equal(h.log.splitScreens.length, 1)
-    assert.equal(
-      h.log.splitScreens[0],
-      'screen:builtin:changes/inspector?wt=local%3A%2Frepo%2F.helmx-worktrees%2Fapp-ab12cd34',
-    )
+    assert.deepEqual(h.log.workbenchTabs, ['plugin:builtin:changes/changes'])
+    assert.deepEqual(h.log.workbenchParams, [{ wt: 'local:/repo/.helmx-worktrees/app-ab12cd34' }])
+    assert.deepEqual(h.log.splitScreens, [])
 
     // 展开节点详情后，不重复渲染插槽
     const nodeToggle = ui.container.querySelector('button.wf-node-clickable') as HTMLButtonElement
@@ -284,9 +284,10 @@ test('独立子代理卡与直接挂载的 WorkflowWorktreeInspectSlot：无 par
   try {
     assert.equal(ui.container.querySelectorAll('.chg-slot-bar').length, 1)
     await act(async () => { buttonByText(ui.container, 'View changes').click() })
-    assert.equal(h.log.splitScreens.length, 1)
-    assert.equal(h.log.splitScreens[0], 'screen:builtin:changes/inspector?wt=remote-1%3A%2Fshared%2Fwt')
-    assert.deepEqual(h.log.drawers, [], '分屏检视绝不触发打开抽屉')
+    assert.deepEqual(h.log.workbenchTabs, ['plugin:builtin:changes/changes'])
+    assert.deepEqual(h.log.workbenchParams, [{ wt: 'remote-1:/shared/wt' }])
+    assert.deepEqual(h.log.splitScreens, [])
+    assert.deepEqual(h.log.drawers, [], '工作台切签检视绝不触发打开抽屉')
   } finally {
     ui.unmount()
   }
@@ -299,9 +300,28 @@ test('独立子代理卡与直接挂载的 WorkflowWorktreeInspectSlot：无 par
   )
   try {
     await act(async () => { buttonByText(slotOnly.container, 'View changes').click() })
-    assert.equal(h.log.splitScreens.length, 2)
-    assert.equal(h.log.splitScreens[1], 'screen:builtin:changes/inspector?wt=local%3A%2Fstandalone%2Fwt')
+    assert.deepEqual(h.log.workbenchTabs, ['plugin:builtin:changes/changes', 'plugin:builtin:changes/changes'])
+    assert.deepEqual(h.log.workbenchParams, [{ wt: 'remote-1:/shared/wt' }, { wt: 'local:/standalone/wt' }])
+    assert.deepEqual(h.log.splitScreens, [])
   } finally {
     slotOnly.unmount()
+  }
+
+  const noConvCtx = SDK.createPluginClientContext(h.port, 'builtin:changes', undefined)
+  const slotNoConv = h.mountNode(
+    e(
+      SDK.PluginClientContext.Provider,
+      { value: noConvCtx },
+      e(worktreeSlots.WorktreeInspectSlot!, {
+        worktree: { path: '/no-conv/wt', branch: 'helmx/no-conv' },
+        nodeId: 'local',
+      }),
+    ),
+  )
+  try {
+    await act(async () => { buttonByText(slotNoConv.container, 'View changes').click() })
+    assert.deepEqual(h.log.splitScreens, ['screen:builtin:changes/inspector?wt=local%3A%2Fno-conv%2Fwt'])
+  } finally {
+    slotNoConv.unmount()
   }
 })

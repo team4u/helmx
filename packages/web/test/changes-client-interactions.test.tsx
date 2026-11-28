@@ -2,13 +2,17 @@
  * `builtin:changes` compiled client TSX interactive DOM tests:
  * - Zero Emoji across rendered Inspector screen, Workbench panel, and Slots;
  * - Pure read-only guarantee: zero session submissions, cleanup slots, or merge controls;
- * - `ChangesInspectorScreen`: `<Screen actions>` Refresh, `< 8` vs `>= 8` SearchBox threshold,
+ * - `ChangesInspectorScreen`: scoped strictly to current conversation/worktree (no blind fallback,
+ *   no cross-conversation target dropdown, hides target selector when no worktrees exist),
+ *   `<Screen actions>` Refresh, `< 8` vs `>= 8` SearchBox threshold,
  *   scope switching (`working` / `unpushed` / `commit`) + compact Commit `Select`,
  *   worktree (`wt`) `committed` Commit `Select`, on-demand `diff`/`untracked`/`binary`/`too_large`,
  *   URL `sp.file` list/diff state transitions (`push` on file click, `replace` on prev/next step,
  *   clear on `← Files`, single-file direct diff without `.chg-is-narrow-diff`),
  *   `DiffViewer` wrap toggle (`wrap-text`) and single sticky gutter span (`.chg-diff-num-single`);
- * - `ChangesWorkbenchPanel` & `SwarmWorktreeActionsSlot`: unified read-only single entry opening split preview.
+ * - `ChangesWorkbenchPanel` & `SwarmWorktreeActionsSlot`: in-place accordion diff expansion,
+ *   in-place clean-state commit switch, per-conversation worktree target scoping, `params.wt` handling,
+ *   `closeWorkbench` before `openSplitScreen`, and slot switching via `openWorkbench`.
  */
 import './helpers/register-happy-dom.js'
 import assert from 'node:assert/strict'
@@ -40,7 +44,10 @@ const EMOJI_RE = /[\u{1F300}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}\u{1F1E6
 
 interface ChangesClientComponents {
   ChangesInspectorScreen: (p: Partial<ScreenProps>) => React.ReactElement
-  ChangesWorkbenchPanel: (p: { conversation?: ConversationSummary }) => React.ReactElement
+  ChangesWorkbenchPanel: (p: {
+    conversation?: ConversationSummary
+    params?: Readonly<Record<string, unknown>>
+  }) => React.ReactElement
   SwarmWorktreeActionsSlot: (p: {
     worktreeId?: string
     path?: string
@@ -87,12 +94,16 @@ interface HarnessLogs {
   submissions: Array<{ conversationId: number; text: string; whenBusy?: string }>
   screens: string[]
   splitScreens: string[]
+  workbenchOpens: Array<{ panelId?: string; conversationId?: number; params?: Record<string, unknown> }>
+  workbenchCloses: number
+  events: string[]
   paramUpdates: Array<{ patch: Record<string, string | undefined>; push?: boolean }>
   notices: Array<{ message: string; tone: string }>
 }
 
 function createChangesHarness(options: {
   locale?: HelmxLocale
+  conversationId?: number
   conversations?: ConversationSummary[]
   plugins?: PluginSummary[]
   onAction: (pluginId: string, actionId: string, input: Record<string, unknown>) => unknown
@@ -102,6 +113,9 @@ function createChangesHarness(options: {
     submissions: [],
     screens: [],
     splitScreens: [],
+    workbenchOpens: [],
+    workbenchCloses: 0,
+    events: [],
     paramUpdates: [],
     notices: [],
   }
@@ -166,12 +180,30 @@ function createChangesHarness(options: {
       logs.submissions.push({ conversationId, text: input.text, whenBusy: input.whenBusy })
     },
     openTarget: (target, opts) => {
-      if (opts?.split === true) logs.splitScreens.push(target)
-      else logs.screens.push(target)
+      if (opts?.split === true) {
+        logs.events.push(`openSplitScreen:${target}`)
+        logs.splitScreens.push(target)
+      } else {
+        logs.events.push(`openScreen:${target}`)
+        logs.screens.push(target)
+      }
     },
     openConversationDrawer: () => {},
     openArtifactPreview: () => {},
-    setWorkbenchOpen: () => {},
+    openWorkbench: (opts) => {
+      logs.events.push(`openWorkbench:${opts?.tab ?? ''}`)
+      logs.workbenchOpens.push({
+        ...(opts?.tab !== undefined ? { panelId: opts.tab } : {}),
+        ...(opts?.conversationId !== undefined ? { conversationId: opts.conversationId } : {}),
+        ...(opts?.params !== undefined ? { params: opts.params } : {}),
+      })
+    },
+    setWorkbenchOpen: (open) => {
+      if (!open) {
+        logs.events.push('closeWorkbench')
+        logs.workbenchCloses += 1
+      }
+    },
     setWorkbenchTab: () => {},
     notify: (message, tone) => {
       logs.notices.push({ message, tone })
@@ -204,11 +236,24 @@ function createChangesHarness(options: {
     openSplitScreen: (target) => port.openTarget(target, { split: true }),
     openConversationDrawer: () => {},
     openArtifact: () => {},
-    openWorkbench: () => {},
-    closeWorkbench: () => {},
+    openWorkbench: (panelId, params) => {
+      const resolved =
+        panelId === undefined || panelId.trim() === ''
+          ? undefined
+          : panelId.startsWith('plugin:') || panelId === 'artifacts' || panelId === 'files'
+            ? panelId
+            : `plugin:builtin:changes/${panelId}`
+      port.openWorkbench?.({
+        ...(resolved !== undefined ? { tab: resolved } : {}),
+        ...(options.conversationId !== undefined ? { conversationId: options.conversationId } : {}),
+        ...(params !== undefined ? { params } : {}),
+      })
+    },
+    closeWorkbench: () => port.setWorkbenchOpen(false),
     notify: (message, tone = 'info') => port.notify(message, tone),
     getPluginDoc: async () => undefined,
     getPluginSessionDoc: async () => undefined,
+    ...(options.conversationId !== undefined ? { conversationId: options.conversationId } : {}),
     theme: 'dark',
     locale: options.locale ?? 'en',
     translate: (text) => resolveLocalizedText(text, options.locale ?? 'en'),
@@ -219,10 +264,13 @@ function createChangesHarness(options: {
     document.body.appendChild(container)
     const root = createRoot(container)
     let setExternalParams: ((next: Record<string, string>) => void) | undefined
+    let setExternalElement: ((next: React.ReactElement) => void) | undefined
 
     function Wrapper() {
       const [params, setParamsState] = useState<Record<string, string>>(() => ({ ...(initialParams ?? {}) }))
+      const [currentElement, setCurrentElement] = useState<React.ReactElement>(element)
       setExternalParams = setParamsState
+      setExternalElement = setCurrentElement
       const scope = {
         params,
         isSplit: false,
@@ -244,7 +292,7 @@ function createChangesHarness(options: {
         e(
           PluginClientContext.Provider,
           { value: ctx },
-          e(ScreenParamsContext.Provider, { value: scope }, element),
+          e(ScreenParamsContext.Provider, { value: scope }, currentElement),
         ),
       )
     }
@@ -261,6 +309,14 @@ function createChangesHarness(options: {
       setParams: async (next: Record<string, string>) => {
         await act(async () => {
           setExternalParams?.(next)
+        })
+        await act(async () => {
+          await flushMacrotask(0)
+        })
+      },
+      rerender: async (next: React.ReactElement) => {
+        await act(async () => {
+          setExternalElement?.(next)
         })
         await act(async () => {
           await flushMacrotask(0)
@@ -353,6 +409,112 @@ const SAMPLE_WORKTREE_INSPECT = {
   filesTruncated: false,
 }
 
+const SAMPLE_OTHER_WORKTREE = {
+  id: 'local:/repo/.helmx-worktrees/wt-other',
+  nodeId: 'local',
+  repoRoot: '/repo/other',
+  path: '/repo/.helmx-worktrees/wt-other',
+  branch: 'helmx/spawn-other',
+  baseCommit: 'dddd111122223333444455556666777788889999',
+  dirtySource: false,
+  parentConversationId: 99,
+  conversationId: 100,
+  origin: 'native',
+  status: 'active',
+  createdAt: 1000,
+}
+
+function handleSampleAction(pluginId: string, actionId: string, input: Record<string, unknown>): unknown {
+  if (pluginId === 'builtin:worktree' && actionId === 'list_worktrees') {
+    return { worktrees: [SAMPLE_WORKTREE_INSPECT.record, SAMPLE_OTHER_WORKTREE] }
+  }
+  if (pluginId === 'builtin:worktree' && actionId === 'inspect_worktree') {
+    return {
+      ...SAMPLE_WORKTREE_INSPECT,
+      scope: input['scope'] ?? 'all',
+      ...(input['commit'] !== undefined ? { selectedCommit: input['commit'] } : {}),
+    }
+  }
+  if (pluginId === 'builtin:worktree' && actionId === 'inspect_worktree_file') {
+    return {
+      kind: 'diff',
+      filePath: String(input['filePath']),
+      status: 'A',
+      additions: 3,
+      deletions: 0,
+      hunks: [
+        {
+          oldStart: 0,
+          oldLines: 0,
+          newStart: 1,
+          newLines: 1,
+          header: '@@ -0,0 +1,1 @@',
+          rows: [{ kind: 'add', newLine: 1, text: 'export const wt = 1' }],
+        },
+      ],
+    }
+  }
+  if (actionId === 'inspect_workspace') {
+    if (input['scope'] === 'unpushed') {
+      return {
+        ...SAMPLE_WORKSPACE_WORKING,
+        scope: 'unpushed',
+        diffBase: 'upstream',
+        files: [{ path: 'unpushed-only.ts', status: 'A', additions: 5, deletions: 0, binary: false, untracked: false }],
+      }
+    }
+    if (input['scope'] === 'commit') {
+      return {
+        ...SAMPLE_WORKSPACE_WORKING,
+        scope: 'commit',
+        diffBase: 'commit',
+        selectedCommit: String(input['commit'] ?? SAMPLE_WORKSPACE_WORKING.commits[0]!.oid),
+      }
+    }
+    return SAMPLE_WORKSPACE_WORKING
+  }
+  if (actionId === 'inspect_workspace_file') {
+    const filePath = String(input['filePath'])
+    if (filePath === 'assets/logo.png') {
+      return { kind: 'binary', filePath, status: 'M', size: 2048 }
+    }
+    if (filePath === 'dist/bundle.min.js') {
+      return { kind: 'too_large', filePath, status: 'M', reason: 'line_budget_exceeded', additions: 5200, deletions: 0 }
+    }
+    if (filePath === 'unpushed-only.ts') {
+      return {
+        kind: 'untracked',
+        filePath,
+        status: 'U',
+        additions: 1,
+        deletions: 0,
+        hunks: [{ oldStart: 0, oldLines: 0, newStart: 1, newLines: 1, header: '@@ -0,0 +1,1 @@', rows: [{ kind: 'add', newLine: 1, text: 'unpushed line' }] }],
+      }
+    }
+    return {
+      kind: 'diff',
+      filePath,
+      status: 'M',
+      additions: 1,
+      deletions: 1,
+      hunks: [
+        {
+          oldStart: 1,
+          oldLines: 1,
+          newStart: 1,
+          newLines: 1,
+          header: '@@ -1,1 +1,1 @@',
+          rows: [
+            { kind: 'remove', oldLine: 1, text: 'const x = oldVal' },
+            { kind: 'add', newLine: 1, text: 'const x = newVal' },
+          ],
+        },
+      ],
+    }
+  }
+  return {}
+}
+
 describe('changes-client-interactions', { timeout: 60_000 }, () => {
   before(async () => {
     mountSharedPluginNamespaces({ realHooks: true })
@@ -368,109 +530,76 @@ describe('changes-client-interactions', { timeout: 60_000 }, () => {
     }
   }, TIMEOUT)
 
-  test('ChangesInspectorScreen：纯只读检视、URL sp.file 窄屏导航、Commit 下拉框、换行切换与 <8 搜索框阈值', TIMEOUT, async () => {
-    let summaryRefreshCount = 0
-    const h = createChangesHarness({
+  test('ChangesInspectorScreen：作用域严格收敛、无参数空态不盲猜、URL sp.file 窄屏导航、Commit 下拉框与换行切换', TIMEOUT, async () => {
+    // 1. No URL params and no ctx.conversationId -> renders empty state instead of guessing a conversation
+    const emptyHarness = createChangesHarness({
+      conversations: [makeConv(1), makeConv(2, { title: 'Other conv', cwd: '/repo/other' })],
+      onAction: handleSampleAction,
+    })
+    const emptyUi = await emptyHarness.mount(e(components.ChangesInspectorScreen, {}))
+    try {
+      assert.match(emptyUi.container.textContent ?? '', /No workspace or worktree selected/)
+      assert.equal(
+        emptyHarness.logs.actions.filter((a) => a.actionId === 'inspect_workspace').length,
+        0,
+        'Screen must not guess or probe conversations when no conv/wt is specified',
+      )
+    } finally {
+      emptyUi.unmount()
+    }
+
+    // 2. Scoped conversation with NO matching worktrees -> hides target selector completely
+    const noWtHarness = createChangesHarness({
+      conversations: [makeConv(1), makeConv(2, { title: 'Other conv', cwd: '/repo/other' })],
       onAction: (pluginId, actionId, input) => {
         if (pluginId === 'builtin:worktree' && actionId === 'list_worktrees') {
-          return { worktrees: [SAMPLE_WORKTREE_INSPECT.record] }
+          return { worktrees: [SAMPLE_OTHER_WORKTREE] }
         }
-        if (pluginId === 'builtin:worktree' && actionId === 'inspect_worktree') {
-          return {
-            ...SAMPLE_WORKTREE_INSPECT,
-            scope: input['scope'] ?? 'all',
-            ...(input['commit'] !== undefined ? { selectedCommit: input['commit'] } : {}),
-          }
-        }
-        if (pluginId === 'builtin:worktree' && actionId === 'inspect_worktree_file') {
-          return {
-            kind: 'diff',
-            filePath: String(input['filePath']),
-            status: 'A',
-            additions: 3,
-            deletions: 0,
-            hunks: [
-              {
-                oldStart: 0,
-                oldLines: 0,
-                newStart: 1,
-                newLines: 1,
-                header: '@@ -0,0 +1,1 @@',
-                rows: [{ kind: 'add', newLine: 1, text: 'export const wt = 1' }],
-              },
-            ],
-          }
-        }
-        if (actionId === 'inspect_workspace') {
-          summaryRefreshCount += 1
-          if (input['scope'] === 'unpushed') {
-            return {
-              ...SAMPLE_WORKSPACE_WORKING,
-              scope: 'unpushed',
-              diffBase: 'upstream',
-              files: [{ path: 'unpushed-only.ts', status: 'A', additions: 5, deletions: 0, binary: false, untracked: false }],
-            }
-          }
-          if (input['scope'] === 'commit') {
-            return {
-              ...SAMPLE_WORKSPACE_WORKING,
-              scope: 'commit',
-              diffBase: 'commit',
-              selectedCommit: String(input['commit'] ?? SAMPLE_WORKSPACE_WORKING.commits[0]!.oid),
-            }
-          }
-          return SAMPLE_WORKSPACE_WORKING
-        }
-        if (actionId === 'inspect_workspace_file') {
-          const filePath = String(input['filePath'])
-          if (filePath === 'assets/logo.png') {
-            return { kind: 'binary', filePath, status: 'M', size: 2048 }
-          }
-          if (filePath === 'dist/bundle.min.js') {
-            return { kind: 'too_large', filePath, status: 'M', reason: 'line_budget_exceeded', additions: 5200, deletions: 0 }
-          }
-          if (filePath === 'unpushed-only.ts') {
-            return {
-              kind: 'untracked',
-              filePath,
-              status: 'U',
-              additions: 1,
-              deletions: 0,
-              hunks: [{ oldStart: 0, oldLines: 0, newStart: 1, newLines: 1, header: '@@ -0,0 +1,1 @@', rows: [{ kind: 'add', newLine: 1, text: 'unpushed line' }] }],
-            }
-          }
-          return {
-            kind: 'diff',
-            filePath,
-            status: 'M',
-            additions: 1,
-            deletions: 1,
-            hunks: [
-              {
-                oldStart: 1,
-                oldLines: 1,
-                newStart: 1,
-                newLines: 1,
-                header: '@@ -1,1 +1,1 @@',
-                rows: [
-                  { kind: 'remove', oldLine: 1, text: 'const x = oldVal' },
-                  { kind: 'add', newLine: 1, text: 'const x = newVal' },
-                ],
-              },
-            ],
-          }
-        }
-        return {}
+        return handleSampleAction(pluginId, actionId, input)
+      },
+    })
+    const noWtUi = await noWtHarness.mount(e(components.ChangesInspectorScreen, {}), { conv: '1' })
+    try {
+      assert.ok(
+        noWtUi.container.querySelector('button[aria-label="Select workspace or worktree"]') === null,
+        'Target selector must be hidden when conversation has no active worktrees',
+      )
+    } finally {
+      noWtUi.unmount()
+    }
+
+    // 3. Full interactive inspection scoped to conv=1 (has worktree wt-1, ignores Other conv & wt-other)
+    let summaryRefreshCount = 0
+    const h = createChangesHarness({
+      conversations: [makeConv(1), makeConv(2, { title: 'Other conv', cwd: '/repo/other' })],
+      onAction: (pluginId, actionId, input) => {
+        if (actionId === 'inspect_workspace') summaryRefreshCount += 1
+        return handleSampleAction(pluginId, actionId, input)
       },
     })
 
-    const ui = await h.mount(e(components.ChangesInspectorScreen, {}))
+    const ui = await h.mount(e(components.ChangesInspectorScreen, {}), { conv: '1' })
     try {
       const text = ui.container.textContent ?? ''
       assert.equal(EMOJI_RE.test(text), false, 'Inspector UI must stay Emoji-free')
       assert.match(text, /const x = oldVal/)
       assert.match(text, /const x = newVal/)
       assert.match(text, /1 unpushed/)
+
+      // Target selector renders ONLY when scoped conversation has active worktrees and excludes unrelated sessions/worktrees
+      const targetTrigger = ui.container.querySelector('button[aria-label="Select workspace or worktree"]') as HTMLButtonElement | null
+      assert.ok(targetTrigger !== null, 'Target selector should appear when scoped conversation has active worktrees')
+      await act(async () => {
+        targetTrigger.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+      })
+      const optionsText = [...document.body.querySelectorAll('[role="option"]')].map((el) => el.textContent ?? '').join('\n')
+      assert.match(optionsText, /Current workspace/)
+      assert.match(optionsText, /helmx\/spawn-wt1/)
+      assert.equal(optionsText.includes('Other conv'), false, 'Other conversations must not appear in target selector')
+      assert.equal(optionsText.includes('helmx/spawn-other'), false, 'Other conversations worktrees must not appear')
+      await act(async () => {
+        targetTrigger.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+      })
 
       // No write / cleanup / prompt buttons rendered
       for (const forbidden of ['Ask session about file', 'Compare to current', 'Ask main to review', 'Clean up']) {
@@ -486,9 +615,8 @@ describe('changes-client-interactions', { timeout: 60_000 }, () => {
       await act(async () => { await flushMacrotask(0) })
       assert.ok(summaryRefreshCount > beforeRefreshCount)
 
-      // 3 files (< 8) -> SearchBox hidden & no 220px commits box & no Commit Select in working scope
+      // 3 files (< 8) -> SearchBox hidden & no Commit Select in working scope
       assert.ok(ui.container.querySelector('.chg-sidebar-search') === null)
-      assert.ok(ui.container.querySelector('.chg-commits-section') === null)
       assert.ok(ui.container.querySelector('button[aria-label="Inspect commit"]') === null)
 
       // Multi-file initial state without sp.file -> data-mobile-pane="master", no chg-is-narrow-diff, no mobile back button
@@ -593,7 +721,7 @@ describe('changes-client-interactions', { timeout: 60_000 }, () => {
         return { kind: 'unchanged', filePath: 'src/file-1.ts' }
       },
     })
-    const ui = await h.mount(e(components.ChangesInspectorScreen, {}))
+    const ui = await h.mount(e(components.ChangesInspectorScreen, {}), { conv: '1' })
     try {
       const searchInput = ui.container.querySelector('.chg-sidebar-search input[aria-label="Filter changed files…"]') as HTMLInputElement | null
       assert.ok(searchInput !== null, 'SearchBox should appear once changed files >= 8')
@@ -603,17 +731,49 @@ describe('changes-client-interactions', { timeout: 60_000 }, () => {
     }
   })
 
-  test('ChangesWorkbenchPanel & SwarmWorktreeActionsSlot：纯只读单一打开入口与文件跳转，无清理或审阅提交按钮', TIMEOUT, async () => {
+  test('ChangesWorkbenchPanel & SwarmWorktreeActionsSlot：原地手风琴 Diff、本会话收敛、关抽屉再分屏与工作台切签', TIMEOUT, async () => {
     const conv = makeConv(1)
-    const h = createChangesHarness({
+
+    // 1. Clean working tree with NO worktrees: hides target selector, and `Inspect recent commits` switches in place
+    const cleanHarness = createChangesHarness({
+      conversationId: 1,
       conversations: [conv],
-      onAction: (pluginId, actionId) => {
-        if (pluginId === 'builtin:changes' && actionId === 'inspect_workspace') return SAMPLE_WORKSPACE_WORKING
+      onAction: (pluginId, actionId, input) => {
         if (pluginId === 'builtin:worktree' && actionId === 'list_worktrees') {
-          return { worktrees: [SAMPLE_WORKTREE_INSPECT.record] }
+          return { worktrees: [SAMPLE_OTHER_WORKTREE] }
         }
-        return {}
+        if (actionId === 'inspect_workspace' && input['scope'] !== 'commit') {
+          return {
+            ...SAMPLE_WORKSPACE_WORKING,
+            summary: { totalFiles: 0, additions: 0, deletions: 0, untrackedCount: 0, dirtyFileCount: 0 },
+            files: [],
+          }
+        }
+        return handleSampleAction(pluginId, actionId, input)
       },
+    })
+    const cleanWb = await cleanHarness.mount(e(components.ChangesWorkbenchPanel, { conversation: conv }))
+    try {
+      assert.ok(
+        cleanWb.container.querySelector('button[aria-label="Change target"]') === null,
+        'Target selector must be hidden when conversation has no active worktrees',
+      )
+      assert.match(cleanWb.container.textContent ?? '', /Working tree is clean/)
+      await act(async () => { buttonByText(cleanWb.container, 'Inspect recent commits').click() })
+      await act(async () => { await flushMacrotask(0) })
+      assert.equal(cleanHarness.logs.splitScreens.length, 0, 'Inspect recent commits must switch scope in place')
+      const commitSelect = cleanWb.container.querySelector('button[aria-label="Inspect commit"]')
+      assert.ok(commitSelect !== null, 'Commit Select must appear in place after clicking Inspect recent commits')
+      assert.match(commitSelect.textContent ?? '', /aaaa111/)
+    } finally {
+      cleanWb.unmount()
+    }
+
+    // 2. Full Workbench flow: inline accordion diff + scoped worktree selector + params.wt + closeWorkbench before openSplitScreen + Swarm slot
+    const h = createChangesHarness({
+      conversationId: 1,
+      conversations: [conv, makeConv(99, { title: 'Unrelated conv' })],
+      onAction: handleSampleAction,
     })
 
     const wb = await h.mount(
@@ -632,34 +792,87 @@ describe('changes-client-interactions', { timeout: 60_000 }, () => {
     try {
       const text = wb.container.textContent ?? ''
       assert.equal(EMOJI_RE.test(text), false, 'Workbench & Swarm slot must stay Emoji-free')
-      assert.match(text, /Workspace changes/)
-      assert.match(text, /helmx\/spawn-wt1/)
-      assert.equal(text.includes('Full view'), false, 'Workbench removes dual Split/Full buttons')
+      assert.equal(text.includes('Full view'), false)
+      assert.equal(text.includes('Managed worktrees'), false, 'Redundant bottom worktree jump section must be removed')
       assert.ok(wb.container.querySelector('button[aria-label="Ask coordinator to review & merge"]') === null)
 
-      // Click unified `Open changes` button
-      await act(async () => { buttonByText(wb.container, 'Open changes').click() })
-      assert.equal(h.logs.splitScreens.length, 1)
-      assert.equal(h.logs.splitScreens[0], 'screen:builtin:changes/inspector?conv=1')
+      // Target selector lists ONLY current workspace + conversation 1's active worktrees (never conv 99's worktree)
+      const targetTrigger = wb.container.querySelector('button[aria-label="Change target"]') as HTMLButtonElement | null
+      assert.ok(targetTrigger !== null, 'Target selector appears when conversation has active worktrees')
+      await act(async () => {
+        targetTrigger.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+      })
+      const targetOptionsText = [...document.body.querySelectorAll('[role="option"]')].map((el) => el.textContent ?? '').join('\n')
+      assert.match(targetOptionsText, /Current workspace/)
+      assert.match(targetOptionsText, /helmx\/spawn-wt1/)
+      assert.equal(targetOptionsText.includes('helmx/spawn-other'), false)
+      await act(async () => {
+        targetTrigger.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+      })
 
-      // Click workspace file row -> opens inspector at file
+      // Clicking workspace file row expands single-file diff inline inside `.chg-wb-diff-drawer` (zero split jump)
       await act(async () => { buttonByText(wb.container, 'app.ts').click() })
-      assert.equal(h.logs.splitScreens.length, 2)
-      assert.match(h.logs.splitScreens[1]!, /conv=1/)
-      assert.match(h.logs.splitScreens[1]!, /file=src%2Fapp\.ts/)
+      await act(async () => { await flushMacrotask(0) })
+      assert.equal(h.logs.splitScreens.length, 0, 'Clicking file row in workbench must expand inline without jumping to split')
+      const drawerEl = wb.container.querySelector('.chg-wb-diff-drawer')
+      assert.ok(drawerEl !== null, 'Inline diff drawer must render under expanded file row')
+      assert.match(drawerEl.textContent ?? '', /const x = oldVal/)
+      assert.match(drawerEl.textContent ?? '', /const x = newVal/)
+      assert.ok(drawerEl.querySelectorAll('.chg-diff-num-single').length > 0)
 
-      // Click worktree `View changes` row button inside SDK compact List -> omits parent param
-      assert.ok(wb.container.querySelector('.helmx-list-compact .helmx-list-row') !== null, 'Worktrees render inside SDK compact List')
-      await act(async () => { buttonByText(wb.container, 'View changes').click() })
-      assert.equal(h.logs.splitScreens.length, 3)
-      assert.equal(h.logs.splitScreens[2], 'screen:builtin:changes/inspector?wt=local%3A%2Frepo%2F.helmx-worktrees%2Fwt-1')
+      // Clicking the same file row collapses it
+      await act(async () => { buttonByText(wb.container, 'app.ts').click() })
+      await act(async () => { await flushMacrotask(0) })
+      assert.ok(wb.container.querySelector('.chg-wb-diff-drawer') === null, 'Clicking expanded row again must collapse it')
 
-      // Click Swarm read-only diff icon button -> opens inspector & never submits prompts
+      // Passing `params: { wt }` switches workbench cleanly to that worktree and expands worktree file inline
+      await wb.rerender(
+        e('div', null,
+          e(components.ChangesWorkbenchPanel, {
+            conversation: conv,
+            params: { wt: SAMPLE_WORKTREE_INSPECT.record.id },
+          }),
+          e(components.SwarmWorktreeActionsSlot, {
+            worktreeId: SAMPLE_WORKTREE_INSPECT.record.id,
+            path: SAMPLE_WORKTREE_INSPECT.record.path,
+            branch: SAMPLE_WORKTREE_INSPECT.record.branch,
+            nodeId: 'local',
+            parentConversationId: 1,
+            mode: 'retained',
+          }),
+        ),
+      )
+      assert.match(wb.container.textContent ?? '', /wt-file\.ts/)
+      await act(async () => { buttonByText(wb.container, 'wt-file.ts').click() })
+      await act(async () => { await flushMacrotask(0) })
+      assert.match(wb.container.querySelector('.chg-wb-diff-drawer')?.textContent ?? '', /export const wt = 1/)
+
+      // Clicking sole `Open in split view` closes workbench first and then opens split inspector with wt & file
+      const splitBtn = wb.container.querySelector('button[aria-label="Open in split view"]') as HTMLButtonElement | null
+      assert.ok(splitBtn !== null)
+      await act(async () => { splitBtn.click() })
+      assert.equal(h.logs.workbenchCloses, 1)
+      assert.deepEqual(
+        h.logs.splitScreens,
+        ['screen:builtin:changes/inspector?wt=local%3A%2Frepo%2F.helmx-worktrees%2Fwt-1&file=wt-file.ts'],
+      )
+      assert.deepEqual(h.logs.events.slice(-2), [
+        'closeWorkbench',
+        'openSplitScreen:screen:builtin:changes/inspector?wt=local%3A%2Frepo%2F.helmx-worktrees%2Fwt-1&file=wt-file.ts',
+      ])
+
+      // Clicking Swarm read-only diff icon button opens Workbench `Changes` tab with `{ wt }` & never submits prompts
       const swarmInspectBtn = wb.container.querySelector('button[aria-label="View changes: helmx/spawn-wt1"]') as HTMLButtonElement | null
       assert.ok(swarmInspectBtn !== null)
       await act(async () => { swarmInspectBtn.click() })
-      assert.equal(h.logs.splitScreens.length, 4)
-      assert.equal(h.logs.splitScreens[3], 'screen:builtin:changes/inspector?wt=local%3A%2Frepo%2F.helmx-worktrees%2Fwt-1')
+      assert.deepEqual(h.logs.workbenchOpens, [
+        {
+          panelId: 'plugin:builtin:changes/changes',
+          conversationId: 1,
+          params: { wt: SAMPLE_WORKTREE_INSPECT.record.id },
+        },
+      ])
+      assert.equal(h.logs.splitScreens.length, 1)
       assert.equal(h.logs.submissions.length, 0)
     } finally {
       wb.unmount()

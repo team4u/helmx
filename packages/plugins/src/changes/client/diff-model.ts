@@ -462,6 +462,37 @@ export function buildChangesScreenTarget(params: {
   return `${base}?${new URLSearchParams(pairs).toString()}`
 }
 
+export function normalizeWorktreeScopeParam(raw: string | undefined): WorktreeDiffScope {
+  return raw === 'committed' || raw === 'uncommitted' ? raw : 'all'
+}
+
+export function normalizeWorkspaceScopeParam(raw: string | undefined): WorkspaceDiffScope {
+  if (raw === 'unpushed' || raw === 'commit' || raw === 'since') return raw
+  return 'working'
+}
+
+export function buildFileCacheKey(parts: {
+  targetKey: string
+  head?: string
+  dirtyCount: number
+  scope: string
+  commit?: string
+  base?: string
+  filePath: string
+  refreshSeq: number
+}): string {
+  return [
+    parts.targetKey,
+    parts.head ?? '',
+    String(parts.dirtyCount),
+    parts.scope,
+    parts.commit ?? '',
+    parts.base ?? '',
+    parts.filePath,
+    String(parts.refreshSeq),
+  ].join('\u0000')
+}
+
 export function splitFilePath(path: string): { dir: string; name: string } {
   const idx = path.lastIndexOf('/')
   if (idx < 0) return { dir: '', name: path }

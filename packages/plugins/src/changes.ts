@@ -3,8 +3,8 @@
  *
  * Responsibilities:
  * - Read-only workspace inspection actions (`inspect_workspace`, `inspect_workspace_file`) resolved via conversation `(nodeId, cwd)`;
- * - Fullscreen / split-screen Changes Inspector (`screen:builtin:changes/inspector`) supporting both ordinary conversation workspaces and managed worktrees;
- * - Conversation right-hand Workbench `Changes` panel (`workbenchPanel` id `'changes'`);
+ * - Conversation right-hand Workbench `Changes` panel (`workbenchPanel` id `'changes'`) with inline single-file diff expansion;
+ * - On-demand split/fullscreen Changes Inspector (`screen:builtin:changes/inspector`) scoped to the active conversation or worktree;
  * - Decoupled UI slots contributed to `builtin:workflow` and `builtin:swarm` (`workflow-worktree-inspect`, `workflow-trace-inspect`, `swarm-worktree-actions`).
  */
 import type { PluginDefinition } from '@helmx/protocol'
@@ -35,13 +35,6 @@ export function createChangesPlugin(): PluginDefinition {
       registerChangesActions(ctx)
 
       const label = { en: 'Changes', 'zh-CN': '改动' }
-      ctx.ui.sidebarItem({
-        id: 'changes-inspector',
-        label,
-        icon: 'file-diff',
-        target: `screen:${CHANGES_PLUGIN_ID}/${CHANGES_SCREEN_ID}`,
-        order: 15,
-      })
       ctx.ui.screen({
         id: CHANGES_SCREEN_ID,
         label,

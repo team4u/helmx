@@ -782,7 +782,7 @@ test('builtin:worktree 不注册前端工作树 UI 插槽，builtin:changes 注�
     assert.equal(chgActions.get('inspect_workspace')?.idempotent, true)
     assert.equal(chgActions.get('inspect_workspace_file')?.idempotent, true)
     const chgUi = host.listUi().filter((u) => u.pluginId === 'builtin:changes')
-    assert.equal((chgUi.find((u) => u.surface === 'sidebar.item')?.spec as { id?: string } | undefined)?.id, 'changes-inspector')
+    assert.equal(chgUi.find((u) => u.surface === 'sidebar.item'), undefined)
     assert.equal((chgUi.find((u) => u.surface === 'screen')?.spec as { id?: string } | undefined)?.id, 'inspector')
     assert.equal((chgUi.find((u) => u.surface === 'workbench.panel')?.spec as { id?: string } | undefined)?.id, 'changes')
     const chgSlots = chgUi

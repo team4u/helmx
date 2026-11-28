@@ -104,7 +104,9 @@ test('时间线行与工作台节点主按钮点击触发 openConversationDrawer
       h.log.actions.map((a) => [a.pluginId, a.actionId, a.input]),
       [['builtin:workflow', 'abort', { runId: 'wf_bg' }]],
     )
-    assert.deepEqual(h.log.splitScreens, ['screen:builtin:changes/inspector?wt=local%3A%2Fwt%2Fx'])
+    assert.deepEqual(h.log.workbenchTabs, ['plugin:builtin:changes/changes'])
+    assert.deepEqual(h.log.workbenchParams, [{ wt: 'local:/wt/x' }])
+    assert.deepEqual(h.log.splitScreens, [])
     assert.deepEqual(h.log.drawers, [], '动作按钮点击绝不触发打开抽屉')
   } finally {
     wbUi.unmount()
@@ -546,10 +548,9 @@ test('已结束的同步 isolation:worktree subagent 行在时间线直接挂载
     await act(async () => {
       inspectBtn.click()
     })
-    assert.deepEqual(
-      h.log.splitScreens,
-      ['screen:builtin:changes/inspector?wt=local%3A%2Frepo%2F.helmx-worktrees%2Fsync-601'],
-    )
+    assert.deepEqual(h.log.workbenchTabs, ['plugin:builtin:changes/changes'])
+    assert.deepEqual(h.log.workbenchParams, [{ wt: 'local:/repo/.helmx-worktrees/sync-601' }])
+    assert.deepEqual(h.log.splitScreens, [])
     assert.deepEqual(h.log.drawers, [], '点击行内检视按钮绝不应触发打开子会话抽屉')
   } finally {
     ui.unmount()
