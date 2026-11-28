@@ -11,7 +11,9 @@ import type { ProfileStarterPrompt, ProviderConfig } from './assets.js'
 import { MODEL_THINKING_LEVELS, type ConversationListFilter } from './conversation.js'
 import { ENV_EXEC_MAX_TIMEOUT_MS, type EnvExecRequest, type NodeUpgradeInput } from './env-rpc.js'
 import type { ConversationSearchOptions } from './http.js'
+import { HELMX_LOCALES } from './locale.js'
 import type { PluginConfigFieldValue } from './plugin-dto.js'
+import type { OmniboxSearchQuery } from './search.js'
 import { SKILL_ID_PATTERN } from './skill-contract.js'
 import { ENV_NAME_REGEX } from './utils.js'
 
@@ -132,6 +134,16 @@ const ConversationSearchQuerySchema = Type.Object(
     profileId: Type.Optional(NonWhitespaceString),
     ownedBy: Type.Optional(Type.Enum(['human', 'helmx'] as const)),
     topLevelOnly: Type.Optional(Type.Boolean()),
+  },
+  { additionalProperties: false },
+)
+
+const OmniboxSearchQuerySchema = Type.Object(
+  {
+    q: NonWhitespaceString,
+    limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
+    locale: Type.Optional(Type.Enum(HELMX_LOCALES)),
+    conversationId: Type.Optional(SafePositiveInt),
   },
   { additionalProperties: false },
 )
@@ -372,6 +384,7 @@ export const REQUEST_SCHEMAS = Object.freeze({
   conversationWithdraw: ConversationWithdrawSchema,
   conversationBulkDelete: ConversationBulkDeleteSchema,
   conversationSearchQuery: ConversationSearchQuerySchema,
+  omniboxSearchQuery: OmniboxSearchQuerySchema,
   conversationListQuery: ConversationListQuerySchema,
   profileStarter: ProfileStarterSchema,
   profileCreate: ProfileCreateSchema,
@@ -409,6 +422,7 @@ const _requestSchemaParityLocks: [
   AssertExact<Static<typeof ConversationWithdrawSchema>, { submissionId: number }>,
   AssertExact<Static<typeof ConversationBulkDeleteSchema>, { ids: number[] }>,
   AssertExact<Static<typeof ConversationSearchQuerySchema>, { q: string } & ConversationSearchOptions>,
+  AssertExact<Static<typeof OmniboxSearchQuerySchema>, OmniboxSearchQuery>,
   AssertExact<Static<typeof ConversationListQuerySchema>, ConversationListFilter & { all?: boolean }>,
   AssertExact<Static<typeof NodeUpgradeSchema>, NodeUpgradeInput>,
   AssertExact<Static<typeof EnvExecSchema>['command'], EnvExecRequest['command']>,
@@ -419,6 +433,6 @@ const _requestSchemaParityLocks: [
   AssertExact<Static<typeof EnvExecSchema>['stream'], EnvExecRequest['stream']>,
   AssertExact<Static<typeof PluginConfigValueSchema>, PluginConfigFieldValue | null>,
 ] = [
-  true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true,
+  true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true,
 ]
 void _requestSchemaParityLocks

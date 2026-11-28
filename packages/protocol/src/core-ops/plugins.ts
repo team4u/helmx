@@ -53,6 +53,27 @@ export const PLUGIN_CORE_OPERATIONS = [
     },
   },
   {
+    key: 'plugins.config_catalog',
+    domain: 'plugins',
+    id: 'config_catalog',
+    description: 'List static secret-stripped configuration schemas for all loaded plugins declaring configSchema',
+    inputSchema: CORE_EMPTY_INPUT_SCHEMA,
+    outputSchema: CORE_ARRAY_OUTPUT_SCHEMA,
+    http: {
+      method: 'GET',
+      path: '/api/plugins/config-catalog',
+      bodyMode: 'none',
+      methodNotAllowed: true,
+    },
+    cli: {
+      command: ['plugins', 'config-catalog'],
+    },
+    action: {
+      idempotent: true,
+      exposeToPrompt: false,
+    },
+  },
+  {
     key: 'plugins.manifest',
     domain: 'plugins',
     id: 'manifest',

@@ -90,6 +90,22 @@ function assertUniqueStrings(
   }
 }
 
+function validateOptionalDescription(
+  spec: Record<string, unknown>,
+  id: string,
+  ctx: UiSpecContext,
+): void {
+  const value = spec['description'];
+  if (value !== undefined && parseNonEmptyLocalizedText(value) === undefined) {
+    throw new HelmxError(
+      'invalid_ui_spec',
+      `plugin ${ctx.pluginId} ui.${ctx.fnName} description must be display copy (non-empty string or { en, 'zh-CN' } map with non-blank values)`,
+      400,
+      { pluginId: ctx.pluginId, id, field: 'description' },
+    );
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Early phase validators
 // ---------------------------------------------------------------------------
@@ -98,8 +114,16 @@ const COMMAND_PALETTE_CHECKER = Compile(UI_SPEC_SCHEMAS.commandPalette);
 
 function validateCommandPaletteSpec(spec: Record<string, unknown>, id: string, ctx: UiSpecContext): void {
   const { pluginId } = ctx;
+  validateOptionalDescription(spec, id, ctx);
   runCompiledUiSchema(COMMAND_PALETTE_CHECKER, spec, id, ctx, (errors) => {
-    const err = findErrorByPathPrefix(errors, ['/slash', '/actionId', '/actionPluginId', '/shortcut']);
+    const err = findErrorByPathPrefix(errors, [
+      '/slash',
+      '/actionId',
+      '/actionPluginId',
+      '/shortcut',
+      '/target',
+      '/keywords',
+    ]);
     if (err?.instancePath.startsWith('/slash')) {
       return {
         message: `plugin ${pluginId} ui.command slash must match /^[a-z0-9][a-z0-9:_-]{0,63}$/ (without leading /)`,
@@ -113,6 +137,18 @@ function validateCommandPaletteSpec(spec: Record<string, unknown>, id: string, c
       return {
         message: `plugin ${pluginId} ui.command shortcut must be a trimmed non-empty string (max 32 chars)`,
         details: { pluginId, id, shortcut: String(spec['shortcut']) },
+      };
+    }
+    if (err?.instancePath.startsWith('/target')) {
+      return {
+        message: `plugin ${pluginId} ui.command target must be a trimmed non-empty string (max 512 chars)`,
+        details: { pluginId, id, target: String(spec['target']) },
+      };
+    }
+    if (err?.instancePath.startsWith('/keywords')) {
+      return {
+        message: `plugin ${pluginId} ui.command keywords must be an array of non-empty trimmed strings`,
+        details: { pluginId, id },
       };
     }
     return { message: `plugin ${pluginId} ui.command actionPluginId must be a non-empty plugin ID`, details: { pluginId, id } };
@@ -140,10 +176,10 @@ function validateCommandPaletteSpec(spec: Record<string, unknown>, id: string, c
   if (slash !== undefined && actionId === undefined) {
     throw new HelmxError('invalid_ui_spec', `plugin ${pluginId} ui.command must bind actionId when declaring slash`, 400);
   }
-  if (actionId === undefined && spec['client'] === undefined) {
+  if (actionId === undefined && spec['client'] === undefined && spec['target'] === undefined) {
     throw new HelmxError(
       'invalid_ui_spec',
-      `plugin ${pluginId} ui.command must provide at least one of actionId or client (command must be triggerable)`,
+      `plugin ${pluginId} ui.command must provide at least one of actionId, client, or target (command must be triggerable)`,
       400,
       { pluginId, id },
     );
@@ -431,6 +467,28 @@ function validateSidebarItemSpec(spec: Record<string, unknown>, id: string, ctx:
   }
 }
 
+const SCREEN_CHECKER = Compile(UI_SPEC_SCHEMAS.screen);
+
+function validateScreenSpec(spec: Record<string, unknown>, id: string, ctx: UiSpecContext): void {
+  const { pluginId } = ctx;
+  validateOptionalDescription(spec, id, ctx);
+  runCompiledUiSchema(SCREEN_CHECKER, spec, id, ctx, () => ({
+    message: `plugin ${pluginId} ui.screen keywords must be an array of non-empty trimmed strings`,
+    details: { pluginId, id },
+  }));
+}
+
+const SETTINGS_PANEL_CHECKER = Compile(UI_SPEC_SCHEMAS.settingsPanel);
+
+function validateSettingsPanelSpec(spec: Record<string, unknown>, id: string, ctx: UiSpecContext): void {
+  const { pluginId } = ctx;
+  validateOptionalDescription(spec, id, ctx);
+  runCompiledUiSchema(SETTINGS_PANEL_CHECKER, spec, id, ctx, () => ({
+    message: `plugin ${pluginId} ui.settingsPanel keywords must be an array of non-empty trimmed strings`,
+    details: { pluginId, id },
+  }));
+}
+
 // ---------------------------------------------------------------------------
 // Two-phase dispatch tables
 // ---------------------------------------------------------------------------
@@ -442,6 +500,8 @@ const EARLY_VALIDATORS: Readonly<Record<string, UiSpecValidator>> = {
 
 const LATE_VALIDATORS: Readonly<Record<string, UiSpecValidator>> = {
   'sidebar.item': validateSidebarItemSpec,
+  screen: validateScreenSpec,
+  'settings.panel': validateSettingsPanelSpec,
   'timeline.renderer': validateTimelineRendererSpec,
   'markdown.codeBlock': validateMarkdownCodeBlockSpec,
   'tool.view': validateToolViewSpec,

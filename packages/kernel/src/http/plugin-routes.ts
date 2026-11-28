@@ -47,6 +47,7 @@ export type PluginRoutesHost = Pick<
       | 'getConfigSources'
       | 'get'
       | 'getManifest'
+      | 'listConfigCatalog'
       | 'withTask'
       | 'beginTask'
       | 'endTask'
@@ -73,6 +74,13 @@ function dispatchPluginJsonRoutes(
 ): (ctx: RouteContext, redactor: JsonRedactor | undefined) => Promise<Response | undefined> {
   return createCoreOperationRouter(PLUGIN_CORE_OPERATIONS, {
     'plugins.list': () => kernel.plugins.list(),
+
+    'plugins.config_catalog': (_input, { redactor }) => {
+      if (kernel.plugins.listConfigCatalog === undefined) {
+        return errorResponse(redactor, 501, 'not_supported', 'Current kernel does not support plugin config catalog')
+      }
+      return kernel.plugins.listConfigCatalog()
+    },
 
     'plugins.manifest': (input, { redactor }) => {
       if (kernel.plugins.getManifest === undefined) {

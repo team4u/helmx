@@ -17,6 +17,8 @@ import {
   type ComposerCompletionSource,
   type MarkdownCodeBlockSpec,
   type PluginSlotContributionSpec,
+  type ScreenSpec,
+  type SettingsPanelSpec,
   type SidebarItemBadgeSpec,
   type SidebarItemSpec,
   type TimelineRendererSpec,
@@ -31,6 +33,8 @@ export const UI_SPEC_PATTERNS = Object.freeze({
   commandActionId: /^[A-Za-z0-9_-]+$/,
   commandSlash: /^[a-z0-9][a-z0-9:_-]{0,63}$/,
   commandShortcut: /^\S(?:[^\r\n\t]{0,30}\S)?$/,
+  commandTarget: /^\S(?:[^\r\n\t\x00-\x1f\x7f]{0,510}\S)?$/,
+  searchKeyword: /^\S(?:[^\r\n\t\x00-\x1f\x7f]*\S)?$/,
   markdownLanguage: /^[a-z0-9][a-z0-9-]{0,31}$/,
   completerDocName: /^[A-Za-z0-9._-]+$/,
   completerItemsField: /^[A-Za-z0-9_$][A-Za-z0-9_$-]{0,127}$/,
@@ -47,6 +51,16 @@ const CommandShortcutSchema = Type.String({
   maxLength: 32,
   pattern: UI_SPEC_PATTERNS.commandShortcut.source,
 })
+const CommandTargetSchema = Type.String({
+  minLength: 1,
+  maxLength: 512,
+  pattern: UI_SPEC_PATTERNS.commandTarget.source,
+})
+const SearchKeywordSchema = Type.String({
+  minLength: 1,
+  pattern: UI_SPEC_PATTERNS.searchKeyword.source,
+})
+const KeywordsSchema = Type.Array(SearchKeywordSchema)
 const MarkdownLanguageSchema = Type.String({ pattern: UI_SPEC_PATTERNS.markdownLanguage.source })
 const CompleterDocNameSchema = Type.String({ pattern: UI_SPEC_PATTERNS.completerDocName.source })
 const CompleterItemsFieldSchema = Type.String({ pattern: UI_SPEC_PATTERNS.completerItemsField.source })
@@ -56,6 +70,16 @@ const CommandPaletteSpecSchema = Type.Object({
   actionId: Type.Optional(CommandActionIdSchema),
   actionPluginId: Type.Optional(NonEmptyString),
   shortcut: Type.Optional(CommandShortcutSchema),
+  target: Type.Optional(CommandTargetSchema),
+  keywords: Type.Optional(KeywordsSchema),
+})
+
+const ScreenSpecSchema = Type.Object({
+  keywords: Type.Optional(KeywordsSchema),
+})
+
+const SettingsPanelSpecSchema = Type.Object({
+  keywords: Type.Optional(KeywordsSchema),
 })
 
 const PluginSlotTargetSchema = Type.Object({
@@ -140,6 +164,8 @@ const SidebarItemSpecSchema = Type.Object({
  */
 export const UI_SPEC_SCHEMAS = Object.freeze({
   commandPalette: CommandPaletteSpecSchema,
+  screen: ScreenSpecSchema,
+  settingsPanel: SettingsPanelSpecSchema,
   pluginSlot: PluginSlotTargetSchema,
   timelineRenderer: TimelineRendererSpecSchema,
   markdownCodeBlock: MarkdownCodeBlockSpecSchema,
@@ -156,7 +182,9 @@ export const UI_SPEC_SCHEMAS = Object.freeze({
 type AssertExact<A, B> = [A] extends [B] ? ([B] extends [A] ? true : never) : never
 
 const _uiSchemaParityLocks: [
-  AssertExact<Static<typeof CommandPaletteSpecSchema>, Pick<CommandSpec, 'slash' | 'actionId' | 'actionPluginId' | 'shortcut'>>,
+  AssertExact<Static<typeof CommandPaletteSpecSchema>, Pick<CommandSpec, 'slash' | 'actionId' | 'actionPluginId' | 'shortcut' | 'target' | 'keywords'>>,
+  AssertExact<Static<typeof ScreenSpecSchema>, Pick<ScreenSpec, 'keywords'>>,
+  AssertExact<Static<typeof SettingsPanelSpecSchema>, Pick<SettingsPanelSpec, 'keywords'>>,
   AssertExact<Static<typeof PluginSlotTargetSchema>, Pick<PluginSlotContributionSpec, 'target'>>,
   AssertExact<Static<typeof TimelineRendererMatchMetaSchema>, NonNullable<TimelineRendererSpec['matchMeta']>>,
   AssertExact<Static<typeof TimelineRendererSpecSchema>, Pick<TimelineRendererSpec, 'matchMeta'>>,
@@ -169,6 +197,6 @@ const _uiSchemaParityLocks: [
   AssertExact<Static<typeof SidebarItemBadgeSchema>, SidebarItemBadgeSpec>,
   AssertExact<Static<typeof SidebarItemSpecSchema>, Pick<SidebarItemSpec, 'badge'>>,
 ] = [
-  true, true, true, true, true, true, true, true, true, true, true, true,
+  true, true, true, true, true, true, true, true, true, true, true, true, true, true,
 ]
 void _uiSchemaParityLocks

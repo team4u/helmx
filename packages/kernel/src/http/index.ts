@@ -23,6 +23,7 @@ export type { AssetRoutesTarget, ConversationArtifactUploadTarget } from './asse
 export type { ConversationRoutesTarget } from './conversation-routes.js'
 export type { ModelRoutesTarget } from './model-routes.js'
 export type { NodeRoutesTarget } from './node-routes.js'
+export type { OmniboxRoutesTarget } from './omnibox-routes.js'
 export type { PluginRoutesTarget, PluginRoutesHost, PluginRoutesStash } from './plugin-routes.js'
 export type { ProfileRoutesTarget } from './profile-routes.js'
 export type { SessionDocRoutesTarget } from './session-doc-routes.js'

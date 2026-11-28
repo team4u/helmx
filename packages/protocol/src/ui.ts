@@ -118,6 +118,10 @@ export interface SidebarItemSpec extends UiSpecBase {
 export interface ScreenSpec extends UiSpecBase {
   label: LocalizedText
   icon?: string
+  /** Optional display copy describing the screen (resolved by the active UI locale). */
+  description?: LocalizedText
+  /** Optional search keywords for Omnibox indexing (trimmed non-empty strings). */
+  keywords?: string[]
 }
 
 // 3. timeline.renderer (take over timeline entries by entry kind / metadata)
@@ -266,12 +270,18 @@ export interface CommandSpec extends UiSpecBase {
   actionId?: string
   actionPluginId?: string
   input?: Record<string, unknown>
+  /** Declarative navigation target (trimmed non-empty string, max 512 chars, same syntax as `SidebarItemSpec.target`). */
+  target?: string
   keywords?: string[]
 }
 
 export interface SettingsPanelSpec extends UiSpecBase {
   label: LocalizedText
   order?: number
+  /** Optional display copy describing the settings panel (resolved by the active UI locale). */
+  description?: LocalizedText
+  /** Optional search keywords for Omnibox indexing (trimmed non-empty strings). */
+  keywords?: string[]
 }
 
 /** Injects content into a named sub-slot of another plugin. */
@@ -622,17 +632,32 @@ const _assertAllKnownUiSurfacesListed: _AssertAllKnownUiSurfacesListed = true
 void _assertAllKnownUiSurfacesListed
 
 const COMMAND_SHORTCUT_MAX_LENGTH = 32
+const COMMAND_TARGET_MAX_LENGTH = 512
+const COMMAND_SINGLE_LINE_CONTROL_RE = /[\r\n\t\x00-\x1f\x7f]/
 
 function normalizeCommandSpec(baseUnknown: unknown, rawSpec: Record<string, unknown>): CommandSpec {
-  const baseSpec = baseUnknown as CommandSpec
-  if (!Object.hasOwn(rawSpec, 'shortcut')) return baseSpec
-  const rawShortcut = rawSpec['shortcut']
-  const trimmed = typeof rawShortcut === 'string' ? rawShortcut.trim() : ''
-  if (trimmed.length >= 1 && trimmed.length <= COMMAND_SHORTCUT_MAX_LENGTH) {
-    return trimmed === rawShortcut ? baseSpec : { ...baseSpec, shortcut: trimmed }
+  let spec = baseUnknown as CommandSpec
+  if (Object.hasOwn(rawSpec, 'shortcut')) {
+    const rawShortcut = rawSpec['shortcut']
+    const trimmed = typeof rawShortcut === 'string' ? rawShortcut.trim() : ''
+    if (trimmed.length >= 1 && trimmed.length <= COMMAND_SHORTCUT_MAX_LENGTH && !COMMAND_SINGLE_LINE_CONTROL_RE.test(trimmed)) {
+      if (trimmed !== rawShortcut) spec = { ...spec, shortcut: trimmed }
+    } else {
+      const { shortcut: _ignored, ...rest } = spec
+      spec = rest
+    }
   }
-  const { shortcut: _ignored, ...rest } = baseSpec
-  return rest
+  if (Object.hasOwn(rawSpec, 'target')) {
+    const rawTarget = rawSpec['target']
+    const trimmed = typeof rawTarget === 'string' ? rawTarget.trim() : ''
+    if (trimmed.length >= 1 && trimmed.length <= COMMAND_TARGET_MAX_LENGTH && !COMMAND_SINGLE_LINE_CONTROL_RE.test(trimmed)) {
+      if (trimmed !== rawTarget) spec = { ...spec, target: trimmed }
+    } else {
+      const { target: _ignored, ...rest } = spec
+      spec = rest
+    }
+  }
+  return spec
 }
 
 function asSurfaceSpec<T>(spec: unknown): T {

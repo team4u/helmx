@@ -1876,7 +1876,7 @@ describe('Core actions (core:*) parity, discovery, and security invariants', { t
       const pluginActions = kernel.plugins.listActions().filter((m) => m.pluginId === 'core:plugins')
       assert.deepEqual(
         pluginActions.map((m) => m.id),
-        ['list', 'manifest', 'doc', 'config_get', 'doctor', 'config_set', 'enable', 'disable', 'reload', 'rescan'],
+        ['list', 'config_catalog', 'manifest', 'doc', 'config_get', 'doctor', 'config_set', 'enable', 'disable', 'reload', 'rescan'],
       )
       for (const excluded of ['install', 'update', 'remove']) {
         assert.equal(pluginActions.some((m) => m.id === excluded), false, `core:plugins.${excluded} must not exist`)

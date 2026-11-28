@@ -2826,6 +2826,11 @@ const SCHEMA_CLI_MAPPINGS: Readonly<Record<string, SchemaCliMapping>> = {
     aliases: { profileId: 'profile', topLevelOnly: 'top-level' },
     positionals: { q: '<query>' },
   },
+  omniboxSearchQuery: {
+    command: ['omnibox', 'search'],
+    aliases: { conversationId: 'conversation' },
+    positionals: { q: '<query>' },
+  },
   conversationListQuery: {
     command: ['conversations', 'list'],
     aliases: { profileId: 'profile', parentConversationId: 'parent', topLevelOnly: 'top-level' },

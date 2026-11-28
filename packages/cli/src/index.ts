@@ -40,7 +40,7 @@ function isDirectRun(): boolean {
 const HELP_GROUPS: ReadonlyArray<{ title: string; prefixes: ReadonlySet<string> }> = [
   { title: 'Auth & Diagnostics', prefixes: new Set(['setup', 'login', 'status', 'doctor']) },
   { title: 'Local Hub Lifecycle', prefixes: new Set(['start', 'stop', 'restart', 'service', 'update']) },
-  { title: 'Conversations & Messaging', prefixes: new Set(['conversations', 'ask', 'send', 'abort', 'events', 'search']) },
+  { title: 'Conversations & Messaging', prefixes: new Set(['conversations', 'ask', 'send', 'abort', 'events', 'search', 'omnibox']) },
   { title: 'Approvals & Artifacts', prefixes: new Set(['asks', 'artifacts']) },
   { title: 'Profiles & Skills', prefixes: new Set(['profiles', 'skills']) },
   { title: 'Models, Providers & Credentials', prefixes: new Set(['models', 'providers', 'credentials']) },
