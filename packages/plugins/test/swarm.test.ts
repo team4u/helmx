@@ -10,6 +10,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { HelmxError, NODE_ID_PATTERN, validateOrThrow } from '@helmx/protocol'
+import { DEFAULT_CHILD_MODEL_CAPABILITY_ID, type DefaultChildModelCapability } from '../src/contracts.js'
 import {
   ARCHIVED_COORDINATOR_TAG,
   ARCHIVED_WORKER_TAG,
@@ -2888,4 +2889,137 @@ test('swarm-unit19: buildReceiptPostSnapshots, selectReceiptLeadPost, isReceiptD
   assert.equal(parsedWakeup.createdAt, undefined)
   assert.equal(parsedWakeup.workerName, 'verifier')
   assert.equal(parsedWakeup.posts.length, 1)
+})
+
+test('swarm-unit15: dispatch_worker passes ownedBy=helmx atomically (no post-create patch) and consumes helmx.default-child-model cleanly', { timeout: 60_000 }, async () => {
+  const buildOwnershipAndModelHarness = (resolvedDefault?: { model: string; thinkingLevel?: string }) => {
+    const profiles = new Map<string, Record<string, unknown>>([
+      ['assistant', { id: 'assistant', name: 'Assistant' }],
+    ])
+    const conversations = new Map<number, Record<string, unknown>>([
+      [1, { id: 1, title: 'Coord', profileId: 'assistant', tags: [COORDINATOR_TAG], nodeId: 'local', cwd: '/repo', status: 'idle' }],
+      [11, { id: 11, title: 'Alpha', profileId: 'assistant', tags: [WORKER_TAG], nodeId: 'local', cwd: '/repo', status: 'idle', parentConversationId: 1 }],
+    ])
+    let nextConvId = 200
+    const createCalls: Array<Record<string, unknown>> = []
+    const forkCalls: Array<{ id: number; opts?: Record<string, unknown> }> = []
+    const updateCalls: Array<{ id: number; patch: Record<string, unknown> }> = []
+    const markOwnershipCalls: Array<{ id: number; owner: string }> = []
+    const consumeQueries: Array<{ capabilityId: string; coordId: number }> = []
+
+    const group = makeGroup({
+      id: 'grp_model_1',
+      coordinatorConversationId: 1,
+      members: [
+        makeMember({ name: 'alpha', conversationId: 11, nodeId: 'local', cwd: '/repo', worktreeId: undefined, isolation: 'inherit' }),
+      ],
+    })
+
+    const fakeCtx = {
+      consume: <T,>(capabilityId: string) => {
+        if (capabilityId !== DEFAULT_CHILD_MODEL_CAPABILITY_ID) return []
+        const impl: DefaultChildModelCapability = {
+          resolveDefaultChildModel(parentConversationId: number) {
+            consumeQueries.push({ capabilityId, coordId: parentConversationId })
+            return resolvedDefault
+          },
+        }
+        return [{ pluginId: 'builtin:duo', impl: impl as unknown as T }]
+      },
+      host: {
+        profiles: { get: async (id: string) => profiles.get(id) },
+        nodeIpc: { isOnline: () => true },
+        resolveSpawnTarget: async () => ({ nodeId: 'local', sourceCwd: '/repo', parentCwd: '/repo' }),
+        createConversation: async (init: Record<string, unknown>) => {
+          createCalls.push(init)
+          const id = nextConvId++
+          const created = { id, ...init, status: 'idle', tags: (init['tags'] as string[] | undefined) ?? [] }
+          conversations.set(id, created)
+          return created
+        },
+        forkConversation: async (id: number, forkOpts?: Record<string, unknown>) => {
+          forkCalls.push({ id, ...(forkOpts !== undefined ? { opts: forkOpts } : {}) })
+          const newId = nextConvId++
+          const src = conversations.get(id) ?? {}
+          const created = { ...src, id: newId, ...(forkOpts ?? {}), tags: [] }
+          conversations.set(newId, created)
+          return created
+        },
+        markConversationOwnership: (id: number, owner: string) => {
+          markOwnershipCalls.push({ id, owner })
+        },
+        updateConversation: async (id: number, patch: Record<string, unknown>) => {
+          updateCalls.push({ id, patch })
+          const prev = conversations.get(id) ?? { id }
+          const next = { ...prev, ...patch }
+          conversations.set(id, next)
+          return next
+        },
+        invokeAction: async () => ({}),
+      },
+    } as never
+
+    const fakeCoordinator = {
+      getConfig: () => resolveSwarmConfig({}),
+      readConversationOrUndefined: (id: number) => conversations.get(id),
+      reportError: () => {},
+      enqueueDispatch: async <T>(_key: string, fn: () => Promise<T>) => fn(),
+      track: async <T>(_label: string, fn: () => Promise<T>) => fn(),
+      groups: {
+        getGroup: (id: string) => (id === group.id ? group : undefined),
+        listGroups: () => [group],
+        findActiveGroupByCoordinator: (cid: number) => (cid === 1 ? group : undefined),
+        findLatestGroupForConversation: (cid: number) => (cid === 1 ? group : undefined),
+        getPosts: () => [],
+        addMemberWithBrief: async (_groupId: string, member: Record<string, unknown>) => {
+          group.members.push(member as unknown as GroupMemberState)
+          return { post: { seq: 1 } }
+        },
+      },
+    } as never
+
+    return {
+      handlers: createWorkerHandlers(fakeCtx, fakeCoordinator),
+      createCalls,
+      forkCalls,
+      updateCalls,
+      markOwnershipCalls,
+      consumeQueries,
+    }
+  }
+
+  // 1) Normal createWorker inherits default child model & effort and passes ownedBy='helmx' atomically
+  {
+    const h = buildOwnershipAndModelHarness({ model: 'faux/coder', thinkingLevel: 'low' })
+    await h.handlers.dispatchWorker({ groupId: 'grp_model_1', name: 'w1', prompt: 'task 1' }, 1)
+    assert.equal(h.markOwnershipCalls.length, 0, 'must NOT patch ownership after createConversation')
+    assert.equal(h.createCalls.length, 1)
+    assert.equal(h.createCalls[0]!['ownedBy'], 'helmx')
+    assert.equal(h.createCalls[0]!['model'], 'faux/coder')
+    assert.equal(h.updateCalls.length, 1)
+    assert.equal(h.updateCalls[0]!.patch['thinkingLevel'], 'low')
+    assert.deepEqual(h.consumeQueries, [{ capabilityId: DEFAULT_CHILD_MODEL_CAPABILITY_ID, coordId: 1 }])
+
+    // 2) forkFrom worker also receives ownedBy='helmx' atomically at forkConversation + inherited model/thinkingLevel
+    await h.handlers.dispatchWorker({ groupId: 'grp_model_1', name: 'w2', prompt: 'task 2', forkFrom: 'alpha' }, 1)
+    assert.equal(h.markOwnershipCalls.length, 0, 'must NOT patch ownership after forkConversation')
+    assert.equal(h.forkCalls.length, 1)
+    assert.equal(h.forkCalls[0]!.opts?.['ownedBy'], 'helmx')
+    assert.equal(h.updateCalls.length, 2)
+    assert.equal(h.updateCalls[1]!.patch['model'], 'faux/coder')
+    assert.equal(h.updateCalls[1]!.patch['thinkingLevel'], 'low')
+
+    // 3) Omitting model + explicit effort honors explicit effort while inheriting model
+    await h.handlers.dispatchWorker({ groupId: 'grp_model_1', name: 'w3', prompt: 'task 3', effort: 'high' }, 1)
+    assert.equal(h.createCalls[1]!['model'], 'faux/coder')
+    assert.equal(h.updateCalls[2]!.patch['thinkingLevel'], 'high')
+
+    // 4) Explicit caller model takes precedence and skips inheriting Duo executor thinkingLevel
+    const queryCountBeforeExplicit = h.consumeQueries.length
+    await h.handlers.dispatchWorker({ groupId: 'grp_model_1', name: 'w4', prompt: 'task 4', model: 'faux/fast' }, 1)
+    assert.equal(h.consumeQueries.length, queryCountBeforeExplicit, 'explicit model must not consult default-child-model')
+    assert.equal(h.createCalls[2]!['ownedBy'], 'helmx')
+    assert.equal(h.createCalls[2]!['model'], 'faux/fast')
+    assert.equal(h.updateCalls.length, 3, 'explicit model without effort must not emit spurious update')
+  }
 })

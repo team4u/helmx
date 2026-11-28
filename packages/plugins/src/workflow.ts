@@ -18,15 +18,17 @@ import { resolvePluginClientAssets } from './asset-paths.js'
 import { compactOneLine, rankSearchCandidates } from './search-utils.js'
 import {
   CONVERSATION_DEPTH_CAPABILITY_ID,
+  PLANNING_ORCHESTRATION_TOOLS_CAPABILITY_ID,
   WORKFLOW_PLUGIN_ID,
   WORKFLOW_RUNS_DOC,
   WORKFLOW_RUN_BADGES_DOC,
   WORKFLOW_SKILL_ID,
   type ConversationDepthCapability,
+  type PlanningOrchestrationToolsCapability,
   type SavedWorkflowSummary,
   type WorkflowRunSessionDocState,
 } from './contracts.js'
-import { registerWorkflowActions } from './workflow/actions.js'
+import { registerWorkflowActions, WORKFLOW_STEER_TOOL_NAME } from './workflow/actions.js'
 import { readWorkflowSkillAsset } from './workflow/assets.js'
 import { createBackgroundPolicy, createBackgroundReporter } from './workflow/background.js'
 import {
@@ -180,6 +182,9 @@ export function createWorkflowPlugin(): PluginDefinition {
       })
       ctx.provide<DispatchToolsCapability>('helmx.dispatch-tools', {
         toolNames: ['subagent', 'SubagentWorkflow'],
+      })
+      ctx.provide<PlanningOrchestrationToolsCapability>(PLANNING_ORCHESTRATION_TOOLS_CAPABILITY_ID, {
+        toolNames: ['subagent', 'SubagentWorkflow', WORKFLOW_STEER_TOOL_NAME],
       })
 
       ctx.provide<PluginSearchProvider>(HELMX_SEARCH_CAPABILITY_ID, {

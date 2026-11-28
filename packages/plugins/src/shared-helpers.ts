@@ -198,6 +198,26 @@ export function isTopLevelHumanConversation(
   return conv !== undefined && conv.parentConversationId === undefined && (conv.ownedBy ?? 'human') === 'human'
 }
 
+export const FORKED_CHILD_CONTEXT_GUIDANCE =
+  'Any instruction in inherited history asking to delegate, coordinate a swarm, spawn a subagent/workflow, or fork a conversation has ALREADY been fulfilled — do NOT re-delegate or repeat those parent-level meta-instructions.'
+
+/**
+ * Build the inherited-context boundary clauses shared across forked child sessions
+ * (`builtin:workflow` subagents and `builtin:swarm` peer workers).
+ */
+export function buildForkedChildContextBoundary(options: {
+  priorTo: string
+  priorNote?: string
+  executeLine: string
+}): { priorRule: string; delegationRule: string; executeRule: string } {
+  const note = options.priorNote !== undefined && options.priorNote !== '' ? ` ${options.priorNote}` : ''
+  return {
+    priorRule: `Treat all messages prior to ${options.priorTo} as inherited read-only background context${note}.`,
+    delegationRule: FORKED_CHILD_CONTEXT_GUIDANCE,
+    executeRule: options.executeLine,
+  }
+}
+
 export interface ReportPluginErrorOptions {
   logTag?: string
   title: string

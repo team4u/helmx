@@ -11,9 +11,11 @@ import {
 } from './shared-helpers.js'
 import {
   CONVERSATION_DEPTH_CAPABILITY_ID,
+  PLANNING_ORCHESTRATION_TOOLS_CAPABILITY_ID,
   WORKFLOW_PLUGIN_ID,
   WORKTREE_PLUGIN_ID,
   type ConversationDepthCapability,
+  type PlanningOrchestrationToolsCapability,
 } from './contracts.js'
 import {
   BOARD_BADGES_DOC_NAME,
@@ -21,6 +23,7 @@ import {
   INDEX_DOC_NAME,
   SWARM_PLUGIN_ID,
   SWARM_SKILL_ID,
+  SWARM_TOOL_NAMES,
   asConversationUpsertEvent,
   assertIndexDoc,
   resolveSwarmConfig,
@@ -111,6 +114,9 @@ export function createSwarmPlugin(): PluginDefinition {
       registerSwarmActions(ctx, coordinator)
       ctx.provide<DispatchToolsCapability>('helmx.dispatch-tools', {
         toolNames: ['swarm_dispatch_worker'],
+      })
+      ctx.provide<PlanningOrchestrationToolsCapability>(PLANNING_ORCHESTRATION_TOOLS_CAPABILITY_ID, {
+        toolNames: [...SWARM_TOOL_NAMES],
       })
       ctx.provide<ConversationDepthCapability>(CONVERSATION_DEPTH_CAPABILITY_ID, {
         depthOf(conversationId) {

@@ -10,7 +10,6 @@ import {
   type AgentSpawnRequest,
 } from '@helmx/protocol'
 import { worktreeExecutionMeta, type WorktreeExecutionDescriptor } from '../contracts.js'
-import { worktreeContextPrompt } from './worktree-context.js'
 import type { ManagedWorktreeRecord, WorktreeAllocator } from './worktree.js'
 import type { WorktreeStore } from './worktree-store.js'
 import type { WorktreeIsolationDeps } from './isolation-types.js'
@@ -133,7 +132,6 @@ export async function spawnWithWorktree(
       ...request,
       cwd: record.path,
       isolation: undefined,
-      prompt: `${request.prompt}${worktreeContextPrompt(record)}`,
       onResolved: makeOnResolved({
         ctx,
         request,
@@ -199,7 +197,6 @@ export async function resumeWithWorktree(
       ...request,
       cwd: record.path,
       isolation: undefined,
-      prompt: `${request.prompt}${worktreeContextPrompt(record)}`,
       onResolved: makeOnResolved({
         ctx,
         request,

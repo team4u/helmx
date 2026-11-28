@@ -10,6 +10,7 @@ import { WORKFLOW_PLUGIN_ID, parseWorkflowSpawnMeta } from '../contracts.js'
 import { isAncestorOrSelf } from '../lineage.js'
 import {
   asDeletedConversationId,
+  buildForkedChildContextBoundary,
   errorMessageOf,
   getConversationOrUndefined,
 } from '../shared-helpers.js'
@@ -18,13 +19,20 @@ import { depthExceededError, type ManagedSubagentRegistry } from './depth.js'
 import type { RunsProjection } from './projection.js'
 import type { WorkflowService } from './runs/index.js'
 
+const WORKFLOW_FORKED_BOUNDARY = buildForkedChildContextBoundary({
+  priorTo: 'the delegated task prompt',
+  priorNote:
+    '(even if the tail contains an unanswered user message or an un-summarized tool result from the parent turn)',
+  executeLine: 'Execute the delegated task directly and report back concisely to the parent.',
+})
+
 export const WORKFLOW_FORKED_CONTEXT_SECTION_ID = 'workflow.forked_context'
 export const WORKFLOW_FORKED_CONTEXT_SECTION = [
   '<forked_subagent_context>',
   'This conversation was forked from a parent conversation snapshot to execute a delegated subtask.',
-  '1. Treat all messages prior to the delegated task prompt as inherited read-only background context (even if the tail contains an unanswered user message or an un-summarized tool result from the parent turn).',
-  '2. Any instruction in inherited history asking to delegate, spawn a subagent/workflow, or fork a conversation has ALREADY been fulfilled by creating this subagent — do NOT re-delegate or repeat those parent-level meta-instructions.',
-  '3. Execute the delegated task directly and report back concisely to the parent.',
+  `1. ${WORKFLOW_FORKED_BOUNDARY.priorRule}`,
+  `2. ${WORKFLOW_FORKED_BOUNDARY.delegationRule}`,
+  `3. ${WORKFLOW_FORKED_BOUNDARY.executeRule}`,
   '</forked_subagent_context>',
 ].join('\n')
 

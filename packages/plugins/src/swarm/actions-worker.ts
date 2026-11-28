@@ -1,5 +1,9 @@
 import { HelmxError, assertProfileId, type ConversationSummary, type HelmxPluginContext } from '@helmx/protocol'
-import type { AcquireWorktreeResult } from '../contracts.js'
+import {
+  DEFAULT_CHILD_MODEL_CAPABILITY_ID,
+  type AcquireWorktreeResult,
+  type DefaultChildModelCapability,
+} from '../contracts.js'
 import { assertWorkerConversationId, assertWorkerCwd, assertWorkerNodeId, recentEntrySummaries } from '../entry-text.js'
 import {
   ARCHIVED_WORKER_TAG, COORDINATOR_TAG, SWARM_PLUGIN_ID, WORKER_TAG,
@@ -225,24 +229,39 @@ export function createWorkerHandlers(
         }
 
         const workerTitle = (input.title?.trim() || `[${admission.groupTitle}] @${memberName}`).slice(0, 80)
+        let effectiveModel = model
+        let effectiveEffort = effort
+        if (effectiveModel === undefined && typeof ctx.consume === 'function') {
+          for (const entry of ctx.consume<DefaultChildModelCapability>(DEFAULT_CHILD_MODEL_CAPABILITY_ID)) {
+            const resolved = entry.impl?.resolveDefaultChildModel(admission.coordinatorConversationId)
+            if (resolved !== undefined) {
+              effectiveModel = resolved.model
+              if (effectiveEffort === undefined && resolved.thinkingLevel !== undefined && resolved.thinkingLevel.trim() !== '') {
+                effectiveEffort = resolved.thinkingLevel.trim()
+              }
+              break
+            }
+          }
+        }
         const created = sourceConvId !== undefined
           ? await ctx.host.forkConversation(sourceConvId, {
               ...(input.forkEntryId !== undefined ? { entryId: input.forkEntryId } : {}),
-              title: workerTitle, parentConversationId: admission.coordinatorConversationId,
+              title: workerTitle, parentConversationId: admission.coordinatorConversationId, ownedBy: 'helmx',
             })
           : await ctx.host.createConversation({
               title: workerTitle, profileId: targetProfile, tags: [WORKER_TAG],
               parentConversationId: admission.coordinatorConversationId, nodeId: finalNodeId, cwd: finalCwd,
-              ...(model ? { model } : {}),
+              ownedBy: 'helmx',
+              ...(effectiveModel ? { model: effectiveModel } : {}),
             })
         createdId = created.id
 
         const now = Date.now()
-        ctx.host.markConversationOwnership(created.id, 'helmx')
-        if (sourceConvId !== undefined || effort) {
+        if (sourceConvId !== undefined || effectiveEffort !== undefined) {
           await ctx.host.updateConversation(created.id, {
             profileId: targetProfile, tags: [WORKER_TAG], nodeId: finalNodeId, cwd: finalCwd,
-            ...(model ? { model } : {}), ...(effort ? { thinkingLevel: effort } : {}),
+            ...(effectiveModel ? { model: effectiveModel } : {}),
+            ...(effectiveEffort ? { thinkingLevel: effectiveEffort } : {}),
           })
         }
 

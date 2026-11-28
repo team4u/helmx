@@ -440,3 +440,46 @@ it('createBackgroundReporter 契约矩阵：kind × 终态（completed/failed/ab
   assert.equal(submits.filter((s) => s.opts.meta['kind'] === 'subagent_report').length, statuses.length)
   assert.equal(submits.filter((s) => s.opts.meta['kind'] === 'workflow_report').length, statuses.length)
 })
+
+it('createBackgroundReporter 忙时策略：parent working 且 runtimeModelOverride=true 时降级 followUp，其余仍 steer', timeout, async () => {
+  interface RecordedSubmit {
+    conversationId: number
+    opts: { origin: 'agent'; whenBusy: 'steer' | 'followUp'; requestId: string; meta: Record<string, unknown> }
+  }
+  const cases: Array<{
+    label: string
+    parent: { id: number; status?: string; runtimeModelOverride?: boolean }
+    expected: 'steer' | 'followUp'
+  }> = [
+    { label: 'working + runtimeModelOverride=true', parent: { id: 1, status: 'working', runtimeModelOverride: true }, expected: 'followUp' },
+    { label: 'working + runtimeModelOverride=false', parent: { id: 1, status: 'working', runtimeModelOverride: false }, expected: 'steer' },
+    { label: 'working + runtimeModelOverride omitted', parent: { id: 1, status: 'working' }, expected: 'steer' },
+    { label: 'idle + runtimeModelOverride=true', parent: { id: 1, status: 'idle', runtimeModelOverride: true }, expected: 'steer' },
+  ]
+
+  for (const [idx, c] of cases.entries()) {
+    const submits: RecordedSubmit[] = []
+    const reporter = createBackgroundReporter({
+      getConversation: () => c.parent,
+      emitEvent: () => {},
+      submitInput: async (conversationId, _text, opts) => {
+        submits.push({ conversationId, opts })
+      },
+      isConversationCancelling: () => false,
+      listActiveRuns: () => [],
+    })
+    const run: WorkflowRunSummary = {
+      id: `wf_busy_policy_${idx}`,
+      name: 'busy-policy',
+      conversationId: 1,
+      kind: 'subagent',
+      status: 'completed',
+      createdAt: 1,
+      updatedAt: 2,
+      result: { ok: true },
+    }
+    await reporter.deliver(run, { parentConversationId: 1, agentType: 'worker' })
+    assert.equal(submits.length, 1, c.label)
+    assert.equal(submits[0]!.opts.whenBusy, c.expected, `case ${c.label}`)
+  }
+})

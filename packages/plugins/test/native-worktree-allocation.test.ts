@@ -13,6 +13,7 @@ import { SecretStash } from '@helmx/kernel'
 import { runNativeSpawn } from '@helmx/kernel/testing'
 import { WorktreeAllocator, type ManagedWorktreeRecord } from '../src/worktree/worktree.js'
 import { WORKTREES_KV_NAMESPACE } from '../src/worktree/worktree-store.js'
+import { resolveWorktreeContextSection } from '../src/worktree/worktree-context.js'
 import { extractWorktreeExecutionMeta } from '../src/contracts.js'
 import {
   createGitTemplate,
@@ -87,13 +88,15 @@ describe('原生 isolation: worktree 基础链路', { timeout: 60_000 }, () => {
       assert.equal(th.mirrors.get(childId)?.cwd, wtPath, '子会话镜像 cwd 应为 worktree 目录')
       const prompt = await childPromptText(th.harness, childId)
       assert.ok(prompt.includes('在 worktree 里执行 pwd'), 'prompt 应原样提交给子会话')
-      // 每次启动都注入 worktree 上下文（干净源也不例外）。
-      assert.ok(prompt.includes('<worktree_context>'), `干净源也应注入 worktree 上下文：${prompt.slice(-400)}`)
-      assert.ok(prompt.includes('git add') && prompt.includes('git commit'), '上下文应提醒结束回合前提交改动')
+      // worktree 上下文统一由 before_turn 段落注入，不再拼接进子会话提示词。
+      assert.ok(!prompt.includes('<worktree_context>'), `spawn 提示词不应重复拼接 <worktree_context>：${prompt.slice(-400)}`)
       // gate 在 worktree 目录内执行：gate 命令校验 pwd 与 worktree 一致
       //（HELMX_EXPECTED_WT 由下方第二次调用验证；首次用 gate 已通过的事实）。
       const allocatorRecord = th.allocator.findActive({ path: wtPath })
       assert.ok(allocatorRecord, '受管记录应已登记')
+      const section = resolveWorktreeContextSection(allocatorRecord)
+      assert.ok(section && section.text.includes('<worktree_context>'), 'before_turn 段落应提供 <worktree_context>')
+      assert.ok(section!.text.includes('git add') && section!.text.includes('git commit'), '段落应提醒结束回合前提交改动')
       assert.equal(allocatorRecord!.branch, wtBranch)
       assert.equal(allocatorRecord!.origin, 'native')
       assert.equal(allocatorRecord!.dirtySource, false, '干净源仓库 dirtySource 应为 false')
@@ -208,7 +211,7 @@ describe('非 Git 目录显式拒绝', { timeout: 60_000 }, () => {
 })
 
 describe('dirty 源仓库诚实提示', { timeout: 60_000 }, () => {
-  it('dirtySource 如实记录；子代理 prompt 含 <worktree_context>（dirty 提示 + 提交提醒）', { timeout: 60_000 }, async () => {
+  it('dirtySource 如实记录；before_turn 段落含 <worktree_context>（dirty 提示 + 提交提醒）且 prompt 不重复注入', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 't4')
     const repo = makeGitRepo(join(dir, 'repo'))
     // 源工作区制造未提交修改（不 commit）。
@@ -231,11 +234,13 @@ describe('dirty 源仓库诚实提示', { timeout: 60_000 }, () => {
       assert.equal(record!.dirtySource, true, 'dirty 源仓库应如实记录 dirtySource=true')
       // 隔离工作树不包含源工作区未提交文件。
       assert.ok(!existsSync(join(record!.path, 'uncommitted.txt')), '隔离工作树基于 HEAD，不应包含源未提交文件')
-      // 子代理收到的 prompt 含诚实提示（每次启动都注入 worktree 上下文）。
+      // prompt 保持干净，不重复拼接 <worktree_context>；由 resolveWorktreeContextSection 统一产出诚实提示。
       const prompt = await childPromptText(th.harness, childId)
-      assert.ok(prompt.includes('<worktree_context>'), `prompt 应含 worktree 上下文：${prompt.slice(-400)}`)
-      assert.ok(prompt.includes('不包含源工作区未提交的改动'), 'dirty 源应说明不含未提交改动')
-      assert.ok(prompt.includes(record!.branch), '上下文应含分支名')
+      assert.ok(!prompt.includes('<worktree_context>'), `prompt 不应重复注入 <worktree_context>：${prompt.slice(-400)}`)
+      const section = resolveWorktreeContextSection(record)
+      assert.ok(section && section.text.includes('<worktree_context>'), 'before_turn 段落应含 <worktree_context>')
+      assert.ok(section!.text.includes('不包含源工作区未提交的改动'), 'dirty 源段落应说明不含未提交改动')
+      assert.ok(section!.text.includes(record!.branch), '段落应含分支名')
     } finally {
       await th.close()
     }
@@ -278,13 +283,15 @@ describe('resume 续接绑定 worktree 的子会话', { timeout: 60_000 }, () =>
       assert.equal(resumedWt!.path, firstWt!.path, 'resume 应沿用原 worktree 路径')
       assert.equal(resumedWt!.branch, firstWt!.branch, 'resume 应沿用原 worktree 分支')
       assert.equal(th.mirrors.size, 1, 'resume 不得新建子会话')
-      // resume 也每次注入 worktree 上下文。
+      // resume 也不在 prompt 重复拼接，统一由 before_turn 段落注入。
       const resumedPrompt = await childPromptText(th.harness, childId)
-      assert.ok(resumedPrompt.includes('<worktree_context>'), 'resume 也应注入 worktree 上下文')
+      assert.ok(!resumedPrompt.includes('<worktree_context>'), 'resume prompt 不应重复注入 <worktree_context>')
       // 受管记录仍只有一条 active（未二次创建）。
       const record = th.allocator.getForConversation(childId)
       assert.ok(record)
       assert.equal(record!.path, firstWt!.path)
+      const resumedSection = resolveWorktreeContextSection(record)
+      assert.ok(resumedSection && resumedSection.text.includes('<worktree_context>'), 'resume 记录的 before_turn 段落仍生效')
     } finally {
       await th.close()
     }

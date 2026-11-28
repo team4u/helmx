@@ -368,7 +368,7 @@ test('T1-A: 原生后台单子代理（isolation:worktree + schema + gate）经 
 
     const childDetail = await k2.conversations.getConversationDetail(childId, { limit: 100 })
     const childInputs = childDetail.entries.filter((e) => e.kind === 'helmx.input')
-    assert.equal(childInputs.length, 1, 'requestId 幂等保证子会话绝无重复用户消息或重复 worktreeContextPrompt')
+    assert.equal(childInputs.length, 1, 'requestId 幂等保证子会话绝无重复用户消息')
 
     const worktrees = (await k2.plugins.invokeAction('builtin:worktree', 'list_worktrees', {})) as { worktrees: Array<{ path: string }> }
     assert.equal(worktrees.worktrees.length, 1, '绝不重复分配第二个 Worktree')

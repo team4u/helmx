@@ -15,10 +15,16 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 
-import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
+import { fauxAssistantMessage, fauxToolCall, type FauxResponseStep } from '@earendil-works/pi-ai/providers/faux'
 
 import { HelmxError } from '@helmx/protocol'
+import { createPluginBuildProvider } from '@helmx/plugin-build'
 import { actionToolResult } from '@helmx/kernel/testing'
+import { createHelmx } from '../../hub/src/app.js'
+import {
+  PLANNING_ORCHESTRATION_TOOLS_CAPABILITY_ID,
+  type PlanningOrchestrationToolsCapability,
+} from '../src/contracts.js'
 import {
   createGitTemplate,
   deferred,
@@ -38,8 +44,13 @@ import {
 } from './helpers/swarm-integration-env.js'
 import { createCollabGroupRuntime } from '../src/swarm/group-store.js'
 import type { CollabGroupRuntime } from '../src/swarm/contracts.js'
+import { FORKED_CHILD_CONTEXT_GUIDANCE } from '../src/shared-helpers.js'
+import { DUO_EXECUTE_SECTION_ID, DUO_PLAN_SECTION_ID, DUO_PLUGIN_ID } from '../src/duo.js'
+import { TIERS_PLUGIN_ID } from '../src/tiers.js'
+import { TITLE_PLUGIN_ID } from '../src/title.js'
 import {
   SWARM_PLUGIN_ID,
+  SWARM_TOOL_NAMES,
   WORKER_TAG,
   resolveSwarmConfig,
   type BoardPost,
@@ -573,7 +584,7 @@ describe('builtin:swarm board routing, settlement & self-healing', { concurrency
       assert.ok(forkedRwMeta, 'must capture forked_rw request metadata')
       const rwSec = forkedRwMeta.sectionsById['swarm.active_group'] ?? ''
       assert.match(rwSec, /^<active_swarm_group[\s\S]*4\. Context boundary:/, 'forked readwrite worker must receive rule 4 context boundary')
-      assert.ok(rwSec.includes('ALREADY fulfilled by dispatching you'))
+      assert.ok(rwSec.includes(FORKED_CHILD_CONTEXT_GUIDANCE))
       for (const stripped of ['subagent', 'SubagentWorkflow', 'swarm_create_group', 'swarm_dispatch_worker']) {
         assert.equal(forkedRwMeta.toolNames.includes(stripped), false, `forked_rw must strip ${stripped}`)
       }
@@ -1557,5 +1568,157 @@ describe('builtin:swarm board routing, settlement & self-healing', { concurrency
     } finally {
       await app3.close()
     }
+  })
+
+  test('swarm-int16: Duo + Swarm integration keeps SWARM_TOOL_NAMES in planning phase, keeps coordinator on Planner, inherits executorModel with atomic ownedBy=helmx, and honors explicit worker model', { timeout: 60_000 }, async (t) => {
+    const root = mkdtempSync(join(tmpdir(), 'helmx-swarm-duo-it-'))
+    const repoDir = join(root, 'repo')
+    const dataDir = join(root, 'data')
+    gitTemplate.cloneTo(repoDir)
+
+    const faux = makeFauxProvider({
+      models: [
+        { id: 'flagship', name: 'Flagship', reasoning: true },
+        { id: 'coder', name: 'Coder', reasoning: true },
+        { id: 'fast', name: 'Fast', reasoning: true },
+      ],
+    })
+    const app = await createHelmx({
+      buildProvider: createPluginBuildProvider(),
+      dataDir,
+      cwd: repoDir,
+      model: 'faux/flagship',
+      providers: [faux.provider],
+    })
+    t.after(async () => {
+      await app.close().catch(() => {})
+      rmSync(root, { recursive: true, force: true })
+    }, { timeout: 60_000 })
+
+    const { kernel } = app
+    await kernel.plugins.setConfig(TITLE_PLUGIN_ID, { autoTitle: false })
+
+    // Verify builtin:swarm exposes all SWARM_TOOL_NAMES via PLANNING_ORCHESTRATION_TOOLS_CAPABILITY_ID
+    const planningCaps = kernel.plugins.consumeCapability<PlanningOrchestrationToolsCapability>(
+      PLANNING_ORCHESTRATION_TOOLS_CAPABILITY_ID,
+    )
+    const swarmPlanCap = planningCaps.find((entry) => entry.pluginId === SWARM_PLUGIN_ID)
+    assert.ok(swarmPlanCap, 'builtin:swarm must provide PLANNING_ORCHESTRATION_TOOLS_CAPABILITY_ID')
+    for (const toolName of SWARM_TOOL_NAMES) {
+      assert.ok(swarmPlanCap!.impl.toolNames.includes(toolName), `planning orchestration whitelist must include ${toolName}`)
+    }
+
+    await kernel.plugins.invokeAction(TIERS_PLUGIN_ID, 'set', {
+      id: 'coder',
+      model: 'faux/coder',
+      thinkingLevel: 'low',
+    })
+
+    const coord = await kernel.conversations.createConversation({
+      title: 'Duo Swarm Coordinator',
+      profileId: 'assistant',
+      cwd: repoDir,
+    })
+    await kernel.plugins.invokeAction(DUO_PLUGIN_ID, 'set_conversation', {
+      conversationId: coord.id,
+      enabled: true,
+      executorModel: 'tier/coder',
+    })
+
+    const observed: Array<{
+      who: string
+      modelId: string
+      toolNames: string[]
+      sectionsById: Record<string, string>
+    }> = []
+    let createdGroup = false
+    let dispatchedWorkers = false
+    const workerSteps = new Map<string, number>()
+
+    const router: FauxResponseStep = (ctx, _opts, _state, model) => {
+      const meta = captureRequestMeta(ctx.messages as unknown as Record<string, unknown>[])
+      const groupSec = meta.sectionsById['swarm.active_group'] ?? ''
+      const workerMatch = /role="worker" name="([^"]+)"/.exec(groupSec)
+      const modelId = `${model.provider}/${model.id}`
+
+      if (workerMatch) {
+        const workerName = workerMatch[1]!
+        const stepIdx = workerSteps.get(workerName) ?? 0
+        workerSteps.set(workerName, stepIdx + 1)
+        observed.push({ who: workerName, modelId, ...meta })
+        if (stepIdx === 0) {
+          return fauxAssistantMessage(
+            [fauxToolCall('swarm_board_post', { to: ['coordinator'], kind: 'done', body: `${workerName} finished.` })],
+            { stopReason: 'toolUse' },
+          )
+        }
+        return fauxAssistantMessage(`${workerName} acknowledged.`)
+      }
+
+      observed.push({ who: 'coordinator', modelId, ...meta })
+      if (!createdGroup) {
+        createdGroup = true
+        return fauxAssistantMessage(
+          [fauxToolCall('swarm_create_group', { title: 'Duo Swarm Squad' })],
+          { stopReason: 'toolUse' },
+        )
+      }
+      if (!dispatchedWorkers) {
+        dispatchedWorkers = true
+        return fauxAssistantMessage(
+          [
+            fauxToolCall('swarm_dispatch_worker', { name: 'auto_w', prompt: 'Implement inherited slice.' }, { id: 'call_auto' }),
+            fauxToolCall('swarm_dispatch_worker', { name: 'fast_w', prompt: 'Implement explicit fast slice.', model: 'faux/fast' }, { id: 'call_fast' }),
+          ],
+          { stopReason: 'toolUse' },
+        )
+      }
+      return fauxAssistantMessage('Coordinator synthesized squad reports.')
+    }
+    faux.setResponses(Array.from({ length: 16 }, () => router))
+
+    await kernel.conversations.submitInput(coord.id, 'Plan and orchestrate two workers')
+    await kernel.conversations.waitForIdle(coord.id)
+    await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0, { timeoutMs: CHAIN_WAIT_MS })
+    await kernel.conversations.waitForIdle(coord.id)
+
+    const coordSteps = observed.filter((entry) => entry.who === 'coordinator')
+    assert.ok(coordSteps.length >= 2, 'coordinator must execute at least planning + dispatch turns')
+    const initialPlanningStep = coordSteps[0]!
+    assert.ok(initialPlanningStep.sectionsById[DUO_PLAN_SECTION_ID] !== undefined, 'step 1 must run in Duo planning phase')
+    assert.equal(initialPlanningStep.toolNames.includes('write'), false, 'Duo planning phase must still strip coding tools')
+    assert.ok(initialPlanningStep.toolNames.includes('swarm_create_group'), 'Duo planning phase must keep swarm_create_group')
+    const postGroupStep = coordSteps[1]!
+    for (const toolName of SWARM_TOOL_NAMES.filter((name) => name !== 'swarm_create_group')) {
+      assert.ok(postGroupStep.toolNames.includes(toolName), `coordinator step must expose ${toolName}`)
+    }
+    assert.ok(coordSteps.every((step) => step.modelId === 'faux/flagship'), 'coordinator must always stay on Planner model')
+
+    const childConvs = kernel.conversations.listConversations({ parentConversationId: coord.id })
+    const autoConv = childConvs.find((c) => c.title.includes('@auto_w'))
+    const fastConv = childConvs.find((c) => c.title.includes('@fast_w'))
+    assert.ok(autoConv && fastConv, 'both workers must exist as child conversations')
+    await kernel.conversations.waitForIdle(autoConv!.id)
+    await kernel.conversations.waitForIdle(fastConv!.id)
+
+    assert.equal(kernel.conversations.getConversation(autoConv!.id).ownedBy, 'helmx', 'auto_w must be atomically owned by helmx')
+    assert.equal(kernel.conversations.getConversation(fastConv!.id).ownedBy, 'helmx', 'fast_w must be atomically owned by helmx')
+    assert.equal(autoConv!.model, 'faux/coder', 'worker omitting model must inherit Duo executorModel')
+    assert.equal(fastConv!.model, 'faux/fast', 'worker with explicit model must override Duo executorModel')
+
+    const autoSteps = observed.filter((entry) => entry.who === 'auto_w')
+    const fastSteps = observed.filter((entry) => entry.who === 'fast_w')
+    assert.ok(autoSteps.length >= 1 && autoSteps.every((s) => s.modelId === 'faux/coder'), 'auto_w runtime must run on faux/coder')
+    assert.ok(fastSteps.length >= 1 && fastSteps.every((s) => s.modelId === 'faux/fast'), 'fast_w runtime must run on faux/fast')
+
+    // Follow-up coordinator turn retains Planner posture & suppresses Duo plan/execute prompts
+    const beforeFollowUp = observed.length
+    await kernel.conversations.submitInput(coord.id, 'Review worker progress')
+    await kernel.conversations.waitForIdle(coord.id)
+    const followUpCoord = observed.slice(beforeFollowUp).filter((entry) => entry.who === 'coordinator')
+    assert.ok(followUpCoord.length >= 1)
+    assert.equal(followUpCoord[0]!.modelId, 'faux/flagship')
+    assert.equal(followUpCoord[0]!.sectionsById[DUO_PLAN_SECTION_ID], undefined)
+    assert.equal(followUpCoord[0]!.sectionsById[DUO_EXECUTE_SECTION_ID], undefined)
   })
 })

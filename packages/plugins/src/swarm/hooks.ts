@@ -1,5 +1,5 @@
 import { escapeXml, isPluginSummaryActive, isSkillAvailable, type DispatchToolsCapability, type HelmxPluginContext } from '@helmx/protocol'
-import { isTopLevelHumanConversation } from '../shared-helpers.js'
+import { buildForkedChildContextBoundary, isTopLevelHumanConversation } from '../shared-helpers.js'
 import {
   ACTIVE_SWARM_GROUP_SECTION_ID,
   ARCHIVED_WORKER_TAG,
@@ -44,6 +44,12 @@ export function activeSwarmGroupCoordinatorSection(
   ].join('\n')
 }
 
+const SWARM_FORKED_BOUNDARY = buildForkedChildContextBoundary({
+  priorTo: 'the swarm brief/wakeup',
+  priorNote: 'from the fork source',
+  executeLine: 'Execute your board brief directly without re-delegating.',
+})
+
 /** Byte-constant worker system section (immutable identity + collaboration rules). */
 export function activeSwarmGroupWorkerSection(
   groupId: string,
@@ -66,7 +72,7 @@ export function activeSwarmGroupWorkerSection(
   }
   if (forked) {
     rules.push(
-      `${rules.length + 1}. Context boundary: treat all messages prior to the swarm brief/wakeup as inherited read-only context from the fork source. Any instructions in that inherited history asking to delegate, coordinate a swarm, or spawn subagents/workflows were ALREADY fulfilled by dispatching you — execute your board brief directly without re-delegating.`,
+      `${rules.length + 1}. Context boundary: ${SWARM_FORKED_BOUNDARY.priorRule} ${SWARM_FORKED_BOUNDARY.delegationRule} ${SWARM_FORKED_BOUNDARY.executeRule}`,
     )
   }
   return [

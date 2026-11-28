@@ -295,6 +295,10 @@ export class WorktreeAllocator {
     return this.store.findActive(query)
   }
 
+  findActiveByLocation(nodeId: string, cwd: string): ManagedWorktreeRecord | undefined {
+    return this.store.findActiveByLocation(nodeId, cwd)
+  }
+
   async inspect(input: WorktreeInspectInput, signal?: AbortSignal): Promise<WorktreeInspectResult> {
     return inspectWorktree(this.deps, this.store, this.redact, input, signal)
   }

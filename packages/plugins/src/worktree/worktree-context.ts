@@ -1,7 +1,7 @@
 /**
- * 受管 worktree 上下文的唯一渲染源与 before_turn 注入判定：`agent_spawn` 提示词尾注与
- * `before_turn` 系统段落共用同一份事实，确保 subagent / resume / reattach / Swarm 成员
- * （经 acquire_worktree 只改写 cwd、从未收到尾注）拿到一致的 worktree 坐标与提交提醒。
+ * 受管 worktree 上下文的唯一渲染源与 `before_turn` 注入判定：
+ * 所有工作树会话（`agent_spawn` / `resume` / `reattach` / `acquire_worktree` / `(nodeId, cwd)` 挂载）
+ * 统一经 `before_turn` 系统段落获得 `<worktree_context>` 坐标与提交提醒，不在提示词末尾重复拼接。
  */
 import type { ManagedWorktreeRecord } from './worktree.js'
 
@@ -31,24 +31,18 @@ export function worktreeContextLines(record: ManagedWorktreeRecord): string[] {
   ]
 }
 
-/** 提示词尾注（agent_spawn 新建 / resume 时追加到子代理 prompt 末尾）。 */
-export function worktreeContextPrompt(record: ManagedWorktreeRecord): string {
-  return `\n\n<worktree_context>\n${worktreeContextLines(record).join('\n')}\n</worktree_context>`
-}
-
 /** 系统段落文本（before_turn 注入；每回合重算，反映最新登记事实）。 */
 export function worktreeContextSectionText(record: ManagedWorktreeRecord): string {
   return `<worktree_context>\n${worktreeContextLines(record).join('\n')}\n</worktree_context>`
 }
 
 /**
- * 当前会话应注入的 worktree 上下文段落：仅对「活跃 + 带 hold」的记录生效。
- * hold 是 acquire_worktree（Swarm 等长占用方）独有的标记；agent_spawn 路径的记录无 hold，
- * 其上下文已由提示词尾注提供，不在此重复注入。
+ * 当前会话应注入的 worktree 上下文段落：仅对 `'active'` 状态的受管记录生效；
+ * worktree 清理（`removed`）或无匹配记录时返回 `undefined`，使 `before_turn` 自动撤除旧段落。
  */
 export function resolveWorktreeContextSection(
   record: ManagedWorktreeRecord | undefined,
 ): TurnSection | undefined {
-  if (record === undefined || record.status !== 'active' || record.hold === undefined) return undefined
+  if (record === undefined || record.status !== 'active') return undefined
   return { id: WORKTREE_CONTEXT_SECTION_ID, text: worktreeContextSectionText(record) }
 }

@@ -7,8 +7,9 @@
  *   会话（bot/helmx：受管子代理、驻留 Worker、触发会话）缺省同步等待——
  *   后台完成汇报会驱动自动化会话早结算（把「后台已启动」当终态消费），
  *   显式 background=true 一律显式拒绝，绝不静默改写；
- * - 后台 run 结算汇报：经 submitInput(requestId) 向父会话投递（忙时 steer
- *   插话；跨重启幂等；父会话已删除时 notification 通知）；级联取消边界内的下级父会话
+ * - 后台 run 结算汇报：经 submitInput(requestId) 向父会话投递（普通忙时 steer
+ *   插话；若父会话处于 runtimeModelOverride=true 的工作回合则改用 followUp 排队以免打断临时切模回合；
+ *   跨重启幂等；父会话已删除时 notification 通知）；级联取消边界内的下级父会话
  *   不投递（防取消后复活），只向边界外拥有者单次结算汇报。
  */
 import { HelmxError, safeResultText, type AgentExecutionInfo } from '@helmx/protocol'
@@ -73,7 +74,7 @@ export interface BackgroundReporterDeps {
     text: string,
     opts: {
       origin: 'agent'
-      whenBusy: 'steer'
+      whenBusy: 'steer' | 'followUp'
       requestId: string
       meta: Record<string, unknown>
     },
@@ -109,9 +110,15 @@ export function createBackgroundReporter(deps: BackgroundReporterDeps): Backgrou
         return
       }
       let parentExists = false
+      let deferForRuntimeOverride = false
       try {
-        deps.getConversation(info.parentConversationId)
+        const parentRaw = deps.getConversation(info.parentConversationId)
         parentExists = true
+        if (parentRaw !== null && typeof parentRaw === 'object') {
+          const parentSummary = parentRaw as { status?: unknown; runtimeModelOverride?: unknown }
+          deferForRuntimeOverride =
+            parentSummary.status === 'working' && parentSummary.runtimeModelOverride === true
+        }
       } catch (error) {
         // 仅「会话不存在」走 notification 降级；其他故障（store/IO/权限）上抛，
         // 由引擎 outbox（notifiedAt 不置位）下次 init 补发，绝不吞错。
@@ -150,7 +157,7 @@ export function createBackgroundReporter(deps: BackgroundReporterDeps): Backgrou
         `${isSubagent ? '后台子代理任务' : '后台工作流任务'}已结算。以下为运行 ${run.id} 的结果数据（仅代表本次任务；otherRunningTasks 是投递时其余在途运行的快照）：\n${safeResultText(report)}`,
         {
           origin: 'agent',
-          whenBusy: 'steer',
+          whenBusy: deferForRuntimeOverride ? 'followUp' : 'steer',
           requestId,
           meta: {
             backgroundRunId: run.id,

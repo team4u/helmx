@@ -9,7 +9,10 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { HelmxError, type ConversationSummary, type MaybePromise, type PluginDefinition, type PluginToolContext } from '@helmx/protocol'
-import { WORKFLOW_PLUGIN_ID } from '../src/contracts.js'
+import { PLANNING_ORCHESTRATION_TOOLS_CAPABILITY_ID, WORKFLOW_PLUGIN_ID, type PlanningOrchestrationToolsCapability } from '../src/contracts.js'
+import { FORKED_CHILD_CONTEXT_GUIDANCE } from '../src/shared-helpers.js'
+import { WORKFLOW_STEER_TOOL_NAME } from '../src/workflow/actions.js'
+import { WORKFLOW_FORKED_CONTEXT_SECTION } from '../src/workflow/hooks.js'
 import { resolveActionId } from '../src/workflow/runs/index.js'
 import { PluginHost } from '@helmx/kernel'
 import { PluginHostBackendFixtureBase } from '../../kernel/test/helpers/plugin-host-backend.js'
@@ -1020,4 +1023,19 @@ test('Workflow DSL resolveActionId excludes core:* from short-name resolution wh
       err.message.includes('core:conversations.list') &&
       err.message.includes('core:profiles.list'),
   )
+})
+
+test('builtin:workflow 提供规划阶段编排工具白名单，且分叉上下文边界复用 FORKED_CHILD_CONTEXT_GUIDANCE', { timeout: 60_000 }, async () => {
+  const host = makeHost()
+  const { createWorkflowPlugin } = await import('../src/workflow.js')
+  await host.register(createWorkflowPlugin())
+  try {
+    const caps = host.consumeCapability<PlanningOrchestrationToolsCapability>(PLANNING_ORCHESTRATION_TOOLS_CAPABILITY_ID)
+    assert.equal(caps.length, 1)
+    assert.equal(caps[0]!.pluginId, WORKFLOW_PLUGIN_ID)
+    assert.deepEqual([...caps[0]!.impl.toolNames], ['subagent', 'SubagentWorkflow', WORKFLOW_STEER_TOOL_NAME])
+    assert.ok(WORKFLOW_FORKED_CONTEXT_SECTION.includes(FORKED_CHILD_CONTEXT_GUIDANCE))
+  } finally {
+    await host.dispose()
+  }
 })

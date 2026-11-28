@@ -78,8 +78,11 @@ export function createWorktreePlugin(): PluginDefinition {
       }, { priority: 200 })
 
       ctx.hook.onBeforeTurn((turn) => {
-        // acquire_worktree 会话没有 agent_spawn 尾注；按当前 hold 更新唯一命名段落，释放 hold 后撤销旧信息。
-        const contextSection = resolveWorktreeContextSection(isolation.allocator.getForConversation(turn.conversation.id))
+        // 单轨注入：所有活跃工作树（agent_spawn / acquire_worktree / (nodeId, cwd)）统一在 before_turn 注入，清理后自动撤除。
+        const activeRecord =
+          isolation.allocator.findActive({ conversationId: turn.conversation.id }) ??
+          isolation.allocator.findActiveByLocation(turn.conversation.nodeId ?? 'local', turn.conversation.cwd)
+        const contextSection = resolveWorktreeContextSection(activeRecord)
         const sections = turn.sections.filter((section) => section.id !== WORKTREE_CONTEXT_SECTION_ID)
         if (contextSection !== undefined) sections.push(contextSection)
         const sectionsChanged = sections.length !== turn.sections.length || sections.some((section, i) => {

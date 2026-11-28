@@ -30,7 +30,7 @@ import { WORKTREE_SKILL_ID } from '../src/worktree.js'
 import {
   resolveWorktreeContextSection,
   WORKTREE_CONTEXT_SECTION_ID,
-  worktreeContextPrompt,
+  worktreeContextSectionText,
 } from '../src/worktree/worktree-context.js'
 import {
   createGitTemplate,
@@ -839,7 +839,7 @@ describe('ManagedWorktreeHold 与隐藏内部动作 acquire_worktree / release_w
     }
   })
 
-  it('真实 PluginHost before_turn：Swarm hold 注入上下文，释放后撤销上下文', {
+  it('真实 PluginHost before_turn：active 记录按 conversationId 与 (nodeId, cwd) 注入上下文，cleanup 后撤销', {
     timeout: 60_000,
   }, async () => {
     const dir = join(rootDir, 't22-context-hook')
@@ -875,7 +875,7 @@ describe('ManagedWorktreeHold 与隐藏内部动作 acquire_worktree / release_w
         },
         {},
         caller,
-      )) as { worktreeId: string }
+      )) as { worktreeId: string; path: string }
 
       const injected = await host.runHook('before_turn', baseTurn)
       assert.equal(injected.action, 'transform')
@@ -883,7 +883,40 @@ describe('ManagedWorktreeHold 与隐藏内部动作 acquire_worktree / release_w
       const context = injected.value.sections.find((section) => section.id === WORKTREE_CONTEXT_SECTION_ID)
       assert.ok(context, '真实 before_turn 应注入 worktree_context')
       assert.ok(context!.text.includes(acquired.worktreeId), '注入段落应包含真实 worktreeId')
-      assert.ok(injected.value.tools.some((tool) => tool.name === 'cleanup_worktree'), '活跃 hold 不应剥离 cleanup 工具')
+      assert.ok(injected.value.tools.some((tool) => tool.name === 'cleanup_worktree'), '活跃 worktree 不应剥离 cleanup 工具')
+
+      // 未显式绑定 conversationId 的会话只要 (nodeId, cwd) 落在活跃 worktree 内也走同一 before_turn 路径注入
+      const byLocation = await host.runHook('before_turn', {
+        ...baseTurn,
+        conversation: makeConversationSummary({
+          id: 33,
+          nodeId: 'local',
+          cwd: join(acquired.path, 'nested'),
+          model: '',
+          createdAt: 1,
+          updatedAt: 1,
+        }),
+      })
+      assert.equal(byLocation.action, 'transform')
+      if (byLocation.action !== 'transform') throw new Error('同节点目录命中应返回 transform')
+      const locationContext = byLocation.value.sections.find((section) => section.id === WORKTREE_CONTEXT_SECTION_ID)
+      assert.ok(locationContext && locationContext.text.includes(acquired.worktreeId), '(nodeId, cwd) 命中应注入同一工作树上下文')
+
+      // nodeId 不匹配时绝不跨节点误命中同路径
+      const wrongNode = await host.runHook('before_turn', {
+        ...baseTurn,
+        conversation: makeConversationSummary({
+          id: 34,
+          nodeId: 'remote-x',
+          cwd: acquired.path,
+          model: '',
+          createdAt: 1,
+          updatedAt: 1,
+        }),
+      })
+      assert.equal(wrongNode.action, 'transform')
+      if (wrongNode.action !== 'transform') throw new Error('不同节点不应命中 local worktree')
+      assert.ok(!wrongNode.value.sections.some((section) => section.id === WORKTREE_CONTEXT_SECTION_ID), '跨节点同路径不得注入')
 
       await host.invokeAction(
         'builtin:worktree',
@@ -897,16 +930,32 @@ describe('ManagedWorktreeHold 与隐藏内部动作 acquire_worktree / release_w
         sections: injected.value.sections,
       })
       assert.equal(afterRelease.action, 'transform')
-      if (afterRelease.action !== 'transform') throw new Error('释放后 before_turn 应返回 transform 以撤销旧段落')
-      assert.ok(!afterRelease.value.sections.some((section) => section.id === WORKTREE_CONTEXT_SECTION_ID), '释放 hold 后不得保留旧上下文')
+      if (afterRelease.action !== 'transform') throw new Error('释放 hold 后工作树仍 active，before_turn 应继续注入')
+      assert.ok(afterRelease.value.sections.some((section) => section.id === WORKTREE_CONTEXT_SECTION_ID), '释放 hold 但未 cleanup 时工作树仍 active，上下文应继续保持')
       assert.ok(afterRelease.value.tools.some((tool) => tool.name === 'cleanup_worktree'), '解除 hold 不会移除仍 active 的工作树')
+
+      await host.invokeAction(
+        'builtin:worktree',
+        'cleanup_worktree',
+        { worktreeId: acquired.worktreeId, deleteBranch: true },
+        {},
+        caller,
+      )
+      const afterCleanup = await host.runHook('before_turn', {
+        ...baseTurn,
+        sections: afterRelease.value.sections,
+      })
+      assert.equal(afterCleanup.action, 'transform')
+      if (afterCleanup.action !== 'transform') throw new Error('cleanup 后 before_turn 应返回 transform 以撤销旧段落')
+      assert.ok(!afterCleanup.value.sections.some((section) => section.id === WORKTREE_CONTEXT_SECTION_ID), 'cleanup 后不得保留旧上下文')
+      assert.ok(!afterCleanup.value.tools.some((tool) => tool.name === 'cleanup_worktree'), 'cleanup 后应剥离 cleanup 工具')
     } finally {
       await close()
       rmSync(dir, { recursive: true, force: true })
     }
   })
 
-  it('before_turn 上下文段落：hold 记录注入、spawn 记录（无 hold）与 removed 记录不注入', {
+  it('before_turn 上下文段落：所有 active 记录均注入（无论是否带 hold），undefined 与 removed 不注入', {
     timeout: 60_000,
   }, async () => {
     const dir = join(rootDir, 't22-context-section')
@@ -934,15 +983,9 @@ describe('ManagedWorktreeHold 与隐藏内部动作 acquire_worktree / release_w
       assert.ok(text.includes(`- baseCommit: ${held.baseCommit.slice(0, 12)}`), 'baseCommit 截断到 12 位')
       assert.ok(text.includes('不包含源工作区未提交的改动'), 'dirty 源须给出诚实提示')
       assert.ok(text.includes('git add') && text.includes('git commit'), '段落须提醒结束回合前提交改动')
+      assert.equal(text, worktreeContextSectionText(heldRecord!), 'resolveWorktreeContextSection 与 worktreeContextSectionText 为单一渲染源')
 
-      // 2) 与 agent_spawn 提示词尾注同源：两者共享同一组事实行，不产生分歧。
-      const prompt = worktreeContextPrompt(heldRecord)
-      assert.ok(
-        prompt.includes(text.slice('<worktree_context>\n'.length, -'\n</worktree_context>'.length)),
-        '段落正文应与提示词尾注正文完全一致（单一事实源）',
-      )
-
-      // 3) 释放 hold 后（记录仍 active）→ 不再注入：上下文回归仅提示词尾注路径。
+      // 2) 释放 hold 后记录仍 active → 依然由 before_turn 单一路径提供上下文。
       await th.isolation.releaseWorktreeHold({
         worktreeId: held.worktreeId,
         pluginId: 'builtin:swarm',
@@ -950,9 +993,10 @@ describe('ManagedWorktreeHold 与隐藏内部动作 acquire_worktree / release_w
       })
       const releasedRecord = th.isolation.getForConversation(31)
       assert.ok(releasedRecord && releasedRecord.status === 'active', '释放 hold 不改变 active 状态')
-      assert.equal(resolveWorktreeContextSection(releasedRecord), undefined, '无 hold 的活跃记录不注入段落')
+      const releasedSection = resolveWorktreeContextSection(releasedRecord)
+      assert.ok(releasedSection && releasedSection.text === worktreeContextSectionText(releasedRecord), '无 hold 的活跃记录仍统一经 before_turn 注入段落')
 
-      // 4) 无记录 / removed 记录 → 不注入。
+      // 3) 无记录 / removed 记录 → 不注入。
       assert.equal(resolveWorktreeContextSection(undefined), undefined, '无记录不注入')
       assert.equal(
         resolveWorktreeContextSection({ ...heldRecord, status: 'removed' }),
@@ -965,7 +1009,7 @@ describe('ManagedWorktreeHold 与隐藏内部动作 acquire_worktree / release_w
     }
   })
 
-  it('spawn 路径记录无 hold：不产生 before_turn 段落（上下文已由提示词尾注提供，不重复）', {
+  it('spawn 路径收敛单轨：prompt 不重复拼接 <worktree_context>，统一经 resolveWorktreeContextSection 注入', {
     timeout: 60_000,
   }, async () => {
     const dir = join(rootDir, 't22-context-spawn-no-section')
@@ -986,14 +1030,12 @@ describe('ManagedWorktreeHold 与隐藏内部动作 acquire_worktree / release_w
       const spawnRecord = th.isolation.getForConversation(childId)
       assert.ok(spawnRecord, 'spawn 路径应绑定子会话')
       assert.equal(spawnRecord.hold, undefined, 'spawn 路径记录不带 hold')
-      assert.equal(
-        resolveWorktreeContextSection(spawnRecord),
-        undefined,
-        'spawn 记录不注入 before_turn 段落（避免与提示词尾注重复）',
-      )
-      // 提示词尾注仍然存在（既有契约不变）。
+      const spawnSection = resolveWorktreeContextSection(spawnRecord)
+      assert.ok(spawnSection && spawnSection.id === WORKTREE_CONTEXT_SECTION_ID, 'spawn 活跃记录统一走 before_turn 段落注入')
+      assert.ok(spawnSection!.text.includes(spawnRecord.branch), 'before_turn 段落含 spawn worktree 分支')
       const prompt = await childPromptText(th.harness, childId)
-      assert.ok(prompt.includes('<worktree_context>'), 'spawn 提示词尾注契约保持不变')
+      assert.ok(prompt.includes('spawn 任务'), '原始提示词保留')
+      assert.ok(!prompt.includes('<worktree_context>'), 'spawn 提示词不再重复拼接 <worktree_context>')
     } finally {
       await th.close()
       rmSync(dir, { recursive: true, force: true })

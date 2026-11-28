@@ -398,6 +398,20 @@ export class WorktreeStore {
     return undefined
   }
 
+  /** Match the active managed worktree covering `(nodeId, cwd)` (exact path or subdirectory). */
+  findActiveByLocation(nodeId: string, cwd: string): ManagedWorktreeRecord | undefined {
+    if (typeof cwd !== 'string' || cwd.trim() === '') return undefined
+    const normalizedNode = nodeId.trim() || 'local'
+    const matches = this.records().filter(
+      (r) => r.status === 'active' && r.nodeId === normalizedNode && this.containsPath(r.path, cwd),
+    )
+    if (matches.length === 0) return undefined
+    return matches.reduce((best, cur) => {
+      if (cur.path.length !== best.path.length) return cur.path.length > best.path.length ? cur : best
+      return cur.createdAt >= best.createdAt ? cur : best
+    })
+  }
+
   resolveRecord(input: WorktreeRecordSelector, mode: WorktreeResolveMode): ManagedWorktreeRecord {
     validateWorktreeSelector(input, mode)
     const scopeHint =
