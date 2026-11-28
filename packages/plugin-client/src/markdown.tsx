@@ -9,7 +9,6 @@ import { useMemo } from 'react'
 import type { MouseEvent } from 'react'
 import Markdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { markdownUrlTransform } from './artifact-url.js'
 
 export interface MarkdownTextProps {
   text: string
@@ -41,7 +40,7 @@ export function MarkdownText({ text, onLinkClick }: MarkdownTextProps): React.JS
   }, [onLinkClick])
 
   return (
-    <Markdown remarkPlugins={[remarkGfm]} urlTransform={markdownUrlTransform} components={components}>
+    <Markdown remarkPlugins={[remarkGfm]} components={components}>
       {text}
     </Markdown>
   )

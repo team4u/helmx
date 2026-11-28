@@ -16,6 +16,9 @@ describe('workspace-file-url: isDisallowedFileUrl', { timeout: 60_000 }, () => {
     assert.equal(isDisallowedFileUrl('C:/etc/secret.txt'), true)
     assert.equal(isDisallowedFileUrl('d:\\repo\\a.ts'), true)
     assert.equal(isDisallowedFileUrl('\\\\server\\share\\a.ts'), true)
+    assert.equal(isDisallowedFileUrl('C:%5Cetc%5Csecret.txt'), true)
+    assert.equal(isDisallowedFileUrl('d:%5crepo%5ca.ts'), true)
+    assert.equal(isDisallowedFileUrl('%5C%5Cserver%5Cshare%5Ca.ts'), true)
     assert.equal(isDisallowedFileUrl('/etc/passwd'), false)
     assert.equal(isDisallowedFileUrl('https://example.com/file://foo'), false)
     assert.equal(isDisallowedFileUrl('docs/file.md'), false)
@@ -148,9 +151,34 @@ describe('workspace-file-url: parseWorkspaceFileRef', { timeout: 60_000 }, () =>
       parseWorkspaceFileRef('C:/repo/src/a.ts:7', { conversationCwd: 'C:\\repo' }),
       { path: 'src/a.ts', startLine: 7 },
     )
-    // Explicit #L fragment wins over the colon suffix when both are present.
+    assert.deepEqual(
+      parseWorkspaceFileRef('file:///repo/CHANGELOG.md:3', { conversationCwd: '/repo' }),
+      { path: 'CHANGELOG.md', startLine: 3 },
+    )
+    assert.deepEqual(
+      parseWorkspaceFileRef('file:///repo/src/a.ts:10-20', { conversationCwd: '/repo' }),
+      { path: 'src/a.ts', startLine: 10, endLine: 20 },
+    )
+    assert.deepEqual(
+      parseWorkspaceFileRef('file:///repo/src/a.ts:12:5-34:9', { conversationCwd: '/repo' }),
+      { path: 'src/a.ts', startLine: 12, endLine: 34 },
+    )
+    assert.deepEqual(
+      parseWorkspaceFileRef('file:///C:/Users/Alice/Repo/src/App.tsx:7', { conversationCwd: 'C:\\Users\\Alice\\Repo' }),
+      { path: 'src/App.tsx', startLine: 7 },
+    )
+    assert.deepEqual(
+      parseWorkspaceFileRef('C:%5CUsers%5CAlice%5CRepo%5Csrc%5CApp.tsx:7', { conversationCwd: 'C:\\Users\\Alice\\Repo' }),
+      { path: 'src/App.tsx', startLine: 7 },
+    )
+    // Explicit #L fragment wins over the colon suffix when both are present without leaking suffix endLine.
     assert.deepEqual(parseWorkspaceFileRef('src/app.ts:12#L30'), { path: 'src/app.ts', startLine: 30 })
     assert.deepEqual(parseWorkspaceFileRef('src/app.ts:12#L30-L40'), { path: 'src/app.ts', startLine: 30, endLine: 40 })
+    assert.deepEqual(parseWorkspaceFileRef('src/app.ts:12-34#L30'), { path: 'src/app.ts', startLine: 30 })
+    assert.deepEqual(
+      parseWorkspaceFileRef('file:///repo/src/a.ts:10-20#L30', { conversationCwd: '/repo' }),
+      { path: 'src/a.ts', startLine: 30 },
+    )
     // Invalid line numbers keep the suffix as part of the path (no silent rewrites).
     assert.deepEqual(parseWorkspaceFileRef('src/app.ts:0'), { path: 'src/app.ts:0' })
     assert.deepEqual(parseWorkspaceFileRef('src/app.ts:20-10'), { path: 'src/app.ts', startLine: 20 })
@@ -309,6 +337,14 @@ describe('workspace-file-url: buildSameTreeWorkspacesMap & resolveWorkspaceFileR
         treeWorkspaces: treeMap.get(1),
       }),
       { conversationId: 2, path: 'README.md', startLine: 5 },
+    )
+    assert.deepEqual(
+      resolveWorkspaceFileRef('file:///root/code/.helmx-worktrees/helm-bbcc88d1/CHANGELOG.md:3-74', {
+        conversationId: 1,
+        conversationCwd: '/root/code/helm',
+        treeWorkspaces: treeMap.get(1),
+      }),
+      { conversationId: 2, path: 'CHANGELOG.md', startLine: 3, endLine: 74 },
     )
 
     // External paths, unrelated trees, and different nodeId stay rejected.

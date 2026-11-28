@@ -1,12 +1,12 @@
 import { Children, createContext, Fragment, memo, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
-import Markdown, { type Components, type Options } from 'react-markdown'
+import Markdown, { defaultUrlTransform, type Components, type Options } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import remarkBreaks from 'remark-breaks'
 import { SyntaxCode } from './SyntaxCode.js'
 import type { CodeLineRange } from './syntax-code-model.js'
 import { CopyButton, HelmxIcon, type HelmxIconName } from '@helmx/ui'
-import { markdownUrlTransform, parseArtifactUrl } from '@helmx/plugin-client'
+import { parseArtifactUrl } from '@helmx/plugin-client'
 import type { MarkdownViewProps } from '@helmx/plugin-client'
 import { useConversationSummary, useConversationTreeWorkspaces, useStoreActions } from '../lib/store-context.js'
 import { LazyMount } from '../ui/LazyMount.js'
@@ -39,6 +39,22 @@ const GITHUB_ALERT_META: Record<GithubAlertType, { icon: HelmxIconName; labelKey
 /** 整篇渲染（非流式与 gate 回退路径）复用同一无状态插件组；breaks 路径追加 remark-breaks（用户手输正文单换行即换行）。 */
 const wholeDocumentRemarkPlugins = [remarkGfm, remarkGithubAlerts, remarkHeadingIndices]
 const wholeDocumentBreaksRemarkPlugins = [remarkGfm, remarkGithubAlerts, remarkBreaks, remarkHeadingIndices]
+
+/**
+ * 透传 `<a href>` 与 `<img src>` 至 `components.a` / `components.img` 出口，
+ * 使 `CHANGELOG.md:3`、`file://` 与 Windows 盘符等工作区引用先经过单一真源解析，
+ * 再对回退到原生标签的 URL 用 `defaultUrlTransform` 严格消毒；其余属性保持默认过滤。
+ */
+function passthroughHandledMarkdownUrl(
+  url: string,
+  key: string,
+  node: { tagName?: string },
+): string {
+  if ((node.tagName === 'a' && key === 'href') || (node.tagName === 'img' && key === 'src')) {
+    return url
+  }
+  return defaultUrlTransform(url)
+}
 
 /**
  * 流式尾部块媒体抑制上下文：流式输出期间，仅尾部仍在增长的块设为 true，
@@ -348,7 +364,7 @@ const StreamingMarkdownBlock = memo(function StreamingMarkdownBlock({
     : [remarkGfm, remarkGithubAlerts, [remarkHeadingIndices, { offset: headingOffset }]]
   return (
     <DeferWorkspaceMediaContext.Provider value={deferMediaFetch}>
-      <Markdown remarkPlugins={remarkPlugins} urlTransform={markdownUrlTransform} components={components}>
+      <Markdown remarkPlugins={remarkPlugins} urlTransform={passthroughHandledMarkdownUrl} components={components}>
         {block}
       </Markdown>
     </DeferWorkspaceMediaContext.Provider>
@@ -479,16 +495,21 @@ export const MarkdownView = memo(function MarkdownView({
       if (isDisallowedFileUrl(href)) {
         return <span className="msg-md-disallowed-file">{children}</span>
       }
-      const isHashOnly = typeof href === 'string' && href.trim().startsWith('#')
+      const trimmedHref = typeof href === 'string' ? href.trim() : ''
+      const safeHref = trimmedHref === '' ? '' : defaultUrlTransform(trimmedHref)
+      if (safeHref === '') {
+        return <span>{children}</span>
+      }
+      const isHashOnly = safeHref.startsWith('#')
       return (
         <a
-          href={href}
+          href={safeHref}
           target={isHashOnly ? undefined : '_blank'}
           rel={isHashOnly ? undefined : 'noreferrer noopener'}
           onClick={(event) => {
             const cb = onLinkClickRef.current
-            if (cb !== undefined && !event.defaultPrevented && typeof href === 'string') {
-              cb(href, event)
+            if (cb !== undefined && !event.defaultPrevented) {
+              cb(safeHref, event)
             }
           }}
         >
@@ -547,7 +568,18 @@ export const MarkdownView = memo(function MarkdownView({
           </span>
         )
       }
-      return <img src={src} alt={alt} title={title} loading="lazy" />
+      const trimmedSrc = typeof src === 'string' ? src.trim() : ''
+      const safeSrc = trimmedSrc === '' ? '' : defaultUrlTransform(trimmedSrc)
+      if (safeSrc === '') {
+        const label = alt || title || t('conv.attachment.disallowedFileLabel')
+        return (
+          <span className="attachment-chip">
+            <HelmxIcon name="file-text" size={11} />
+            <span>{label}</span>
+          </span>
+        )
+      }
+      return <img src={safeSrc} alt={alt} title={title} loading="lazy" />
     },
   }), [conversationId, conversationCwd, workspaceBaseDir, treeWorkspaces, setActiveModal, t])
 
@@ -569,7 +601,7 @@ export const MarkdownView = memo(function MarkdownView({
       <div className={rootClass}>
         <Markdown
           remarkPlugins={breaks === true ? wholeDocumentBreaksRemarkPlugins : wholeDocumentRemarkPlugins}
-          urlTransform={markdownUrlTransform}
+          urlTransform={passthroughHandledMarkdownUrl}
           components={components}
         >
           {text}

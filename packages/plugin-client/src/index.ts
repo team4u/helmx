@@ -143,7 +143,7 @@ export { MarkdownView, CodeBlockView } from './markdown-host.js'
 export type { MarkdownViewProps, CodeBlockViewProps } from './markdown-host.js'
 export { ToolCallDetails } from './tool-details.js'
 export type { ToolCallDetailsProps } from './tool-details.js'
-export { parseArtifactUrl, markdownUrlTransform } from './artifact-url.js'
+export { parseArtifactUrl } from './artifact-url.js'
 
 // ---- Inter-plugin sub-slots & plugin CSS scoping ----
 export { PluginSlot } from './plugin-slot.js'

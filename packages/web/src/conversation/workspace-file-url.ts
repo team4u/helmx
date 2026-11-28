@@ -29,7 +29,7 @@ export interface ResolvedWorkspaceFileTarget extends WorkspaceFileRef {
 const EMPTY_WORKSPACE_NODES: ReadonlyArray<WorkspaceConversationNode> = Object.freeze([])
 
 const EXPLICIT_SCHEME_RE = /^[a-zA-Z][a-zA-Z\d+.-]*:/
-const WINDOWS_DRIVE_ABS_RE = /^[A-Za-z]:[\\/]/
+const WINDOWS_DRIVE_OR_UNC_RAW_RE = /^(?:[A-Za-z]:(?:[\\/]|%5[Cc])|\\\\|%5[Cc]%5[Cc])/
 const BARE_LOCALHOST_RE = /^localhost(?::\d+)?$/i
 const BARE_IPV4_RE = /^\d{1,3}(?:\.\d{1,3}){3}(?::\d+)?$/
 const BARE_WEB_TLD_RE = /\.(?:com|org|net|io|dev|app|ai|cn|edu|gov|co|me|xyz|info|biz)(?::\d+)?$/i
@@ -38,7 +38,7 @@ const LINE_FRAGMENT_RE = /^L(\d+)(?:C\d+)?(?:-L?(\d+)(?:C\d+)?)?$/i
 const TRAILING_COLON_LINE_RE = /:(\d{1,7})(?::\d{1,5})?(?:-(\d{1,7})(?::\d{1,5})?)?$/
 
 function isWindowsDriveOrUnc(raw: string): boolean {
-  return WINDOWS_DRIVE_ABS_RE.test(raw) || raw.startsWith('\\\\')
+  return WINDOWS_DRIVE_OR_UNC_RAW_RE.test(raw)
 }
 
 /**
@@ -64,6 +64,21 @@ function parseLineRange(fragment: string): { startLine?: number; endLine?: numbe
     return { startLine }
   }
   return { startLine, endLine }
+}
+
+function withLineRange(
+  path: string,
+  suffix: { startLine?: number; endLine?: number } | null,
+  fragment: string,
+): WorkspaceFileRef {
+  const frag = parseLineRange(fragment)
+  const range = frag.startLine !== undefined ? frag : suffix
+  if (range?.startLine === undefined) return { path }
+  return {
+    path,
+    startLine: range.startLine,
+    ...(range.endLine !== undefined ? { endLine: range.endLine } : {}),
+  }
 }
 
 /**
@@ -141,7 +156,7 @@ function relativizeInsideCwd(
 function parseFileSchemeRef(
   beforeHash: string,
   conversationCwd: string | undefined,
-): string | null {
+): { path: string; startLine?: number; endLine?: number } | null {
   if (!beforeHash.toLowerCase().startsWith('file://')) return null
   if (beforeHash.includes('?')) return null
 
@@ -169,7 +184,19 @@ function parseFileSchemeRef(
     ? decodedPath.slice(1)
     : decodedPath
 
-  return relativizeInsideCwd(candidatePath, conversationCwd, { allowRootCwd: true })
+  const suffix = splitTrailingLineSuffix(candidatePath)
+  const relPath = relativizeInsideCwd(
+    suffix !== null ? suffix.path : candidatePath,
+    conversationCwd,
+    { allowRootCwd: true },
+  )
+  if (relPath === null) return null
+  return {
+    path: relPath,
+    ...(suffix !== null
+      ? { startLine: suffix.startLine, ...(suffix.endLine !== undefined ? { endLine: suffix.endLine } : {}) }
+      : {}),
+  }
 }
 
 /**
@@ -193,9 +220,9 @@ export function parseWorkspaceFileRef(
   if (beforeHash === '') return null
 
   if (/^file:/i.test(beforeHash)) {
-    const relPath = parseFileSchemeRef(beforeHash, opts?.conversationCwd)
-    if (relPath === null) return null
-    return { path: relPath, ...parseLineRange(fragment) }
+    const fileRef = parseFileSchemeRef(beforeHash, opts?.conversationCwd)
+    if (fileRef === null) return null
+    return withLineRange(fileRef.path, fileRef, fragment)
   }
 
   if (beforeHash.includes('?')) return null
@@ -217,13 +244,7 @@ export function parseWorkspaceFileRef(
       { allowRootCwd: false },
     )
     if (relPath === null) return null
-    return {
-      path: relPath,
-      ...(suffix !== null
-        ? { startLine: suffix.startLine, ...(suffix.endLine !== undefined ? { endLine: suffix.endLine } : {}) }
-        : {}),
-      ...parseLineRange(fragment),
-    }
+    return withLineRange(relPath, suffix, fragment)
   }
 
   // Strip a trailing compiler-style `:line` suffix before scheme/host
@@ -288,13 +309,7 @@ export function parseWorkspaceFileRef(
     return null
   }
 
-  return {
-    path: normalized,
-    ...(suffix !== null
-      ? { startLine: suffix.startLine, ...(suffix.endLine !== undefined ? { endLine: suffix.endLine } : {}) }
-      : {}),
-    ...parseLineRange(fragment),
-  }
+  return withLineRange(normalized, suffix, fragment)
 }
 
 /**

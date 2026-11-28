@@ -5,7 +5,7 @@ import * as React from 'react'
 import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import { renderToString } from 'react-dom/server'
-import { parseArtifactUrl, markdownUrlTransform } from '@helmx/plugin-client'
+import { parseArtifactUrl } from '@helmx/plugin-client'
 import { groupUiContributions } from '../src/lib/types.js'
 
 ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
@@ -43,15 +43,6 @@ describe('artifact-link 纯函数解析与 URL 转换', { timeout: 60_000 }, () 
     assert.equal(parseArtifactUrl('/api/artifacts/content'), null)
     assert.equal(parseArtifactUrl('https://example.com/api/artifacts/123/content'), null)
     assert.equal(parseArtifactUrl('https://github.com'), null)
-  })
-
-  test('markdownUrlTransform：放行产物链接并拦截危险协议', () => {
-    assert.equal(markdownUrlTransform('artifact:art-123'), 'artifact:art-123')
-    assert.equal(markdownUrlTransform('/api/artifacts/art-123/content?inline=1'), '/api/artifacts/art-123/content?inline=1')
-    assert.equal(markdownUrlTransform('https://example.com'), 'https://example.com')
-    // 拦截 javascript: 等伪协议（defaultUrlTransform 行为）
-    assert.equal(markdownUrlTransform('javascript:alert(1)'), '')
-    assert.equal(markdownUrlTransform('vbscript:msgbox(1)'), '')
   })
 })
 
@@ -113,6 +104,37 @@ describe('MarkdownView 产物内联渲染', { timeout: 60_000 }, () => {
     // 服务端 SSR 阶段 loading 态直出 attachment-chip 加载骨架
     assert.match(html, /class="attachment-chip"/)
     assert.match(html, /架构图/)
+  })
+
+  test('MarkdownView：危险协议链接与未知 scheme 渲染为惰性 <span> 且图片不渲染 <img>', { timeout: 60_000 }, () => {
+    const store = makeMockStore()
+    const html = renderToString(
+      React.createElement(
+        HostStoreProviders,
+        { value: store },
+        React.createElement(MarkdownView, {
+          text: [
+            '[Js](javascript:alert(1))',
+            '[Vbs](vbscript:msgbox(1))',
+            '[Data](data:text/html,<script>alert(1)</script>)',
+            '[Custom](custom:foo)',
+            '![Bad](javascript:alert(1))',
+          ].join(' '),
+          conversationId: 1,
+        }),
+      ),
+    )
+    assert.doesNotMatch(html, /<a\b/)
+    assert.doesNotMatch(html, /<img\b/)
+    for (const forbidden of ['javascript:', 'vbscript:', 'data:text/html', 'custom:foo']) {
+      assert.equal(html.includes(forbidden), false, `SSR output must not contain ${forbidden}`)
+    }
+    assert.match(html, /<span>Js<\/span>/)
+    assert.match(html, /<span>Vbs<\/span>/)
+    assert.match(html, /<span>Data<\/span>/)
+    assert.match(html, /<span>Custom<\/span>/)
+    assert.match(html, /class="attachment-chip"/)
+    assert.match(html, /Bad/)
   })
 
   test('MarkdownView：# 锚点链接不带 target="_blank" 并支持 onLinkClick 拦截', { timeout: 60_000 }, () => {

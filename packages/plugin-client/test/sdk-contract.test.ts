@@ -1312,18 +1312,33 @@ test('MarkdownView / CodeBlockView render the host-port injected implementations
   }
 })
 
-test('markdownUrlTransform allows artifact:, file:, and Windows drive paths while filtering unsafe protocols', { timeout: 60_000 }, () => {
-  assert.equal(SDK.markdownUrlTransform('artifact:art-1'), 'artifact:art-1')
-  assert.equal(SDK.markdownUrlTransform('  file:///repo/README.md#L10  '), 'file:///repo/README.md#L10')
-  assert.equal(SDK.markdownUrlTransform('FILE:///C:/repo/a.png'), 'FILE:///C:/repo/a.png')
-  assert.equal(SDK.markdownUrlTransform('C:/repo/src/App.tsx#L10'), 'C:/repo/src/App.tsx#L10')
-  assert.equal(SDK.markdownUrlTransform('d:\\repo\\a.png'), 'd:\\repo\\a.png')
-  assert.equal(SDK.markdownUrlTransform('docs/guide.md#L5'), 'docs/guide.md#L5')
-  assert.equal(SDK.markdownUrlTransform('https://example.com/a'), 'https://example.com/a')
-  assert.equal(SDK.markdownUrlTransform('javascript:alert(1)'), '')
-  assert.equal(SDK.markdownUrlTransform('data:text/html,<script>alert(1)</script>'), '')
-  assert.equal(SDK.markdownUrlTransform('vbscript:msgbox(1)'), '')
-  assert.equal(SDK.markdownUrlTransform('custom:foo'), '')
+test('MarkdownText enforces strict standard URL filtering without leaking artifact:, file:, Windows drive, or unsafe protocols', { timeout: 60_000 }, () => {
+  const md = [
+    '[Ext](https://example.com/a)',
+    '[Guide](docs/guide.md#L5)',
+    '[Art](artifact:art-1)',
+    '[File](file:///repo/README.md#L10)',
+    '[Win](C:/repo/src/App.tsx#L10)',
+    '[Js](javascript:alert(1))',
+    '[Data](data:text/html,<script>alert(1)</script>)',
+    '[Vbs](vbscript:msgbox(1))',
+    '[Custom](custom:foo)',
+  ].join(' ')
+  const html = renderToString(e(SDK.MarkdownText, { text: md }))
+
+  assert.match(html, /<a href="https:\/\/example\.com\/a">/)
+  assert.match(html, /<a href="docs\/guide\.md#L5">/)
+  for (const forbidden of [
+    'artifact:art-1',
+    'file:///repo/README.md#L10',
+    'C:/repo/src/App.tsx#L10',
+    'javascript:alert(1)',
+    'data:text/html',
+    'vbscript:msgbox(1)',
+    'custom:foo',
+  ]) {
+    assert.equal(html.includes(forbidden), false, `MarkdownText output must not leak ${forbidden}`)
+  }
 })
 
 // ---------------------------------------------------------------------------

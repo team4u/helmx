@@ -521,6 +521,130 @@ describe('MarkdownView workspace file links and inline images', { timeout: 60_00
       resetBody()
     }
   })
+
+  test('renders colon line ranges, file:// URLs, and Windows backslash links as workspace chips while blocking outside/unsafe links', { timeout: 60_000 }, async () => {
+    const opened: ActiveModal[] = []
+    const store = makeTestStore({
+      conversations: [conv(21, '/repo'), conv(22, 'C:\\repo')],
+    })
+    spyActiveModal(store, opened)
+
+    resetBody()
+    const posixMount = mount(
+      e(
+        HostStoreProviders,
+        { value: store },
+        e(MarkdownView, {
+          text: '[CHANGELOG.md](CHANGELOG.md:3) · [v0.6.0](CHANGELOG.md:3-74) · [FileUrl](file:///repo/CHANGELOG.md:3)',
+          conversationId: 21,
+        }),
+      ),
+    )
+    try {
+      const chips = [...posixMount.host.querySelectorAll<HTMLButtonElement>('button.attachment-chip')]
+      assert.equal(chips.length, 3)
+      assert.ok(posixMount.host.querySelector('a') === null, 'all resolved links render as chips without <a>')
+      for (const chip of chips) {
+        await act(async () => {
+          chip.click()
+        })
+      }
+      assert.deepEqual(opened, [
+        { kind: 'workspace-file', conversationId: 21, path: 'CHANGELOG.md', startLine: 3 },
+        { kind: 'workspace-file', conversationId: 21, path: 'CHANGELOG.md', startLine: 3, endLine: 74 },
+        { kind: 'workspace-file', conversationId: 21, path: 'CHANGELOG.md', startLine: 3 },
+      ])
+    } finally {
+      posixMount.unmount()
+      resetBody()
+    }
+
+    opened.length = 0
+    const winMount = mount(
+      e(
+        HostStoreProviders,
+        { value: store },
+        e(MarkdownView, {
+          text: String.raw`[WinBackslash](C:\repo\src\app.ts:7) · [WinOutside](C:\secret.txt)`,
+          conversationId: 22,
+        }),
+      ),
+    )
+    try {
+      const chips = [...winMount.host.querySelectorAll<HTMLButtonElement>('button.attachment-chip')]
+      assert.equal(chips.length, 1)
+      assert.match(chips[0]!.textContent ?? '', /WinBackslash/)
+      const disallowed = winMount.host.querySelector('.msg-md-disallowed-file')
+      assert.ok(disallowed !== null, 'outside Windows backslash link renders disallowed span')
+      assert.equal(disallowed.textContent, 'WinOutside')
+      assert.ok(winMount.host.querySelector('a') === null, 'no <a> rendered for Windows local paths')
+
+      await act(async () => {
+        chips[0]!.click()
+      })
+      assert.deepEqual(opened, [
+        { kind: 'workspace-file', conversationId: 22, path: 'src/app.ts', startLine: 7 },
+      ])
+    } finally {
+      winMount.unmount()
+      resetBody()
+    }
+  })
+
+  test('degrades unresolved colon links, bare port hosts, unsafe schemes, and unsafe images to inert spans/chips with zero <a> or <img>', { timeout: 60_000 }, () => {
+    const store = makeTestStore({
+      conversations: [conv(23, '/repo')],
+    })
+
+    resetBody()
+    const noConvMount = mount(
+      e(
+        HostStoreProviders,
+        { value: store },
+        e(MarkdownView, {
+          text: 'See [CHANGELOG.md](CHANGELOG.md:3)',
+        }),
+      ),
+    )
+    try {
+      assert.ok(noConvMount.host.querySelector('a') === null, 'missing conversationId must not emit <a> for CHANGELOG.md:3')
+      assert.ok(noConvMount.host.querySelector('button.attachment-chip') === null)
+      const fallbackSpan = [...noConvMount.host.querySelectorAll('span')].find(
+        (el) => el.textContent === 'CHANGELOG.md',
+      )
+      assert.ok(fallbackSpan !== undefined, 'degrades to ordinary <span>')
+    } finally {
+      noConvMount.unmount()
+      resetBody()
+    }
+
+    const withConvMount = mount(
+      e(
+        HostStoreProviders,
+        { value: store },
+        e(MarkdownView, {
+          text: '[Port](EXAMPLE.ORG:8443) · [Js](javascript:alert(1)) · [Custom](custom:foo) · ![Bad](javascript:alert(1))',
+          conversationId: 23,
+        }),
+      ),
+    )
+    try {
+      assert.ok(withConvMount.host.querySelector('a') === null, 'zero <a> elements rendered')
+      assert.ok(withConvMount.host.querySelector('img') === null, 'zero <img> elements rendered')
+      for (const label of ['Port', 'Js', 'Custom']) {
+        const span = [...withConvMount.host.querySelectorAll('span')].find(
+          (el) => el.className === '' && el.textContent === label,
+        )
+        assert.ok(span !== undefined, `${label} renders as ordinary <span>`)
+      }
+      const badChip = withConvMount.host.querySelector('span.attachment-chip')
+      assert.ok(badChip !== null, 'dangerous image renders as inert .attachment-chip')
+      assert.match(badChip.textContent ?? '', /Bad/)
+    } finally {
+      withConvMount.unmount()
+      resetBody()
+    }
+  })
 })
 
 describe('WorkspaceFilePreviewModal', { timeout: 60_000 }, () => {
@@ -713,6 +837,64 @@ describe('WorkspaceFilePreviewModal', { timeout: 60_000 }, () => {
       })
       await flush()
       assert.equal(closeCalls, 1, 'second Escape closes PreviewModalShell')
+    } finally {
+      mounted.unmount()
+      shim.restore()
+      globalThis.fetch = origFetch
+      resetBody()
+    }
+  })
+
+  test('defaults CHANGELOG.md with startLine=3 to source mode with L3 badge and line 3 highlight, then switches cleanly to rich view', { timeout: 60_000 }, async () => {
+    const origFetch = globalThis.fetch
+    const shim = installObjectUrlShim()
+    globalThis.fetch = (async () =>
+      new Response('# Changelog\n\n## v0.6.0\n\nRelease notes.\n', {
+        status: 200,
+        headers: { 'Content-Type': 'text/markdown; charset=utf-8' },
+      })) as typeof fetch
+
+    const store = makeTestStore({ conversations: [conv(8, '/repo')] })
+    resetBody()
+    const mounted = mount(
+      e(
+        HostStoreProviders,
+        { value: store },
+        e(WorkspaceFilePreviewModal, {
+          conversationId: 8,
+          path: 'CHANGELOG.md',
+          startLine: 3,
+          onClose: () => {},
+          inline: true,
+        }),
+      ),
+    )
+
+    try {
+      await flush()
+      assert.ok(document.querySelector('.preview-modal-code') !== null, 'defaults to source view when startLine is provided')
+      assert.ok(document.querySelector('.artifact-markdown-preview') === null)
+      assert.match(document.body.textContent ?? '', /L3/)
+
+      const line3 = document.querySelector<HTMLElement>('.code-line[data-line="3"]')
+      const line1 = document.querySelector<HTMLElement>('.code-line[data-line="1"]')
+      assert.ok(line3 !== null)
+      assert.equal(line3.getAttribute('data-highlighted'), 'true')
+      assert.equal(line1?.getAttribute('data-highlighted') ?? null, null)
+
+      const richTab = [...document.querySelectorAll<HTMLButtonElement>('[role="tab"]')].find((el) =>
+        el.textContent?.includes('Rich text'),
+      )
+      assert.ok(richTab !== undefined, 'Rich text tab rendered')
+      await act(async () => {
+        richTab.dispatchEvent(new MouseEvent('mousedown', { button: 0, bubbles: true }))
+        richTab.click()
+      })
+      await flush()
+
+      assert.ok(document.querySelector('.artifact-markdown-preview') !== null, 'switches to rich Markdown preview')
+      assert.ok(document.querySelector('.preview-modal-code') === null)
+      assert.equal(document.querySelector('.artifact-markdown-preview h2')?.textContent, 'v0.6.0')
     } finally {
       mounted.unmount()
       shim.restore()
