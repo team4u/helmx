@@ -14,6 +14,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {
+  COMPOSER_STATUS_SLOT,
   HelmxError,
   type BeforeTurnHookPayload,
   type ConversationSummary,
@@ -327,6 +328,19 @@ test('pure contracts, client orchestrator helpers, and bilingual zero-Emoji copy
 test('PluginHost unit: recipe capability mounting, external tier delta cascade without loops, override & crash recovery', TIMEOUT, async () => {
   const env = await openDuoUnitHost()
   try {
+    const duoStatusSlot = env.host
+      .listUi()
+      .find(
+        (u) =>
+          u.pluginId === DUO_PLUGIN_ID &&
+          u.surface === 'plugin.slot' &&
+          (u.spec as { id?: string }).id === 'duo-toolbar-pill',
+      )
+    assert.ok(duoStatusSlot, 'duo-toolbar-pill must be registered on PluginHost')
+    const duoStatusSpec = duoStatusSlot.spec as { target?: string; order?: number }
+    assert.equal(duoStatusSpec.target, COMPOSER_STATUS_SLOT)
+    assert.equal(duoStatusSpec.order, 5, 'duo-toolbar-pill must register with order 5 (< token-speed 10, magpie 20)')
+
     let externalTiers: Record<string, ModelTierSpec> = {
       coder: { model: 'faux/coder', thinkingLevel: 'low' },
     }
