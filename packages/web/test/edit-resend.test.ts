@@ -4,8 +4,7 @@
  * 覆盖：
  * 1. 编辑目标附件整体替换（目标无附件则清空旧草稿，绝不保留上一个目标的残留）。
  * 2. 编辑目标 / 草稿版本 / 发送失败恢复判定的纯函数语义。
- * 3. 编辑态正文中的 /new、/clear、/compact 只是被编辑消息的文本，不作为立即管理命令。
- * 4. SSR 渲染行为：human 消息渲染编辑铅笔，agent/trigger 消息不渲染铅笔但保留复制。
+ * 3. SSR 渲染行为：human 消息渲染编辑铅笔，agent/trigger 消息不渲染铅笔但保留复制。
  */
 import assert from 'node:assert/strict'
 import test from 'node:test'
@@ -16,7 +15,6 @@ import {
   attachmentsOfEditTarget,
   draftVersionOf,
   isHistoricalEdit,
-  isSessionManageCommand,
   sameDraftVersion,
   shouldRestoreEditOnFailure,
   type PendingAttachment,
@@ -100,19 +98,6 @@ test('draftVersionOf / sameDraftVersion：文本、编辑目标、附件任一�
     ),
     false,
   )
-})
-
-test('isSessionManageCommand：仅会话内管理命令，编辑态正文不触发立即执行', { timeout: 60_000 }, () => {
-  assert.equal(isSessionManageCommand('/new'), true)
-  assert.equal(isSessionManageCommand('/clear'), true)
-  assert.equal(isSessionManageCommand('/compact'), true)
-  // 带前后空白仍按 trim 后正文判定（send 中 payload 已 trim）
-  assert.equal(isSessionManageCommand('/compact'), true)
-  // 普通文本、斜杠技能、局部出现命令词都不是管理命令
-  assert.equal(isSessionManageCommand('/skill:foo'), false)
-  assert.equal(isSessionManageCommand('看看 /new 的用法'), false)
-  assert.equal(isSessionManageCommand('普通消息'), false)
-  assert.equal(isSessionManageCommand(''), false)
 })
 
 test('shouldRestoreEditOnFailure：仅当 Composer 仍处于乐观清空后的期望状态才恢复', { timeout: 60_000 }, () => {

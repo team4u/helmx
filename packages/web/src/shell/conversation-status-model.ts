@@ -66,22 +66,6 @@ export function conversationStatusLabel(
   }
 }
 
-/** 会话五态对应的徽章样式类。 */
-export function conversationStatusBadgeClass(status: ConversationSummary['status']): string {
-  switch (status) {
-    case 'working':
-      return 'badge badge-accent'
-    case 'blocked':
-      return 'badge badge-warn'
-    case 'done':
-      return 'badge badge-ok'
-    case 'error':
-      return 'badge badge-err'
-    default:
-      return 'badge badge-neutral'
-  }
-}
-
 /** 会话状态圆点样式类：idle 状态返回 null（不显示圆点）。 */
 export function conversationStatusDotClass(
   status: ConversationSummary['status'],

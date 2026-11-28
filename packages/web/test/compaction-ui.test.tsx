@@ -1,8 +1,7 @@
 /**
  * Regression for in-progress context-compaction feedback, busy queueing controls and
  * `/compact <instructions>` (real DOM mount + pure functions):
- * - parseCompactSlashCommand and isSessionManageCommand parsing of `/compact` and its
- *   optional instructions;
+ * - parseCompactSlashCommand parsing of `/compact` and its optional instructions;
  * - ConversationTimeline rendering the pending compaction divider (`正在精简上下文…` +
  *   the `.spin-slow` loader) and its ordering against queued messages;
  * - Composer switching to busy state under `status='idle' && contextUsage.compacting=true`
@@ -27,7 +26,6 @@ import type { HelmxStoreValue } from '../src/lib/types.js'
 import { createWebTranslator } from '../src/i18n/catalog.js'
 import {
   getComposerPlaceholder,
-  isSessionManageCommand,
   parseCompactSlashCommand,
 } from '../src/conversation/composer-model.js'
 
@@ -151,10 +149,10 @@ describe("compaction-ui", () => {
   }
 
   // ---------------------------------------------------------------------------
-  // 1. Pure functions: parseCompactSlashCommand & isSessionManageCommand
+  // 1. Pure functions: parseCompactSlashCommand
   // ---------------------------------------------------------------------------
 
-  test('parseCompactSlashCommand & isSessionManageCommand: exact /compact recognition with optional instructions', { timeout: 60_000 }, () => {
+  test('parseCompactSlashCommand: exact /compact recognition with optional instructions', { timeout: 60_000 }, () => {
     assert.deepEqual(parseCompactSlashCommand('/compact'), {})
     assert.deepEqual(parseCompactSlashCommand('/compact   '), {})
     assert.deepEqual(parseCompactSlashCommand('  /compact  '), {})
@@ -164,12 +162,6 @@ describe("compaction-ui", () => {
     assert.equal(parseCompactSlashCommand('/compaction'), null)
     assert.equal(parseCompactSlashCommand('please /compact'), null)
     assert.equal(parseCompactSlashCommand('/new'), null)
-
-    assert.equal(isSessionManageCommand('/new'), true)
-    assert.equal(isSessionManageCommand('/clear'), true)
-    assert.equal(isSessionManageCommand('/compact'), true)
-    assert.equal(isSessionManageCommand('/compact 保留关键决定'), true)
-    assert.equal(isSessionManageCommand('/compactfoo'), false)
   })
 
   // ---------------------------------------------------------------------------

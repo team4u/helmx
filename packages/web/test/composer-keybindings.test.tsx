@@ -51,7 +51,7 @@ ensureHappyDom()
 const { act } = await import('react')
 const { createRoot } = await import('react-dom/client')
 const { renderToStaticMarkup } = await import('react-dom/server')
-const { conversationsApi, assetsApi } = await import('../src/lib/api.js')
+const { conversationsApi } = await import('../src/lib/api.js')
 const { seedPluginClientModule } = await import('../src/lib/plugin-client.js')
 const {
   usePluginContext,
@@ -148,7 +148,6 @@ describe("composer-keybindings", () => {
   const originalSubmitInput = conversationsApi.submitInput
   const originalWithdraw = conversationsApi.withdraw
   const originalAbort = conversationsApi.abort
-  const originalGetDefaultModel = assetsApi.getDefaultModel
   const originalMatchMedia = window.matchMedia
 
   const mountedRoots: Array<{ root: ReturnType<typeof createRoot>; host: HTMLElement }> = []
@@ -165,7 +164,6 @@ describe("composer-keybindings", () => {
     conversationsApi.submitInput = originalSubmitInput
     conversationsApi.withdraw = originalWithdraw
     conversationsApi.abort = originalAbort
-    assetsApi.getDefaultModel = originalGetDefaultModel
     window.matchMedia = originalMatchMedia
     resetStandbyDrafts()
   })

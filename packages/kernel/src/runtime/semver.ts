@@ -217,22 +217,6 @@ export function validateUpgradeCheckResult(nodeId: string, value: NodeUpgradeChe
   return value
 }
 
-/** Validate upgrade RPC response envelope (returns `value` only if `ok` and `value` are valid). */
-export function unwrapUpgradeRpc(nodeId: string, result: unknown): NodeUpgradeResult {
-  if (!isRpcResultShape(result)) {
-    throw new HelmxError(
-      'node_upgrade_invalid_result',
-      `Node ${nodeId} upgrade returned invalid RpcResult (non-object or malformed ok/error): ${safeJson(result)}`,
-      502,
-      { nodeId },
-    )
-  }
-  if (!result.ok) {
-    throw rpcFailureToHelmxError(nodeId, 'upgrade', (result as { error: { code: string; message: string } }).error)
-  }
-  return validateUpgradeResult(nodeId, result.value as NodeUpgradeResult)
-}
-
 /** Boundary validation for `nodeUpgrade` result fields. */
 export function validateUpgradeResult(nodeId: string, value: NodeUpgradeResult): NodeUpgradeResult {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) {

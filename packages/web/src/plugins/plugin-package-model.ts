@@ -116,26 +116,6 @@ export function buildDoctorCheckItems(report: PluginDoctorReport): PluginDoctorC
   }))
 }
 
-/** 从 doctor 报告中提取整体结论文案（存在失败项时逐项列出）。 */
-export function buildDoctorConclusion(
-  report: PluginDoctorReport,
-  t: WebMessageTranslator,
-): string {
-  const failed = (report.checks ?? []).filter((check) => check.error !== undefined)
-  if (report.ok && failed.length === 0) return t('plugins.package.doctorPassed')
-  const parts = failed.map((check) =>
-    t('plugins.package.doctorFailedItem', {
-      id: check.id,
-      code: check.error?.code ?? 'unknown',
-      message: check.error?.message ?? '',
-    }),
-  )
-  return t('plugins.package.doctorFailed', {
-    count: failed.length,
-    details: parts.join(t('plugins.package.doctorSeparator')),
-  })
-}
-
 /** 提取插件包操作（安装/更新/移除）失败时的诊断文案；409 在途任务给出明确指引。 */
 export function pluginPackageErrorText(
   err: unknown,

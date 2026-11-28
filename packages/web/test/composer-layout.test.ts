@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createWebTranslator } from '../src/i18n/catalog.js'
-import { canConfigureSessionEnv, envDraftError, envDraftOnNodeChange, envDraftUnchanged, formatEnvSubtitle } from '../src/conversation/composer-model.js'
+import { canConfigureSessionEnv, envDraftError, envDraftOnNodeChange, formatEnvSubtitle } from '../src/conversation/composer-model.js'
 
 const enT = createWebTranslator('en')
 
@@ -88,11 +88,6 @@ test('starting-environment draft: switching nodes never keeps the old cwd; valid
   assert.equal(envDraftError({ nodeId: 'local', cwd: '/root/code/helm' }, enT), null)
   assert.equal(envDraftError({ nodeId: 'win-node', cwd: 'C:\\workspace\\helmx' }, enT), null)
   assert.equal(envDraftError({ nodeId: 'win-node', cwd: 'C:/workspace/helmx' }, enT), null)
-  // Compared against the current coordinate: an absent nodeId counts as local.
-  assert.equal(envDraftUnchanged({ nodeId: 'local', cwd: '/a' }, undefined, '/a'), true)
-  assert.equal(envDraftUnchanged({ nodeId: 'local', cwd: '/a' }, 'local', '/a'), true)
-  assert.equal(envDraftUnchanged({ nodeId: 'gpu-box', cwd: '/a' }, 'local', '/a'), false)
-  assert.equal(envDraftUnchanged({ nodeId: 'local', cwd: '/b' }, 'local', '/a'), false)
 })
 
 test('formatEnvSubtitle: local omits @local, remote carries the @node prefix, tooltip keeps full info', { timeout: 60_000 }, () => {

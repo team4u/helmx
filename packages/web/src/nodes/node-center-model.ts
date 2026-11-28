@@ -63,14 +63,6 @@ export interface NodeFilterOptions {
   categoryTab: NodeCategoryTab
 }
 
-/** Node center summary metrics. */
-export interface NodeSummaryStats {
-  total: number
-  online: number
-  local: number
-  remote: number
-}
-
 /**
  * Whether the node is online and reachable: accepts node.online,
  * node.status === 'online' or node.connected === true.
@@ -153,17 +145,6 @@ export function buildNodeCategoryCounts(nodes: NodeInfo[]): Record<NodeCategoryT
     remote,
     online,
     offline,
-  }
-}
-
-/** Summarize node metrics (total, online, local, remote). */
-export function summarizeNodes(nodes: NodeInfo[]): NodeSummaryStats {
-  const counts = buildNodeCategoryCounts(nodes)
-  return {
-    total: counts.all,
-    online: counts.online,
-    local: counts.local,
-    remote: counts.remote,
   }
 }
 

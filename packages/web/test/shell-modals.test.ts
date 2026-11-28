@@ -21,7 +21,6 @@ import {
 } from '../src/conversation/archive-model.js'
 import {
   collectEnabledPluginIds,
-  conversationStatusBadgeClass,
   conversationStatusDotClass,
   conversationStatusLabel,
   conversationStatusTooltip,
@@ -34,9 +33,6 @@ import {
   activeConversationIdsOf,
   buildAgentStandings,
   extractSidebarViews,
-  filterConversationsByTag,
-  filterDeletableConversations,
-  fuzzyMatchConversations,
   getConversationPresence,
   isConversationArchivable,
   isConversationBulkDeletable,
@@ -427,50 +423,12 @@ test('partitionSidebarUi 跳过 conversation:tag: 前缀目标', { timeout: 60_0
   assert.equal(partition.pinnedProfileIds.size, 0)
 })
 
-test('filterConversationsByTag 按 filterTag 过滤分组会话', { timeout: 60_000 }, () => {
-  const workers = filterConversationsByTag(conversations, 'worker')
-  assert.deepEqual(workers.map((c) => c.id), [20, 21, 30])
-  const archived = filterConversationsByTag(conversations, 'worker-archived')
-  assert.deepEqual(archived.map((c) => c.id), [30])
-})
-
-test('filterConversationsByTag 仅按 filterTag 过滤（不匹配的标签不扩容）', { timeout: 60_000 }, () => {
-  const runs = [
-    conv({ id: 1, tags: ['worker'], createdAt: 100 }),
-    conv({ id: 2, tags: ['worker'], createdAt: 300 }),
-    conv({ id: 3, tags: ['worker-done'], createdAt: 500 }),
-    conv({ id: 4, tags: [] }),
-  ]
-  assert.deepEqual(filterConversationsByTag(runs, 'worker').map((c) => c.id), [1, 2])
-})
-
-test('fuzzyMatchConversations 按标题、profileId 与纯数字 id 过滤', { timeout: 60_000 }, () => {
-  assert.deepEqual(
-    fuzzyMatchConversations(conversations, '周末').map((c) => c.id),
-    [10],
-  )
-  assert.deepEqual(
-    fuzzyMatchConversations(conversations, 'coder').map((c) => c.id),
-    [20, 21, 30, 40],
-  )
-  assert.deepEqual(
-    fuzzyMatchConversations(conversations, '20').map((c) => c.id),
-    [20],
-  )
-  assert.deepEqual(fuzzyMatchConversations(conversations, ''), [])
-})
-
-test('conversationStatusLabel / BadgeClass 覆盖五态', { timeout: 60_000 }, () => {
+test('conversationStatusLabel 覆盖五态', { timeout: 60_000 }, () => {
   assert.equal(conversationStatusLabel('working', enT), 'Running')
   assert.equal(conversationStatusLabel('blocked', enT), 'Awaiting confirmation')
   assert.equal(conversationStatusLabel('done', enT), 'Completed')
   assert.equal(conversationStatusLabel('idle', enT), 'Idle')
   assert.equal(conversationStatusLabel('error', enT), 'Error')
-  assert.equal(conversationStatusBadgeClass('working'), 'badge badge-accent')
-  assert.equal(conversationStatusBadgeClass('blocked'), 'badge badge-warn')
-  assert.equal(conversationStatusBadgeClass('done'), 'badge badge-ok')
-  assert.equal(conversationStatusBadgeClass('error'), 'badge badge-err')
-  assert.equal(conversationStatusBadgeClass('idle'), 'badge badge-neutral')
 })
 
 test('conversationStatusDotClass 仅对非 idle 状态返回圆点类名', { timeout: 60_000 }, () => {
@@ -599,7 +557,7 @@ test('collectEnabledPluginIds 仅收集处于活跃运行态的插件（排除 d
 })
 
 // ---------------------------------------------------------------------------
-// 会话可删除性判断：isConversationDeletable & filterDeletableConversations
+// 会话可删除性判断：isConversationDeletable
 // ---------------------------------------------------------------------------
 
 test('isConversationDeletable 正确判定会话是否允许人类删除', { timeout: 60_000 }, () => {
@@ -618,23 +576,6 @@ test('isConversationDeletable 正确判定会话是否允许人类删除', { tim
   // 普通人类会话（无 ownedBy 或 ownedBy === 'human'）允许删除
   assert.equal(isConversationDeletable({ id: 10 }), true)
   assert.equal(isConversationDeletable({ id: 11, ownedBy: 'human' }), true)
-})
-
-test('filterDeletableConversations 过滤出可删除会话', { timeout: 60_000 }, () => {
-  const sample = [
-    conv({ id: 1, title: '初始会话' }), // 无 id 级豁免 -> true
-    conv({ id: 2, title: '运行中自动化', ownedBy: 'helmx', status: 'working' }), // working helmx -> false
-    conv({ id: 3, title: '待审批自动化', ownedBy: 'helmx', status: 'blocked' }), // blocked helmx -> false
-    conv({ id: 4, title: '已结束自动化', ownedBy: 'helmx', status: 'done' }), // settled helmx -> true
-    conv({ id: 10, title: '人类会话1' }), // true
-    conv({ id: 11, title: '人类会话2', ownedBy: 'human' }), // true
-  ]
-
-  const deletable = filterDeletableConversations(sample)
-  assert.deepEqual(
-    deletable.map((c) => c.id),
-    [1, 4, 10, 11],
-  )
 })
 
 // ---------------------------------------------------------------------------
@@ -840,7 +781,7 @@ test('批量选择状态计算：全选、反选与单选切换', { timeout: 60_
 
   // 提取所有智能体站位下的可删除会话
   const allConvs = standings.flatMap((a) => a.conversations)
-  const allDeletableIds = filterDeletableConversations(allConvs).map((c) => c.id)
+  const allDeletableIds = allConvs.filter(isConversationDeletable).map((c) => c.id)
 
   // 应该包含 1, 10, 11, 22（初始会话无豁免；排除 helmx 拥有的会话）
   assert.deepEqual(allDeletableIds.sort((a, b) => a - b), [1, 10, 11, 22])

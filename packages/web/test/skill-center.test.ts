@@ -22,7 +22,6 @@ import {
   isSkillPlugin,
   isSkillWorkspace,
   resolveSkillOwnerTarget,
-  summarizeSkills,
   type SkillCategoryTab,
 } from '../src/skills/skill-center-model.js'
 import { createWebTranslator } from '../src/i18n/catalog.js'
@@ -200,19 +199,6 @@ test('skill-center-model: buildSkillCategoryCounts counts each category accurate
 
   const emptyCounts = buildSkillCategoryCounts([])
   assert.deepEqual(emptyCounts, { all: 0, core: 0, builtin: 0, workspace: 0, plugins: 0, agents: 0, node: 0 })
-})
-
-test('skill-center-model: summarizeSkills metric summary', { timeout: 60_000 }, () => {
-  const summary = summarizeSkills(mockSkills)
-  assert.deepEqual(summary, {
-    total: 6,
-    core: 0,
-    builtin: 2,
-    workspace: 2,
-    plugins: 1,
-    agents: 1,
-    node: 0,
-  })
 })
 
 test('skill-center-model: filterSkills category filtering and multi-dimension search (ID / name / description / references)', { timeout: 60_000 }, () => {

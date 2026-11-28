@@ -2,7 +2,7 @@
  * edit tool real difference result (runtime/tool-edit-diff.ts) test.
  *
  * override:
- * 1. pure function computeEditDiff: precise row number (real scan),±3 context window, row inside/many row/
+ * 1. pure function computeMultiEditDiff: precise row number (real scan),±3 context window, row inside/many row/
  *    pure increase delete,CRLF, tail without newline, tail part empty row, duplicate context, huge long row and row count/text pre- compute
  *    truncate (count still override complete difference),no-op;
  * 2. redaction security: all text first row redaction (single row secret hit placeholder); across row secret and horizontal across window boundary
@@ -29,7 +29,6 @@ import {
   type ToolDiffRow,
 } from '@helmx/protocol'
 import {
-  computeEditDiff,
   computeMultiEditDiff,
 } from '../src/runtime/tool-edit-diff.js'
 import { createEditTool } from '../src/runtime/tools.js'
@@ -58,7 +57,13 @@ function applyEdit(original: string, oldText: string, newText: string): string {
 
 function diffOf(original: string, oldText: string, newText: string, redact = identityRedact) {
   const offset = original.indexOf(oldText)
-  return computeEditDiff(original, applyEdit(original, oldText, newText), offset, oldText.length, redact)
+  assert.ok(offset >= 0, `test pre-:oldText should store in (${JSON.stringify(oldText.slice(0, 20))})`)
+  return computeMultiEditDiff(
+    original,
+    applyEdit(original, oldText, newText),
+    [{ matchOffset: offset, replacedLength: oldText.length, insertedLength: newText.length }],
+    redact,
+  )
 }
 
 function rowTexts(rows: ToolDiffRow[]): string[] {
@@ -80,7 +85,7 @@ after(async () => {
   rmSync(rootDir, { recursive: true, force: true })
 })
 
-describe('computeEditDiff pure function: row number and window', { timeout: 60_000 }, () => {
+describe('computeMultiEditDiff pure function: row number and window', { timeout: 60_000 }, () => {
   it('row inside replace: precise row number,±3 context window, row level count', { timeout: 60_000 }, () => {
     const original = numberedLines(12)
     const diff = diffOf(original, 'l7', 'L7')
@@ -176,7 +181,7 @@ describe('computeEditDiff pure function: row number and window', { timeout: 60_0
   })
 })
 
-describe('computeEditDiff pure function: row boundary form', { timeout: 60_000 }, () => {
+describe('computeMultiEditDiff pure function: row boundary form', { timeout: 60_000 }, () => {
   it('CRLF: row text strip \r, row number and count correct', { timeout: 60_000 }, () => {
     const original = 'a\r\nb\r\nc\r\n'
     const diff = diffOf(original, 'b', 'B')
@@ -256,7 +261,7 @@ describe('computeEditDiff pure function: row boundary form', { timeout: 60_000 }
   })
 })
 
-describe('computeEditDiff pure function: pre- compute and truncate', { timeout: 60_000 }, () => {
+describe('computeMultiEditDiff pure function: pre- compute and truncate', { timeout: 60_000 }, () => {
   it('huge long row: single row text truncate to cap, count override complete difference, does not huge long row pass back', { timeout: 60_000 }, () => {
     const long = 'x'.repeat(9_000)
     const original = `head\n${long}\ntail\n`
@@ -325,9 +330,19 @@ describe('computeEditDiff pure function: pre- compute and truncate', { timeout: 
   })
 
   it('replace zone between out of bounds: precondition throws immediately before writing', { timeout: 60_000 }, () => {
-    assert.throws(() => computeEditDiff('abc', 'abc', 3, 2, identityRedact), /Edit diff precondition failed/)
-    assert.throws(() => computeEditDiff('abc', 'abc', -1, 1, identityRedact), /Edit diff precondition failed/)
-    assert.throws(() => computeEditDiff('abc', 'abc', 0, 0, identityRedact), /Edit diff precondition failed/)
+    assert.throws(
+      () => computeMultiEditDiff('abc', 'abc', [{ matchOffset: 3, replacedLength: 2, insertedLength: 2 }], identityRedact),
+      /Edit diff precondition failed/,
+    )
+    assert.throws(
+      () => computeMultiEditDiff('abc', 'abc', [{ matchOffset: -1, replacedLength: 1, insertedLength: 1 }], identityRedact),
+      /Edit diff precondition failed/,
+    )
+    assert.throws(
+      () => computeMultiEditDiff('abc', 'abc', [{ matchOffset: 0, replacedLength: 0, insertedLength: 0 }], identityRedact),
+      /Edit diff precondition failed/,
+    )
+    assert.throws(() => computeMultiEditDiff('abc', 'abc', [], identityRedact), /Edit diff precondition failed/)
   })
 
   it('algorithm pre- compute (maxEditLength) over limit: whole segment replace means, public before suffix keep, count consistent,truncated=true', { timeout: 60_000 }, () => {
@@ -370,7 +385,12 @@ describe('computeEditDiff pure function: pre- compute and truncate', { timeout: 
   it('sparse change only keep each change surrounding context, row count pre- compute do not swallow after continue change', { timeout: 60_000 }, () => {
     const original = Array.from({ length: 400 }, (_, i) => `line-${i + 1}`).join('\n') + '\n'
     const updated = original.replace('line-20\n', 'changed-20\n').replace('line-380\n', 'changed-380\n')
-    const diff = computeEditDiff(original, updated, 0, original.length, (text) => text)
+    const diff = computeMultiEditDiff(
+      original,
+      updated,
+      [{ matchOffset: 0, replacedLength: original.length, insertedLength: updated.length }],
+      (text) => text,
+    )
     assert.equal(diff.truncated, false)
     assert.equal(diff.addedLines, 2)
     assert.equal(diff.removedLines, 2)
@@ -383,7 +403,7 @@ describe('computeEditDiff pure function: pre- compute and truncate', { timeout: 
   })
 })
 
-describe('computeEditDiff pure function: redaction', { timeout: 60_000 }, () => {
+describe('computeMultiEditDiff pure function: redaction', { timeout: 60_000 }, () => {
   it('single row secret: row text replace is placeholder, row number/count and not redaction consistent', { timeout: 60_000 }, () => {
     const original = 'l1\nl2 token=s3cret-value\nl3\n'
     const redact = (text: string): string => text.split('s3cret-value').join('[REDACTED]')

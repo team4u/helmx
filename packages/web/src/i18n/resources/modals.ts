@@ -26,21 +26,6 @@ export const modalsMessages = {
   'modals.nodeOption.local': { en: '{id} (local)', 'zh-CN': '{id} (本机)' },
   'modals.nodeOption.offline': { en: '{id} (offline)', 'zh-CN': '{id} (离线)' },
 
-  // Node upgrade confirm gating hints.
-  'modals.nodeUpgrade.offline': { en: 'Node is offline; cannot upgrade', 'zh-CN': '节点已离线，无法升级' },
-  'modals.nodeUpgrade.invalidTarget': {
-    en: 'Target version is not valid SemVer (e.g. 0.2.0)',
-    'zh-CN': '目标版本不是合法 SemVer（示例 0.2.0）',
-  },
-  'modals.nodeUpgrade.checkFirst': {
-    en: 'Check for updates first, or enter an explicit target version',
-    'zh-CN': '请先检查更新，或填写明确的目标版本',
-  },
-  'modals.nodeUpgrade.upToDate': {
-    en: 'Already up to date; tick force reinstall/retry or enter a target version',
-    'zh-CN': '当前已是最新版本；可勾选强制重装/重试，或填写目标版本',
-  },
-
   // Node resource usage summary label.
   'modals.nodeUsage.label': { en: '{used} / {total} ({percent}%)', 'zh-CN': '{used} / {total}（{percent}%）' },
 
@@ -73,10 +58,6 @@ export const modalsMessages = {
     en: 'Enter to open · {modEnter} to open in split',
     'zh-CN': 'Enter 打开 · {modEnter} 在右侧分屏打开',
   },
-  'modals.palette.group.context': { en: 'Current context', 'zh-CN': '当前上下文' },
-  'modals.palette.group.recent': { en: 'Recent conversations', 'zh-CN': '最近会话' },
-  'modals.palette.group.navigation': { en: 'Navigate', 'zh-CN': '快速跳转' },
-  'modals.palette.group.commands': { en: 'Commands', 'zh-CN': '快捷命令' },
   'modals.palette.noResults': { en: 'No matching results', 'zh-CN': '未找到匹配结果' },
   'modals.palette.emptyHint': {
     en: 'Type keywords to search, or pick a command below',
@@ -162,7 +143,6 @@ export const modalsMessages = {
     'zh-CN': '远端搜索暂时不可用，当前仅展示本地结果',
   },
   'modals.omnibox.footerSwitchScope': { en: 'switch scope', 'zh-CN': '切换分类' },
-  'modals.omnibox.footerSecondary': { en: 'secondary', 'zh-CN': '次操作' },
   'modals.omnibox.navRowTitleWithSecondary': {
     en: 'Enter to open · {modEnter} split · Alt+Enter {secondary}',
     'zh-CN': 'Enter 打开 · {modEnter} 分屏 · Alt+Enter {secondary}',

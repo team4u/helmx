@@ -62,10 +62,6 @@ export const pluginsMessages = {
     en: 'Resident core plugin; cannot be disabled',
     'zh-CN': '常驻核心插件，不可停用',
   },
-  'plugins.card.failedFallbackTitle': {
-    en: 'Plugin failed to load or enable',
-    'zh-CN': '插件加载或启用失败',
-  },
   'plugins.card.toolsTitle': { en: '{count} Agent Tools', 'zh-CN': '{count} 个 Agent Tools' },
   'plugins.card.actionsTitle': {
     en: '{count} CLI/HTTP Actions',
@@ -160,19 +156,6 @@ export const pluginsMessages = {
   'plugins.package.sourceKind.local': { en: 'Local path', 'zh-CN': '本地路径' },
   'plugins.package.sourceKind.unknown': { en: 'Unrecognized', 'zh-CN': '无法识别' },
   'plugins.package.sourceBadge.local': { en: 'Local', 'zh-CN': '本地' },
-  'plugins.package.doctorPassed': {
-    en: 'Pre-install doctor passed',
-    'zh-CN': '安装前自检通过',
-  },
-  'plugins.package.doctorFailedItem': {
-    en: '{id} ({code}): {message}',
-    'zh-CN': '{id}（{code}）：{message}',
-  },
-  'plugins.package.doctorSeparator': { en: '; ', 'zh-CN': '；' },
-  'plugins.package.doctorFailed': {
-    en: 'Pre-install doctor failed with {count} failures: {details}',
-    'zh-CN': '安装前自检未通过，共 {count} 项失败：{details}',
-  },
   'plugins.package.action.install': { en: 'Install', 'zh-CN': '安装' },
   'plugins.package.action.update': { en: 'Update', 'zh-CN': '更新' },
   'plugins.package.action.uninstall': { en: 'Uninstall', 'zh-CN': '卸载' },
@@ -249,10 +232,6 @@ export const pluginsMessages = {
   'plugins.package.updatePlugin': { en: 'Update plugin', 'zh-CN': '更新插件' },
   'plugins.package.uninstalling': { en: 'Uninstalling…', 'zh-CN': '正在卸载…' },
   'plugins.package.uninstallPlugin': { en: 'Uninstall plugin', 'zh-CN': '卸载插件' },
-  'plugins.package.confirmUninstallAria': {
-    en: 'Confirm plugin uninstall',
-    'zh-CN': '确认卸载插件',
-  },
   'plugins.package.confirmUninstallBody': {
     en: 'Uninstall {name} ({id})? The install directory and registry entry will be deleted; this cannot be undone.',
     'zh-CN': '确定卸载 {name}（{id}）？将删除安装目录与注册记录，该操作不可恢复。',
