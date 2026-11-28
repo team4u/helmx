@@ -18,14 +18,12 @@ import {
   buildIndexProbeUrl,
   buildVersionReloadUrl,
   claimFingerprintAutoReload,
-  claimPreloadAutoReload,
   detectDocumentProductionEntry,
   FINGERPRINT_RELOAD_GUARD_KEY,
   initialVersionWatchState,
   isComposerManagedInput,
   isTextInputElement,
   parseIndexHtmlProductionEntry,
-  PRELOAD_RELOAD_GUARD_KEY,
   probeAllowed,
   probeLatestIndexEntry,
   RELOAD_CACHE_BUSTER_PARAM,
@@ -336,16 +334,6 @@ describe("version-watch-model", () => {
       },
     }
   }
-
-  test('preloadError auto-retry budget: the first claim succeeds and writes the marker, later ones are denied; unavailable storage always denies', { timeout: 60_000 }, () => {
-    const storage = memoryStorage()
-    assert.equal(claimPreloadAutoReload(storage), true, 'the first claim succeeds')
-    assert.equal(storage.getItem(PRELOAD_RELOAD_GUARD_KEY), '1', 'the cross-reload marker is written')
-    assert.equal(claimPreloadAutoReload(storage), false, 'an exhausted budget is denied')
-    assert.equal(claimPreloadAutoReload(null), false, 'no storage denies')
-    assert.equal(claimPreloadAutoReload(memoryStorage({ getItem: true })), false, 'a throwing read denies')
-    assert.equal(claimPreloadAutoReload(memoryStorage({ setItem: true })), false, 'a throwing write denies (never mistakenly allows auto refresh)')
-  })
 
   // ---------------------------------------------------------------------------
   // WebView-safe refresh URL construction

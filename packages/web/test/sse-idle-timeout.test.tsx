@@ -15,7 +15,7 @@ import { test } from 'node:test'
 import * as React from 'react'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
-import { readSseChunkWithDeadline, sseClientTimings } from '../src/lib/live-state.js'
+import { patchSseClientTimings, readSseChunkWithDeadline, resetSseClientTimings, sseClientTimings } from '../src/lib/live-state.js'
 
 Object.assign(globalThis, { React, IS_REACT_ACT_ENVIRONMENT: true })
 
@@ -117,9 +117,8 @@ test('挂起流idle timeout中止并重连，重连 401 必须登出且不再无
   assert.equal(sseClientTimings.idleTimeoutMs, 30_000, '默认 SSE 空闲超时必须收敛至 30_000ms')
   const { HelmxStoreProvider } = await import('../src/lib/HelmxStoreProvider.js')
   const { useHelmxStore } = await import('../src/lib/store-context.js')
-  const originalTimings = { ...sseClientTimings }
   const originalFetch = globalThis.fetch
-  Object.assign(sseClientTimings, {
+  patchSseClientTimings({
     idleTimeoutMs: 80,
     reconnectBaseMs: 15,
     reconnectCapMs: 40,
@@ -182,7 +181,7 @@ test('挂起流idle timeout中止并重连，重连 401 必须登出且不再无
     assert.equal(eventsCalls, 2, '401 登出后不得继续重连')
     assert.equal(observed.authenticated, false)
   } finally {
-    Object.assign(sseClientTimings, originalTimings)
+    resetSseClientTimings()
     globalThis.fetch = originalFetch
     localStorage.removeItem('helmx:token')
     const r = root
@@ -194,13 +193,12 @@ test('挂起流idle timeout中止并重连，重连 401 必须登出且不再无
 test('online 与 visibilitychange 秒醒：取消退避立即重连、陈旧流重连、健康流不误杀', { timeout: 60_000 }, async () => {
   const { HelmxStoreProvider } = await import('../src/lib/HelmxStoreProvider.js')
   const { useHelmxStore } = await import('../src/lib/store-context.js')
-  const originalTimings = { ...sseClientTimings }
   const originalFetch = globalThis.fetch
   const originalHiddenDescriptor = Object.getOwnPropertyDescriptor(document, 'hidden')
   let hidden = false
   Object.defineProperty(document, 'hidden', { configurable: true, get: () => hidden })
 
-  Object.assign(sseClientTimings, {
+  patchSseClientTimings({
     idleTimeoutMs: 30_000,
     staleWakeupMs: 40,
     reconnectBaseMs: 10_000,
@@ -293,7 +291,7 @@ test('online 与 visibilitychange 秒醒：取消退避立即重连、陈旧流�
     await waitUntil(() => eventsCalls === 4 && sseConnected === true)
     assert.equal(streams[0]?.abortable, true, '陈旧连接必须被中止')
   } finally {
-    Object.assign(sseClientTimings, originalTimings)
+    resetSseClientTimings()
     globalThis.fetch = originalFetch
     localStorage.removeItem('helmx:token')
     if (originalHiddenDescriptor !== undefined) {

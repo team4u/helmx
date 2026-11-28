@@ -6,7 +6,7 @@ import { act } from 'react'
 import type { Root } from 'react-dom/client'
 import type { ConversationEntry, ConversationSummary } from '@helmx/protocol'
 import { hangingEventStream, type SseFrameSender } from './helpers/sse-stream.js'
-import { typeIntoControl } from './helpers/dom-harness.js'
+import { flushMicrotasks, typeIntoControl } from './helpers/dom-harness.js'
 import type { HelmxExternalStore } from '../src/lib/helmx-store.js'
 import type { ResolvedTarget } from '../src/lib/types.js'
 
@@ -135,8 +135,7 @@ async function mount(hash: string, options: { strictMode?: boolean; limit?: numb
 }
 
 async function settle(): Promise<void> {
-  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
-  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
+  await flushMicrotasks()
 }
 
 function findPane(conversationId: number): HTMLElement | null {
@@ -233,7 +232,7 @@ describe("conversation-window-keepalive", () => {
 
   afterEach(() => {
     reset()
-  })
+  }, { timeout: 60_000 })
 
   test('keeps timeline scroller instance, reading offset and composer draft across A -> B -> A', { timeout: 60_000 }, async () => {
     await mount('#/c/1')

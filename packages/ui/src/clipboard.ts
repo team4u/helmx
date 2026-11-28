@@ -2,15 +2,33 @@
  * Timeline clipboard utility (plain .ts, Fast Refresh friendly).
  */
 
-export async function copyToClipboard(text: string): Promise<boolean> {
+export interface ClipboardEnv {
+  navigator?: { clipboard?: { writeText?: (text: string) => Promise<void> } }
+  document?: Pick<Document, 'body' | 'createElement' | 'execCommand'>
+}
+
+export async function copyToClipboard(text: string, env?: ClipboardEnv): Promise<boolean> {
+  const nav =
+    env && 'navigator' in env
+      ? env.navigator
+      : typeof navigator !== 'undefined'
+        ? navigator
+        : undefined
+  const doc =
+    env && 'document' in env
+      ? env.document
+      : typeof document !== 'undefined'
+        ? document
+        : undefined
+
   // 1. Prefer the modern Clipboard API (only effective in secure contexts such as HTTPS or localhost)
   if (
-    typeof navigator !== 'undefined' &&
-    navigator.clipboard !== undefined &&
-    typeof navigator.clipboard.writeText === 'function'
+    nav !== undefined &&
+    nav.clipboard !== undefined &&
+    typeof nav.clipboard.writeText === 'function'
   ) {
     try {
-      await navigator.clipboard.writeText(text)
+      await nav.clipboard.writeText(text)
       return true
     } catch {
       // The modern API may throw on missing focus, hidden documents or denied
@@ -21,9 +39,9 @@ export async function copyToClipboard(text: string): Promise<boolean> {
   // 2. Generic fallback: dynamically create an invisible textarea + document.execCommand('copy')
   // Compatible with HTTP (LAN IP / remote dev machine direct access), legacy
   // browsers and non-secure contexts
-  if (typeof document !== 'undefined') {
+  if (doc !== undefined) {
     try {
-      const textarea = document.createElement('textarea')
+      const textarea = doc.createElement('textarea')
       textarea.value = text
       // Avoid page scrolling or layout reflow
       textarea.style.position = 'fixed'
@@ -38,12 +56,12 @@ export async function copyToClipboard(text: string): Promise<boolean> {
       textarea.style.background = 'transparent'
       textarea.style.opacity = '0'
       textarea.setAttribute('readonly', '')
-      document.body.appendChild(textarea)
+      doc.body.appendChild(textarea)
       textarea.focus()
       textarea.select()
       textarea.setSelectionRange(0, textarea.value.length)
-      const success = document.execCommand('copy')
-      document.body.removeChild(textarea)
+      const success = doc.execCommand('copy')
+      doc.body.removeChild(textarea)
       if (success) return true
     } catch {
       // execCommand fallback failed

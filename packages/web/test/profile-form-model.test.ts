@@ -3,7 +3,6 @@
  * - isProfileFormDirty：新建模式任一字段非空即脏；编辑模式逐项对比基线（技能顺序无关、starters 按 label/prompt）；
  * - mergeHydratedDetailPreservingEdits：异步详情只回填用户未触碰的字段，保留进行中的编辑。
  */
-import './helpers/register-happy-dom.js'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import type { Profile } from '@helmx/protocol'

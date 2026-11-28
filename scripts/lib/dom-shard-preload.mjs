@@ -36,6 +36,12 @@ function getState() {
       baselineConsole: null,
       baselineNotificationDesc: undefined,
       baselineNotificationCaptured: false,
+      baselineDomDescriptorsCaptured: false,
+      baselineMatchMediaDesc: undefined,
+      baselineDocHiddenDesc: undefined,
+      baselineDocVisibilityDesc: undefined,
+      baselineNavClipboardDesc: undefined,
+      baselineSessionStorageDesc: undefined,
     };
   }
   return g[STATE_KEY];
@@ -62,6 +68,35 @@ function captureBaselineGlobals(state) {
   if (!state.baselineNotificationCaptured) {
     state.baselineNotificationDesc = Object.getOwnPropertyDescriptor(globalThis, 'Notification');
     state.baselineNotificationCaptured = true;
+  }
+  if (!state.baselineDomDescriptorsCaptured && globalThis.window && globalThis.document && globalThis.navigator) {
+    state.baselineMatchMediaDesc = Object.getOwnPropertyDescriptor(globalThis.window, 'matchMedia');
+    state.baselineInnerWidthDesc = Object.getOwnPropertyDescriptor(globalThis.window, 'innerWidth');
+    state.baselineInnerHeightDesc = Object.getOwnPropertyDescriptor(globalThis.window, 'innerHeight');
+    state.baselineViewport = {
+      width: globalThis.window.innerWidth,
+      height: globalThis.window.innerHeight,
+    };
+    state.baselineDocHiddenDesc = Object.getOwnPropertyDescriptor(globalThis.document, 'hidden');
+    state.baselineDocVisibilityDesc = Object.getOwnPropertyDescriptor(globalThis.document, 'visibilityState');
+    state.baselineNavClipboardDesc = Object.getOwnPropertyDescriptor(globalThis.navigator, 'clipboard');
+    state.baselineSessionStorageDesc = Object.getOwnPropertyDescriptor(globalThis, 'sessionStorage');
+    state.baselineDomDescriptorsCaptured = true;
+  }
+}
+
+function restoreOwnPropertyDescriptor(target, prop, baselineDesc) {
+  if (!target) return;
+  const curDesc = Object.getOwnPropertyDescriptor(target, prop);
+  if (descriptorsEqual(curDesc, baselineDesc)) return;
+  try {
+    if (baselineDesc) {
+      Object.defineProperty(target, prop, baselineDesc);
+    } else {
+      delete target[prop];
+    }
+  } catch {
+    // Ignore non-configurable property
   }
 }
 
@@ -177,6 +212,23 @@ export function resetSharedHappyDom() {
     }
   } catch {
     // Ignore DOM cleanup errors from custom test mocks
+  }
+
+  if (state.baselineDomDescriptorsCaptured) {
+    restoreOwnPropertyDescriptor(globalThis, 'sessionStorage', state.baselineSessionStorageDesc);
+    restoreOwnPropertyDescriptor(globalThis.window, 'matchMedia', state.baselineMatchMediaDesc);
+    restoreOwnPropertyDescriptor(globalThis.window, 'innerWidth', state.baselineInnerWidthDesc);
+    restoreOwnPropertyDescriptor(globalThis.window, 'innerHeight', state.baselineInnerHeightDesc);
+    try {
+      if (state.baselineViewport) {
+        globalThis.window?.happyDOM?.setViewport?.(state.baselineViewport);
+      }
+    } catch {
+      // Ignore viewport reset errors
+    }
+    restoreOwnPropertyDescriptor(globalThis.document, 'hidden', state.baselineDocHiddenDesc);
+    restoreOwnPropertyDescriptor(globalThis.document, 'visibilityState', state.baselineDocVisibilityDesc);
+    restoreOwnPropertyDescriptor(globalThis.navigator, 'clipboard', state.baselineNavClipboardDesc);
   }
 
   try {

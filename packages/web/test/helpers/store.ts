@@ -11,7 +11,12 @@
  * - 动作函数不可覆写——真实 store 提供真实动作，用例经可观察状态断言行为。
  */
 import { HelmxExternalStore, type AuthSlice, type CatalogSlice, type NavSlice, type PrefsSlice } from '../../src/lib/helmx-store.js'
-import { emptyLiveState } from '../../src/lib/live-state.js'
+import { emptyLiveState, resetSseClientTimings } from '../../src/lib/live-state.js'
+import { resetSessionDocTimings } from '../../src/lib/session-docs.js'
+import { resetVersionWatchTimings } from '../../src/shell/version-watch-model.js'
+import { resetCompletionQueryDebounceMs } from '../../src/conversation/composer-completion-model.js'
+import { resetSymmetricBackFallbackMs } from '../../src/lib/url-hash-model.js'
+import { resetOverviewSearchDebounceMs } from '../../src/overview/overview-timing.js'
 import { HelmxExternalStoreContext } from '../../src/lib/store-context.js'
 import type { HelmxStoreValue, ToastNotice } from '../../src/lib/types.js'
 import { testResetCallbacks } from './store-reset-registry.js'
@@ -20,12 +25,23 @@ export { HelmxExternalStoreContext }
 
 const activeTestStores = new Set<HelmxExternalStore>()
 
+/** 恢复所有可测试覆盖的 Web 时序默认值。 */
+export function resetWebTestTimings(): void {
+  resetSseClientTimings()
+  resetSessionDocTimings()
+  resetVersionWatchTimings()
+  resetCompletionQueryDebounceMs()
+  resetSymmetricBackFallbackMs()
+  resetOverviewSearchDebounceMs()
+}
+
 /** 清理通过 `makeTestStore()` 创建且尚未手动释放的测试 store（消除泄漏定时器）。 */
 export function disposeTestStores(): void {
   for (const store of [...activeTestStores]) {
     store.dispose()
   }
   activeTestStores.clear()
+  resetWebTestTimings()
 }
 
 testResetCallbacks.add(disposeTestStores)

@@ -2,10 +2,9 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import * as React from 'react'
 import { renderToString } from 'react-dom/server'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join, resolve, dirname } from 'node:path'
-import { fileURLToPath, pathToFileURL } from 'node:url'
+import { mkdirSync } from 'node:fs'
+import { resolve, dirname } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import * as HelmxUi from '@helmx/ui'
 import type { HelmxLocale } from '@helmx/ui'
 import * as HelmxPluginClient from '@helmx/plugin-client'
@@ -31,21 +30,22 @@ interface SpecRenderContext {
 ;(globalThis as Record<string, unknown>).__helmx_shared_react_jsx_runtime = await import('react/jsx-runtime')
 ;(globalThis as Record<string, unknown>).__helmx_shared_ui = HelmxUi
 ;(globalThis as Record<string, unknown>).__helmx_shared_plugin_client = HelmxPluginClient
-;(globalThis as Record<string, unknown>).__helmx_shared_lucide_react = await import('lucide-react')
 
 const here = dirname(fileURLToPath(import.meta.url))
-const CACHE = mkdtempSync(join(tmpdir(), 'helmx-jr-feedback-'))
+const CACHE = fileURLToPath(new URL('../../../node_modules/.cache/helmx-test-plugin-clients', import.meta.url))
+mkdirSync(CACHE, { recursive: true })
 const { code } = await compilePluginClientModule(
   'builtin:json-render',
   resolve(here, '../../plugins/src/json-render/client'),
   'spec-primitives.tsx',
   CACHE,
 )
-const f = join(CACHE, 'spec-primitives.mjs')
-writeFileSync(f, code, 'utf8')
-// Windows 上裸绝对路径不是合法 ESM 说明符，统一经 file:// URL 动态导入
-const { SpecNodeList } = await import(pathToFileURL(f).href)
-rmSync(CACHE, { recursive: true, force: true })
+if (code.includes('__helmx_shared_lucide_react')) {
+  ;(globalThis as Record<string, unknown>).__helmx_shared_lucide_react = await import('lucide-react')
+}
+const { SpecNodeList } = await import(`data:text/javascript;base64,${Buffer.from(code, 'utf8').toString('base64')}`) as {
+  SpecNodeList: React.ComponentType<{ nodes: NormalizedSpecNode[]; ctx: SpecRenderContext }>
+}
 
 function render(spec: Record<string, unknown>, pending: boolean, succeeded: boolean, locale: HelmxLocale = 'en'): string {
   const normalized = normalizeSpec(spec)

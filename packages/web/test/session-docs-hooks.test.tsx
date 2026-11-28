@@ -17,8 +17,9 @@ import { createRoot, type Root } from 'react-dom/client'
 import {
   bindSessionDocRuntime,
   getSessionDocState,
+  patchSessionDocTimings,
   resetSessionDocSubscriptions,
-  sessionDocTimings,
+  resetSessionDocTimings,
   subscribeSessionDoc,
 } from '../src/lib/session-docs.js'
 import { usePluginSessionDocsMap } from '../src/lib/store-context.js'
@@ -34,15 +35,14 @@ const e = React.createElement
 
 ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
 
-const originalTimings = { ...sessionDocTimings }
 describe("session-docs-hooks", () => {
 
   before(() => {
-    sessionDocTimings.subscribeDebounceMs = 0
+    patchSessionDocTimings({ subscribeDebounceMs: 0 })
   })
   after(() => {
-    Object.assign(sessionDocTimings, originalTimings)
-  })
+    resetSessionDocTimings()
+  }, { timeout: 60_000 })
 
   const multiplexFrame = (
     action: 'snapshot' | 'updated' | 'deleted',

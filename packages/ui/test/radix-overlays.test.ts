@@ -20,7 +20,7 @@ import {
   TooltipRoot,
   TooltipTrigger,
   TooltipContent,
-} from '@helmx/ui'
+} from '../src/index.js'
 
 test('Popover 原语挂载、数据属性与无障碍属性（SSR）', { timeout: 60_000 }, () => {
   const openHtml = renderToString(
@@ -40,18 +40,14 @@ test('Popover 原语挂载、数据属性与无障碍属性（SSR）', { timeout
     ),
   )
 
-  // 触发器携带 WAI-ARIA 与 Radix 状态属性
   assert.match(openHtml, /aria-haspopup="dialog"/)
   assert.match(openHtml, /aria-expanded="true"/)
   assert.match(openHtml, /data-state="open"/)
-
-  // 浮层内容携带 role="dialog" 与样式类
   assert.match(openHtml, /role="dialog"/)
   assert.match(openHtml, /helmx-popover-content/)
   assert.match(openHtml, /custom-popover/)
   assert.match(openHtml, /浮层正文/)
 
-  // 关闭状态
   const closedHtml = renderToString(
     React.createElement(
       PopoverRoot,
@@ -102,33 +98,23 @@ test('DropdownMenu 原语挂载、数据属性与角色属性（SSR）', { timeo
     ),
   )
 
-  // 菜单触发器语义
   assert.match(menuHtml, /aria-haspopup="menu"/)
   assert.match(menuHtml, /aria-expanded="true"/)
   assert.match(menuHtml, /data-state="open"/)
-
-  // 菜单主体 WAI-ARIA 语义
   assert.match(menuHtml, /role="menu"/)
   assert.match(menuHtml, /data-radix-menu-content/)
   assert.match(menuHtml, /helmx-dropdown-content/)
   assert.match(menuHtml, /pane-more-popover/)
-
-  // 菜单项 role="menuitem"
   assert.match(menuHtml, /role="menuitem"/)
   assert.match(menuHtml, /Rename conversation/)
-
-  // 分隔线 role="separator"
   assert.match(menuHtml, /role="separator"/)
   assert.match(menuHtml, /helmx-dropdown-separator/)
   assert.match(menuHtml, /popover-separator/)
-
-  // 危险菜单项样式契约
   assert.match(menuHtml, /helmx-dropdown-item-danger/)
   assert.match(menuHtml, /popover-item-danger/)
 })
 
 test('Tooltip 原语挂载、无障碍属性与独立使用能力（SSR）', { timeout: 60_000 }, () => {
-  // 原语组合形式
   const primitiveHtml = renderToString(
     React.createElement(
       TooltipProvider,
@@ -155,7 +141,6 @@ test('Tooltip 原语挂载、无障碍属性与独立使用能力（SSR）', { t
   assert.match(primitiveHtml, /helmx-tooltip-content/)
   assert.match(primitiveHtml, /关闭弹窗/)
 
-  // Tooltip 便捷包装器（无需外层 Provider 即可独立安全渲染）
   const wrapperHtml = renderToString(
     React.createElement(
       Tooltip,
@@ -166,7 +151,6 @@ test('Tooltip 原语挂载、无障碍属性与独立使用能力（SSR）', { t
   assert.match(wrapperHtml, /role="tooltip"/)
   assert.match(wrapperHtml, /提示文本/)
 
-  // disabled 时直接透传触发器子元素
   const disabledHtml = renderToString(
     React.createElement(
       Tooltip,

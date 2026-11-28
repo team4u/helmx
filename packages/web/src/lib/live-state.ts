@@ -683,7 +683,7 @@ export class SseParser {
 // SSE 空闲看门狗：卡死连接可靠检测（如 Vite dev 代理保留的挂起流）
 // ---------------------------------------------------------------------------
 
-/** SSE 客户端时序参数（集中定义；对象引用共享，测试可临时改写后复原）。 */
+/** SSE 客户端时序参数（集中定义；对象引用共享，测试请使用 patchSseClientTimings/resetSseClientTimings）。 */
 export const sseClientTimings = {
   /**
    * 连接建立后持续未收到任何字节（含服务端 `: keepalive` 心跳注释行）即判定
@@ -698,6 +698,18 @@ export const sseClientTimings = {
   reconnectCapMs: 10_000,
   /** 重连随机抖动上限（毫秒）。 */
   reconnectJitterMs: 250,
+}
+
+const DEFAULT_SSE_CLIENT_TIMINGS = { ...sseClientTimings }
+
+/** 临时覆盖 SSE 客户端时序参数（供测试缩短超时/退避等待）。 */
+export function patchSseClientTimings(patch: Partial<typeof sseClientTimings>): void {
+  Object.assign(sseClientTimings, patch)
+}
+
+/** 恢复 SSE 客户端默认时序参数。 */
+export function resetSseClientTimings(): void {
+  Object.assign(sseClientTimings, DEFAULT_SSE_CLIENT_TIMINGS)
 }
 
 /** 带空闲 Deadline 的单次读取结果：正常 chunk 或超时（连接卡死）。 */

@@ -920,3 +920,88 @@ test('parse/format: 插件中心 core 页签（#/settings/plugins/core[/<owner>[
   }
   assert.deepEqual(roundtrip(state), state)
 })
+
+const boundaryBase: WorkspaceLocationState = {
+  primaryTarget: { kind: 'conversation', conversationId: 1 },
+  splitTarget: null,
+  drawerStack: [],
+  activeModal: null,
+}
+
+test('Hash 边界：modal 类型不接受原型链属性', { timeout: 60_000 }, () => {
+  for (const modal of ['constructor', '__proto__', 'toString', 'hasOwnProperty']) {
+    assert.equal(parseLocationHash(`#/c/1?modal=${modal}`).activeModal, null)
+  }
+})
+
+test('Hash 边界：所有路径段、查询值都按各自层级编解码', { timeout: 60_000 }, () => {
+  const identifiers = ['builtin:herdr', 'hello world', '中文', 'a/b', 'a%2Fb', 'a+b&c=d?#e', '%E0%A4%A']
+  for (const id of identifiers) {
+    const target = { kind: 'screen' as const, pluginId: id, screenId: id }
+    const state: WorkspaceLocationState = {
+      ...boundaryBase,
+      primaryTarget: target,
+      splitTarget: target,
+      drawerStack: [
+        { kind: 'workbench', tab: id },
+        { kind: 'conversation', conversationId: 11 },
+      ],
+      activeModal: { kind: 'artifact-preview', artifactId: id },
+    }
+    assert.deepEqual(parseLocationHash(formatLocationHash(state)), state, id)
+  }
+})
+
+test('Hash 边界：设置中心子项段的编码斜杠不破坏层级', { timeout: 60_000 }, () => {
+  assert.deepEqual(parseLocationHash('#/settings/profiles/team%2Falpha').primaryTarget, {
+    kind: 'profiles',
+    profileId: 'team/alpha',
+  })
+  assert.deepEqual(parseLocationHash('#/views/a%2Fb/c').primaryTarget, {
+    kind: 'screen',
+    pluginId: 'a/b',
+    screenId: 'c',
+  })
+  assert.deepEqual(parseLocationHash('#/settings/profiles/team/alpha').primaryTarget, { kind: 'profiles' })
+  assert.deepEqual(parseLocationHash('#/settings/skills/a/b').primaryTarget, { kind: 'profiles' })
+  assert.deepEqual(parseLocationHash('#/settings/profiles/').primaryTarget, { kind: 'profiles' })
+  assert.equal(parseLocationHash('#/c/1?split=settings%2Fprofiles%2F').splitTarget, null)
+})
+
+test('Hash 边界：未编码的多余路径段不能冒充合法目标', { timeout: 60_000 }, () => {
+  assert.deepEqual(parseLocationHash('#/views/a/b/c').primaryTarget, { kind: 'profiles' })
+  assert.equal(parseLocationHash('#/c/1?split=views/a/b/c').splitTarget, null)
+})
+
+test('Hash 边界：screen/overview sp.* 与 ssp.* 参数不做二次解码，百分号与保留字符往返无损', { timeout: 60_000 }, () => {
+  const trickyValues = [
+    '100%',
+    '100% done',
+    'a%2Fb',
+    '50%25',
+    '%E0%A4%A',
+    'a+b&c=d?#e',
+    '中文 / 检索 %20',
+  ]
+  for (const val of trickyValues) {
+    const screenState: WorkspaceLocationState = {
+      primaryTarget: { kind: 'screen', pluginId: 'builtin:workflow', screenId: 'runs', params: { q: val, filter: 'all' } },
+      splitTarget: { kind: 'screen', pluginId: 'builtin:workflow', screenId: 'runs', params: { q: val } },
+      drawerStack: [],
+      activeModal: null,
+    }
+    const once = parseLocationHash(formatLocationHash(screenState))
+    assert.deepEqual(once, screenState, `screen roundtrip failed for ${val}`)
+    assert.deepEqual(parseLocationHash(formatLocationHash(once)), screenState, `screen double-roundtrip failed for ${val}`)
+
+    const overviewState: WorkspaceLocationState = {
+      primaryTarget: { kind: 'overview', params: { q: val } },
+      splitTarget: null,
+      drawerStack: [],
+      activeModal: null,
+    }
+    const onceOverview = parseLocationHash(formatLocationHash(overviewState))
+    assert.deepEqual(onceOverview, overviewState, `overview roundtrip failed for ${val}`)
+    assert.deepEqual(parseLocationHash(formatLocationHash(onceOverview)), overviewState, `overview double-roundtrip failed for ${val}`)
+  }
+})

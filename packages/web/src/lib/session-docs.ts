@@ -93,7 +93,7 @@ const stream: MultiplexStreamState = {
   debounceMicrotaskPending: false,
 }
 
-/** 会话文档 SSE 时序参数（集中定义；对象引用共享，测试可临时改写后复原）。 */
+/** 会话文档 SSE 时序参数（集中定义；对象引用共享，测试请使用 patchSessionDocTimings/resetSessionDocTimings）。 */
 export const sessionDocTimings = {
   reconnectBaseMs: 1_000,
   reconnectCapMs: 15_000,
@@ -101,6 +101,18 @@ export const sessionDocTimings = {
   subscribeDebounceMs: 50,
   /** 多路复用 SSE 空闲看门狗阈值（毫秒），对齐内核 15s keepalive。 */
   idleTimeoutMs: 30_000,
+}
+
+const DEFAULT_SESSION_DOC_TIMINGS = { ...sessionDocTimings }
+
+/** 临时覆盖会话文档 SSE 时序参数（供测试缩短防抖/超时等待）。 */
+export function patchSessionDocTimings(patch: Partial<typeof sessionDocTimings>): void {
+  Object.assign(sessionDocTimings, patch)
+}
+
+/** 恢复会话文档 SSE 默认时序参数。 */
+export function resetSessionDocTimings(): void {
+  Object.assign(sessionDocTimings, DEFAULT_SESSION_DOC_TIMINGS)
 }
 
 function notify(entry: EntryState): void {
@@ -275,7 +287,11 @@ function handleUnauthorizedStream(items: readonly SubscribedEntryItem[], signatu
       notify(item.entry)
     }
   }
-  notifyUnauthorizedResponse({ status: 401 })
+  if (unauthorizedHandler !== undefined) {
+    unauthorizedHandler()
+  } else {
+    notifyUnauthorizedResponse({ status: 401 })
+  }
 }
 
 type ProbeSubsetResult =
@@ -798,16 +814,24 @@ type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Respo
 
 let fetchImpl: FetchLike | undefined
 let tokenProvider: () => string | null = getStoredToken
+let unauthorizedHandler: (() => void) | undefined
 
-/** 注入 fetch/token 替身（任一参数可省略表示保持不变）；返回恢复上一实现的函数。 */
-export function bindSessionDocRuntime(fetch?: FetchLike, token?: () => string | null): () => void {
+/** 注入 fetch/token/401 处理替身（任一参数可省略表示保持不变）；返回恢复上一实现的函数。 */
+export function bindSessionDocRuntime(
+  fetch?: FetchLike,
+  token?: () => string | null,
+  opts?: { onUnauthorized?: () => void },
+): () => void {
   const prevFetch = fetchImpl
   const prevToken = tokenProvider
+  const prevUnauthorized = unauthorizedHandler
   if (fetch !== undefined) fetchImpl = fetch
   if (token !== undefined) tokenProvider = token
+  if (opts !== undefined && 'onUnauthorized' in opts) unauthorizedHandler = opts.onUnauthorized
   return () => {
     fetchImpl = prevFetch
     tokenProvider = prevToken
+    unauthorizedHandler = prevUnauthorized
   }
 }
 
