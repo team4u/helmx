@@ -5,6 +5,7 @@ import type {
   ActionManifest,
   CredentialSummary,
   HelmxLocale,
+  PluginConfigCatalogEntry,
   PluginSummary,
   PluginUiContribution,
   Profile,
@@ -20,6 +21,7 @@ import type {
   HelmxStoreValue,
   LocalePreference,
   ResolvedTarget,
+  SearchFocusAnchor,
   ThemeMode,
   ThemePreference,
 } from '../types.js'
@@ -65,6 +67,7 @@ export interface CatalogSlice {
   credentials: CredentialSummary[]
   skills: SkillSummary[]
   actions: ActionManifest[]
+  pluginConfigCatalog: PluginConfigCatalogEntry[]
 }
 
 export interface PluginsUiSlice {
@@ -103,6 +106,7 @@ export interface NavSlice {
   workbenchParams: WorkbenchParamsState | null
   activeModal: ActiveModal
   highlightedEntry: { conversationId: number; entryId: string } | null
+  searchFocusAnchor: SearchFocusAnchor | null
 }
 
 export interface ConversationBackgroundSlice {
@@ -156,6 +160,8 @@ export type HelmxStoreActions = Pick<
   | 'closeAllDrawers'
   | 'openSpace'
   | 'setActiveModal'
+  | 'focusSearchAnchor'
+  | 'clearSearchFocusAnchor'
   | 'dismissNotice'
   | 'pauseNoticeTimer'
   | 'resumeNoticeTimer'
@@ -181,6 +187,7 @@ export type StoreDomainKey =
   | 'credentials'
   | 'skills'
   | 'actions'
+  | 'pluginConfigCatalog'
   | 'conversations'
   | 'workspaceTopology'
   | 'conversationDetailsMap'
@@ -208,6 +215,7 @@ export type StoreDomainKey =
   | 'locationState'
   | 'conversationBackground'
   | 'highlightedEntry'
+  | 'searchFocusAnchor'
   | 'homeLanding'
   | 'notices'
 

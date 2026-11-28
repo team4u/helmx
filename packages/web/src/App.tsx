@@ -23,6 +23,7 @@ import { standbyDraftKey } from './conversation/standby-model.js'
 import { DrawerStackShell } from './conversation/DrawerStackShell.js'
 import { useWebLocale } from './i18n/use-web-locale.js'
 import { isElementVisibleInDocument } from './lib/dom-visibility.js'
+import { useSearchFocusAnchor } from './lib/use-search-focus-anchor.js'
 import { HelmxStoreProvider } from './lib/HelmxStoreProvider.js'
 import {
   useActiveModal,
@@ -187,8 +188,8 @@ const ProfileCenter = lazyWithRetry(() =>
 const SkillCenter = lazyWithRetry(() =>
   lazy(() => import('./skills/SkillCenter.js').then((m) => ({ default: m.SkillCenter }))),
 )
-const CommandPaletteModal = lazyWithRetry(
-  () => lazy(() => import('./modals/CommandPaletteModal.js').then((m) => ({ default: m.CommandPaletteModal }))),
+const OmniboxModal = lazyWithRetry(
+  () => lazy(() => import('./omnibox/OmniboxModal.js').then((m) => ({ default: m.OmniboxModal }))),
   { overlay: true },
 )
 const ShortcutsModal = lazyWithRetry(
@@ -438,6 +439,7 @@ function HelmxShellInner({
   const closeModal = useCallback(() => setActiveModal(null), [setActiveModal])
   const focusPrimary = useCallback(() => setFocusedPanel?.('primary'), [setFocusedPanel])
   const focusSplit = useCallback(() => setFocusedPanel?.('split'), [setFocusedPanel])
+  useSearchFocusAnchor()
 
   useEffect(() => {
     if (!authenticated || sseConnected) {
@@ -684,7 +686,7 @@ function HelmxShellInner({
 
         {activeModal?.kind === 'command-palette' && (
           <Suspense fallback={<div className="screen-loading screen-loading-overlay"><LoadingState label={t('conv.shell.loadingCommandPalette')} iconSize={13} /></div>}>
-            <CommandPaletteModal onClose={closeModal} />
+            <OmniboxModal onClose={closeModal} />
           </Suspense>
         )}
         {activeModal?.kind === 'shortcuts' && (

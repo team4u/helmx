@@ -104,3 +104,16 @@
   gap: 8px;
   flex-wrap: wrap;
 }
+
+/* Omnibox 深链落地高亮：1.5s 克制发丝环（亮暗主题一致，尊重减少动画偏好） */
+.search-focus-highlight {
+  border-radius: var(--radius-sm);
+  background: var(--accent-bg);
+  box-shadow: 0 0 0 1px var(--accent-border), 0 0 0 3px var(--focus-ring-soft);
+  transition: background var(--dur-normal) var(--ease-out), box-shadow var(--dur-normal) var(--ease-out);
+}
+@media (prefers-reduced-motion: reduce) {
+  .search-focus-highlight {
+    transition: none;
+  }
+}

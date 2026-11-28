@@ -1,22 +1,24 @@
 /**
- * 命令面板选中态：键盘上下移动、指针悬停选中（查询变化后忽略悬停直到指针真正移动）、
- * 选中项滚动到可见区域。
+ * Omnibox keyboard & pointer selection state:
+ * - Pins `selectedId` across asynchronous lower-zone arrivals so Enter never races
+ * - Suppresses stationary pointer hover after query / scope / keyboard changes until the pointer actually moves
+ * - Scrolls the active option into view smoothly (`block: 'nearest'`)
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react'
-import { resolveSelectedIndex, type PaletteRow } from '../command-palette-model.js'
+import { resolveSelectedIndex } from './ranker.js'
+import type { OmniboxItem } from './types.js'
 
-export interface PaletteSelection {
+export interface OmniboxSelection {
   selectedId: string | null
   selectedIdx: number
   rowIndexById: Map<string, number>
   listRef: RefObject<HTMLDivElement | null>
   resetSelection: () => void
-  /** 键盘方向键移动：忽略悬停选中，空列表不动。 */
   moveSelection: (delta: 1 | -1) => void
   handleRowPointerHover: (rowId: string, clientX: number, clientY: number, isMove: boolean) => void
 }
 
-export function usePaletteSelection(rows: PaletteRow[]): PaletteSelection {
+export function useOmniboxSelection(rows: ReadonlyArray<OmniboxItem>): OmniboxSelection {
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const listRef = useRef<HTMLDivElement | null>(null)
   const ignoreHoverRef = useRef(false)
@@ -47,10 +49,14 @@ export function usePaletteSelection(rows: PaletteRow[]): PaletteSelection {
       if (rows.length === 0) return
       const nextIdx =
         delta === 1
-          ? (selectedIdx < 0 ? 0 : (selectedIdx + 1) % rows.length)
-          : (selectedIdx < 0 ? rows.length - 1 : (selectedIdx - 1 + rows.length) % rows.length)
+          ? selectedIdx < 0
+            ? 0
+            : (selectedIdx + 1) % rows.length
+          : selectedIdx < 0
+            ? rows.length - 1
+            : (selectedIdx - 1 + rows.length) % rows.length
       const nextRow = rows[nextIdx]
-      if (nextRow) setSelectedId(nextRow.id)
+      if (nextRow !== undefined) setSelectedId(nextRow.id)
     },
     [rows, selectedIdx],
   )
@@ -68,5 +74,13 @@ export function usePaletteSelection(rows: PaletteRow[]): PaletteSelection {
     if (!ignoreHoverRef.current) setSelectedId(rowId)
   }, [])
 
-  return { selectedId, selectedIdx, rowIndexById, listRef, resetSelection, moveSelection, handleRowPointerHover }
+  return {
+    selectedId,
+    selectedIdx,
+    rowIndexById,
+    listRef,
+    resetSelection,
+    moveSelection,
+    handleRowPointerHover,
+  }
 }

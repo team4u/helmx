@@ -17,7 +17,7 @@ const { mountSharedPluginNamespaces } = await import('./helpers/builtin-clients.
 
 const { createRoot } = await import('react-dom/client')
 const { ScreenHost } = await import('../src/screens/ScreenHost.js')
-const { CommandPaletteModal } = await import('../src/modals/CommandPaletteModal.js')
+const { OmniboxModal } = await import('../src/omnibox/OmniboxModal.js')
 const { AuthGate } = await import('../src/shell/AuthGate.js')
 const { ToastOverlay } = await import('../src/shell/ToastOverlay.js')
 const { Sidebar } = await import('../src/shell/Sidebar.js')
@@ -407,7 +407,7 @@ describe("screen-host-shell", () => {
       let closed = false
       mount(
         <HostStoreProviders value={store}>
-          <CommandPaletteModal onClose={() => { closed = true }} />
+          <OmniboxModal onClose={() => { closed = true }} />
         </HostStoreProviders>,
       )
       await settle()

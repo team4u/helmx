@@ -42,7 +42,7 @@ const { SkillCenter } = await import('../src/skills/SkillCenter.js')
 const { NodeCenter } = await import('../src/nodes/NodeCenter.js')
 const { ModelCenter } = await import('../src/models/ModelCenter.js')
 const { Sidebar } = await import('../src/shell/Sidebar.js')
-const { CommandPaletteModal } = await import('../src/modals/CommandPaletteModal.js')
+const { OmniboxModal } = await import('../src/omnibox/OmniboxModal.js')
 
 const e = React.createElement
 
@@ -133,7 +133,7 @@ test('CommandPaletteModal: the four quick items dispatch primary routes uniforml
     spyOpenTarget(store, opened)
     try {
       await act(async () => {
-        root.render(e(HostStoreProviders, { value: store }, e(CommandPaletteModal, { onClose: () => { closed = true } })))
+        root.render(e(HostStoreProviders, { value: store }, e(OmniboxModal, { onClose: () => { closed = true } })))
         await flushMacrotask(0)
       })
       const row = Array.from(document.querySelectorAll<HTMLButtonElement>('[data-idx].nav-item')).find((el) =>

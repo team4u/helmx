@@ -673,6 +673,47 @@ test('resolveTargetString: 非法查询串整体判无效（重复键 / 空键�
   assert.deepEqual(parseScreenTargetQuery('b=2&a=1'), { a: '1', b: '2' })
 })
 
+test('resolveTargetString: overview 与全部五中心子目标完整解析与哈希往返', { timeout: 60_000 }, () => {
+  assert.deepEqual(resolveTargetString('overview', []), { kind: 'overview' })
+  assert.deepEqual(resolveTargetString('overview?', []), { kind: 'overview' })
+  assert.deepEqual(resolveTargetString('overview?bucket=archived', []), {
+    kind: 'overview',
+    params: { bucket: 'archived' },
+  })
+  assert.deepEqual(resolveTargetString('overview?bucket=needs_attention&q=deploy', []), {
+    kind: 'overview',
+    params: { bucket: 'needs_attention', q: 'deploy' },
+  })
+  assert.equal(resolveTargetString('overview?bad', []), null)
+  assert.equal(resolveTargetString('overview?__proto__=1', []), null)
+
+  // 五中心子目标与 agent / conversation 目标统一往返
+  const targets = [
+    resolveTargetString('overview?bucket=archived', []),
+    resolveTargetString('models:defaults', []),
+    resolveTargetString('models:anthropic', []),
+    resolveTargetString('profiles:coder', []),
+    resolveTargetString('skills:helmx-cli', []),
+    resolveTargetString('nodes:local', []),
+    resolveTargetString('plugins:builtin:workflow', []),
+    resolveTargetString('plugins:core', []),
+    resolveTargetString('plugins:core/core:host/info', []),
+    resolveTargetString('screen:builtin:workflow/runs?tab=active', []),
+    resolveTargetString('agent:coder', []),
+    resolveTargetString('conversation:42', []),
+  ]
+  for (const target of targets) {
+    assert.ok(target !== null)
+    const state: WorkspaceLocationState = {
+      primaryTarget: target,
+      splitTarget: null,
+      drawerStack: [],
+      activeModal: null,
+    }
+    assert.deepEqual(roundtrip(state).primaryTarget, target)
+  }
+})
+
 // ---------------------------------------------------------------------------
 // agent 待命目标（#/a/<profileId>，草稿环境 node/cwd 主/分屏往返）
 // ---------------------------------------------------------------------------

@@ -29,7 +29,7 @@ import type { HelmxStoreValue } from '../src/lib/types.js'
 import { resetPluginClientCache, seedPluginClientModule } from '../src/lib/plugin-client.js'
 import { ConversationPane } from '../src/conversation/ConversationPane.js'
 import { ConversationTimeline } from '../src/conversation/ConversationTimeline.js'
-import { CommandPaletteModal } from '../src/modals/CommandPaletteModal.js'
+import { OmniboxModal } from '../src/omnibox/OmniboxModal.js'
 import { ModelCenter } from '../src/models/ModelCenter.js'
 import { NodeCenter } from '../src/nodes/NodeCenter.js'
 import { PluginCenter } from '../src/plugins/PluginCenter.js'
@@ -381,7 +381,7 @@ describe("helmx-store-rerender-isolation", () => {
             <NodeCenter />
           </React.Profiler>
           <React.Profiler id="command-palette" onRender={() => bump('commandPalette')}>
-            <CommandPaletteModal onClose={noop} />
+            <OmniboxModal onClose={noop} />
           </React.Profiler>
           <React.Profiler id="pane-1" onRender={() => bump('pane1')}>
             <ConversationPane conversationId={1} isSplit={false} />

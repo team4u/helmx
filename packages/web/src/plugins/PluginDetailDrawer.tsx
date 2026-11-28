@@ -3,6 +3,7 @@ import { DEFAULT_HELMX_LOCALE, resolveLocalizedText, type PluginSummary, type Sk
 import { Callout, Card, DetailDrawer, EmptyState, HelmxIcon, HelperText, LoadingState, MonoId, Stack } from '@helmx/ui'
 import { createWebTranslator } from '../i18n/catalog.js'
 import { useOptionalGroupedUi, useOptionalLocale, useOptionalStoreActions } from '../lib/store-context.js'
+import { useSearchFocusAnchor } from '../lib/use-search-focus-anchor.js'
 import { PluginConfigForm } from './plugin-detail/PluginConfigForm.js'
 import { PluginCapabilitiesCard } from './plugin-detail/PluginCapabilitiesCard.js'
 import { PluginFailureDiagnosticCallout, PluginInUseConfirmCallout } from './plugin-detail/PluginDiagnosticCallouts.js'
@@ -78,6 +79,7 @@ export function PluginDetailDrawer({
   const t = useMemo(() => createWebTranslator(locale), [locale])
 
   const configLoader = usePluginConfigLoader(open, plugin?.id)
+  useSearchFocusAnchor()
   const ops = usePluginDrawerActions({
     open,
     plugin,

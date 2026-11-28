@@ -484,7 +484,7 @@ test('样式边界：统一批量操作栏 .batch-bar 族归属 web primitives.c
 
 /** 运行时由 JS / Radix 动态注入的 CSS 自定义属性白名单（带明确来源说明，防僵尸登记）。 */
 const RUNTIME_CSS_VAR_ALLOWLIST: Readonly<Record<string, string>> = {
-  '--palette-vvh': 'CommandPaletteModal.tsx sets --palette-vvh dynamically from visualViewport.height',
+  '--palette-vvh': 'OmniboxModal.tsx sets --palette-vvh dynamically from visualViewport.height',
   '--dialog-layer-z': '@helmx/ui Dialog/AlertDialog sets --dialog-layer-z inline for nested overlays',
   '--helmx-split-ratio': 'App.tsx sets --helmx-split-ratio inline for desktop resizable split panes',
   '--radix-popper-transform-origin': 'Radix Popper runtime CSS custom property for popover/dropdown/tooltip/select enter origin',
