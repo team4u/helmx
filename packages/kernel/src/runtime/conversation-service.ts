@@ -149,6 +149,8 @@ export class ConversationService {
   private readonly mutationMutex = createKeyedMutex<number>()
   /** In-memory transient runtime model/thinking overrides (cleared on run end when `resetOnRunEnd`, config patch, reset, delete, or `null`). */
   private readonly runtimeModelOverrides = new Map<number, { resetOnRunEnd: boolean }>()
+  /** Derived symbolic tier references (`'tier/<id>'`) for active conversations (never persisted in SQLite). */
+  private readonly effectiveModelRefs = new Map<number, string>()
 
   private readonly withMutationGate = <T>(id: number, op: () => Promise<T>): Promise<T> =>
     this.mutationMutex.run(id, op)
@@ -191,6 +193,8 @@ export class ConversationService {
       resolveModelRef: this.o.resolveModelRef,
       summaryWithOwnership: (id) => this.summaryWithOwnership(id),
       hasRuntimeModelOverride: (id) => this.runtimeModelOverrides.has(id),
+      getEffectiveModelRef: (id) => this.effectiveModelRefs.get(id),
+      setEffectiveModelRef: (id, rawRef) => this.setEffectiveModelRef(id, rawRef),
       // Context window and thresholds may change after model/Profile alignment: trigger context usage recalculation.
       scheduleContextUsageRefresh: (id) => this.tracker.scheduleContextUsageRefresh(id),
     })
@@ -254,6 +258,7 @@ export class ConversationService {
       onClearRuntimeModelOverride: (id) => {
         this.runtimeModelOverrides.delete(id)
       },
+      setEffectiveModelRef: (id, rawRef) => this.setEffectiveModelRef(id, rawRef),
       managedConversations: this.o.managedConversations,
       cancelAsksByConversation: this.o.cancelAsksByConversation,
       ownershipOf: this.o.ownershipOf,
@@ -362,14 +367,35 @@ export class ConversationService {
   }
 
   withOwnership(summary: ConversationSummary): ConversationSummary {
-    if (this.runtimeModelOverrides.has(summary.id)) {
-      return { ...summary, ownedBy: this.o.ownershipOf(summary.id), runtimeModelOverride: true }
+    const ownedBy = this.o.ownershipOf(summary.id)
+    const hasRuntime = this.runtimeModelOverrides.has(summary.id)
+    const effectiveModelRef = this.effectiveModelRefs.get(summary.id)
+    let next: ConversationSummary = summary
+    if (hasRuntime) {
+      if (next.runtimeModelOverride !== true) next = { ...next, runtimeModelOverride: true }
+    } else if (next.runtimeModelOverride !== undefined) {
+      const { runtimeModelOverride: _dropped, ...rest } = next
+      next = rest
     }
-    if (summary.runtimeModelOverride !== undefined) {
-      const { runtimeModelOverride: _dropped, ...rest } = summary
-      return { ...rest, ownedBy: this.o.ownershipOf(summary.id) }
+    if (effectiveModelRef !== undefined) {
+      if (next.effectiveModelRef !== effectiveModelRef) next = { ...next, effectiveModelRef }
+    } else if (next.effectiveModelRef !== undefined) {
+      const { effectiveModelRef: _droppedRef, ...rest } = next
+      next = rest
     }
-    return { ...summary, ownedBy: this.o.ownershipOf(summary.id) }
+    return { ...next, ownedBy }
+  }
+
+  effectiveModelRefOf(id: number): string | undefined {
+    return this.effectiveModelRefs.get(id)
+  }
+
+  setEffectiveModelRef(id: number, rawRef: string | undefined): void {
+    if (rawRef !== undefined && rawRef.startsWith('tier/')) {
+      this.effectiveModelRefs.set(id, rawRef)
+    } else {
+      this.effectiveModelRefs.delete(id)
+    }
   }
 
   activitySnapshot(): HubActivityCounts {

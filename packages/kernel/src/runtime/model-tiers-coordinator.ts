@@ -163,10 +163,18 @@ export class ModelTiersCoordinator {
     for (const { impl } of providers) {
       const map = impl.getTiers()
       if (map === null || typeof map !== 'object') continue
+      const sanitizeTierText = (value: unknown, maxLen: number): string | undefined => {
+        if (typeof value !== 'string') return undefined
+        const trimmed = value.trim()
+        return trimmed !== '' && trimmed.length <= maxLen ? trimmed : undefined
+      }
       for (const [id, spec] of Object.entries(map)) {
         if (!isValidModelTierId(id) || spec === null || typeof spec !== 'object' || typeof spec.model !== 'string') {
           continue
         }
+        const displayGroup = sanitizeTierText(spec.displayGroup, 32)
+        const displayLabel = sanitizeTierText(spec.displayLabel, 80)
+        const displayDetail = sanitizeTierText(spec.displayDetail, 120)
         const base: ModelTierSpec = {
           model: spec.model,
           ...(typeof spec.thinkingLevel === 'string' && spec.thinkingLevel !== ''
@@ -175,6 +183,11 @@ export class ModelTiersCoordinator {
           ...(typeof spec.description === 'string' && spec.description !== ''
             ? { description: spec.description }
             : {}),
+          ...(displayGroup !== undefined ? { displayGroup } : {}),
+          ...(displayLabel !== undefined ? { displayLabel } : {}),
+          ...(displayDetail !== undefined ? { displayDetail } : {}),
+          ...(spec.preserveRef === true ? { preserveRef: true } : {}),
+          ...(spec.singleTurnEligible === false ? { singleTurnEligible: false } : {}),
         }
         result[id] = base
       }
@@ -223,6 +236,7 @@ export class ModelTiersCoordinator {
       ...(tier.thinkingLevel !== undefined && tier.thinkingLevel !== ''
         ? { tierThinkingLevel: tier.thinkingLevel }
         : {}),
+      ...(tier.preserveRef === true ? { preserveRef: true } : {}),
     }
   }
 }

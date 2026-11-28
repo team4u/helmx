@@ -238,6 +238,7 @@ export function GlobalDefaultsPanel({
               resetLabel={t('models.defaults.compactionOptionUnset')}
               resetTitle={t('models.defaults.compactionOptionUnset')}
               enableShortcut={false}
+              allowPreserveRefTiers={false}
               disabled={saving}
               copy={copy}
               onNotice={onNotice}

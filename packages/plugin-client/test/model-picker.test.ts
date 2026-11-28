@@ -852,3 +852,143 @@ test('ModelPickerControl SSR: variant="field" renders standard 32px/28px bordere
   assert.match(composerHtml, /class="btn btn-ghost btn-sm composer-model-button"/)
   assert.doesNotMatch(composerHtml, /helmx-model-picker-field/)
 })
+
+test('ModelPickerControl grouped tiers, displayLabel/displayDetail & preserveRef/singleTurnEligible filtering', { timeout: 60_000 }, async () => {
+  const slice: HostModelsSlice = {
+    models: CATALOG_MODELS,
+    modelTiers: [
+      {
+        id: 'fast',
+        model: 'openai/gpt-4o-mini',
+        thinkingLevel: 'low',
+        available: true,
+        description: 'Fast ungrouped tier',
+      },
+      {
+        id: 'claude-duo',
+        model: 'anthropic/claude-3-7-sonnet',
+        thinkingLevel: 'high',
+        description: 'Plan then refine',
+        displayGroup: 'duo',
+        displayLabel: 'Claude 精修',
+        displayDetail: 'opus → sonnet',
+        preserveRef: true,
+        singleTurnEligible: false,
+        available: true,
+      },
+    ],
+  }
+  const handle: CatalogHandle = { slice, listeners: new Set() }
+  const applied: Array<{ model: string; thinkingLevel: string | null }> = []
+
+  const mountPicker = async (props: Partial<ModelPickerControlProps>) => {
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root = ReactDOMClient.createRoot(container)
+    await act(async () => {
+      root.render(
+        e(
+          PluginClientHostContext.Provider,
+          { value: makePort(handle) },
+          e(ModelPickerControl, {
+            effectiveModel: 'tier/claude-duo',
+            activeThinkingLevel: 'high',
+            resetLabel: 'Reset',
+            resetTitle: 'Reset',
+            buttonTitle: 'Model',
+            onApply: (model, thinkingLevel) => {
+              applied.push({ model, thinkingLevel })
+            },
+            ...props,
+          }),
+        ),
+      )
+    })
+    return {
+      container,
+      cleanup: async () => {
+        await act(async () => {
+          root.unmount()
+        })
+        container.remove()
+      },
+    }
+  }
+
+  // 1. Trigger shows displayLabel + duo icon, popover renders grouped tiers BEFORE ungrouped tiers BEFORE models, and keyboard navigation matches
+  const run1 = await mountPicker({})
+  try {
+    const trigger = run1.container.querySelector<HTMLButtonElement>('button.composer-model-button')
+    assert.ok(trigger !== null)
+    assert.equal(trigger.querySelector('.composer-model-label')?.textContent?.trim(), 'Claude 精修')
+    assert.ok(trigger.querySelector('.composer-model-tier-trigger-icon') !== null)
+
+    await act(async () => {
+      trigger.click()
+    })
+    const popover = document.body.querySelector<HTMLElement>('.composer-model-popover')
+    assert.ok(popover !== null)
+    const headers = Array.from(popover.querySelectorAll('.popover-header')).map((el) => el.textContent?.trim())
+    assert.deepEqual(headers, ['Dual-phase recipes', 'Model tiers', 'Model list'])
+
+    const rows = Array.from(popover.querySelectorAll<HTMLButtonElement>('.composer-model-row-main'))
+    assert.match(rows[0]!.textContent ?? '', /Claude 精修/)
+    assert.match(rows[0]!.textContent ?? '', /opus → sonnet/)
+    assert.match(rows[0]!.textContent ?? '', /Plan then refine/)
+    assert.equal(rows[0]!.querySelector('.composer-model-row-name')?.classList.contains('mono'), false)
+    assert.match(rows[1]!.textContent ?? '', /tier\/fast/)
+
+    // Keyboard navigation picks index 0 -> 'tier/claude-duo'
+    const search = popover.querySelector<HTMLInputElement>('input[aria-label="Search models"]')
+    assert.ok(search !== null)
+    await act(async () => {
+      search.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true, cancelable: true }))
+    })
+    await act(async () => {
+      search.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
+    })
+    assert.deepEqual(applied, [{ model: 'tier/claude-duo', thinkingLevel: null }])
+  } finally {
+    await run1.cleanup()
+  }
+
+  // 2. allowPreserveRefTiers={false} excludes preserveRef tiers
+  const run2 = await mountPicker({ allowPreserveRefTiers: false, effectiveModel: 'openai/gpt-4o-mini' })
+  try {
+    const trigger = run2.container.querySelector<HTMLButtonElement>('button.composer-model-button')!
+    await act(async () => {
+      trigger.click()
+    })
+    const popover = document.body.querySelector<HTMLElement>('.composer-model-popover')!
+    const text = popover.textContent ?? ''
+    assert.doesNotMatch(text, /Claude 精修/)
+    assert.doesNotMatch(text, /Dual-phase recipes/)
+    assert.match(text, /tier\/fast/)
+  } finally {
+    await run2.cleanup()
+  }
+
+  // 3. Next turn only mode hides singleTurnEligible: false tiers
+  const run3 = await mountPicker({
+    effectiveModel: 'openai/gpt-4o-mini',
+    nextTurnMode: { onChange: () => {} },
+  })
+  try {
+    const trigger = run3.container.querySelector<HTMLButtonElement>('button.composer-model-button')!
+    await act(async () => {
+      trigger.click()
+    })
+    const popover = document.body.querySelector<HTMLElement>('.composer-model-popover')!
+    assert.match(popover.textContent ?? '', /Claude 精修/)
+    const nextTurnTab = Array.from(popover.querySelectorAll<HTMLButtonElement>('.composer-model-mode-bar [role="tab"]'))
+      .find((btn) => (btn.textContent ?? '').includes('Next turn only'))!
+    await act(async () => {
+      nextTurnTab.click()
+    })
+    const nextText = popover.textContent ?? ''
+    assert.doesNotMatch(nextText, /Claude 精修/)
+    assert.match(nextText, /tier\/fast/)
+  } finally {
+    await run3.cleanup()
+  }
+})

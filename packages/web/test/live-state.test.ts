@@ -893,3 +893,77 @@ test('runtimeModelOverride 在 applySnapshot / mergeConversationDetail / convers
   })
   assert.equal('runtimeModelOverride' in (clearedSnap.conversationDetails[1] ?? {}), false)
 })
+
+test('effectiveModelRef 与 modelTiers 新展示元数据在快照/详情合并/upsert 与目录归一化中保真并去残留', { timeout: 60_000 }, () => {
+  const catalog = normalizeModelCatalogInfo({
+    models: [{ provider: 'anthropic', modelId: 'claude-3-7-sonnet', available: true }],
+    thinkingLevels: { 'anthropic/claude-3-7-sonnet': ['off', 'high'] },
+    modelTiers: [
+      {
+        id: 'claude-duo',
+        model: 'anthropic/claude-3-7-sonnet',
+        available: true,
+        thinkingLevel: 'high',
+        thinkingLevels: ['off', 'high'],
+        description: 'Plan then verify',
+        displayGroup: 'duo',
+        displayLabel: 'Claude 精修',
+        displayDetail: 'opus → sonnet',
+        preserveRef: true,
+        singleTurnEligible: false,
+      },
+    ],
+  })
+  assert.deepEqual(catalog.modelTiers, [
+    {
+      id: 'claude-duo',
+      model: 'anthropic/claude-3-7-sonnet',
+      available: true,
+      thinkingLevel: 'high',
+      thinkingLevels: ['off', 'high'],
+      description: 'Plan then verify',
+      displayGroup: 'duo',
+      displayLabel: 'Claude 精修',
+      displayDetail: 'opus → sonnet',
+      preserveRef: true,
+      singleTurnEligible: false,
+    },
+  ])
+
+  const baseDetail: ConversationDetail = {
+    ...conv,
+    model: 'faux/base',
+    thinkingLevel: 'low',
+    entries: [{ id: '1', kind: 'pi.assistant' }],
+  }
+  const withSymbolic: ConversationSummary = {
+    ...conv,
+    model: 'faux/base',
+    effectiveModelRef: 'tier/claude-duo',
+  }
+
+  const snapState = applySnapshot({ ...emptyLiveState(), conversationDetails: { 1: baseDetail } }, {
+    ...snapshot,
+    conversations: [withSymbolic],
+  })
+  assert.equal(snapState.conversations[0]?.effectiveModelRef, 'tier/claude-duo')
+  assert.equal(snapState.conversationDetails[1]?.effectiveModelRef, 'tier/claude-duo')
+
+  const staleDetail: ConversationDetail = { ...withSymbolic, entries: [{ id: '1', kind: 'pi.assistant' }] }
+  const clearedSummaryState = {
+    ...snapState,
+    conversations: [{ ...conv, model: 'faux/base', thinkingLevel: 'low' }],
+  }
+  const mergedCleared = mergeConversationDetail(clearedSummaryState, staleDetail)
+  assert.equal('effectiveModelRef' in (mergedCleared.conversationDetails[1] ?? {}), false)
+
+  const upsertedCleared = applyEventFrame(snapState, {
+    seq: snapState.seq + 1,
+    event: {
+      type: 'conversation.upsert',
+      conversation: { ...conv, model: 'faux/base', thinkingLevel: 'low' },
+    },
+  })
+  assert.equal('effectiveModelRef' in (upsertedCleared.conversations[0] ?? {}), false)
+  assert.equal('effectiveModelRef' in (upsertedCleared.conversationDetails[1] ?? {}), false)
+})

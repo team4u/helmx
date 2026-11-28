@@ -250,6 +250,8 @@ export interface ModelPickerControlCopy {
   refreshCatalog: string
   /** Optional header for the model tiers section above the model list. */
   tiersHeader: string
+  /** Optional localized headers for grouped model tiers keyed by `tier.displayGroup`. */
+  tierGroupLabels?: Readonly<Record<string, string>>
   /** Tier row tooltip template ({tier}/{model}). */
   tierRowTitle: string
   listHeader: string
@@ -289,6 +291,7 @@ export const DEFAULT_MODEL_PICKER_COPY: Readonly<ModelPickerControlCopy> = Objec
   searchPlaceholder: 'Search models…',
   refreshCatalog: 'Refresh dynamic model catalog',
   tiersHeader: 'Model tiers',
+  tierGroupLabels: Object.freeze({ duo: 'Dual-phase recipes' }),
   tierRowTitle: 'Use {tier} ({model})',
   listHeader: 'Model list',
   navHint: '↑↓ select · Enter confirm',

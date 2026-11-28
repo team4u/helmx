@@ -373,4 +373,63 @@ describe('Composer one-turn override & runtimeModelOverride', () => {
       h.unmount()
     }
   })
+
+  test('renders effectiveModelRef displayLabel, duo group header, Next-turn eligibility filter & hides preserveRef tiers on child/helmx conversations', { timeout: 60_000 }, async () => {
+    const richTiers: ModelTierCatalogEntry[] = [
+      ...TEST_TIERS,
+      {
+        id: 'claude-duo',
+        model: 'anthropic/claude-opus-4-6',
+        available: true,
+        thinkingLevel: 'medium',
+        thinkingLevels: ['off', 'medium', 'max'],
+        description: 'Plan then review',
+        displayGroup: 'duo',
+        displayLabel: 'Claude 精修',
+        displayDetail: 'opus → sonnet',
+        preserveRef: true,
+        singleTurnEligible: false,
+      },
+    ]
+    const h = mountComposerApp(
+      makeConv(1, {
+        model: 'anthropic/claude-opus-4-6',
+        effectiveModelRef: 'tier/claude-duo',
+        thinkingLevel: 'medium',
+      }),
+      richTiers,
+    )
+    try {
+      assert.equal(h.host.querySelector('.composer-model-label')?.textContent?.trim(), 'Claude 精修')
+      assert.ok(h.host.querySelector('.composer-model-tier-trigger-icon') !== null)
+
+      const pop = openModelPopover(h.host)
+      const headers = Array.from(pop.querySelectorAll('.popover-header')).map((el) => el.textContent?.trim())
+      assert.deepEqual(headers, ['Dual-phase recipes', 'Model tiers', 'Model list'])
+      assert.match(pop.textContent ?? '', /Claude 精修/)
+      assert.match(pop.textContent ?? '', /opus → sonnet/)
+
+      // Next turn only hides singleTurnEligible: false tiers
+      const nextTurnTab = Array.from(pop.querySelectorAll<HTMLButtonElement>('.composer-model-mode-bar [role="tab"]'))
+        .find((btn) => (btn.textContent ?? '').includes('Next turn only'))!
+      await act(async () => {
+        nextTurnTab.click()
+      })
+      assert.doesNotMatch(pop.textContent ?? '', /Claude 精修/)
+      assert.match(pop.textContent ?? '', /tier\/claude-auto/)
+
+      // Close and rerender as child conversation -> preserveRef tiers hidden
+      act(() => {
+        pop.querySelector('input[aria-label="Search models"]')?.dispatchEvent(
+          new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }),
+        )
+      })
+      h.rerender(makeConv(1, { parentConversationId: 99, model: 'anthropic/claude-opus-4-6' }))
+      const childPop = openModelPopover(h.host)
+      assert.doesNotMatch(childPop.textContent ?? '', /Claude 精修/)
+      assert.match(childPop.textContent ?? '', /tier\/claude-auto/)
+    } finally {
+      h.unmount()
+    }
+  })
 })

@@ -269,6 +269,8 @@ export interface ResolvedModelRef extends ModelRefParts {
   tierId?: string
   /** Preset thinking level carried by the resolved tier (if configured). */
   tierThinkingLevel?: string
+  /** When true, top-level human conversations keep symbolic `'tier/<id>'` in `modelOverride` instead of freezing. */
+  readonly preserveRef?: boolean
 }
 
 /** Resolve default model reference; missing config fails explicitly instead of fabricating a model. */

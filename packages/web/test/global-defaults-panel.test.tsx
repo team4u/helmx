@@ -86,7 +86,19 @@ interface MountDefaultsOptions {
     modelThinkingLevels?: Record<string, string>
     defaultCompactionModel?: string
     defaultCompactionThinkingLevel?: string
-    modelTiers?: Array<{ id: string; model: string; thinkingLevel?: string; available: boolean; thinkingLevels?: string[] }>
+    modelTiers?: Array<{
+      id: string
+      model: string
+      thinkingLevel?: string
+      description?: string
+      displayGroup?: string
+      displayLabel?: string
+      displayDetail?: string
+      preserveRef?: boolean
+      singleTurnEligible?: boolean
+      available: boolean
+      thinkingLevels?: string[]
+    }>
   }
   /** Optional interceptor for fetch requests (returning a Response overrides the default mock; returning undefined falls through). */
   onRequest?: (path: string, init?: RequestInit) => Promise<Response | undefined> | Response | undefined
@@ -653,5 +665,57 @@ test('GlobalDefaultsPanel: unmounting while save is in flight suppresses post-un
     assert.equal(panel.requestedPaths.length, pathsBeforeUnmount)
   } finally {
     globalThis.fetch = restoredFetch
+  }
+})
+
+test('GlobalDefaultsPanel: defaultModel includes preserveRef tiers while compactionModel excludes them', { timeout: 60_000 }, async () => {
+  const panel = await mountDefaultsPanel({}, {
+    modelDefaults: {
+      defaultModel: 'tier/claude-duo',
+      defaultThinkingLevel: 'high',
+      modelTiers: [
+        {
+          id: 'fast',
+          model: 'openai/gpt-4o-mini',
+          available: true,
+          thinkingLevels: ['off', 'low', 'medium'],
+        },
+        {
+          id: 'claude-duo',
+          model: 'anthropic/claude-3-7-sonnet',
+          displayGroup: 'duo',
+          displayLabel: 'Claude Duo',
+          displayDetail: 'sonnet -> mini',
+          preserveRef: true,
+          singleTurnEligible: false,
+          available: true,
+          thinkingLevels: ['off', 'low', 'high'],
+        },
+      ],
+    },
+  })
+  try {
+    const defaultTrigger = panel.container.querySelector('#model-defaults-model') as HTMLButtonElement
+    assert.ok(defaultTrigger, 'default model trigger must exist')
+    assert.equal(defaultTrigger.querySelector('.composer-model-label')?.textContent?.trim(), 'Claude Duo')
+    await click(defaultTrigger)
+    const defaultPop = document.body.querySelector<HTMLElement>('.composer-model-popover')!
+    assert.match(defaultPop.textContent ?? '', /Claude Duo/)
+    assert.match(defaultPop.textContent ?? '', /tier\/fast/)
+
+    // Select tier/fast row to commit & close default popover cleanly, then open compaction picker -> preserveRef tier hidden
+    const fastRow = Array.from(defaultPop.querySelectorAll<HTMLButtonElement>('.composer-model-row-main'))
+      .find((btn) => (btn.textContent ?? '').includes('tier/fast'))!
+    await click(fastRow)
+    assert.ok(document.body.querySelector('.composer-model-popover') === null)
+    const compactionTrigger = panel.container.querySelector('#model-defaults-compaction-model') as HTMLButtonElement
+    assert.ok(compactionTrigger, 'compaction model trigger must exist')
+    await click(compactionTrigger)
+    const compactionPop = document.body.querySelector<HTMLElement>('.composer-model-popover')
+    assert.ok(compactionPop !== null, 'compaction picker popover must open')
+    assert.doesNotMatch(compactionPop.textContent ?? '', /Claude Duo/)
+    assert.match(compactionPop.textContent ?? '', /tier\/fast/)
+  } finally {
+    await panel.unmount()
   }
 })

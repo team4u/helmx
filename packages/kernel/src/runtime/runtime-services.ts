@@ -275,6 +275,7 @@ export function assembleRuntimeServices(
     models: () => models.models,
     isClosed: () => runtime.isClosing,
     hasRuntimeModelOverride: (id) => conversations.hasRuntimeModelOverride(id),
+    effectiveModelRefOf: (id) => conversations.effectiveModelRefOf(id),
     events: {
       onSummaryChanged: (summary) => {
         if (options.store.getConv(summary.id) === undefined || options.store.isDeleted(summary.id)) return

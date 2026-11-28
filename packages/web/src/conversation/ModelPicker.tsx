@@ -37,13 +37,17 @@ export function ModelPicker({ conversation, nextTurnMode, onReturnFocus }: Model
   const [pending, setPending] = useState(false)
 
   const configuredBaseline =
-    conversation.modelOverride !== undefined && conversation.modelOverride !== ''
-      ? conversation.modelOverride
-      : undefined
+    conversation.effectiveModelRef !== undefined && conversation.effectiveModelRef !== ''
+      ? conversation.effectiveModelRef
+      : conversation.modelOverride !== undefined && conversation.modelOverride !== ''
+        ? conversation.modelOverride
+        : undefined
   const displayEffectiveModel =
     conversation.runtimeModelOverride === true
       ? conversation.model
       : (configuredBaseline ?? conversation.model)
+  const allowPreserveRefTiers =
+    conversation.parentConversationId === undefined && (conversation.ownedBy ?? 'human') === 'human'
 
   const stagedNextTurnModel =
     nextTurnMode?.model !== undefined && nextTurnMode.model !== '' ? nextTurnMode.model : undefined
@@ -189,6 +193,7 @@ export function ModelPicker({ conversation, nextTurnMode, onReturnFocus }: Model
       effectiveModel={displayEffectiveModel}
       activeThinkingLevel={conversation.thinkingLevel}
       nextTurnMode={nextTurnMode}
+      allowPreserveRefTiers={allowPreserveRefTiers}
       resetLabel={t('composer.model.clearOverride')}
       resetTitle={t('composer.model.clearOverride')}
       buttonTitle={buttonTitle}
