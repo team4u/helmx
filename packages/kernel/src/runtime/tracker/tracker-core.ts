@@ -67,6 +67,8 @@ export interface TrackerCoreOptions {
   readonly models?: () => Models
   /** Host closing predicate (double protection alongside tracker.close()). */
   readonly isClosed?: () => boolean
+  /** Transient runtime model override lookup (attached to derived ConversationSummary frames). */
+  readonly hasRuntimeModelOverride?: (conversationId: number) => boolean
   /** Diagnostic channel sink (defaults to defaultDiagnosticSink). */
   readonly onDiagnostic?: KernelDiagnosticSink
 }
@@ -81,6 +83,8 @@ export class TrackerCore {
   readonly ownershipOf: ((id: number) => 'helmx' | 'human') | undefined
   /** Live Models catalog reader (if omitted, window stays unset). */
   readonly modelsOf: (() => Models) | undefined
+  /** Transient runtime model override lookup (if omitted, treated as false). */
+  readonly hasRuntimeModelOverride: ((conversationId: number) => boolean) | undefined
   /** conversation -> per-conversation aggregate mirror (created on observe or first write; deleted wholesale on stopObserving). */
   readonly mirrors = new Map<number, ConversationMirror>()
   /** conversation -> latest visible timeline entry ID (`0` when none; excludes `pi.system` and rewound intervals). */
@@ -99,6 +103,7 @@ export class TrackerCore {
     this.redactError = options.redactError ?? ((text) => text)
     this.ownershipOf = options.ownershipOf
     this.modelsOf = options.models
+    this.hasRuntimeModelOverride = options.hasRuntimeModelOverride
     this.isClosedFn = options.isClosed
     this.diagnosticSink = options.onDiagnostic
   }

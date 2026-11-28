@@ -14,7 +14,6 @@ export async function completeConversationTextHelper(
       resolveEffectiveModel(
         modelOverride?: string,
         profileId?: string,
-        mode?: 'human_conversation' | 'single_only' | 'subagent_inherit',
       ): Promise<string | undefined>
     }
     models: {
@@ -22,7 +21,6 @@ export async function completeConversationTextHelper(
       isModelDisabled(providerId: string, modelId: string): boolean
       resolveModelRef?(
         ref: string,
-        opts?: { mode?: 'human_conversation' | 'single_only' | 'subagent_inherit' },
       ): { provider: string; modelId: string; canonicalRef: string; tierThinkingLevel?: string }
     }
     stash: { redact(text: string): string }
@@ -48,13 +46,12 @@ export async function completeConversationTextHelper(
       : await deps.conversations.resolveEffectiveModel(
           meta.modelOverride,
           meta.profileId,
-          'subagent_inherit',
         )
   if (effective === undefined || effective === '') {
     throw new HelmxError('model_not_configured', `Conversation ${input.conversationId} has no effective model resolved; cannot run text completion`, 409, { conversationId: input.conversationId })
   }
   const ref = deps.models.resolveModelRef !== undefined
-    ? deps.models.resolveModelRef(effective, { mode: 'single_only' })
+    ? deps.models.resolveModelRef(effective)
     : requireModelRef(effective)
   const model = deps.models.models.getModel(ref.provider, ref.modelId)
   if (model === undefined) {

@@ -139,6 +139,8 @@ export function registerConversationCoreActions(
             ...(parsed.replaceFromEntryId !== undefined
               ? { replaceFromEntryId: parsed.replaceFromEntryId }
               : {}),
+            ...(parsed.model !== undefined ? { model: parsed.model } : {}),
+            ...(parsed.thinkingLevel !== undefined ? { thinkingLevel: parsed.thinkingLevel } : {}),
           }
           const { submissionId } = access.guarded
             ? await runtime.conversations.submitInputGuarded(

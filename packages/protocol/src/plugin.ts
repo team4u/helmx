@@ -440,12 +440,10 @@ export interface ProvidedCapability<T = unknown> {
 
 /**
  * Well-known `'helmx.dispatch-tools'` capability contract:
- * - `toolNames`: dispatch/spawn entry tools (unlocks `<available_profiles>` in `builtin:profile` and stripped at max subagent depth);
- * - `orchestrationTools`: optional companion orchestration/coordination tools exposed alongside `toolNames` in orchestrator Planning Phase.
+ * - `toolNames`: dispatch/spawn entry tools (unlocks `<available_profiles>` in `builtin:profile` and stripped at max subagent depth).
  */
 export interface DispatchToolsCapability {
   readonly toolNames: readonly string[]
-  readonly orchestrationTools?: readonly string[]
 }
 
 /** Well-known `'helmx.model-tiers'` capability contract: provides a live model-tier table consumed by kernel ModelRegistry. */
@@ -690,12 +688,13 @@ export interface HelmxHostApi {
   /** 部分更新会话；返回更新后的摘要。 */
   updateConversation(id: number, patch: ConversationPatch): Promise<ConversationSummary>
   /**
-   * Switch a conversation's active SDK runtime model/thinkingLevel without overwriting symbolic
-   * `modelOverride` / `modelTier` or advancing `stateChangeSeq` (safe against pending AskDoc CAS).
+   * Switch a conversation's active SDK runtime model/thinkingLevel without overwriting persisted
+   * `modelOverride` / `thinkingLevelOverride` or advancing `stateChangeSeq` (safe against pending AskDoc CAS).
+   * Pass `null` to clear the transient runtime override and restore the conversation's configured baseline.
    */
   setConversationRuntimeModel(
     id: number,
-    target: { model: string; thinkingLevel?: string },
+    target: { model: string; thinkingLevel?: string; resetOnRunEnd?: boolean } | null,
   ): Promise<ConversationSummary>
   /** 中止指定会话的在途执行。 */
   abortConversation(id: number): Promise<void>

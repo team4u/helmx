@@ -178,6 +178,8 @@ export function parseInputBody(body: Record<string, unknown>): {
   meta?: Record<string, unknown>
   attachments?: string[]
   replaceFromEntryId?: number
+  model?: string
+  thinkingLevel?: string
 } {
   // Mechanical shape (text type, enums, attachment ID pattern, unknown fields) uses schema;
   // UTF-16 length cap on text, recursive strict plain-JSON check on meta, and attachment dedupe/empty-array
@@ -194,6 +196,8 @@ export function parseInputBody(body: Record<string, unknown>): {
     ...(meta !== undefined ? { meta } : {}),
     ...(attachments !== undefined ? { attachments } : {}),
     ...(parsed.replaceFromEntryId !== undefined ? { replaceFromEntryId: parsed.replaceFromEntryId } : {}),
+    ...(parsed.model !== undefined ? { model: parsed.model } : {}),
+    ...(parsed.thinkingLevel !== undefined ? { thinkingLevel: parsed.thinkingLevel } : {}),
   }
 }
 

@@ -3,7 +3,7 @@
  * (extracted from `model-registry.ts`).
  */
 import type { ModelCatalog, ModelTierCatalogEntry, ModelTierSpec } from '@helmx/protocol'
-import { HelmxError, MODEL_TIER_PREFIX, isOrchestratorTier } from '@helmx/protocol'
+import { HelmxError, MODEL_TIER_PREFIX } from '@helmx/protocol'
 import { THINKING_LEVELS } from './models.js'
 
 /**
@@ -166,37 +166,6 @@ export function buildModelTierCatalogEntries(
     const primaryDisabled = primaryTarget !== undefined && isModelDisabled(primaryTarget.provider, primaryTarget.modelId)
     const primaryEntry = modelMap.get(spec.model)
     const thinkingLevels = catalog.thinkingLevels[spec.model]
-    if (isOrchestratorTier(spec)) {
-      const execRef = spec.executorModel ?? ''
-      const execTarget = parseConcreteTarget(execRef)
-      const execDisabled = execTarget !== undefined && isModelDisabled(execTarget.provider, execTarget.modelId)
-      const execEntry = modelMap.get(execRef)
-      const disabled = primaryDisabled || execDisabled
-      const available =
-        primaryEntry !== undefined &&
-        primaryEntry.available === true &&
-        execEntry !== undefined &&
-        execEntry.available === true &&
-        !disabled
-      const executorThinkingLevels = catalog.thinkingLevels[execRef]
-      modelTiers.push({
-        id,
-        kind: 'orchestrator',
-        model: spec.model,
-        ...(spec.thinkingLevel !== undefined && spec.thinkingLevel !== '' ? { thinkingLevel: spec.thinkingLevel } : {}),
-        executorModel: execRef,
-        ...(spec.executorThinkingLevel !== undefined && spec.executorThinkingLevel !== ''
-          ? { executorThinkingLevel: spec.executorThinkingLevel }
-          : {}),
-        ...(spec.maxExecutionSteps !== undefined ? { maxExecutionSteps: spec.maxExecutionSteps } : {}),
-        ...(spec.description !== undefined && spec.description !== '' ? { description: spec.description } : {}),
-        available,
-        ...(disabled ? { disabled: true } : {}),
-        ...(thinkingLevels !== undefined ? { thinkingLevels } : {}),
-        ...(executorThinkingLevels !== undefined ? { executorThinkingLevels } : {}),
-      })
-      continue
-    }
     const available = primaryEntry !== undefined && primaryEntry.available === true && !primaryDisabled
     modelTiers.push({
       id,

@@ -1,9 +1,5 @@
-import { useCallback, useContext, useEffect, useId, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent, type ReactNode, type RefObject } from 'react'
-import { MODEL_TIER_PREFIX, isOrchestratorTier, type HostModelEntry, type ModelTierCatalogEntry } from '@helmx/protocol/browser'
-import {
-  ComposerModelPickerModeContext,
-  type ComposerModelPickerModeRegistration,
-} from '../composer-model-modes.js'
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from 'react'
+import { MODEL_TIER_PREFIX, type HostModelEntry, type ModelTierCatalogEntry } from '@helmx/protocol/browser'
 import {
   Button,
   HelmxIcon,
@@ -57,10 +53,6 @@ import {
 const EMPTY_TIERS: ReadonlyArray<ModelTierCatalogEntry> = []
 const EMPTY_MODELS: ReadonlyArray<HostModelEntry> = []
 const EMPTY_NAV_ITEMS: ReadonlyArray<{ id: string }> = []
-const EMPTY_REGISTERED_MODES: readonly ComposerModelPickerModeRegistration[] = Object.freeze([])
-const NOOP_SUBSCRIBE = (): (() => void) => () => {}
-const getEmptyRegisteredModes = (): readonly ComposerModelPickerModeRegistration[] => EMPTY_REGISTERED_MODES
-const DEFAULT_MODE_VALUE = '__default__'
 
 interface ModelPickerHeaderProps {
   query: string
@@ -68,10 +60,10 @@ interface ModelPickerHeaderProps {
   onSearchKeyDown: (event: KeyboardEvent<HTMLInputElement>) => void
   searchInputRef: RefObject<HTMLInputElement | null>
   copy: ModelPickerControlCopy
-  hasRegisteredModes: boolean
-  activeMode: ComposerModelPickerModeRegistration | null
-  registeredModes: readonly ComposerModelPickerModeRegistration[]
-  onSelectModeKey: (modeKey: string | null) => void
+  hasNextTurnMode: boolean
+  isNextTurnMode: boolean
+  nextTurnDisabled: boolean
+  onSelectNextTurnMode: (next: boolean) => void
   canRefresh: boolean
   refreshing: boolean
   onRefresh: () => void
@@ -83,10 +75,10 @@ function ModelPickerHeader({
   onSearchKeyDown,
   searchInputRef,
   copy,
-  hasRegisteredModes,
-  activeMode,
-  registeredModes,
-  onSelectModeKey,
+  hasNextTurnMode,
+  isNextTurnMode,
+  nextTurnDisabled,
+  onSelectNextTurnMode,
   canRefresh,
   refreshing,
   onRefresh,
@@ -108,26 +100,27 @@ function ModelPickerHeader({
           onKeyDown={onSearchKeyDown}
         />
       </div>
-      {hasRegisteredModes || canRefresh ? (
+      {hasNextTurnMode || canRefresh ? (
         <div className="composer-model-header-actions">
-          {hasRegisteredModes ? (
+          {hasNextTurnMode ? (
             <div className="composer-model-mode-bar">
               <SegmentedControl
                 size="sm"
                 aria-label={copy.modeBarAria ?? DEFAULT_MODEL_PICKER_COPY.modeBarAria}
-                value={activeMode !== null ? activeMode.key : DEFAULT_MODE_VALUE}
+                value={isNextTurnMode ? 'nextTurn' : 'default'}
                 onValueChange={(nextValue) => {
-                  onSelectModeKey(nextValue === DEFAULT_MODE_VALUE ? null : nextValue)
+                  onSelectNextTurnMode(nextValue === 'nextTurn')
                 }}
                 items={[
                   {
-                    value: DEFAULT_MODE_VALUE,
+                    value: 'default',
                     label: copy.defaultModeLabel ?? DEFAULT_MODEL_PICKER_COPY.defaultModeLabel ?? 'Default',
                   },
-                  ...registeredModes.map((entry) => ({
-                    value: entry.key,
-                    label: entry.spec.label,
-                  })),
+                  {
+                    value: 'nextTurn',
+                    label: copy.nextTurnModeLabel ?? DEFAULT_MODEL_PICKER_COPY.nextTurnModeLabel ?? 'Next turn only',
+                    disabled: nextTurnDisabled,
+                  },
                 ]}
               />
             </div>
@@ -181,9 +174,7 @@ function ModelPickerTierRow({
   onSelect,
 }: ModelPickerTierRowProps): ReactNode {
   const tierRef = `${MODEL_TIER_PREFIX}/${tier.id}`
-  const orchestrator = isOrchestratorTier(tier)
   const targetShort = formatModelShortName(tier.model)
-  const executorShort = orchestrator ? formatModelShortName(tier.executorModel) : ''
   // The badge shows the level the kernel will actually run for this tier:
   // tier preset > per-model default, converged the way the kernel clamps.
   const rawTierLevel =
@@ -197,9 +188,7 @@ function ModelPickerTierRow({
     rawTierLevel !== '' && tierSupportsThinking
       ? resolveEffectiveThinkingLevel(effectiveTierLevels ?? [rawTierLevel], rawTierLevel)
       : ''
-  const titleModel = orchestrator && tier.executorModel !== undefined && tier.executorModel !== ''
-    ? `${tier.model} -> ${tier.executorModel}`
-    : tier.model
+  const titleModel = tier.model
   const subtitle = tier.description || titleModel
 
   return (
@@ -218,25 +207,14 @@ function ModelPickerTierRow({
         onClick={() => onSelect(tierRef, null)}
       >
         <span className="composer-model-row-name-line">
-          <HelmxIcon name={orchestrator ? 'workflow' : 'layers'} size={12} className="composer-model-tier-icon" />
+          <HelmxIcon name="layers" size={12} className="composer-model-tier-icon" />
           <span className="mono composer-model-row-name">{tierRef}</span>
-          {orchestrator ? (
-            <span className="popover-item-meta">
-              {' · '}
-              {targetShort}
-              {' -> '}
-              {executorShort}
-            </span>
-          ) : (
-            <span className="popover-item-meta">· {targetShort}</span>
-          )}
+          <span className="popover-item-meta">· {targetShort}</span>
           {isCurrent ? <HelmxIcon name="check" size={12} className="composer-model-row-check" /> : null}
         </span>
         <span className="popover-item-meta composer-model-row-source">{subtitle}</span>
       </button>
-      {orchestrator ? (
-        <span className="badge badge-accent">auto</span>
-      ) : tierPresetBadge !== '' ? (
+      {tierPresetBadge !== '' ? (
         <span className="badge badge-neutral">{tierPresetBadge}</span>
       ) : null}
     </div>
@@ -413,6 +391,28 @@ function ModelPickerFooter({
   )
 }
 
+export interface ModelPickerNextTurnMode {
+  /** Staged one-turn model (`'provider/modelId'` or `'tier/<id>'`), when set. */
+  model?: string
+  /** Staged one-turn thinking level, when set. */
+  thinkingLevel?: string
+  /** Disable staging a one-turn override. */
+  disabled?: boolean
+  /** Disable staging a one-turn override while conversation is actively working/blocked. */
+  busy?: boolean
+  /** Called when user stages `{ model?, thinkingLevel? }` or clears (`null`). */
+  onChange: (override: { model?: string; thinkingLevel?: string } | null) => void
+}
+
+export interface ModelPickerInitialMode {
+  /** Standby initial-model mode active. */
+  enabled?: boolean
+  /** Fallback default model displayed when no explicit draft/effective model is selected. */
+  defaultModel?: string
+  /** Optional callback invoked alongside apply/reset when standby changes its draft model. */
+  onChange?: (model: string | null) => void
+}
+
 export type ModelPickerVariant = 'composer' | 'field'
 export type ModelPickerSize = 'sm' | 'md'
 
@@ -468,14 +468,14 @@ export interface ModelPickerControlProps {
   renderTrigger?: (state: { open: boolean; disabled: boolean; pending: boolean }) => ReactNode
   /** Enable the host Ctrl+L panel shortcut toggle. */
   enableShortcut?: boolean
-  /** Enable ComposerModelPickerModeContext mode tabs inside the popover (host composer/standby only). */
-  enableRegisteredModes?: boolean
+  /** Built-in one-turn local draft mode (`Next turn only` toggle inside the popover and indicator on trigger). */
+  nextTurnMode?: ModelPickerNextTurnMode
+  /** Optional standby initial-model configuration mode. */
+  initialMode?: ModelPickerInitialMode
   /** Hide inline thinking-level chips (plain model-id config fields, e.g. plugin config format:'model'). */
   showThinkingLevels?: boolean
   /** Include mounted runtime model tiers (`tier/<id>`) at the top of the picker (default `true`; pass `false` when selecting concrete models only). */
   allowTiers?: boolean
-  /** Include human-only dual-phase orchestrator tiers (`kind: 'orchestrator'`) when `allowTiers` is enabled (default `false`). */
-  allowOrchestratorTiers?: boolean
   disabled?: boolean
   pending?: boolean
   /**
@@ -519,10 +519,10 @@ export function ModelPickerControl({
   showResetDefault = true,
   renderTrigger,
   enableShortcut = true,
-  enableRegisteredModes = false,
+  nextTurnMode,
+  initialMode,
   showThinkingLevels = true,
   allowTiers = true,
-  allowOrchestratorTiers = false,
   disabled = false,
   pending = false,
   onNotice,
@@ -537,17 +537,28 @@ export function ModelPickerControl({
   // fabricated empty catalog); models: [] = loaded and genuinely empty.
   const catalog = useHostModels()
   const host = usePluginClientHost()
-  const modeRegistry = useContext(ComposerModelPickerModeContext)
-  const registeredModes = useSyncExternalStore(
-    enableRegisteredModes && modeRegistry !== undefined ? modeRegistry.subscribe : NOOP_SUBSCRIBE,
-    enableRegisteredModes && modeRegistry !== undefined ? modeRegistry.getModes : getEmptyRegisteredModes,
-    getEmptyRegisteredModes,
-  )
   const copy: ModelPickerControlCopy = { ...DEFAULT_MODEL_PICKER_COPY, ...copyOverride }
   const models = catalog?.models ?? EMPTY_MODELS
   const catalogUnknown = catalog === undefined
+  const resolvedEffectiveModel =
+    effectiveModel !== undefined && effectiveModel !== ''
+      ? effectiveModel
+      : initialMode?.enabled
+        ? initialMode.defaultModel
+        : undefined
+  const stagedNextTurnModel =
+    nextTurnMode?.model !== undefined && nextTurnMode.model !== '' ? nextTurnMode.model : undefined
+  const stagedNextTurnThinking =
+    nextTurnMode?.thinkingLevel !== undefined && nextTurnMode.thinkingLevel !== ''
+      ? nextTurnMode.thinkingLevel
+      : undefined
+  const hasStagedNextTurn =
+    nextTurnMode !== undefined &&
+    (stagedNextTurnModel !== undefined || stagedNextTurnThinking !== undefined)
+  const isNextTurnDisabled = nextTurnMode?.disabled === true || nextTurnMode?.busy === true
   const [uncontrolledOpen, setUncontrolledOpen] = useState(false)
-  const [activeModeKey, setActiveModeKey] = useState<string | null>(null)
+  const [pickerScope, setPickerScope] = useState<'default' | 'nextTurn'>('default')
+  const activeNextTurnTab = nextTurnMode !== undefined && !isNextTurnDisabled && pickerScope === 'nextTurn'
   const isControlled = openProp !== undefined
   const open = isControlled ? openProp : uncontrolledOpen
   const openRef = useRef(open)
@@ -556,7 +567,7 @@ export function ModelPickerControl({
     (next: boolean | ((prev: boolean) => boolean)): void => {
       const resolved = typeof next === 'function' ? next(openRef.current) : next
       if (!resolved) {
-        setActiveModeKey(null)
+        setPickerScope('default')
       }
       if (!isControlled) {
         setUncontrolledOpen(resolved)
@@ -567,11 +578,14 @@ export function ModelPickerControl({
   )
   const handlePopoverOpenChange = useCallback(
     (nextOpen: boolean): void => {
-      // Trigger clicks and closures always return to default persistent-switch mode.
-      setActiveModeKey(null)
+      if (nextOpen) {
+        setPickerScope(hasStagedNextTurn && !isNextTurnDisabled ? 'nextTurn' : 'default')
+      } else {
+        setPickerScope('default')
+      }
       setOpen(nextOpen)
     },
-    [setOpen],
+    [hasStagedNextTurn, isNextTurnDisabled, setOpen],
   )
   const [refreshing, setRefreshing] = useState(false)
   const [query, setQuery] = useState('')
@@ -597,42 +611,27 @@ export function ModelPickerControl({
     () => {
       if (!enableShortcut) return
       if (disabled || pending) {
-        setActiveModeKey(null)
+        setPickerScope('default')
         setOpen(false)
         return
       }
-      setActiveModeKey(null)
+      setPickerScope(!openRef.current && hasStagedNextTurn && !isNextTurnDisabled ? 'nextTurn' : 'default')
       setOpen((prev) => !prev)
     },
     fallbackPanel,
   )
 
   useEffect(() => {
-    if (!enableRegisteredModes || modeRegistry === undefined || disabled || pending) return
-    return modeRegistry.setOpenMode((modeKey) => {
-      const exists = modeRegistry.getModes().some((entry) => entry.key === modeKey)
-      if (!exists) return
-      setActiveModeKey(modeKey)
-      setOpen(true)
-    })
-  }, [enableRegisteredModes, modeRegistry, disabled, pending, setOpen])
-
-  const activeMode =
-    enableRegisteredModes && activeModeKey !== null
-      ? (registeredModes.find((entry) => entry.key === activeModeKey) ?? null)
-      : null
-
-  useEffect(() => {
     if (!open) {
-      setActiveModeKey(null)
+      setPickerScope('default')
     }
   }, [open])
 
   useEffect(() => {
-    if (activeModeKey !== null && activeMode === null) {
-      setActiveModeKey(null)
+    if ((nextTurnMode === undefined || isNextTurnDisabled) && pickerScope !== 'default') {
+      setPickerScope('default')
     }
-  }, [activeModeKey, activeMode])
+  }, [nextTurnMode, isNextTurnDisabled, pickerScope])
 
   const rawTiers = allowTiers ? (catalog?.modelTiers ?? EMPTY_TIERS) : EMPTY_TIERS
   const { filteredTiers, filteredModels, navItems, syncKey, initialActiveIndex, allUnavailable } = useMemo(() => {
@@ -647,16 +646,13 @@ export function ModelPickerControl({
       }
     }
     const queryLower = query.toLowerCase()
-    const canShowOrchestratorTiers = allowOrchestratorTiers && activeMode === null
     const nextTiers = rawTiers.filter((tier) => {
       if (!tier.available || tier.disabled === true) return false
-      if (isOrchestratorTier(tier) && !canShowOrchestratorTiers) return false
       if (queryLower === '') return true
       const tierRef = `${MODEL_TIER_PREFIX}/${tier.id}`
       return (
         tierRef.toLowerCase().includes(queryLower) ||
         tier.model.toLowerCase().includes(queryLower) ||
-        (tier.executorModel?.toLowerCase().includes(queryLower) ?? false) ||
         (tier.description?.toLowerCase().includes(queryLower) ?? false)
       )
     })
@@ -669,7 +665,7 @@ export function ModelPickerControl({
     ]
     const nextUnavailable =
       models.every((model) => !model.available || model.disabled === true) &&
-      rawTiers.every((tier) => !tier.available || tier.disabled === true || (isOrchestratorTier(tier) && !canShowOrchestratorTiers))
+      rawTiers.every((tier) => !tier.available || tier.disabled === true)
     const filteredKeys = nextNavItems.map((item) => item.id).join('|')
     return {
       filteredTiers: nextTiers,
@@ -679,7 +675,7 @@ export function ModelPickerControl({
       initialActiveIndex: initialModelActiveIndex(nextNavItems, query),
       allUnavailable: nextUnavailable,
     }
-  }, [open, query, rawTiers, models, allowOrchestratorTiers, activeMode])
+  }, [open, query, rawTiers, models])
   const [activeIndex, setActiveIndex] = useState(-1)
 
   useEffect(() => {
@@ -728,19 +724,33 @@ export function ModelPickerControl({
 
   const applySelection = (model: string | undefined, level: string | null): void => {
     if (model === undefined || model === '') return
-    const modeToApply = activeMode
-    setActiveModeKey(null)
+    const isNextTurn = activeNextTurnTab && nextTurnMode !== undefined
+    setPickerScope('default')
     setOpen(false)
-    if (modeToApply !== null) {
-      void modeToApply.spec.onApply({ modelKey: model, thinkingLevel: level ?? '' })
+    if (isNextTurn) {
+      nextTurnMode.onChange({
+        model,
+        ...(level !== null && level !== '' ? { thinkingLevel: level } : {}),
+      })
       return
+    }
+    if (initialMode?.enabled && initialMode.onChange !== undefined) {
+      initialMode.onChange(model)
     }
     void onApply(model, level)
   }
 
   const resetDefault = (): void => {
-    setActiveModeKey(null)
+    const isNextTurn = activeNextTurnTab && nextTurnMode !== undefined
+    setPickerScope('default')
     setOpen(false)
+    if (isNextTurn) {
+      nextTurnMode.onChange(null)
+      return
+    }
+    if (initialMode?.enabled && initialMode.onChange !== undefined) {
+      initialMode.onChange(null)
+    }
     void onResetDefault?.()
   }
 
@@ -766,30 +776,47 @@ export function ModelPickerControl({
     }
   }
 
-  const rawShortName = formatModelShortName(effectiveModel)
+  const triggerModel = hasStagedNextTurn ? (stagedNextTurnModel ?? resolvedEffectiveModel) : resolvedEffectiveModel
+  const triggerThinkingInput = hasStagedNextTurn
+    ? (stagedNextTurnThinking ?? (stagedNextTurnModel !== undefined ? '' : activeThinkingLevel))
+    : activeThinkingLevel
+  const rawShortName = formatModelShortName(triggerModel)
   const shortName = rawShortName !== '' ? rawShortName : (placeholderLabel ?? copy.defaultLabel)
-  const currentModel = effectiveModel !== undefined && effectiveModel !== '' ? models.find((model) => model.id === effectiveModel) : undefined
+  const currentModel = triggerModel !== undefined && triggerModel !== '' ? models.find((model) => model.id === triggerModel) : undefined
   const currentTier =
-    effectiveModel !== undefined && effectiveModel.startsWith(`${MODEL_TIER_PREFIX}/`)
-      ? (catalog?.modelTiers ?? EMPTY_TIERS).find((tier) => `${MODEL_TIER_PREFIX}/${tier.id}` === effectiveModel)
+    triggerModel !== undefined && triggerModel.startsWith(`${MODEL_TIER_PREFIX}/`)
+      ? (catalog?.modelTiers ?? EMPTY_TIERS).find((tier) => `${MODEL_TIER_PREFIX}/${tier.id}` === triggerModel)
       : undefined
   const currentLevels = currentModel?.thinkingLevels ?? currentTier?.thinkingLevels ?? ['off']
   const supportsThinking = showThinkingLevels && currentLevels.some((level) => level !== 'off')
   // Effective level display: the caller's level, or a selected tier's own preset when
   // that level is empty, converged the way the kernel clamps.
-  const displayLevelInput = activeThinkingLevel !== '' ? activeThinkingLevel : (currentTier?.thinkingLevel ?? '')
+  const displayLevelInput = triggerThinkingInput !== '' ? triggerThinkingInput : (currentTier?.thinkingLevel ?? '')
   const effectiveLevel = resolveEffectiveThinkingLevel(currentLevels, displayLevelInput)
   const showLevel = supportsThinking && effectiveLevel !== '' && effectiveLevel !== 'off'
   const canRefresh = host.refreshModels !== undefined
   const customTrigger = renderTrigger !== undefined ? renderTrigger({ open, disabled, pending }) : undefined
   const hasCustomTrigger =
     customTrigger !== null && customTrigger !== undefined && customTrigger !== false
-  const hasRegisteredModes = enableRegisteredModes && registeredModes.length > 0
-  const hideResetForMode = activeMode !== null && activeMode.spec.hideResetDefault !== false
-  const shouldShowReset = showResetDefault && onResetDefault !== undefined && !hideResetForMode
-  const activeModeHint = activeMode?.spec.hint !== undefined && activeMode.spec.hint !== '' ? activeMode.spec.hint : ''
-  const listEffectiveModel = activeMode !== null ? activeMode.spec.effectiveModel : effectiveModel
-  const listActiveThinkingLevel = activeMode !== null ? (activeMode.spec.activeThinkingLevel ?? '') : activeThinkingLevel
+  const hasNextTurnMode = nextTurnMode !== undefined
+  const shouldShowReset = activeNextTurnTab
+    ? hasStagedNextTurn
+    : showResetDefault && onResetDefault !== undefined
+  const activeModeHint = activeNextTurnTab
+    ? (copy.nextTurnModeHint ?? DEFAULT_MODEL_PICKER_COPY.nextTurnModeHint ?? '')
+    : ''
+  const effectiveResetLabel = activeNextTurnTab
+    ? (copy.clearNextTurnLabel ?? DEFAULT_MODEL_PICKER_COPY.clearNextTurnLabel)
+    : resetLabel
+  const effectiveResetTitle = activeNextTurnTab
+    ? (copy.clearNextTurnLabel ?? DEFAULT_MODEL_PICKER_COPY.clearNextTurnLabel)
+    : resetTitle
+  const listEffectiveModel = activeNextTurnTab
+    ? (stagedNextTurnModel ?? resolvedEffectiveModel)
+    : resolvedEffectiveModel
+  const listActiveThinkingLevel = activeNextTurnTab
+    ? (stagedNextTurnThinking ?? (stagedNextTurnModel !== undefined ? '' : activeThinkingLevel))
+    : activeThinkingLevel
 
   const isFieldVariant = variant === 'field'
   const popoverId = useId()
@@ -811,6 +838,7 @@ export function ModelPickerControl({
     'composer-picker-root',
     isFieldVariant ? 'helmx-model-picker-field' : undefined,
     isFieldVariant && size === 'sm' ? 'helmx-model-picker-sm' : undefined,
+    hasStagedNextTurn ? 'composer-model-has-next-turn' : undefined,
     className,
   ]
     .filter(Boolean)
@@ -833,6 +861,11 @@ export function ModelPickerControl({
       {pending ? <HelmxIcon name="loader" size={12} className="spin-slow" /> : null}
       <span className={labelClassName}>{shortName}</span>
       {showLevel ? <span className="composer-model-level">· {effectiveLevel}</span> : null}
+      {hasStagedNextTurn ? (
+        <span className="badge badge-accent composer-model-next-turn-badge">
+          {copy.nextTurnBadge ?? DEFAULT_MODEL_PICKER_COPY.nextTurnBadge}
+        </span>
+      ) : null}
       <HelmxIcon
         name="chevron-down"
         size={12}
@@ -842,7 +875,7 @@ export function ModelPickerControl({
   )
 
   return (
-    <span className={rootClassName} ref={rootRef}>
+    <span className={rootClassName} ref={rootRef} data-next-turn={hasStagedNextTurn ? 'true' : undefined}>
       <Popover open={open} onOpenChange={handlePopoverOpenChange}>
         {renderTrigger !== undefined ? (
           hasCustomTrigger ? (
@@ -889,6 +922,18 @@ export function ModelPickerControl({
             </button>
           </PopoverTrigger>
         )}
+        {renderTrigger === undefined && hasStagedNextTurn && !isNextTurnDisabled ? (
+          <IconButton
+            icon={<HelmxIcon name="x" size={12} />}
+            variant="ghost"
+            size="xs"
+            className="composer-model-next-turn-clear"
+            disabled={disabled || pending}
+            label={copy.clearNextTurnLabel ?? DEFAULT_MODEL_PICKER_COPY.clearNextTurnLabel ?? 'Clear one-turn override'}
+            title={copy.clearNextTurnLabel ?? DEFAULT_MODEL_PICKER_COPY.clearNextTurnLabel ?? 'Clear one-turn override'}
+            onClick={() => nextTurnMode?.onChange(null)}
+          />
+        ) : null}
         <PopoverPortal>
           <PopoverContent
             id={popoverId}
@@ -898,7 +943,7 @@ export function ModelPickerControl({
             align="start"
             sideOffset={8}
             collisionPadding={12}
-            data-mode={activeMode !== null ? 'registered' : 'default'}
+            data-mode={activeNextTurnTab ? 'next-turn' : 'default'}
             className="composer-popover composer-model-popover"
             onOpenAutoFocus={(event) => {
               event.preventDefault()
@@ -935,10 +980,12 @@ export function ModelPickerControl({
               onSearchKeyDown={handleSearchKeyDown}
               searchInputRef={searchInputRef}
               copy={copy}
-              hasRegisteredModes={hasRegisteredModes}
-              activeMode={activeMode}
-              registeredModes={registeredModes}
-              onSelectModeKey={setActiveModeKey}
+              hasNextTurnMode={hasNextTurnMode}
+              isNextTurnMode={activeNextTurnTab}
+              nextTurnDisabled={isNextTurnDisabled}
+              onSelectNextTurnMode={(next) => {
+                setPickerScope(next ? 'nextTurn' : 'default')
+              }}
               canRefresh={canRefresh}
               refreshing={refreshing}
               onRefresh={() => {
@@ -1001,12 +1048,12 @@ export function ModelPickerControl({
               />
             </div>
             <ModelPickerFooter
-              hasModeActive={activeMode !== null}
+              hasModeActive={activeNextTurnTab}
               activeModeHint={activeModeHint}
               shouldShowReset={shouldShowReset}
               disabled={disabled}
-              resetLabel={resetLabel}
-              resetTitle={resetTitle}
+              resetLabel={effectiveResetLabel}
+              resetTitle={effectiveResetTitle}
               hasNavItems={navItems.length > 0}
               navHint={copy.navHint}
               onResetDefault={resetDefault}

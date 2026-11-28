@@ -645,33 +645,20 @@ test('refreshCatalog aborts state updates and notices cleanly when unmounted mid
   }
 })
 
-test('allowOrchestratorTiers hides orchestrator tiers by default and suppresses them inside non-default mode tabs', { timeout: 60_000 }, async () => {
-  const { ComposerModelPickerModeContext, createComposerModelPickerModeRegistry } = await import('../src/composer-model-modes.js')
-  const modeRegistry = createComposerModelPickerModeRegistry()
-  const releaseMode = modeRegistry.register('tiers:one-turn', {
-    id: 'tiers:one-turn',
-    label: 'Next turn',
-    hint: 'Next turn only',
-    onApply: () => {},
-  })
-
+test('ModelPickerControl nextTurnMode: toggles one-turn tab, stages badge + quick clear, disables on busy, and supports initialMode', { timeout: 60_000 }, async () => {
   const slice: HostModelsSlice = {
     models: CATALOG_MODELS,
     modelTiers: [
-      { id: 'coder', model: 'anthropic/claude-3-7-sonnet', available: true },
-      {
-        id: 'claude-auto',
-        kind: 'orchestrator',
-        model: 'anthropic/claude-3-7-sonnet',
-        executorModel: 'openai/gpt-4o-mini',
-        maxExecutionSteps: 10,
-        available: true,
-      },
+      { id: 'coder', model: 'anthropic/claude-3-7-sonnet', thinkingLevel: 'high', available: true },
     ],
   }
   const handle: CatalogHandle = { slice, listeners: new Set() }
 
-  const renderAndOpen = async (props: Partial<ModelPickerControlProps>) => {
+  const applied: Array<{ model: string; thinkingLevel: string | null }> = []
+  const nextTurnChanges: Array<{ model?: string; thinkingLevel?: string } | null> = []
+  const initialChanges: Array<string | null> = []
+
+  const renderPicker = async (props: Partial<ModelPickerControlProps>) => {
     const container = document.createElement('div')
     document.body.appendChild(container)
     const root = ReactDOMClient.createRoot(container)
@@ -680,30 +667,23 @@ test('allowOrchestratorTiers hides orchestrator tiers by default and suppresses 
         e(
           PluginClientHostContext.Provider,
           { value: makePort(handle) },
-          e(
-            ComposerModelPickerModeContext.Provider,
-            { value: modeRegistry },
-            e(ModelPickerControl, {
-              effectiveModel: 'openai/gpt-4o-mini',
-              activeThinkingLevel: '',
-              resetLabel: 'Reset',
-              resetTitle: 'Reset',
-              buttonTitle: 'Model',
-              enableRegisteredModes: true,
-              onApply: () => {},
-              onResetDefault: () => {},
-              ...props,
-            }),
-          ),
+          e(ModelPickerControl, {
+            effectiveModel: 'openai/gpt-4o-mini',
+            activeThinkingLevel: 'medium',
+            resetLabel: 'Reset',
+            resetTitle: 'Reset',
+            buttonTitle: 'Model',
+            onApply: (model, thinkingLevel) => {
+              applied.push({ model, thinkingLevel })
+            },
+            onResetDefault: () => {},
+            ...props,
+          }),
         ),
       )
     })
-    const trigger = container.querySelector<HTMLButtonElement>('button.composer-model-button')
-    assert.ok(trigger !== null)
-    await act(async () => {
-      trigger.click()
-    })
     return {
+      container,
       cleanup: async () => {
         await act(async () => {
           root.unmount()
@@ -713,41 +693,112 @@ test('allowOrchestratorTiers hides orchestrator tiers by default and suppresses 
     }
   }
 
+  // 1. Default persistent selection vs Next turn only mode
+  const run1 = await renderPicker({
+    nextTurnMode: {
+      onChange: (override) => {
+        nextTurnChanges.push(override)
+      },
+    },
+  })
   try {
-    // 1. Default allowOrchestratorTiers=false hides tier/claude-auto while keeping single tier/coder
-    const defaultRun = await renderAndOpen({})
-    try {
-      const popover = document.body.querySelector<HTMLElement>('.composer-model-popover')
-      assert.ok(popover !== null)
-      const text = popover.textContent ?? ''
-      assert.match(text, /tier\/coder/)
-      assert.doesNotMatch(text, /tier\/claude-auto/)
-    } finally {
-      await defaultRun.cleanup()
-    }
-
-    // 2. allowOrchestratorTiers=true reveals tier/claude-auto in default mode, then hides it under registered mode tab
-    const allowedRun = await renderAndOpen({ allowOrchestratorTiers: true })
-    try {
-      const popover = document.body.querySelector<HTMLElement>('.composer-model-popover')
-      assert.ok(popover !== null)
-      const text = popover.textContent ?? ''
-      assert.match(text, /tier\/claude-auto/)
-      assert.match(text, /auto/)
-      const tabs = Array.from(popover.querySelectorAll<HTMLButtonElement>('.composer-model-mode-bar [role="tab"]'))
-      const nextTurnTab = tabs.find((btn) => (btn.textContent ?? '').includes('Next turn'))
-      assert.ok(nextTurnTab !== undefined)
-      await act(async () => {
-        nextTurnTab.click()
-      })
-      const modeText = popover.textContent ?? ''
-      assert.match(modeText, /tier\/coder/)
-      assert.doesNotMatch(modeText, /tier\/claude-auto/)
-    } finally {
-      await allowedRun.cleanup()
-    }
+    const trigger = run1.container.querySelector<HTMLButtonElement>('button.composer-model-button')
+    assert.ok(trigger !== null)
+    await act(async () => {
+      trigger.click()
+    })
+    const popover = document.body.querySelector<HTMLElement>('.composer-model-popover')
+    assert.ok(popover !== null)
+    assert.match(popover.textContent ?? '', /tier\/coder/)
+    const tabs = Array.from(popover.querySelectorAll<HTMLButtonElement>('.composer-model-mode-bar [role="tab"]'))
+    const nextTurnTab = tabs.find((btn) => (btn.textContent ?? '').includes('Next turn only'))
+    assert.ok(nextTurnTab !== undefined)
+    await act(async () => {
+      nextTurnTab.click()
+    })
+    assert.equal(popover.getAttribute('data-mode'), 'next-turn')
+    const tierRow = Array.from(popover.querySelectorAll<HTMLButtonElement>('.composer-model-row-main')).find((btn) =>
+      (btn.textContent ?? '').includes('tier/coder'),
+    )
+    assert.ok(tierRow !== undefined)
+    await act(async () => {
+      tierRow.click()
+    })
+    assert.deepEqual([...nextTurnChanges], [{ model: 'tier/coder' }])
+    assert.equal(applied.length, 0)
   } finally {
-    releaseMode()
+    await run1.cleanup()
+  }
+
+  // 2. Staged override displays staged model + accent badge + sibling quick-clear button
+  const run2 = await renderPicker({
+    nextTurnMode: {
+      model: 'anthropic/claude-3-7-sonnet',
+      thinkingLevel: 'high',
+      onChange: (override) => {
+        nextTurnChanges.push(override)
+      },
+    },
+  })
+  try {
+    const rootEl = run2.container.querySelector<HTMLElement>('.composer-picker-root')
+    assert.equal(rootEl?.getAttribute('data-next-turn'), 'true')
+    const trigger = run2.container.querySelector<HTMLButtonElement>('button.composer-model-button')
+    assert.ok(trigger !== null)
+    assert.match(trigger.textContent ?? '', /claude-3-7-sonnet/)
+    assert.match(trigger.textContent ?? '', /high/)
+    assert.match(trigger.textContent ?? '', /Next turn/)
+    const clearBtn = run2.container.querySelector<HTMLButtonElement>('button.composer-model-next-turn-clear')
+    assert.ok(clearBtn !== null)
+    await act(async () => {
+      clearBtn.click()
+    })
+    assert.deepEqual(nextTurnChanges.at(-1), null)
+  } finally {
+    await run2.cleanup()
+  }
+
+  // 3. Busy state disables Next turn only tab and initialMode invokes fallback/onChange
+  const run3 = await renderPicker({
+    effectiveModel: undefined,
+    initialMode: {
+      enabled: true,
+      defaultModel: 'openai/gpt-4o-mini',
+      onChange: (model) => {
+        initialChanges.push(model)
+      },
+    },
+    nextTurnMode: {
+      busy: true,
+      onChange: (override) => {
+        nextTurnChanges.push(override)
+      },
+    },
+  })
+  try {
+    const trigger = run3.container.querySelector<HTMLButtonElement>('button.composer-model-button')
+    assert.ok(trigger !== null)
+    assert.match(trigger.textContent ?? '', /gpt-4o-mini/)
+    await act(async () => {
+      trigger.click()
+    })
+    const popover = document.body.querySelector<HTMLElement>('.composer-model-popover')
+    assert.ok(popover !== null)
+    const tabs = Array.from(popover.querySelectorAll<HTMLButtonElement>('.composer-model-mode-bar [role="tab"]'))
+    const nextTurnTab = tabs.find((btn) => (btn.textContent ?? '').includes('Next turn only'))
+    assert.ok(nextTurnTab !== undefined)
+    assert.equal(nextTurnTab.disabled, true)
+    const modelRow = Array.from(popover.querySelectorAll<HTMLButtonElement>('.composer-model-row-main')).find((btn) => {
+      const text = btn.textContent ?? ''
+      return !text.includes('tier/') && text.includes('claude-3-7-sonnet')
+    })
+    assert.ok(modelRow !== undefined)
+    await act(async () => {
+      modelRow.click()
+    })
+    assert.deepEqual([...initialChanges], ['anthropic/claude-3-7-sonnet'])
+  } finally {
+    await run3.cleanup()
   }
 })
 

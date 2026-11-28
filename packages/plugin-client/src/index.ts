@@ -96,17 +96,6 @@ export type {
   ComposerCommandInvokeResult,
   ComposerCommandRegistry,
 } from './composer-commands.js'
-export {
-  ComposerModelPickerModeContext,
-  createComposerModelPickerModeRegistry,
-  useComposerModelPickerMode,
-} from './composer-model-modes.js'
-export type {
-  ComposerModelPickerModeRegistration,
-  ComposerModelPickerModeRegistry,
-  ComposerModelPickerModeSelection,
-  ComposerModelPickerModeSpec,
-} from './composer-model-modes.js'
 export { usePluginAction } from './ui/use-plugin-action.js'
 export type {
   UsePluginActionOptions,
@@ -122,7 +111,13 @@ export type {
 
 // ---- Host-coupled widgets: ModelPickerControl, Markdown, ToolCallDetails ----
 export { ModelPickerControl } from './ui/ModelPicker.js'
-export type { ModelPickerControlProps, ModelPickerSize, ModelPickerVariant } from './ui/ModelPicker.js'
+export type {
+  ModelPickerControlProps,
+  ModelPickerInitialMode,
+  ModelPickerNextTurnMode,
+  ModelPickerSize,
+  ModelPickerVariant,
+} from './ui/ModelPicker.js'
 export {
   formatModelShortName,
   initialModelActiveIndex,
