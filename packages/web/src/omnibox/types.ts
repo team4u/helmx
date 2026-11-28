@@ -104,6 +104,8 @@ export interface OmniboxProviderModelHint {
  * settings/configuration intent.
  */
 export interface OmniboxSettingIntentSwap {
+  /** When true, also swaps primary/secondary when browsing the `pages` scope (e.g. Profiles). When false/omitted, swaps only on explicit setting/config query intent (e.g. plugin Screens). */
+  swapInPagesScope?: boolean
   title?: string
   subtitle?: string
   intent: OmniboxIntent

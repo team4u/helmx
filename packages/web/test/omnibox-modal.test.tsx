@@ -367,6 +367,25 @@ describe('omnibox-modal', () => {
     const notice = document.querySelector('.palette-status-notice')
     assert.ok(notice !== null)
     assert.ok(notice.textContent?.includes('ext:slow'))
+
+    // Clicking an async plugin resource hit must NOT pollute localStorage frecency LRU
+    const pluginHitRow = getRows().find((r) => r.dataset.omniboxId === 'plugin-hit:builtin:workflow/wf-1')
+    assert.ok(pluginHitRow !== undefined)
+    await act(async () => {
+      pluginHitRow.click()
+    })
+    assert.equal(window.localStorage.getItem(OMNIBOX_FRECENCY_STORAGE_KEY), null)
+
+    // Strict `#999` pin skips remote `/api/omnibox/search` and shows "No matching results" (not empty hint)
+    const prevRequestCount = requests.length
+    await act(async () => {
+      typeIntoControl(input, '#999')
+    })
+    await settle(40)
+    assert.equal(requests.length, prevRequestCount, 'exact #id pin must not trigger remote search')
+    const emptyStatus = document.querySelector('.palette-empty')
+    assert.ok(emptyStatus !== null)
+    assert.ok(emptyStatus.textContent?.includes('No matching results'))
   })
 
   test('IME guard, layered Esc (IME -> preview -> query -> scope -> close), and plugin command preview / target', { timeout: 60_000 }, async () => {

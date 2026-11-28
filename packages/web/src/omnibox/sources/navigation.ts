@@ -192,6 +192,7 @@ export function buildNavigationItems(input: BuildNavigationItemsInput): OmniboxI
         intent: { type: 'navigate', target: { kind: 'profiles', profileId: profile.id } },
       },
       settingIntentSwap: {
+        swapInPagesScope: true,
         title: displayName,
         subtitle: t('modals.omnibox.subtitle.profileSettings', { id: profile.id }),
         intent: { type: 'navigate', target: { kind: 'profiles', profileId: profile.id } },
@@ -282,6 +283,7 @@ export function buildNavigationItems(input: BuildNavigationItemsInput): OmniboxI
         intent: { type: 'navigate', target: { kind: 'plugins', pluginId: screen.pluginId } },
       },
       settingIntentSwap: {
+        swapInPagesScope: false,
         subtitle: t('modals.omnibox.subtitle.pluginSettings', { id: screen.pluginId }),
         intent: { type: 'navigate', target: { kind: 'plugins', pluginId: screen.pluginId } },
         secondaryAction: {

@@ -392,7 +392,8 @@ export function useOmniboxCatalog({
           ? item.secondaryAction.intent
           : item.intent
 
-      if (item.recentEligible === true || item.kind === 'page' || item.kind === 'setting') {
+      // Only record explicitly eligible local pages/settings so transient async plugin hits never evict the 32-entry LRU.
+      if (item.recentEligible === true) {
         setFrecencyEntries((prev) => recordFrecencyUse(prev, item.id))
       }
 

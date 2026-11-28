@@ -190,7 +190,7 @@ export function OmniboxModal({ onClose, searchDebounceMs = 200 }: OmniboxModalPr
     }
   }
 
-  const remoteQuery = parsed.searchText
+  const remoteQuery = parsed.exactConversationId !== null ? '' : parsed.searchText
   const isSearchPending =
     remoteQuery !== '' && (search.isComposing || search.searching || search.settledQuery !== remoteQuery)
   const settledCurrentQuery = remoteQuery !== '' && search.settledQuery === remoteQuery
@@ -294,7 +294,7 @@ export function OmniboxModal({ onClose, searchDebounceMs = 200 }: OmniboxModalPr
                       compact
                       className="palette-empty"
                       title={
-                        remoteQuery === ''
+                        parsed.searchText === ''
                           ? t('modals.palette.emptyHint')
                           : degradedMessages.length > 0
                             ? degradedMessages[0]!

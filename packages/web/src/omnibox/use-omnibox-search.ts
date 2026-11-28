@@ -56,7 +56,11 @@ export function useOmniboxSearch({
   const searchAbortRef = useRef<AbortController | null>(null)
   const settledQueryRef = useRef('')
 
-  const remoteQuery = useMemo(() => parseOmniboxQuery(query, 'all').searchText, [query])
+  const remoteQuery = useMemo(() => {
+    const parsed = parseOmniboxQuery(query, 'all')
+    // Exact `#<id>` pin resolves strictly against local conversations at 0ms without remote noise.
+    return parsed.exactConversationId !== null ? '' : parsed.searchText
+  }, [query])
 
   useEffect(() => {
     if (!inputEl) return

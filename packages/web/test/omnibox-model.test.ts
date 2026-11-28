@@ -744,4 +744,184 @@ describe('omnibox-model', () => {
     assert.equal(exactTitleView.sections[0]?.items[0]?.id, 'skill:deploy-2')
     assert.equal(tZh('modals.omnibox.scope.all'), '全部')
   })
+
+  test('regressions: empty-state frecency dedup, view:* swap only on setting intent, no false View-all, strict #id FTS filter', { timeout: 60_000 }, () => {
+    const plugins: PluginSummary[] = [
+      {
+        id: 'builtin:workflow',
+        name: { en: 'Workflow', 'zh-CN': '工作流' },
+        version: '0.1.0',
+        enabled: true,
+        locked: false,
+        hooks: [],
+        actions: [],
+        tools: [],
+      },
+    ]
+    const screens: GroupedUiSpecs['screens'] = [
+      {
+        pluginId: 'builtin:workflow',
+        spec: {
+          id: 'library',
+          label: { en: 'Workflow Library', 'zh-CN': '工作流库' },
+          description: { en: 'Browse saved workflows', 'zh-CN': '浏览已保存工作流' },
+          keywords: ['workflow', 'pipeline'],
+        },
+      },
+    ]
+    const pageItems = buildNavigationItems({
+      profiles: [{ id: 'coder', name: 'Coder' }],
+      enabledPluginIds: new Set(['builtin:workflow']),
+      screens,
+      plugins,
+      providers: [],
+      credentials: [],
+      models: [],
+      skills: [],
+      nodes: [],
+      actions: [],
+      locale: 'en',
+      t: tEn,
+    })
+
+    // 1) Empty-state `all` dedup: frecency pointing to an `emptyStateVisible: true` page (`builtin:open-overview` & `view:builtin:workflow/library`)
+    //    must appear ONCE (in `recent`), NEVER duplicated in `quick`, and `scopeCounts.all` matches emitted row count exactly.
+    const emptyDedup = buildOmniboxView({
+      query: '',
+      scope: 'all',
+      contextItems: [],
+      recentConversationItems: [],
+      pageItems,
+      commandItems: [],
+      conversationItems: [],
+      asyncPluginItems: [],
+      asyncMessageItems: [],
+      frecencyEntries: [
+        { id: 'builtin:open-overview', count: 5, lastUsedAt: 20_000 },
+        { id: 'view:builtin:workflow/library', count: 3, lastUsedAt: 10_000 },
+      ],
+    })
+    const emptyIds = emptyDedup.rows.map((r) => r.id)
+    assert.equal(new Set(emptyIds).size, emptyIds.length, 'empty-state rows must never contain duplicate IDs')
+    assert.equal(emptyDedup.scopeCounts.all, emptyDedup.rows.length)
+    const recentSec = emptyDedup.sections.find((s) => s.key === 'recent')!
+    const quickSec = emptyDedup.sections.find((s) => s.key === 'quick')!
+    assert.ok(recentSec.items.some((i) => i.id === 'builtin:open-overview'))
+    assert.ok(recentSec.items.some((i) => i.id === 'view:builtin:workflow/library'))
+    assert.equal(quickSec.items.some((i) => i.id === 'builtin:open-overview'), false)
+    assert.equal(quickSec.items.some((i) => i.id === 'view:builtin:workflow/library'), false)
+
+    // 2) Plugin Screen `view:*` stays primary = screen in `pages` scope (empty & `'workflow'`),
+    //    swapping to `#/settings/plugins/<id>` ONLY on explicit setting intent (`'workflow settings'`).
+    const emptyPagesView = buildOmniboxView({
+      query: '',
+      scope: 'pages',
+      contextItems: [],
+      recentConversationItems: [],
+      pageItems,
+      commandItems: [],
+      conversationItems: [],
+      asyncPluginItems: [],
+      asyncMessageItems: [],
+    })
+    const wfEmptyPages = emptyPagesView.rows.find((r) => r.id === 'view:builtin:workflow/library')
+    assert.deepEqual(wfEmptyPages?.intent, {
+      type: 'navigate',
+      target: { kind: 'screen', pluginId: 'builtin:workflow', screenId: 'library' },
+    })
+    const coderEmptyPages = emptyPagesView.rows.find((r) => r.id === 'profile:coder')
+    assert.deepEqual(coderEmptyPages?.intent, {
+      type: 'navigate',
+      target: { kind: 'profiles', profileId: 'coder' },
+    })
+
+    const wfPagesQuery = buildOmniboxView({
+      query: 'workflow',
+      scope: 'pages',
+      contextItems: [],
+      recentConversationItems: [],
+      pageItems,
+      commandItems: [],
+      conversationItems: [],
+      asyncPluginItems: [],
+      asyncMessageItems: [],
+    }).rows.find((r) => r.id === 'view:builtin:workflow/library')
+    assert.deepEqual(wfPagesQuery?.intent, {
+      type: 'navigate',
+      target: { kind: 'screen', pluginId: 'builtin:workflow', screenId: 'library' },
+    })
+
+    const wfSettingsIntent = buildOmniboxView({
+      query: 'workflow settings',
+      scope: 'all',
+      contextItems: [],
+      recentConversationItems: [],
+      pageItems,
+      commandItems: [],
+      conversationItems: [],
+      asyncPluginItems: [],
+      asyncMessageItems: [],
+    }).rows.find((r) => r.id === 'view:builtin:workflow/library')
+    assert.deepEqual(wfSettingsIntent?.intent, {
+      type: 'navigate',
+      target: { kind: 'plugins', pluginId: 'builtin:workflow' },
+    })
+
+    // 3) No false "View all N · Tab" when sync section is NOT truncated (even if async plugin items exist in the same scope)
+    const asyncPluginItems = buildAsyncPluginResourceItems(
+      [
+        {
+          id: 'builtin:workflow/wf-1',
+          pluginId: 'builtin:workflow',
+          itemId: 'wf-1',
+          kind: 'resource',
+          title: 'Workflow Alpha',
+          target: 'screen:builtin:workflow/library?wf=wf-1',
+          score: 90,
+        },
+      ],
+      [],
+      plugins,
+      'en',
+    )
+    const nonTruncatedView = buildOmniboxView({
+      query: 'workf',
+      scope: 'all',
+      contextItems: [],
+      recentConversationItems: [],
+      pageItems,
+      commandItems: [],
+      conversationItems: [],
+      asyncPluginItems,
+      asyncMessageItems: [],
+    })
+    const pagesSec = nonTruncatedView.sections.find((s) => s.key === 'pages')
+    assert.ok(pagesSec !== undefined)
+    assert.equal(pagesSec.items.length, 1)
+    assert.equal(pagesSec.totalCount, 2)
+    assert.equal(pagesSec.viewAllScope, undefined, 'non-truncated sync section must not show View all button')
+
+    // 4) Strict `#42` pin excludes unrelated FTS messages mentioning "42" from other conversations
+    const convs = [makeConv(42, { title: 'Target thread' }), makeConv(99, { title: 'Other thread' })]
+    const pinWithMessages = buildOmniboxView({
+      query: '#42',
+      scope: 'all',
+      contextItems: [],
+      recentConversationItems: [],
+      pageItems: [],
+      commandItems: [],
+      conversationItems: buildLocalConversationItems(convs, tEn),
+      asyncPluginItems: [],
+      asyncMessageItems: buildAsyncMessageItems(
+        [
+          { conversationId: 99, entryId: 'e-other', title: 'Other thread', snippet: 'mentions 42' },
+          { conversationId: 42, entryId: 'e-same', title: 'Target thread', snippet: 'inside 42' },
+        ],
+        convs,
+        tEn,
+      ),
+    })
+    assert.equal(pinWithMessages.rows.some((r) => r.id === 'msg:99:e-other'), false)
+    assert.equal(pinWithMessages.rows.some((r) => r.id === 'msg:42:e-same'), true)
+  })
 })

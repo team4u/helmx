@@ -66,9 +66,14 @@ interface ScoredItem {
   originalIdx: number
 }
 
-function applyIntentSwap(item: OmniboxItem, shouldSwap: boolean): OmniboxItem {
-  if (!shouldSwap || item.settingIntentSwap === undefined) return item
+function applyIntentSwap(
+  item: OmniboxItem,
+  options: { inPagesScope: boolean; hasSettingIntent: boolean },
+): OmniboxItem {
   const swap = item.settingIntentSwap
+  if (swap === undefined) return item
+  const shouldSwap = options.hasSettingIntent || (options.inPagesScope && swap.swapInPagesScope === true)
+  if (!shouldSwap) return item
   return {
     ...item,
     ...(swap.title !== undefined ? { title: swap.title } : {}),
@@ -127,13 +132,20 @@ function buildEmptyStateView(
   const allCommandItems = deduplicateById([...input.contextItems, ...input.commandItems])
   const emptyQuickPages = input.pageItems.filter((item) => item.emptyStateVisible === true)
   const emptyQuickCommands = input.commandItems.filter((item) => item.emptyStateVisible === true)
+
+  // Deduplicate empty-state `all` sections cleanly in priority order: context -> recent -> quick
+  const contextDedup = deduplicateById(input.contextItems)
+  const usedEmptyAllIds = new Set(contextDedup.map((item) => item.id))
+  const recentCombined = deduplicateById([...input.recentConversationItems, ...recentPageItems]).filter(
+    (item) => !usedEmptyAllIds.has(item.id),
+  )
+  for (const item of recentCombined) usedEmptyAllIds.add(item.id)
+  const quickCombined = deduplicateById([...emptyQuickPages, ...emptyQuickCommands]).filter(
+    (item) => !usedEmptyAllIds.has(item.id),
+  )
+
   const scopeCounts: OmniboxScopeCounts = {
-    all:
-      input.contextItems.length +
-      input.recentConversationItems.length +
-      recentPageItems.length +
-      emptyQuickPages.length +
-      emptyQuickCommands.length,
+    all: contextDedup.length + recentCombined.length + quickCombined.length,
     pages: input.pageItems.length,
     commands: allCommandItems.length,
     conversations: input.conversationItems.length,
@@ -142,15 +154,14 @@ function buildEmptyStateView(
   const sections: OmniboxSection[] = []
 
   if (parsed.effectiveScope === 'all') {
-    if (input.contextItems.length > 0) {
+    if (contextDedup.length > 0) {
       sections.push({
         key: 'context',
         zone: 'sync',
-        items: [...input.contextItems],
-        totalCount: input.contextItems.length,
+        items: contextDedup,
+        totalCount: contextDedup.length,
       })
     }
-    const recentCombined = deduplicateById([...input.recentConversationItems, ...recentPageItems])
     if (recentCombined.length > 0) {
       sections.push({
         key: 'recent',
@@ -159,7 +170,6 @@ function buildEmptyStateView(
         totalCount: recentCombined.length,
       })
     }
-    const quickCombined = deduplicateById([...emptyQuickPages, ...emptyQuickCommands])
     if (quickCombined.length > 0) {
       sections.push({
         key: 'quick',
@@ -169,9 +179,10 @@ function buildEmptyStateView(
       })
     }
   } else if (parsed.effectiveScope === 'pages') {
-    const swappedPages = input.pageItems.map((item) => applyIntentSwap(item, true))
+    const pagesSwapOpts = { inPagesScope: true, hasSettingIntent: false }
+    const swappedPages = input.pageItems.map((item) => applyIntentSwap(item, pagesSwapOpts))
     const prioritized = deduplicateById([
-      ...recentPageItems.map((item) => applyIntentSwap(item, true)),
+      ...recentPageItems.map((item) => applyIntentSwap(item, pagesSwapOpts)),
       ...swappedPages.filter((item) => item.emptyStateVisible === true),
       ...swappedPages,
     ]).slice(0, DEDICATED_SCOPE_SYNC_LIMIT)
@@ -228,12 +239,18 @@ export function buildOmniboxView(input: BuildOmniboxViewInput): BuildOmniboxView
   }
 
   const frecencyById = indexFrecencyEntries(frecencyEntries)
-  const swapForPagesOrIntent = parsed.effectiveScope === 'pages' || parsed.hasSettingIntent
+  const pageSwapOpts = {
+    inPagesScope: parsed.effectiveScope === 'pages',
+    hasSettingIntent: parsed.hasSettingIntent,
+  }
 
-  const scoreList = (items: ReadonlyArray<OmniboxItem>, applySwap: boolean): ScoredItem[] => {
+  const scoreList = (
+    items: ReadonlyArray<OmniboxItem>,
+    swapOpts: { inPagesScope: boolean; hasSettingIntent: boolean } | null,
+  ): ScoredItem[] => {
     const scored: ScoredItem[] = []
     items.forEach((rawItem, originalIdx) => {
-      const item = applyIntentSwap(rawItem, applySwap)
+      const item = swapOpts !== null ? applyIntentSwap(rawItem, swapOpts) : rawItem
       const bonus = computeFrecencyBonus(frecencyById.get(item.id), nowMs)
       const match = scoreOmniboxItem(item, parsed, bonus)
       if (match === null) return
@@ -257,10 +274,10 @@ export function buildOmniboxView(input: BuildOmniboxViewInput): BuildOmniboxView
     return scored
   }
 
-  const scoredPages = scoreList(input.pageItems, swapForPagesOrIntent)
+  const scoredPages = scoreList(input.pageItems, pageSwapOpts)
   const allCommands = deduplicateById([...input.contextItems, ...input.commandItems])
-  const scoredCommands = scoreList(allCommands, false)
-  const scoredConversations = scoreList(input.conversationItems, false)
+  const scoredCommands = scoreList(allCommands, null)
+  const scoredConversations = scoreList(input.conversationItems, null)
 
   // Async plugin items sorted by providerScore desc (then stable order); never reorder upper sync zone!
   const sortedPluginItems = deduplicateById(input.asyncPluginItems)
@@ -271,7 +288,8 @@ export function buildOmniboxView(input: BuildOmniboxViewInput): BuildOmniboxView
   const asyncPagePluginItems = sortedPluginItems.filter((item) => item.scope === 'pages')
   const asyncCommandPluginItems = sortedPluginItems.filter((item) => item.scope === 'commands')
 
-  // Deduplicate async FTS message hits against local conversation matches (skip title-only hit when conv matched locally)
+  // Deduplicate async FTS message hits against local conversation matches (skip title-only hit when conv matched locally).
+  // Under strict `#<id>` pin queries, drop unrelated conversations so `#42` never leaks messages from `#99`.
   const matchedLocalConvIds = new Set(
     scoredConversations
       .map((entry) => entry.item.conv?.id)
@@ -281,6 +299,15 @@ export function buildOmniboxView(input: BuildOmniboxViewInput): BuildOmniboxView
   const seenMessageIds = new Set<string>()
   for (const item of input.asyncMessageItems) {
     if (seenMessageIds.has(item.id)) continue
+    if (parsed.exactConversationId !== null) {
+      if (
+        item.intent.type !== 'navigate' ||
+        item.intent.target.kind !== 'conversation' ||
+        item.intent.target.conversationId !== parsed.exactConversationId
+      ) {
+        continue
+      }
+    }
     if (
       item.intent.type === 'navigate' &&
       item.intent.target.kind === 'conversation' &&
@@ -345,9 +372,7 @@ export function buildOmniboxView(input: BuildOmniboxViewInput): BuildOmniboxView
         zone: 'sync',
         items: visible,
         totalCount: pagesTotal,
-        ...(remainingPages.length > visible.length || pagesTotal > visible.length
-          ? { viewAllScope: 'pages' as const }
-          : {}),
+        ...(remainingPages.length > visible.length ? { viewAllScope: 'pages' as const } : {}),
       })
     }
 
@@ -361,9 +386,7 @@ export function buildOmniboxView(input: BuildOmniboxViewInput): BuildOmniboxView
         zone: 'sync',
         items: visible,
         totalCount: commandsTotal,
-        ...(remainingCommands.length > visible.length || commandsTotal > visible.length
-          ? { viewAllScope: 'commands' as const }
-          : {}),
+        ...(remainingCommands.length > visible.length ? { viewAllScope: 'commands' as const } : {}),
       })
     }
 
@@ -377,9 +400,7 @@ export function buildOmniboxView(input: BuildOmniboxViewInput): BuildOmniboxView
         zone: 'sync',
         items: visible,
         totalCount: conversationsTotal,
-        ...(remainingConvs.length > visible.length || conversationsTotal > visible.length
-          ? { viewAllScope: 'conversations' as const }
-          : {}),
+        ...(remainingConvs.length > visible.length ? { viewAllScope: 'conversations' as const } : {}),
       })
     }
 
