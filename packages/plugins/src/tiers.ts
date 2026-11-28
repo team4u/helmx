@@ -2,6 +2,7 @@
 import {
   COMPOSER_STATUS_SLOT,
   COMPOSER_TOOLBAR_SLOT,
+  HELMX_SEARCH_CAPABILITY_ID,
   HelmxError,
   MODEL_TIER_DESCRIPTION_MAX_LENGTH,
   ORCHESTRATOR_TIER_MAX_STEPS_LIMIT,
@@ -10,8 +11,11 @@ import {
   type ModelTiersCapability,
   type ModelTierSpec,
   type PluginDefinition,
+  type PluginSearchItem,
+  type PluginSearchProvider,
 } from '@helmx/protocol'
 import { resolvePluginClientAssets } from './asset-paths.js'
+import { compactOneLine, rankSearchCandidates } from './search-utils.js'
 import {
   asConversationEntryEvent,
   asDeletedConversationId,
@@ -671,10 +675,164 @@ export function createTiersPlugin(): PluginDefinition {
         },
       })
 
+      type TierSearchCandidate =
+        | { kind: 'tier'; id: string; spec: ModelTierSpec; description?: string }
+        | { kind: 'template'; template: TierTemplate; active: boolean; description?: string }
+
+      ctx.provide<PluginSearchProvider>(HELMX_SEARCH_CAPABILITY_ID, {
+        search(input, signal) {
+          if (signal.aborted) return []
+          const state = readState()
+          const candidates: TierSearchCandidate[] = []
+          for (const [id, spec] of Object.entries(state.tiers)) {
+            if (signal.aborted) return []
+            const description =
+              spec.description !== undefined ? compactOneLine(ctx.host.redact(spec.description)) : undefined
+            candidates.push({ kind: 'tier', id, spec, description })
+          }
+          for (const template of sortTemplates(state.templates)) {
+            if (signal.aborted) return []
+            const description =
+              template.description !== undefined ? compactOneLine(ctx.host.redact(template.description)) : undefined
+            candidates.push({
+              kind: 'template',
+              template,
+              active: state.activeTemplate === template.id,
+              description,
+            })
+          }
+          return rankSearchCandidates<TierSearchCandidate, PluginSearchItem>({
+            query: input.query,
+            limit: input.limit,
+            signal,
+            items: candidates,
+            fields: (entry) => {
+              if (entry.kind === 'tier') {
+                return {
+                  primary: [`tier/${entry.id}`, entry.id],
+                  secondary: [
+                    entry.spec.model,
+                    entry.spec.executorModel,
+                    entry.description,
+                    entry.spec.thinkingLevel,
+                    entry.spec.executorThinkingLevel,
+                    entry.spec.kind,
+                  ],
+                  keywords: [
+                    'tier',
+                    'tiers',
+                    'model',
+                    'routing',
+                    'fallback',
+                    '档位',
+                    '模型档位',
+                    '模型分级',
+                    ...(entry.spec.kind === 'orchestrator' ? ['orchestrator', 'planner', 'executor', '双相'] : []),
+                  ],
+                }
+              }
+              const tierIds = Object.keys(entry.template.tiers)
+              const modelRefs = Object.values(entry.template.tiers).flatMap((spec) =>
+                spec.executorModel !== undefined ? [spec.model, spec.executorModel] : [spec.model],
+              )
+              return {
+                primary: [entry.template.name, entry.template.id],
+                secondary: [
+                  entry.description,
+                  ...tierIds,
+                  ...tierIds.map((tid) => `tier/${tid}`),
+                  ...modelRefs,
+                ],
+                keywords: ['template', 'preset', 'tier', 'tiers', '模板', '档位模板'],
+              }
+            },
+            tieBreaker: (entry) => `${entry.kind}:${entry.kind === 'tier' ? entry.id : entry.template.id}`,
+            toResult: (entry, score) => {
+              if (entry.kind === 'tier') {
+                const { id, spec, description } = entry
+                const modelRef =
+                  spec.kind === 'orchestrator' && spec.executorModel !== undefined
+                    ? `${spec.model} -> ${spec.executorModel}`
+                    : spec.model
+                const subtitle =
+                  description !== undefined ? compactOneLine(`${modelRef} · ${description}`) : modelRef
+                return {
+                  id: `tier:${id}`,
+                  kind: 'resource',
+                  title: `tier/${id}`,
+                  ...(subtitle !== undefined ? { subtitle } : {}),
+                  breadcrumb: [{ en: 'Model Tiers', 'zh-CN': '模型档位' }],
+                  icon: 'layers',
+                  ...(spec.kind === 'orchestrator'
+                    ? { badge: { en: 'Dual-phase', 'zh-CN': '双相' } }
+                    : {}),
+                  target: `screen:${TIERS_PLUGIN_ID}/${TIERS_SCREEN_ID}?edit=${encodeURIComponent(id)}`,
+                  score,
+                }
+              }
+              const { template, active, description } = entry
+              const tierRefs = Object.keys(template.tiers)
+                .map((tid) => `tier/${tid}`)
+                .join(', ')
+              const detail = description ?? (tierRefs !== '' ? tierRefs : undefined)
+              const subtitle =
+                detail !== undefined ? compactOneLine(`${template.id} · ${detail}`) : template.id
+              return {
+                id: `template:${template.id}`,
+                kind: 'resource',
+                title: template.name,
+                ...(subtitle !== undefined ? { subtitle } : {}),
+                breadcrumb: [
+                  { en: 'Model Tiers', 'zh-CN': '模型档位' },
+                  { en: 'Templates', 'zh-CN': '模板' },
+                ],
+                icon: 'layers',
+                badge: active
+                  ? { en: 'Active', 'zh-CN': '当前生效' }
+                  : { en: 'Template', 'zh-CN': '模板' },
+                target: `screen:${TIERS_PLUGIN_ID}/${TIERS_SCREEN_ID}?tab=templates`,
+                score,
+              }
+            },
+          })
+        },
+      })
+
       const label = { en: 'Model Tiers', 'zh-CN': '模型档位' }
       ctx.ui.sidebarItem({ id: 'tiers-manager', label, icon: 'layers', target: `screen:${TIERS_PLUGIN_ID}/${TIERS_SCREEN_ID}`, order: 16 })
-      ctx.ui.screen({ id: TIERS_SCREEN_ID, label, icon: 'layers', client: { module: 'manager.tsx', export: 'TiersManagerScreen' } })
-      ctx.ui.settingsPanel({ id: 'tiers-settings', label, order: 26, client: { module: 'settings.tsx', export: 'TiersSettingsPanel' } })
+      ctx.ui.screen({
+        id: TIERS_SCREEN_ID,
+        label,
+        description: {
+          en: 'Configure semantic model tiers (tier/<id>), dual-phase planner/executor pairs, and switchable templates.',
+          'zh-CN': '配置语义模型档位（tier/<id>）、双相规划执行组合与可一键切换的编制模板。',
+        },
+        keywords: ['tier', 'tiers', 'model', 'models', 'routing', 'fallback', 'template', 'orchestrator', '档位', '模型分级', '模型档位', '编制模板'],
+        icon: 'layers',
+        client: { module: 'manager.tsx', export: 'TiersManagerScreen' },
+      })
+      ctx.ui.settingsPanel({
+        id: 'tiers-settings',
+        label,
+        description: {
+          en: 'Summary of active model tiers and preset templates with quick entry to Model Tiers.',
+          'zh-CN': '查看当前生效模型档位与模板概览，并快速进入模型档位管理页。',
+        },
+        keywords: ['tier', 'tiers', 'model', 'routing', 'fallback', 'template', '档位', '模型分级', '模型档位'],
+        order: 26,
+        client: { module: 'settings.tsx', export: 'TiersSettingsPanel' },
+      })
+      ctx.ui.command({
+        id: 'tiers-create',
+        title: { en: 'Create Model Tier', 'zh-CN': '新建模型档位' },
+        description: {
+          en: 'Open the drawer to bind a new semantic model tier (tier/<id>).',
+          'zh-CN': '打开抽屉新建语义模型档位（tier/<id>）绑定。',
+        },
+        icon: 'layers',
+        target: `screen:${TIERS_PLUGIN_ID}/${TIERS_SCREEN_ID}?create=1`,
+        keywords: ['tier', 'create', 'new', 'add', 'model', 'routing', 'fallback', '档位', '新建档位', '模型分级'],
+      })
       ctx.ui.slot({
         id: 'tiers-orchestrator-status',
         target: COMPOSER_STATUS_SLOT,

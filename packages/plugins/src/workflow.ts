@@ -7,8 +7,15 @@
  * - ./workflow/{config,depth,projection,background,steer,hooks,tools,actions,ui,assets}.ts — Plugin adapters
  * - ./workflow/client/ — React UI surfaces (timelineRenderer / toolView / slot / workbenchPanel / screen)
  */
-import type { DispatchToolsCapability, PluginDefinition } from '@helmx/protocol'
+import {
+  HELMX_SEARCH_CAPABILITY_ID,
+  type DispatchToolsCapability,
+  type PluginDefinition,
+  type PluginSearchItem,
+  type PluginSearchProvider,
+} from '@helmx/protocol'
 import { resolvePluginClientAssets } from './asset-paths.js'
+import { compactOneLine, rankSearchCandidates } from './search-utils.js'
 import {
   CONVERSATION_DEPTH_CAPABILITY_ID,
   WORKFLOW_PLUGIN_ID,
@@ -16,6 +23,7 @@ import {
   WORKFLOW_RUN_BADGES_DOC,
   WORKFLOW_SKILL_ID,
   type ConversationDepthCapability,
+  type SavedWorkflowSummary,
   type WorkflowRunSessionDocState,
 } from './contracts.js'
 import { registerWorkflowActions } from './workflow/actions.js'
@@ -172,6 +180,60 @@ export function createWorkflowPlugin(): PluginDefinition {
       })
       ctx.provide<DispatchToolsCapability>('helmx.dispatch-tools', {
         toolNames: ['subagent', 'SubagentWorkflow'],
+      })
+
+      ctx.provide<PluginSearchProvider>(HELMX_SEARCH_CAPABILITY_ID, {
+        search(input, signal) {
+          if (signal.aborted) return []
+          const saved = workflows.list()
+          return rankSearchCandidates<SavedWorkflowSummary, PluginSearchItem>({
+            query: input.query,
+            limit: input.limit,
+            signal,
+            items: saved,
+            fields: (wf) => {
+              const description =
+                wf.description !== undefined ? compactOneLine(ctx.host.redact(wf.description)) : undefined
+              const whenToUse =
+                wf.whenToUse !== undefined ? compactOneLine(ctx.host.redact(wf.whenToUse)) : undefined
+              const phaseTitles = wf.phases?.map((phase) => ctx.host.redact(phase.title)) ?? []
+              return {
+                primary: [wf.name],
+                secondary: [description, whenToUse, ...phaseTitles],
+                keywords: ['workflow', 'workflows', 'library', 'template', 'subagent', '工作流', '工作流库', '模板'],
+              }
+            },
+            tieBreaker: (wf) => wf.name,
+            toResult: (wf, score) => {
+              const description =
+                wf.description !== undefined ? compactOneLine(ctx.host.redact(wf.description)) : undefined
+              const whenToUse =
+                wf.whenToUse !== undefined ? compactOneLine(ctx.host.redact(wf.whenToUse)) : undefined
+              const phaseTitles = wf.phases?.map((phase) => ctx.host.redact(phase.title)) ?? []
+              const subtitle =
+                description ??
+                whenToUse ??
+                (phaseTitles.length > 0 ? compactOneLine(phaseTitles.join(' -> ')) : undefined)
+              const badge =
+                wf.metadataError !== undefined
+                  ? { en: 'Metadata issue', 'zh-CN': '元数据异常' }
+                  : wf.phases !== undefined && wf.phases.length > 0
+                    ? { en: `${wf.phases.length} phases`, 'zh-CN': `${wf.phases.length} 阶段` }
+                    : undefined
+              return {
+                id: `workflow:${wf.name}`,
+                kind: 'resource',
+                title: wf.name,
+                ...(subtitle !== undefined ? { subtitle } : {}),
+                breadcrumb: [{ en: 'Workflow Library', 'zh-CN': '工作流库' }],
+                icon: 'workflow',
+                ...(badge !== undefined ? { badge } : {}),
+                target: `screen:${WORKFLOW_PLUGIN_ID}/library?wf=${encodeURIComponent(wf.name)}`,
+                score,
+              }
+            },
+          })
+        },
       })
 
       registerWorkflowActions(ctx, {

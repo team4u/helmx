@@ -64,6 +64,7 @@ export interface CronRuntime {
   tickNow(): Promise<void>
   settle(): Promise<void>
   getJob(id: string): CronJob | undefined
+  listJobs(): CronJob[]
 }
 
 /** `cron_update` 的已校验输入（id + 至少一个补丁字段）。 */

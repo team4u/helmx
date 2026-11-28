@@ -52,6 +52,11 @@ export function registerWorkflowUi(ctx: HelmxPluginContext): void {
   ctx.ui.screen({
     id: 'library',
     label: { en: 'Workflow Library', 'zh-CN': '工作流库' },
+    description: {
+      en: 'Browse saved multi-agent workflow definitions, inspect scripts, and launch runs.',
+      'zh-CN': '浏览已保存的多智能体工作流定义、检视脚本源码并发起运行。',
+    },
+    keywords: ['workflow', 'workflows', 'library', 'template', 'subagent', 'orchestration', '工作流', '工作流库', '模板'],
     icon: 'workflow',
     client: { module: 'library.tsx', export: 'WorkflowLibraryScreen' },
   })
