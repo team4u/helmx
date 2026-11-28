@@ -91,7 +91,8 @@ async function apiCall(
 }
 
 async function sdkAgent(kernel: KernelRuntime, id: number) {
-  const conv = await getSdkConversation(kernel.harness, id, BACKGROUND_CONTEXT)
+  const harness = (kernel as unknown as { harness: Parameters<typeof getSdkConversation>[0] }).harness
+  const conv = await getSdkConversation(harness, id, BACKGROUND_CONTEXT)
   assert.ok(conv)
   return conv.agent(BACKGROUND_CONTEXT)
 }

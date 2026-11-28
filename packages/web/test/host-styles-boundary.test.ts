@@ -52,6 +52,7 @@ const PLUGIN_PRIVATE_CLASS_PREFIXES = [
   'tg-', // builtin:triggers
   'magpie-', // builtin:magpie
   'tiers-', // builtin:tiers
+  'duo-', // builtin:duo
   'plan-', // builtin:plan
 ] as const
 

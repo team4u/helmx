@@ -10,11 +10,11 @@ Swarm 在会话里提供一张共享顺序黑板。主控会话负责分工，�
 helmx swarm create-group --conversation-id 42 --title '检查导出模块' --json
 ```
 
-主控分配具体任务，协调接口和分支合入。成员可单独指定 Profile、目标计算节点（`nodeId`）、工作目录（`cwd`）、模型和思考档位；`nodeId` 覆盖 Profile 与主控所在节点（显式传 `local` 可切回 Hub 本机），远端节点必须提供 `cwd` 或匹配的 Profile `cwd`，且节点离线时在创建会话前即返回 `409 node_offline`。并发写代码的成员应各有独立的 Git worktree；注意主控本机的 `git merge` 仅适用于同节点上的工作树，跨节点工作树需在各自节点上处理合入。Swarm 通过 `builtin:worktree` 分配工作树，并在协作期间持有租约，避免被清理。`readonly` 是任务约定，成员仍保有原来的工具权限。 [Git Worktree 的隔离范围](../workflows/worktree-and-gate.md)
+主控分配具体任务，协调接口和分支合入。成员在 `createConversation` / `forkConversation` 创建边界即原子写入 `ownedBy: 'helmx'`；可单独指定 Profile、目标计算节点（`nodeId`）、工作目录（`cwd`）、模型和思考档位（省略 `model` 时通过 `helmx.default-child-model` 自动消费 [`builtin:duo`](duo.md) 等插件提供的默认执行模型）；`nodeId` 覆盖 Profile 与主控所在节点（显式传 `local` 可切回 Hub 本机），远端节点必须提供 `cwd` 或匹配的 Profile `cwd`，且节点离线时在创建会话前即返回 `409 node_offline`。并发写代码的成员应各有独立的 Git worktree；注意主控本机的 `git merge` 仅适用于同节点上的工作树，跨节点工作树需在各自节点上处理合入。Swarm 通过 `builtin:worktree` 分配工作树，并在协作期间持有租约，避免被清理。`readonly` 是任务约定，成员仍保有原来的工具权限。 [Git Worktree 的隔离范围](../workflows/worktree-and-gate.md)
 
-带 worktree 的成员每回合都会收到 `builtin:worktree` 注入的 `<worktree_context>` 系统段落（含 `branch`、`path`、`baseCommit`、源工作区是否脏，以及结束回合前 `git commit` 的提醒），与 `subagent` 隔离派生的提示词尾注同源；成员据此知道自己在哪条受管分支上工作。
+带 worktree 的成员每回合都会收到 `builtin:worktree` 在 `before_turn` 单轨注入的 `<worktree_context>` 系统段落（含 `branch`、`path`、`baseCommit`、源工作区是否脏，以及结束回合前 `git commit` 的提醒）；成员据此知道自己在哪条受管分支上工作，清理工作树后自动停止注入。
 
-Swarm 成员通过 `helmx.conversation-depth` 上报 `depth = 1`，统一复用 [`builtin:workflow`](workflow.md) 的 `maxSubagentDepth` 上限（默认 `1`，即成员默认不可再派子代理或工作流，在 `before_turn` 自动剥离派工工具并抑制 `<available_profiles>` 协作目录，并在派生入口拦截 `403 subagent_depth_exceeded`）。使用 `forkFrom`（`'coordinator'` 或既有成员名）热分叉的成员还会持久化 `forked: true`：每回合在 `<active_swarm_group>` 注入上下文边界规则（将分叉点之前的历史视作只读背景，不重复派发继承来的委托指令），且即使全局上限调高仍始终保持叶子收口；人工 `conversations fork` 会话不受影响。
+Swarm 成员通过 `helmx.conversation-depth` 上报 `depth = 1`，统一复用 [`builtin:workflow`](workflow.md) 的 `maxSubagentDepth` 上限（默认 `1`，即成员默认不可再派子代理或工作流，在 `before_turn` 自动剥离派工工具并抑制 `<available_profiles>` 协作目录，并在派生入口拦截 `403 subagent_depth_exceeded`）。本插件同时向 `PluginHost` 提供 `helmx.dispatch-tools`（`['swarm_dispatch_worker']`）与 `helmx.planning-orchestration-tools`（`[...SWARM_TOOL_NAMES]`），供深度守卫与 [`builtin:duo`](duo.md) 规划阶段协同放行。使用 `forkFrom`（`'coordinator'` 或既有成员名）热分叉的成员还会持久化 `forked: true`：每回合经共享 `FORKED_CHILD_CONTEXT_GUIDANCE` 边界助手在 `<active_swarm_group>` 注入上下文边界规则（将分叉点之前的历史视作只读背景，不重复派发继承来的委托指令），且即使全局上限调高仍始终保持叶子收口；人工 `conversations fork` 会话不受影响。
 
 ## 看板消息
 

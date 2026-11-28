@@ -15,7 +15,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux'
-import { HelmxError, type Profile } from '@helmx/protocol'
+import { HelmxError, type ModelCatalog, type Profile } from '@helmx/protocol'
 import { createPluginBuildProvider } from '@helmx/plugin-build'
 import { createHelmx } from '../../hub/src/app.js'
 import { wrapModelsForCompaction } from '@helmx/kernel/testing'

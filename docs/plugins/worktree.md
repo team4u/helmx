@@ -7,7 +7,7 @@
 - **分配**：`agent_spawn` around 钩子（priority 200）包裹整个派生。按 `resolveSpawnTarget`（支持动态 `request.nodeId` 覆盖）在目标节点从主仓切出 `helmx/spawn-*` 分支再改写 `cwd`；续接已有隔离子会话（`resume`）不支持传 `nodeId`（`400 validation_error`）。目录建在目标节点主工作树同级 `.helmx-worktrees/` 下，不嵌套；远端真实路径以 execution metadata / `worktreeId` 为准。
 - **租约**：`git worktree add` 执行前先持久登记占位。进程崩溃后无法证明执行已停止时，清理显式拒绝（`worktree_execution_unknown`），交人工确认。
 - **持有锁（hold）**：跨插件长占用（如 Swarm 协作期）通过 `acquire_worktree`（支持可选 `requestNodeId` 动态指定目标节点） / `release_worktree_hold` 两个内部动作加 `ManagedWorktreeHold` 持久保护。这两个动作不进模型 `<available_actions>` 目录，仅供插件间互调。
-- **上下文注入（单一事实源）**：`worktree_context` 的坐标（`worktreeId` / `path` / `branch` / `baseCommit` / `baseBranch` / `dirtySource`）与「结束回合前 `git add` + `git commit`」提醒由 `worktree-context.ts` 统一渲染。`agent_spawn` 路径（新建 / resume / reattach）追加为提示词尾注；经 `acquire_worktree` 只改写 `cwd` 的会话（如 Swarm 成员，没有尾注）则由 `before_turn` 每回合按最新登记事实注入 `builtin:worktree.context` 系统段落。两者共享同一份事实行，不重复注入。
+- **上下文注入（单轨 `before_turn`）**：`<worktree_context>` 的坐标（`worktreeId` / `path` / `branch` / `baseCommit` / `baseBranch` / `dirtySource`）与「结束回合前 `git add` + `git commit`」提醒由 `worktree-context.ts` 统一渲染，并在 `before_turn` 钩子以 `builtin:worktree.context` 系统段落单轨注入给所有活跃工作树会话（无论由 `agent_spawn`、`acquire_worktree` 还是 `(nodeId, cwd)` 位置匹配识别）；工作树被清理或租约移除后自动停止注入，消除双轨冗余与清理后残余提示。
 - **执行描述**：派生结果把 worktree 描述写入 execution meta 的 `builtin:worktree` 命名空间，编排脚本可据此续接、合入或清理。
 
 ## 工具与动作

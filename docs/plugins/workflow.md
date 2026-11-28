@@ -6,10 +6,10 @@
 
 ### 模型工具（2 个，外加动态 `workflow_steer`）
 
-- **`subagent`**：派生子代理。支持 `fork: true` 从父会话上下文分叉（默认收口为叶子，除非显式传入 `maxSubagentDepth`）、`nodeId` 动态目标计算节点覆写（显式 `'local'` 可切回本机，远端节点需兼容 `cwd`，与 `resume` 互斥）、`isolation: 'worktree'` 隔离工作树、`resume` 续接（凭 `execution.conversationId` / `executionId`）、`schema` 结构化输出、`gate` 验收命令、`model` / `effort` 覆盖、`maxSubagentDepth` 显式授予派生深度；
+- **`subagent`**：派生子代理。支持 `fork: true` 从父会话上下文分叉（默认收口为叶子，除非显式传入 `maxSubagentDepth`）、`nodeId` 动态目标计算节点覆写（显式 `'local'` 可切回本机，远端节点需兼容 `cwd`，与 `resume` 互斥）、`isolation: 'worktree'` 隔离工作树、`resume` 续接（凭 `execution.conversationId` / `executionId`）、`schema` 结构化输出、`gate` 验收命令、`model` / `effort` 覆盖（省略 `model` 时自动经 `helmx.default-child-model` 消费 [`builtin:duo`](duo.md) 等插件提供的默认执行模型）、`maxSubagentDepth` 显式授予派生深度；
 - **`SubagentWorkflow`**：确定性 DSL 编排（内联 `script` / `scriptPath` / 已保存 `name`），journal 账本支持 `resumeFromRunId` 断点恢复。
 
-后台策略按**当前会话归属**判定：human 会话缺省后台（终态后幂等汇报自动到达父会话，禁止 sleep 轮询）、显式 `background: false` 同步等待；`helmx` 自动化会话缺省同步、显式 `background: true` 拒绝。同步 `subagent` 直接经内核 `ctx.host.spawnAgent` 执行并按 `(parentConversationId, parentToolCallId)` 幂等续接，不创建 `WorkflowRun` 磁盘账本记录；后台 `subagent` 与 `SubagentWorkflow` 由引擎账本持久化跟踪。`helmx workflows run` 动作与模型工具的 `background` 是不同参数、不同入口。
+后台策略按**当前会话归属**判定：human 会话缺省后台（终态后幂等汇报自动到达父会话，禁止 sleep 轮询；若父会话处于 `working` 且持有 `runtimeModelOverride: true`，汇报以 `whenBusy: 'followUp'` 排队送达以免中途抢占临时执行模型，其余忙态沿用 `steer`）、显式 `background: false` 同步等待；`helmx` 自动化会话缺省同步、显式 `background: true` 拒绝。同步 `subagent` 直接经内核 `ctx.host.spawnAgent` 执行并按 `(parentConversationId, parentToolCallId)` 幂等续接，不创建 `WorkflowRun` 磁盘账本记录；后台 `subagent` 与 `SubagentWorkflow` 由引擎账本持久化跟踪。`helmx workflows run` 动作与模型工具的 `background` 是不同参数、不同入口。同时，本插件通过 `helmx.dispatch-tools`（`['subagent', 'SubagentWorkflow']`）与 `helmx.planning-orchestration-tools`（`['subagent', 'SubagentWorkflow', 'workflow_steer']`）分别对接深度守卫与 [`builtin:duo`](duo.md) 规划阶段放行。
 
 ### 动作（10 个，五端复用）
 
@@ -58,7 +58,7 @@
 
 工作流定义文件唯一存储真源是 `<ctx.dataDir>/workflows/<name>.js`。引擎经 `emitEvent` 发布 `workflow.updated`（全局仅状态失效提示）与 `workflow.settled`（完整 summary，`broadcast: false` 进程内分发）。
 
-**嵌套深度契约**：受管子代理（经 `subagent` / 编排引擎 / 任何 `agent_spawn` 管道派生、`onResolved` 回传 `conversationId` 的子会话）默认上限为 1 层（即第 1 层子代理默认即为编排叶子，不能继续派生子代理、工作流或 Swarm）；非分叉子代理仅当通过插件配置或显式 `maxSubagentDepth`（2..5）授予更高上限时才允许继续嵌套。`fork: true` 即使在全局配置调高时仍默认收口为当前子层级的叶子（`maxSubagentDepth = childDepth`）并持久记录 `forked: true`，在 `before_turn` 注入 `<forked_subagent_context>` 边界段落防止重复派发继承来的父级委托指令，仅当显式传入 `maxSubagentDepth`（且不超出继承上限）时才允许继续嵌套。`builtin:swarm` 成员通过 `helmx.conversation-depth` 上报 `depth = 1`（`forkFrom` 成员标记为叶子），统一复用本插件 `maxSubagentDepth` 上限（默认 `1`）。三道防线：`before_turn` 剥离叶子回合的派工工具（含所有活跃 `helmx.dispatch-tools` 提供方声明的工具，自然抑制 `<available_profiles>`）、工具/动作入口前置拒绝（`403 subagent_depth_exceeded`）、`agent_spawn` 钩子（priority 300）兜底。人工会话级 `conversations fork` 不进登记表、不受限。DSL `workflow()` 脚本组合深度上限为 2 层（`MAX_WORKFLOW_NESTING_DEPTH = 2`），与子代理层级分别计数。
+**嵌套深度契约**：受管子代理（经 `subagent` / 编排引擎 / 任何 `agent_spawn` 管道派生、`onResolved` 回传 `conversationId` 的子会话）默认上限为 1 层（即第 1 层子代理默认即为编排叶子，不能继续派生子代理、工作流或 Swarm）；非分叉子代理仅当通过插件配置或显式 `maxSubagentDepth`（2..5）授予更高上限时才允许继续嵌套。`fork: true` 即使在全局配置调高时仍默认收口为当前子层级的叶子（`maxSubagentDepth = childDepth`）并持久记录 `forked: true`，在 `before_turn` 经共享 `FORKED_CHILD_CONTEXT_GUIDANCE` 边界助手注入 `<forked_subagent_context>` 边界段落防止重复派发继承来的父级委托指令，仅当显式传入 `maxSubagentDepth`（且不超出继承上限）时才允许继续嵌套。`builtin:swarm` 成员通过 `helmx.conversation-depth` 上报 `depth = 1`（`forkFrom` 成员标记为叶子），统一复用本插件 `maxSubagentDepth` 上限（默认 `1`）。三道防线：`before_turn` 剥离叶子回合的派工工具（含所有活跃 `helmx.dispatch-tools` 提供方声明的工具，自然抑制 `<available_profiles>`）、工具/动作入口前置拒绝（`403 subagent_depth_exceeded`）、`agent_spawn` 钩子（priority 300）兜底。人工会话级 `conversations fork` 不进登记表、不受限。DSL `workflow()` 脚本组合深度上限为 2 层（`MAX_WORKFLOW_NESTING_DEPTH = 2`），与子代理层级分别计数。
 
 ## 停用与失败语义
 

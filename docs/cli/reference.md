@@ -91,6 +91,8 @@
 | :--- | :--- |
 | `--current` | 读 `HELMX_CONVERSATION_ID` 解析会话目标，可省略位置 `id` |
 | `--wait` | 同步等待回答（`?wait=1`，无超时）；人类模式直出 assistant 文本 |
+| `--model <ref>` | 单轮运行时模型临时覆写（`provider/model` 或 `tier/<id>`；要求会话处于空闲态，回合结束后自动恢复） |
+| `--thinking <level>` | 单轮运行时思考强度临时覆写（`off\|minimal\|low\|medium\|high\|xhigh\|max`；要求会话空闲） |
 | `--when-busy <mode>` | `steer`（默认）/ `followUp` / `reject` |
 | `--when-pending-ask <mode>` | 存在挂起 AskDoc 时的策略：`supersede`（默认）/ `reject`（返回 `409 ask_pending`） |
 | `--origin <src>` | `human`（默认）/ `agent` / `trigger` |
@@ -242,6 +244,8 @@ PUT 为整体替换契约：update 走语义化标志时 CLI 先 GET 完整 Prof
 | `helmx cron list / create / delete / trigger` | builtin:triggers | cron 任务管理；create 必填 `--id --schedule --text`（标准五字段，timezone 默认 UTC），支持 `--target-conversation-id` / `--target-profile-id` 定向 |
 | `helmx webhook create / list / delete` | builtin:triggers | webhook 端点管理（HMAC-SHA256 验签）；create 必填 `--id --secret`，**secret 仅允许人工 HTTP/CLI 配置**（会话上下文调用被 403 拒绝） |
 | `helmx magpie status / refresh / quota` | builtin:magpie | 网关状态、目录刷新与配额查询 |
+| `helmx tiers list / set / remove / save-template / apply-template / delete-template` | builtin:tiers | 语义模型档位（`tier/<id>`）映射与多套预设模板管理 |
+| `helmx duo status / set-conversation / clear-conversation / set-profile / clear-profile` | builtin:duo | 顶层会话与 Profile 级规划/执行双相协同配置管理与状态查询 |
 
 ---
 

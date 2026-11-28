@@ -477,9 +477,7 @@ test('builtin:tiers helmx.search: searches tiers + templates with valid ?edit= a
   try {
     await env.app.kernel.plugins.invokeAction(TIERS_PLUGIN_ID, 'set', {
       id: 'architect',
-      kind: 'orchestrator',
       model: 'faux/flagship',
-      executorModel: 'faux/fast',
       description: 'Deep design planning and execution',
     })
     await env.app.kernel.plugins.invokeAction(TIERS_PLUGIN_ID, 'set', {

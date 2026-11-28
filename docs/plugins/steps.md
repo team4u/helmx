@@ -15,8 +15,8 @@
 - **双通道返回**：
   - 给模型的 `output` 只返回单行英文摘要（例如 `Updated steps: 2/5 done, current: Run verification.`），避免 JSON 回显膨胀上下文；
   - UI 结构化快照写入 `presentationMeta`（受 `STEPS_PRESENTATION_META_SCHEMA` 约束，持久化于 `pi.tool-result.model[0].details`，不进模型上下文）。
-- **与 `builtin:tiers` / `builtin:plan` 的协同**：
-  - 实时步骤清单仅面向执行阶段：`builtin:tiers` 双阶段组合档位在 Planning 阶段（`ORCHESTRATOR_PLAN_TOOL_WHITELIST`）与 `builtin:plan` 只读 `/plan` 阶段（`PLAN_MODE_TOOL_WHITELIST`）均收紧白名单并剥离 `update_steps`，进入 Execution 阶段或批准回到 `normal` 执行期后自动恢复可用。
+- **与 `builtin:duo` / `builtin:plan` 的协同**：
+  - 实时步骤清单仅面向执行阶段：`builtin:duo` 规划阶段（`DUO_PLAN_BASE_TOOL_WHITELIST`）与 `builtin:plan` 只读 `/plan` 阶段（`PLAN_MODE_TOOL_WHITELIST`）均收紧白名单并剥离 `update_steps`，进入 `builtin:duo` 执行阶段或 `/plan` 批准回到 `normal` 执行期后自动恢复可用。
 
 ## 生命周期收敛语义
 
@@ -56,4 +56,5 @@
 
 - [插件系统设计与契约](overview.md)
 - [计划模式插件（`builtin:plan`）](plan.md)
+- [双相协同插件（`builtin:duo`）](duo.md)
 - [模型档位插件（`builtin:tiers`）](tiers.md)

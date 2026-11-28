@@ -4,7 +4,7 @@
 
 ## 当前状态
 
-插件系统是 Helmx 的核心生产能力：内核（`@helmx/kernel`）只保留持久会话、跨节点执行底座、Model/Auth 与插件宿主四块通用机制，其余一切业务能力由插件承载。官方插件实现与资产位于 `packages/plugins`，由产品组合根 `packages/hub/src/app.ts` 的 `createHelmx` 注册，共 16 个内置插件（全部默认启用）：
+插件系统是 Helmx 的核心生产能力：内核（`@helmx/kernel`）只保留持久会话、跨节点执行底座、Model/Auth 与插件宿主四块通用机制，其余一切业务能力由插件承载。官方插件实现与资产位于 `packages/plugins`，由产品组合根 `packages/hub/src/app.ts` 的 `createHelmx` 注册，共 17 个内置插件（全部默认启用）：
 
 | 插件 ID | 名称 | 职责一句话 | 默认状态 | locked |
 | :--- | :--- | :--- | :--- | :--- |
@@ -20,6 +20,7 @@
 | `builtin:magpie` | Magpie 网关 | 动态模型网关接入：目录、配额与路由组诊断 | 启用 | 否 |
 | `builtin:token-speed` | Token 速率 | 输入区状态行实时解码速率（只读展示，内核零速率计算） | 启用 | 否 |
 | `builtin:tiers` | 模型档位 | 语义模型档位（`tier/<id>`）、自定义多套模板与 `model-tiers` 受管技能 | 启用 | 否 |
+| `builtin:duo` | 双相协同 | 顶层会话 Planner 只读规划与 Executor 落地执行双相协同（`exit_plan_mode` / `hand_back_to_planner`）、Profile 与会话级配置、`helmx.default-child-model` 默认执行模型提供方与 `duo` 受管技能 | 启用 | 否 |
 | `builtin:title` | 会话标题 | 首轮完成后后台静默整理清晰标题，提供 `/title` 命令按当前内容随时重整 | 启用 | 否 |
 | `builtin:plan` | 计划模式 | 只读调研、澄清问答与结构化计划草拟：规划工具白名单（剥离写与派工工具）、`AskDoc` 审批、人工编辑、产物归档与可选新上下文/模型交接执行 | 启用 | 否 |
 | `builtin:steps` | 实时步骤清单 | 由 `update_steps` 工具驱动的实时步骤清单：输入框上方可折叠进度条、时间线紧凑轨迹与全生命周期收敛 | 启用 | 否 |
@@ -46,7 +47,7 @@
 | `ctx.doc(name, initial, opts)` | 声明全局持久文档 | state.sqlite；`public: true` 进全局首帧与 SSE 广播 |
 | `ctx.sessionDoc(name, initial, opts)` | 按会话分片的持久文档 | 不进全局首帧/全局 SSE，专用 SSE 按需订阅 |
 | `ctx.kv<T>(namespace)` | 轻量插件专属键值存储 | state.sqlite `helmx_plugin_kv`；按条目独立 `get / set / delete / list(prefix/limit/cursor) / clear / flush`（无整命名空间序列化），写入自动过 SecretStash 脱敏、单条上限 256 KiB（超限 `413 plugin_kv_too_large`），受 epoch 守卫，卸载清理 |
-| `ctx.provide<T>(id, impl)` / `ctx.consume<T>(id)` / `ctx.onCapabilityChanged(id, listener)` | 类型化插件间能力注册、发现与变更观察 | `id` 边界强校验（`^[a-z0-9][a-z0-9._-]{0,63}$`）；停用/停止/回滚自动释放提供与订阅；`consume` 仅返回活跃插件实现；`onCapabilityChanged` 返回幂等退订函数；内核子系统亦通过 `PluginHost.consumeCapability` 消费（如 `helmx.dispatch-tools` 与 `helmx.model-tiers`） |
+| `ctx.provide<T>(id, impl)` / `ctx.consume<T>(id)` / `ctx.onCapabilityChanged(id, listener)` | 类型化插件间能力注册、发现与变更观察 | `id` 边界强校验（`^[a-z0-9][a-z0-9._-]{0,63}$`）；停用/停止/回滚自动释放提供与订阅；`consume` 仅返回活跃插件实现；`onCapabilityChanged` 返回幂等退订函数；内核子系统亦通过 `PluginHost.consumeCapability` 消费（如 `helmx.dispatch-tools`、`helmx.planning-orchestration-tools`、`helmx.model-tiers`、`helmx.default-child-model` 与 `helmx.plan-mode-active`） |
 | `ctx.service(spec)` | 注册后台长驻服务 | `prepare / start / reconcile / stop / liveTasks / inUse` |
 | `ctx.provider(provider)` | 注册模型供应商网关 | 启用时挂载、停用后注销，宿主统一协调 |
 | `ctx.ui` | 前端扩展点注册表（10 个 surface） | 见[扩展点详解](../architecture/extension-points.md) |
@@ -128,7 +129,7 @@
 
 ## 相关文档
 
-- 各内置插件深度文档：[workflow](workflow.md) · [worktree](worktree.md) · [changes](changes.md) · [swarm](swarm.md) · [profile](profile.md) · [memory](memory.md) · [triggers](triggers.md) · [magpie](magpie.md) · [json-render](json-render.md) · [mermaid](mermaid.md) · [token-speed](token-speed.md) · [tiers](tiers.md) · [title](title.md) · [plan](plan.md) · [steps](steps.md) · [port-forward](port-forward.md)
+- 各内置插件深度文档：[workflow](workflow.md) · [worktree](worktree.md) · [changes](changes.md) · [swarm](swarm.md) · [profile](profile.md) · [memory](memory.md) · [triggers](triggers.md) · [magpie](magpie.md) · [json-render](json-render.md) · [mermaid](mermaid.md) · [token-speed](token-speed.md) · [tiers](tiers.md) · [duo](duo.md) · [title](title.md) · [plan](plan.md) · [steps](steps.md) · [port-forward](port-forward.md)
 - [插件开发实战](plugin-development.md)：从 `helmx plugins init` 到 doctor / rescan / enable / reload 的完整闭环
 - [生命周期 Hook 与全界面扩展点](../architecture/extension-points.md)：4 个 Hook 与 10 个 UI surface 的逐项契约
 - [微内核架构总览](../architecture/overview.md)：内核四块机制与包依赖方向

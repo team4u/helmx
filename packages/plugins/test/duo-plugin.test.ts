@@ -154,7 +154,7 @@ function openDuoUnitHost(options: {
       conversations.set(id, next)
       return structuredClone(next)
     },
-    onEvent(type, listener) {
+    onEvent: ((type: string, listener: (payload: unknown) => Promise<void> | void) => {
       let set = listeners.get(type)
       if (!set) {
         set = new Set()
@@ -164,7 +164,7 @@ function openDuoUnitHost(options: {
       return () => {
         set?.delete(listener)
       }
-    },
+    }) as NonNullable<PluginHostBackend['onEvent']>,
     emitEvent: () => {},
   }
 
@@ -219,7 +219,8 @@ test('pure contracts and client model helpers validate inputs strictly', TIMEOUT
     parseDuoInputMeta({ [DUO_INPUT_META_KEY]: { enabled: true, executorModel: ' tier/coder ', maxExecutionSteps: 12 } }),
     { present: true, valid: true, enabled: true, executorModel: 'tier/coder', maxExecutionSteps: 12 },
   )
-  assert.equal(parseDuoInputMeta({ [DUO_INPUT_META_KEY]: { enabled: 'yes' } }).valid, false)
+  const invalidMeta = parseDuoInputMeta({ [DUO_INPUT_META_KEY]: { enabled: 'yes' } })
+  assert.ok(invalidMeta.present && !invalidMeta.valid)
 
   assert.deepEqual(
     resolveDuoModelThroughTiers('tier/coder', undefined, {
