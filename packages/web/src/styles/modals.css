@@ -48,7 +48,7 @@
 }
 
 /* ==========================================================================
- * 命令面板（CommandPaletteModal）
+ * 全局搜索与命令面板（OmniboxModal）
  * ========================================================================== */
 
 .palette-backdrop {
@@ -57,8 +57,8 @@
 }
 
 .palette-modal {
-  max-width: 620px;
-  max-height: min(74dvh, calc(var(--palette-vvh, 100dvh) - 32px), 580px);
+  max-width: 640px;
+  max-height: min(76dvh, calc(var(--palette-vvh, 100dvh) - 32px), 600px);
 }
 
 .palette-header {
@@ -68,6 +68,14 @@
   padding: 8px 12px;
   gap: 8px;
   border-bottom: 1px solid var(--line-2);
+  flex-shrink: 0;
+  min-width: 0;
+}
+
+.omnibox-scope-bar {
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--line-2);
+  background: var(--bg-subtle);
   flex-shrink: 0;
   min-width: 0;
 }
@@ -107,6 +115,73 @@
   height: auto;
 }
 
+.omnibox-row {
+  cursor: pointer;
+}
+
+.omnibox-row-multiline {
+  align-items: flex-start;
+}
+
+.omnibox-row-title-line {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+
+.omnibox-breadcrumb {
+  font-size: 11.5px;
+  color: var(--fg-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex-shrink: 1;
+}
+
+.omnibox-subtitle {
+  font-size: 11.5px;
+  color: var(--fg-muted);
+  line-height: 1.35;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.omnibox-row-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.omnibox-secondary-btn {
+  opacity: 0;
+  pointer-events: none;
+  flex-shrink: 0;
+  transition: opacity 120ms ease;
+}
+
+.omnibox-row.nav-item-active .omnibox-secondary-btn,
+.omnibox-row:focus-within .omnibox-secondary-btn {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+@media (hover: hover) {
+  .omnibox-row:hover .omnibox-secondary-btn {
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+
+@media (hover: none) {
+  .omnibox-secondary-btn {
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+
 .palette-listbox .nav-item:focus-visible,
 .palette-listbox .nav-item.nav-item-active {
   outline: none;
@@ -132,6 +207,35 @@
   letter-spacing: 0.02em;
   text-transform: uppercase;
   user-select: none;
+}
+
+.omnibox-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.omnibox-view-all-btn {
+  font-size: 11px;
+  font-weight: 500;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--fg-muted);
+  flex-shrink: 0;
+}
+
+@media (hover: hover) {
+  .omnibox-view-all-btn:hover {
+    color: var(--fg);
+  }
+}
+
+.omnibox-zone-divider {
+  height: 1px;
+  margin: 6px 8px 2px;
+  background: var(--line-2);
+  flex-shrink: 0;
 }
 
 .palette-listbox .nav-item + .palette-group-header,
@@ -372,4 +476,17 @@
   flex-shrink: 0;
   display: inline-flex;
   align-items: center;
+}
+
+/* Omnibox 深链落地高亮：1.5s 克制发丝环（亮暗主题一致，尊重减少动画偏好） */
+.search-focus-highlight {
+  border-radius: var(--radius-sm);
+  background: var(--accent-bg);
+  box-shadow: 0 0 0 1px var(--accent-border), 0 0 0 3px var(--focus-ring-soft);
+  transition: background var(--dur-normal) var(--ease-out), box-shadow var(--dur-normal) var(--ease-out);
+}
+@media (prefers-reduced-motion: reduce) {
+  .search-focus-highlight {
+    transition: none;
+  }
 }

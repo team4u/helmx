@@ -178,7 +178,7 @@ export function GlobalDefaultsPanel({
   }
 
   return (
-    <div className="model-defaults-panel">
+    <div className="model-defaults-panel" data-search-anchor="models:defaults">
       <Card
         variant="subtle"
         title={

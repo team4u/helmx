@@ -95,6 +95,8 @@ export interface StoreNavActions {
   setWorkbenchOpen: (update: StoreUpdater<boolean>) => void
   setWorkbenchTab: (update: StoreUpdater<string>) => void
   setActiveModal: (update: StoreUpdater<ActiveModal>) => void
+  focusSearchAnchor: (anchorId: string) => void
+  clearSearchFocusAnchor: () => void
   openTarget: (
     target: string | ResolvedTarget,
     opts?: { split?: boolean; highlightEntryId?: string; history?: 'push' | 'replace' },
@@ -118,6 +120,7 @@ export function createStoreNavActions(
   let spaceMemory: Partial<Record<SidebarSpace, ResolvedTarget>> = {}
   const conversationDrawerMemory = new Map<number, DrawerFrame[]>()
   let escAbortTimer: ReturnType<typeof setTimeout> | null = null
+  let searchFocusSeq = 0
 
   const clearEscTimer = (): void => {
     if (escAbortTimer !== null) {
@@ -313,6 +316,19 @@ export function createStoreNavActions(
     const next = applyUpdater(host.getNavSlice().activeModal, update)
     // 顶层预览弹窗（文件/产物/命令面板）与右侧抽屉栈正交：互不覆盖、各自按叠层关闭。
     host.patchNav({ activeModal: next })
+  }
+
+  const focusSearchAnchor = (anchorId: string): void => {
+    const trimmed = anchorId.trim()
+    if (trimmed === '') return
+    searchFocusSeq += 1
+    host.patchNav({ searchFocusAnchor: { anchorId: trimmed, seq: searchFocusSeq } })
+  }
+
+  const clearSearchFocusAnchor = (): void => {
+    if (host.getNavSlice().searchFocusAnchor !== null) {
+      host.patchNav({ searchFocusAnchor: null })
+    }
   }
 
   const openTarget = (
@@ -560,6 +576,8 @@ export function createStoreNavActions(
     setWorkbenchOpen,
     setWorkbenchTab,
     setActiveModal,
+    focusSearchAnchor,
+    clearSearchFocusAnchor,
     openTarget,
     openSpace,
     setScreenParams,

@@ -1,29 +1,47 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
-import { Dialog, DialogContent, DialogOverlay, DialogPortal, DialogTitle, EmptyState, HelmxIcon, LoadingState } from '@helmx/ui'
+import {
+  Dialog,
+  DialogContent,
+  DialogOverlay,
+  DialogPortal,
+  DialogTitle,
+  EmptyState,
+  HelmxIcon,
+  LoadingState,
+} from '@helmx/ui'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { isImeComposing } from '../lib/ime.js'
+import { activeTargetForPanel, resolveFocusedPanel } from '../lib/panel-focus.js'
+import { useLocationTargets } from '../lib/store-context.js'
 import { formatModShortcut } from '../shell/shortcuts-model.js'
-import { resolvePaletteEscapeAction } from './command-palette-model.js'
-import { CommandPaletteFooter } from './command-palette/CommandPaletteFooter.js'
-import { CommandPaletteHeader } from './command-palette/CommandPaletteHeader.js'
-import { CommandPaletteList } from './command-palette/CommandPaletteList.js'
-import { CommandPalettePreview } from './command-palette/CommandPalettePreview.js'
-import { usePaletteCommands } from './command-palette/use-palette-commands.js'
-import { usePaletteSearch } from './command-palette/use-palette-search.js'
-import { usePaletteSelection } from './command-palette/use-palette-selection.js'
+import { resolveNextOmniboxScope, resolveOmniboxEscapeAction } from './matcher.js'
+import { stripOmniboxPrefix } from './omnibox-labels.js'
+import { OmniboxFooter } from './OmniboxFooter.js'
+import { OmniboxHeader } from './OmniboxHeader.js'
+import { OmniboxList } from './OmniboxList.js'
+import { OmniboxPreview } from './OmniboxPreview.js'
+import { OmniboxScopeBar } from './OmniboxScopeBar.js'
+import type { OmniboxScope } from './types.js'
+import { useOmniboxCatalog } from './use-omnibox-catalog.js'
+import { useOmniboxSearch } from './use-omnibox-search.js'
+import { useOmniboxSelection } from './use-omnibox-selection.js'
 
-/**
- * 全局命令面板（居中轻量模态）：FTS 检索、分组命令目录、键盘 / 悬停选中与分层 Esc。
- * 检索、选中与命令装配分别在 ./command-palette/ 下的三个 Hook 中，本组件只负责编排与 DOM 骨架。
- */
-export function CommandPaletteModal({
-  onClose,
-  searchDebounceMs = 200,
-}: {
+export interface OmniboxModalProps {
   onClose: () => void
   searchDebounceMs?: number
-}) {
+}
+
+/**
+ * Global Omnibox ("Search Everywhere") modal:
+ * - 4 scope tabs (`All`, `Pages & Settings`, `Commands`, `Conversations`) cycled via `Tab` / `Shift+Tab`
+ * - 0ms synchronous upper zone (centers, sub-tabs, profiles, screens, providers/models, skills, nodes, plugins, core actions, settings panels, config fields, workbench tabs, commands, local conversations)
+ * - 200ms single-request asynchronous lower zone (plugin resources + FTS messages) physically isolated from upper selection
+ * - Single-entity dedup with `Alt+Enter` / trailing secondary action and `Cmd/Ctrl+Enter` split navigation
+ */
+export function OmniboxModal({ onClose, searchDebounceMs = 200 }: OmniboxModalProps) {
   const { locale, t } = useWebLocale()
+  const { primaryTarget, splitTarget, focusedPanel } = useLocationTargets()
+  const [scope, setScope] = useState<OmniboxScope>('all')
   const [inputEl, setInputEl] = useState<HTMLInputElement | null>(null)
   const [modalEl, setModalEl] = useState<HTMLDivElement | null>(null)
 
@@ -41,7 +59,7 @@ export function CommandPaletteModal({
     inputEl?.focus()
   }, [inputEl])
 
-  // 软键盘弹出时按 visualViewport 高度约束面板高度，避免输入框被遮挡。
+  // Sync mobile soft-keyboard visualViewport height onto `--palette-vvh` so the search bar never gets clipped.
   useEffect(() => {
     if (!modalEl) return
     const vv = typeof window !== 'undefined' ? window.visualViewport : null
@@ -59,11 +77,42 @@ export function CommandPaletteModal({
     }
   }, [modalEl])
 
-  const search = usePaletteSearch(inputEl, searchDebounceMs)
+  const activeConversationId = useMemo(() => {
+    const panel = resolveFocusedPanel(focusedPanel ?? 'primary', splitTarget)
+    const activeTarget = activeTargetForPanel(primaryTarget, splitTarget, panel)
+    return activeTarget.kind === 'conversation' ? activeTarget.conversationId : undefined
+  }, [focusedPanel, primaryTarget, splitTarget])
+
+  const search = useOmniboxSearch({
+    inputEl,
+    searchDebounceMs,
+    locale,
+    conversationId: activeConversationId,
+  })
   const { setQuery } = search
-  const commands = usePaletteCommands({ onClose, query: search.query, hits: search.hits })
-  const selection = usePaletteSelection(commands.rows)
-  const { rows, sections, scopedPluginCommands, previewCmd, setPreviewCmd, close, invokePluginCommand } = commands
+
+  const catalog = useOmniboxCatalog({
+    onClose,
+    query: search.query,
+    scope,
+    asyncMessages: search.messages,
+    asyncPluginHits: search.pluginItems,
+  })
+  const {
+    parsed,
+    effectiveScope,
+    sections,
+    rows,
+    scopeCounts,
+    scopedPluginCommands,
+    previewCmd,
+    setPreviewCmd,
+    close,
+    invokePluginCommand,
+    executeItem,
+  } = catalog
+
+  const selection = useOmniboxSelection(rows)
   const { selectedIdx, rowIndexById, listRef, resetSelection, moveSelection, handleRowPointerHover } = selection
 
   const handleQueryChange = useCallback(
@@ -74,8 +123,26 @@ export function CommandPaletteModal({
     [setQuery, resetSelection],
   )
 
+  const handleSelectScope = useCallback(
+    (nextScope: OmniboxScope) => {
+      setScope(nextScope)
+      if (parsed.prefixMode !== null) {
+        setQuery(stripOmniboxPrefix(search.query))
+      }
+      resetSelection()
+      inputRef.current?.focus()
+    },
+    [parsed.prefixMode, resetSelection, search.query, setQuery],
+  )
+
   const onKeyDown = (e: React.KeyboardEvent) => {
     if (search.composingRef.current || isImeComposing(e)) return
+    if (e.key === 'Tab' && !e.metaKey && !e.ctrlKey && !e.altKey) {
+      e.preventDefault()
+      const nextScope = resolveNextOmniboxScope(effectiveScope, e.shiftKey ? -1 : 1)
+      handleSelectScope(nextScope)
+      return
+    }
     if (e.key === 'ArrowDown') {
       e.preventDefault()
       moveSelection(1)
@@ -85,17 +152,19 @@ export function CommandPaletteModal({
     } else if (e.key === 'Enter') {
       e.preventDefault()
       const row = selectedIdx >= 0 ? rows[selectedIdx] : undefined
-      if (!row) return
+      if (row === undefined) return
+      const secondary = e.altKey && !e.metaKey && !e.ctrlKey && !e.shiftKey && row.secondaryAction !== undefined
       const forceSplit = (e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey
-      commands.executeRow(row, forceSplit)
+      executeItem(row, { forceSplit, secondary })
     }
   }
 
   const handleEscapeKeyDown = (event: KeyboardEvent) => {
-    const action = resolvePaletteEscapeAction({
+    const action = resolveOmniboxEscapeAction({
       isComposing: search.composingRef.current || isImeComposing(event),
       hasPreview: previewCmd !== null,
       query: search.query,
+      scope,
     })
     if (action === 'ignore-ime') {
       event.preventDefault()
@@ -111,12 +180,33 @@ export function CommandPaletteModal({
       event.preventDefault()
       handleQueryChange('')
       inputRef.current?.focus()
+      return
+    }
+    if (action === 'reset-scope') {
+      event.preventDefault()
+      setScope('all')
+      resetSelection()
+      inputRef.current?.focus()
     }
   }
 
-  const trimmedQuery = search.query.trim()
+  const remoteQuery = parsed.exactConversationId !== null ? '' : parsed.searchText
   const isSearchPending =
-    trimmedQuery !== '' && (search.isComposing || search.searching || search.settledQuery !== trimmedQuery)
+    remoteQuery !== '' && (search.isComposing || search.searching || search.settledQuery !== remoteQuery)
+  const settledCurrentQuery = remoteQuery !== '' && search.settledQuery === remoteQuery
+
+  const degradedMessages: string[] = []
+  if (settledCurrentQuery && search.requestFailed) {
+    degradedMessages.push(t('modals.omnibox.searchFailed'))
+  } else if (settledCurrentQuery) {
+    if (search.messagesUnavailable) {
+      degradedMessages.push(t('modals.palette.searchUnavailable'))
+    }
+    if (search.failedPlugins.length > 0) {
+      degradedMessages.push(t('modals.omnibox.failedPlugins', { plugins: search.failedPlugins.join(', ') }))
+    }
+  }
+
   const previewMatchingCommand = useMemo(
     () =>
       previewCmd !== null
@@ -127,10 +217,9 @@ export function CommandPaletteModal({
     [previewCmd, scopedPluginCommands],
   )
 
+  const selectedRow = selectedIdx >= 0 ? rows[selectedIdx] : undefined
   const activeDescendantId =
-    selectedIdx >= 0 && rows[selectedIdx] !== undefined ? `${listboxId}-opt-${selectedIdx}` : undefined
-
-  const searchUnavailable = search.searchFailed && search.settledQuery === trimmedQuery && trimmedQuery !== ''
+    selectedRow !== undefined ? `${listboxId}-opt-${selectedIdx}` : undefined
 
   return (
     <Dialog open onOpenChange={(open) => { if (!open) onClose() }}>
@@ -142,10 +231,10 @@ export function CommandPaletteModal({
             aria-label={t('modals.palette.dialogTitle')}
             onKeyDown={onKeyDown}
             onEscapeKeyDown={handleEscapeKeyDown}
-            onCloseAutoFocus={commands.handleCloseAutoFocus}
+            onCloseAutoFocus={catalog.handleCloseAutoFocus}
           >
             <DialogTitle className="helmx-sr-only">{t('modals.palette.dialogTitle')}</DialogTitle>
-            <CommandPaletteHeader
+            <OmniboxHeader
               query={search.query}
               onQueryChange={handleQueryChange}
               searching={search.searching}
@@ -159,13 +248,19 @@ export function CommandPaletteModal({
               }}
             />
 
+            <OmniboxScopeBar
+              effectiveScope={effectiveScope}
+              scopeCounts={scopeCounts}
+              onSelectScope={handleSelectScope}
+            />
+
             <div className="helmx-modal-body palette-body" ref={listRef}>
               {previewCmd && (
-                <CommandPalettePreview
+                <OmniboxPreview
                   pluginId={previewCmd.pluginId}
                   spec={previewCmd.spec}
                   matchingCommand={previewMatchingCommand}
-                  conversationId={commands.paletteConversation?.id}
+                  conversationId={catalog.activeConversation?.id}
                   locale={locale}
                   t={t}
                   onRun={() => {
@@ -179,10 +274,10 @@ export function CommandPaletteModal({
                 />
               )}
 
-              {searchUnavailable && (
+              {degradedMessages.length > 0 && (
                 <div className="callout callout-warn palette-status-notice" role="status">
                   <HelmxIcon name="alert-triangle" size={13} />
-                  <span>{t('modals.palette.searchUnavailable')}</span>
+                  <span>{degradedMessages.join(' · ')}</span>
                 </div>
               )}
 
@@ -199,10 +294,10 @@ export function CommandPaletteModal({
                       compact
                       className="palette-empty"
                       title={
-                        trimmedQuery === ''
+                        parsed.searchText === ''
                           ? t('modals.palette.emptyHint')
-                          : searchUnavailable
-                            ? t('modals.palette.searchUnavailable')
+                          : degradedMessages.length > 0
+                            ? degradedMessages[0]!
                             : t('modals.palette.noResults')
                       }
                     />
@@ -210,22 +305,26 @@ export function CommandPaletteModal({
                 )
               )}
 
-              <CommandPaletteList
+              <OmniboxList
                 listboxId={listboxId}
                 rows={rows}
                 sections={sections}
-                trimmedQuery={trimmedQuery}
+                searchText={parsed.searchText}
                 selectedIdx={selectedIdx}
                 rowIndexById={rowIndexById}
                 navRowTitle={t('modals.palette.navRowTitle', { modEnter: formatModShortcut('Enter') })}
-                background={commands.background}
+                background={catalog.background}
                 t={t}
-                onExecute={commands.executeRow}
+                onExecute={executeItem}
                 onHover={handleRowPointerHover}
+                onJumpScope={handleSelectScope}
               />
             </div>
 
-            <CommandPaletteFooter onOpenShortcuts={commands.openShortcutsModal} />
+            <OmniboxFooter
+              secondaryActionLabel={selectedRow?.secondaryAction?.label}
+              onOpenShortcuts={catalog.openShortcutsModal}
+            />
           </DialogContent>
         </DialogOverlay>
       </DialogPortal>

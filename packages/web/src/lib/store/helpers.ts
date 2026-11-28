@@ -20,6 +20,7 @@ export const ASSET_LOAD_FAILURE_TITLES: ReadonlyArray<WebMessageKey> = [
   'shell.assets.credentialsLoadFailed',
   'shell.assets.skillsLoadFailed',
   'shell.assets.actionsLoadFailed',
+  'shell.assets.pluginConfigCatalogLoadFailed',
 ]
 
 export function emptyPlan(): NotifyPlan {

@@ -1,8 +1,8 @@
 import React from 'react'
 import { Badge, Button, DialogClose, HelmxIcon, LoadingState, SearchBox } from '@helmx/ui'
-import { useWebLocale } from '../../i18n/use-web-locale.js'
+import { useWebLocale } from '../i18n/use-web-locale.js'
 
-export interface CommandPaletteHeaderProps {
+export interface OmniboxHeaderProps {
   query: string
   onQueryChange: (next: string) => void
   searching: boolean
@@ -10,12 +10,10 @@ export interface CommandPaletteHeaderProps {
   ariaExpanded: boolean
   activeDescendantId: string | undefined
   attachInputRef: (el: HTMLInputElement | null) => void
-  /** 清除按钮：重置选中并把焦点放回输入框。 */
   onCleared: () => void
 }
 
-/** 顶部搜索区：combobox 语义搜索框、检索中状态与关闭按钮（桌面 Esc 徽章 / 移动端关闭文案）。 */
-export function CommandPaletteHeader({
+export function OmniboxHeader({
   query,
   onQueryChange,
   searching,
@@ -24,7 +22,7 @@ export function CommandPaletteHeader({
   activeDescendantId,
   attachInputRef,
   onCleared,
-}: CommandPaletteHeaderProps): React.JSX.Element {
+}: OmniboxHeaderProps): React.JSX.Element {
   const { t } = useWebLocale()
   return (
     <div className="palette-header">

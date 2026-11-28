@@ -14,6 +14,7 @@ import type {
   HelmxLocale,
   NodeInfo,
   NotificationEvent,
+  PluginConfigCatalogEntry,
   PluginSummary,
   PluginSlotContributionSpec,
   PluginUiContribution,
@@ -32,6 +33,12 @@ import type { ModelDescriptor } from './api.js'
 import type { SessionDocKey } from './session-docs.js'
 
 export type { SessionDocKey }
+
+/** Transient landing focus highlight request emitted by Omnibox (never persisted to the URL hash). */
+export interface SearchFocusAnchor {
+  anchorId: string
+  seq: number
+}
 
 export type ThemeMode = 'light' | 'dark'
 export type ThemePreference = 'system' | 'light' | 'dark'
@@ -180,6 +187,14 @@ export function resolveTargetString(
   conversations: ConversationSummary[],
 ): ResolvedTarget | null {
   const target = rawTarget.trim()
+  if (target === 'overview') {
+    return { kind: 'overview' }
+  }
+  if (target.startsWith('overview?')) {
+    const params = parseScreenTargetQuery(target.slice('overview?'.length))
+    if (params === null) return null
+    return params === undefined ? { kind: 'overview' } : { kind: 'overview', params }
+  }
   if (target === 'plugins') {
     return { kind: 'plugins' }
   }
@@ -467,6 +482,7 @@ export interface HelmxStoreValue {
   credentials: CredentialSummary[]
   skills: SkillSummary[]
   actions: ActionManifest[]
+  pluginConfigCatalog: PluginConfigCatalogEntry[]
 
   // View routing & workbench state
   primaryTarget: ResolvedTarget
@@ -486,6 +502,8 @@ export interface HelmxStoreValue {
   workbenchParams: { tab: string; conversationId?: number; params: Readonly<Record<string, unknown>> } | null
   activeModal: ActiveModal
   highlightedEntry: { conversationId: number; entryId: string } | null
+  /** Transient landing focus anchor emitted by Omnibox (memory only, never serialized to URL hash). */
+  searchFocusAnchor: SearchFocusAnchor | null
   notices: ToastNotice[]
 
   // Actions
@@ -556,6 +574,10 @@ export interface HelmxStoreValue {
   /** Activity Rail space switch: navigates the primary pane to the space's most recent target (space default when none remembered), pushing history. */
   openSpace(space: SidebarSpace): void
   setActiveModal(modal: ActiveModal): void
+  /** Requests a brief Quiet Surface focus highlight on `[data-search-anchor="<anchorId>"]` after Omnibox navigation. */
+  focusSearchAnchor(anchorId: string): void
+  /** Clears any active landing focus anchor highlight request. */
+  clearSearchFocusAnchor(): void
   dismissNotice(id: string): void
   pauseNoticeTimer(id: string): void
   resumeNoticeTimer(id: string): void

@@ -9,6 +9,7 @@ import type {
   CredentialSummary,
   HelmxLocale,
   NodeInfo,
+  PluginConfigCatalogEntry,
   PluginSummary,
   Profile,
   ProviderConfig,
@@ -37,6 +38,7 @@ import type {
   GroupedUiSpecs,
   HelmxStoreValue,
   ResolvedTarget,
+  SearchFocusAnchor,
   ToastNotice,
 } from './types.js'
 import type { WorkspaceLocationState } from './url-hash-model.js'
@@ -223,6 +225,10 @@ export function useSkills(): SkillSummary[] {
   return useDomainSlice('skills', (s) => s.getSkills())
 }
 
+export function usePluginConfigCatalog(): PluginConfigCatalogEntry[] {
+  return useDomainSlice('pluginConfigCatalog', (s) => s.getPluginConfigCatalog())
+}
+
 export function useCatalogActions(enabled = true): ActionManifest[] {
   const external = useContext(HelmxExternalStoreContext)
   const subscribe = useCallback(
@@ -398,6 +404,14 @@ export function useLocationState(): WorkspaceLocationState {
 
 export function useHighlightedEntry(): { conversationId: number; entryId: string } | null {
   return useDomainSlice('highlightedEntry', (s) => s.getHighlightedEntry())
+}
+
+export function useSearchFocusAnchor(): SearchFocusAnchor | null {
+  return useDomainSlice('searchFocusAnchor', (s) => s.getSearchFocusAnchor())
+}
+
+export function useOptionalSearchFocusAnchor(): SearchFocusAnchor | null {
+  return useDomainSlice('searchFocusAnchor', (s) => s.getSearchFocusAnchor(), () => null)
 }
 
 export function useHomeLandingPending(): boolean {

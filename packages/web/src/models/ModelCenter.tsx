@@ -29,6 +29,7 @@ import {
   useStoreActions,
 } from '../lib/store-context.js'
 import type { ModelsCenterTab } from '../lib/types.js'
+import { useSearchFocusAnchor } from '../lib/use-search-focus-anchor.js'
 import { CloseSplitButton, SplitToggleButton } from '../ui/SplitControls.js'
 import { usePaneSplitToggle } from '../ui/use-pane-split-toggle.js'
 import { GlobalDefaultsPanel, type DefaultModelInfo } from './GlobalDefaultsPanel.js'
@@ -82,6 +83,7 @@ export function ModelCenter({
   const { primaryTarget, splitTarget } = useLocationTargets()
   const { openTarget, refreshAssets, pushNotice } = useStoreActions()
   const { t } = useWebLocale()
+  useSearchFocusAnchor()
   const [query, setQuery] = useState('')
   const [statusTab, setStatusTab] = useState<ProviderFilterTab>('all')
   const providersPanelId = useId()

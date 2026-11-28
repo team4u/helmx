@@ -75,6 +75,8 @@ export type TestStoreOverrides = Omit<
   | 'closeAllDrawers'
   | 'openSpace'
   | 'setActiveModal'
+  | 'focusSearchAnchor'
+  | 'clearSearchFocusAnchor'
   | 'dismissNotice'
   | 'pauseNoticeTimer'
   | 'resumeNoticeTimer'
@@ -110,9 +112,9 @@ export function makeTestStore(overrides: TestStoreOverrides = {}): HelmxExternal
     conversations, conversationDetails, conversationLives, pendingAsks,
     plugins, uiContributions, pluginDocs, nodes, nodesLoaded,
     conversationArtifacts, loadErrors,
-    profiles, profilesLoaded, assetsLoaded, models, modelDefaults, providers, credentials, skills, actions,
+    profiles, profilesLoaded, assetsLoaded, models, modelDefaults, providers, credentials, skills, actions, pluginConfigCatalog,
     primaryTarget, splitTarget, focusedPanel, sidebarCollapsed, pendingEscAbortConversationId,
-    drawerStack, workbenchOpen, workbenchTab, activeModal, highlightedEntry,
+    drawerStack, workbenchOpen, workbenchTab, activeModal, highlightedEntry, searchFocusAnchor,
     notices,
   } = overrides
 
@@ -157,6 +159,7 @@ export function makeTestStore(overrides: TestStoreOverrides = {}): HelmxExternal
     credentials: credentials ?? [],
     skills: skills ?? [],
     actions: actions ?? [],
+    pluginConfigCatalog: pluginConfigCatalog ?? [],
   })
   hydrate.patchNav({
     focusedPanel: focusedPanel ?? 'primary',
@@ -164,6 +167,7 @@ export function makeTestStore(overrides: TestStoreOverrides = {}): HelmxExternal
     pendingEscAbortConversationId: pendingEscAbortConversationId ?? null,
     ...(workbenchTab !== undefined ? { workbenchTab } : {}),
     highlightedEntry: highlightedEntry ?? null,
+    searchFocusAnchor: searchFocusAnchor ?? null,
   })
   store.updateLive(() => ({
     ...emptyLiveState(),

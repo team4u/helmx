@@ -493,6 +493,10 @@ export const shellMessages = {
   'shell.assets.credentialsLoadFailed': { en: 'Credentials failed to load', 'zh-CN': '凭据加载失败' },
   'shell.assets.skillsLoadFailed': { en: 'Skills failed to load', 'zh-CN': '技能加载失败' },
   'shell.assets.actionsLoadFailed': { en: 'Plugin actions failed to load', 'zh-CN': '插件动作加载失败' },
+  'shell.assets.pluginConfigCatalogLoadFailed': {
+    en: 'Plugin configuration catalog failed to load',
+    'zh-CN': '插件配置目录加载失败',
+  },
   'shell.assets.nodesLoadFailed': { en: 'Compute nodes failed to load', 'zh-CN': '计算节点加载失败' },
   'shell.assets.artifactsLoadFailed': { en: 'Conversation artifacts failed to load', 'zh-CN': '会话产物加载失败' },
   'shell.assets.pluginStateLoadFailed': { en: 'Plugin state failed to load', 'zh-CN': '插件状态读取失败' },

@@ -47,7 +47,7 @@ const e = React.createElement
 ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
 
 const { Sidebar } = await import('../src/shell/Sidebar.js')
-const { CommandPaletteModal } = await import('../src/modals/CommandPaletteModal.js')
+const { OmniboxModal } = await import('../src/omnibox/OmniboxModal.js')
 
 function conv(partial: Partial<ConversationSummary> & { id: number }): ConversationSummary {
   return {
@@ -589,7 +589,7 @@ test('CommandPaletteModal: recent conversation rows render the status dot in the
     await act(async () => {
       root = createRoot(container)
       root.render(
-        e(HelmxExternalStoreContext.Provider, { value: store }, e(CommandPaletteModal, { onClose: () => {} })),
+        e(HelmxExternalStoreContext.Provider, { value: store }, e(OmniboxModal, { onClose: () => {} })),
       )
     })
     const recentRows = [...document.body.querySelectorAll('.helmx-modal .nav-item')].filter((row) =>
@@ -778,7 +778,7 @@ test('conversations rail status dot mounts in non-conversations spaces (mobile d
 test('CommandPaletteModal: all plugin views are searchable rows and open via the standard routing', { timeout: 60_000 }, async () => {
   const originalFetch = globalThis.fetch
   globalThis.fetch = (async () =>
-    new Response(JSON.stringify([]), { status: 200, headers: { 'content-type': 'application/json' } })) as typeof fetch
+    new Response(JSON.stringify({ query: 'board', messages: [], pluginItems: [] }), { status: 200, headers: { 'content-type': 'application/json' } })) as typeof fetch
   const store = sidebarStore({
     plugins: [{ id: 'demo-desk', name: { en: 'Apps', 'zh-CN': '应用' }, version: '0.0.0', enabled: true, locked: false, hooks: [], actions: [], tools: [] }],
     conversations: [conv({ id: 50, title: '当前查看', profileId: 'coder' })],
@@ -791,7 +791,7 @@ test('CommandPaletteModal: all plugin views are searchable rows and open via the
   try {
     await act(async () => {
       root = createRoot(container)
-      root.render(e(HelmxExternalStoreContext.Provider, { value: store }, e(CommandPaletteModal, { onClose: () => {} })))
+      root.render(e(HelmxExternalStoreContext.Provider, { value: store }, e(OmniboxModal, { onClose: () => {} })))
     })
     let viewRow = [...document.body.querySelectorAll('.helmx-modal .nav-item')].find((row) => row.textContent?.includes('App Center'))
     assert.ok(viewRow !== undefined, 'the plugin view row renders in the empty-query palette')

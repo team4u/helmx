@@ -176,6 +176,7 @@ export function createStoreRequestActions(host: StoreRequestsHost): StoreRequest
       assetsApi.listCredentials({ signal }),
       assetsApi.listSkills({ signal }),
       pluginsApi.listActions({ signal }),
+      pluginsApi.configCatalog({ signal }),
     ]).then((results) => {
       if (isStale()) return
       const plan = emptyPlan()
@@ -201,6 +202,9 @@ export function createStoreRequestActions(host: StoreRequestsHost): StoreRequest
       if (results[2].status === 'fulfilled') patch.credentials = results[2].value
       if (results[3].status === 'fulfilled') patch.skills = results[3].value
       if (results[4].status === 'fulfilled') patch.actions = results[4].value
+      if (results[5].status === 'fulfilled' && Array.isArray(results[5].value)) {
+        patch.pluginConfigCatalog = results[5].value
+      }
       host.patchCatalog(patch, plan, true)
       if (nextErrors !== undefined) host.setLoadErrors(nextErrors, plan, true)
       host.emit(plan)

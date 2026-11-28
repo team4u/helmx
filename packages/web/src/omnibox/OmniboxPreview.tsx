@@ -1,25 +1,22 @@
 import React from 'react'
 import { resolveLocalizedText, type CommandSpec, type HelmxLocale } from '@helmx/protocol/browser'
 import { Button, Stack } from '@helmx/ui'
-import type { QualifiedCommand } from '../../lib/commands-model.js'
-import type { WebMessageTranslator } from '../../i18n/catalog.js'
-import { PluginUiView } from '../../ui/PluginUiView.js'
+import type { WebMessageTranslator } from '../i18n/catalog.js'
+import type { QualifiedCommand } from '../lib/commands-model.js'
+import { PluginUiView } from '../ui/PluginUiView.js'
 
-export interface CommandPalettePreviewProps {
+export interface OmniboxPreviewProps {
   pluginId: string
   spec: CommandSpec
-  /** 当前目录中仍可调用的同一命令（目录变化后可能不再存在，此时不渲染执行按钮）。 */
   matchingCommand: QualifiedCommand | undefined
   conversationId: number | undefined
   locale: HelmxLocale
   t: WebMessageTranslator
   onRun: () => void
-  /** 收起预览并把焦点放回输入框。 */
   onCollapse: () => void
 }
 
-/** 插件 client 命令预览面板：标题 + 显式执行按钮 + PluginUiView 挂载。 */
-export function CommandPalettePreview({
+export function OmniboxPreview({
   pluginId,
   spec,
   matchingCommand,
@@ -28,7 +25,7 @@ export function CommandPalettePreview({
   t,
   onRun,
   onCollapse,
-}: CommandPalettePreviewProps): React.JSX.Element {
+}: OmniboxPreviewProps): React.JSX.Element {
   return (
     <div className="palette-preview">
       <div className="palette-preview-header">

@@ -21,6 +21,7 @@ import type {
   ConversationStatus,
   ConversationSummary,
   CredentialSummary,
+  HelmxLocale,
   InputOrigin,
   HostModelEntry,
   HubAccessInfo,
@@ -33,6 +34,8 @@ import type {
   NodeUpgradeCheckResult,
   NodeUpgradeInput,
   NodeUpgradeResult,
+  OmniboxSearchResponse,
+  PluginConfigCatalogEntry,
   PluginConfigFieldSchema,
   PluginConfigFieldSource,
   PluginDoctorReport,
@@ -769,6 +772,8 @@ export const pluginsApi = {
     ),
   listActions: (opts?: { signal?: AbortSignal }) =>
     apiRequest<ActionManifest[]>('GET', '/api/actions', undefined, opts?.signal),
+  configCatalog: (opts?: { signal?: AbortSignal }) =>
+    apiRequest<PluginConfigCatalogEntry[]>('GET', '/api/plugins/config-catalog', undefined, opts?.signal),
   invokeAction: <T = unknown>(
     pluginId: string,
     actionId: string,
@@ -815,5 +820,33 @@ export const searchApi = {
       params.push(`maxPerConversation=${encodeURIComponent(String(opts.maxPerConversation))}`)
     }
     return apiRequest<SearchHit[]>('GET', `/api/search?${params.join('&')}`, undefined, opts?.signal)
+  },
+}
+
+export interface OmniboxSearchOptions {
+  limit?: number
+  locale?: HelmxLocale
+  conversationId?: number
+  signal?: AbortSignal
+}
+
+export const omniboxApi = {
+  search: (q: string, opts?: OmniboxSearchOptions) => {
+    const params: string[] = [`q=${encodeURIComponent(q)}`]
+    if (opts?.limit !== undefined) {
+      params.push(`limit=${encodeURIComponent(String(opts.limit))}`)
+    }
+    if (opts?.locale !== undefined) {
+      params.push(`locale=${encodeURIComponent(opts.locale)}`)
+    }
+    if (opts?.conversationId !== undefined) {
+      params.push(`conversationId=${encodeURIComponent(String(opts.conversationId))}`)
+    }
+    return apiRequest<OmniboxSearchResponse>(
+      'GET',
+      `/api/omnibox/search?${params.join('&')}`,
+      undefined,
+      opts?.signal,
+    )
   },
 }

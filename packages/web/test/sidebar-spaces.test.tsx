@@ -22,7 +22,7 @@ const { act } = await import('react')
 const { createRoot } = await import('react-dom/client')
 ;(globalThis as Record<string, unknown>).React = React
 const { Sidebar } = await import('../src/shell/Sidebar.js')
-const { CommandPaletteModal } = await import('../src/modals/CommandPaletteModal.js')
+const { OmniboxModal } = await import('../src/omnibox/OmniboxModal.js')
 const { ScreenHost } = await import('../src/screens/ScreenHost.js')
 const { HostStoreProviders } = await import('./helpers/host-store.js')
 
@@ -615,7 +615,7 @@ test('CommandPaletteModal 与 ScreenHost 双语本地化及语言循环命令（
     activeModal: { kind: 'command-palette' },
   })
   spyLocalePreference(store)
-  render(store, e(CommandPaletteModal, { onClose: () => {} }))
+  render(store, e(OmniboxModal, { onClose: () => {} }))
   await act(async () => {})
 
   const dialog = document.querySelector('.helmx-modal[aria-label="命令面板与全局搜索"]')

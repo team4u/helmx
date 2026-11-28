@@ -24,7 +24,7 @@ import type { PluginSummary } from '@helmx/protocol'
 import { formatLocationHash, parseLocationHash } from '../src/lib/url-hash-model.js'
 const { makeTestStore } = await import('./helpers/store.js')
 const { HostStoreProviders } = await import('./helpers/host-store.js')
-const { CommandPaletteModal } = await import('../src/modals/CommandPaletteModal.js')
+const { OmniboxModal } = await import('../src/omnibox/OmniboxModal.js')
 
 const e = React.createElement
 const typeIntoInput = typeIntoControl
@@ -338,7 +338,7 @@ test('全局入口收敛：CommandPaletteModal 点击「打开插件中心」导
   spyOpenTarget(store, opened)
   try {
     await act(async () => {
-      root.render(e(HostStoreProviders, { value: store }, e(CommandPaletteModal, { onClose: () => { closed = true } })))
+      root.render(e(HostStoreProviders, { value: store }, e(OmniboxModal, { onClose: () => { closed = true } })))
       await flushMacrotask(0)
     })
     const row = Array.from(document.querySelectorAll<HTMLButtonElement>('[data-idx].nav-item')).find((el) =>

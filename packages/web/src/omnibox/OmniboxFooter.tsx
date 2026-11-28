@@ -1,10 +1,17 @@
 import React from 'react'
 import { Button, Kbd } from '@helmx/ui'
-import { useWebLocale } from '../../i18n/use-web-locale.js'
-import { formatModShortcut } from '../../shell/shortcuts-model.js'
+import { useWebLocale } from '../i18n/use-web-locale.js'
+import { formatModShortcut } from '../shell/shortcuts-model.js'
 
-/** 底部快捷键提示（方向 / 回车 / 分屏 / Esc）与「查看全部快捷键」入口。 */
-export function CommandPaletteFooter({ onOpenShortcuts }: { onOpenShortcuts: () => void }): React.JSX.Element {
+export interface OmniboxFooterProps {
+  secondaryActionLabel?: string
+  onOpenShortcuts: () => void
+}
+
+export function OmniboxFooter({
+  secondaryActionLabel,
+  onOpenShortcuts,
+}: OmniboxFooterProps): React.JSX.Element {
   const { t } = useWebLocale()
   const modEnterHint = formatModShortcut('Enter')
   const shortcutsHint = formatModShortcut('/')
@@ -22,6 +29,16 @@ export function CommandPaletteFooter({ onOpenShortcuts }: { onOpenShortcuts: () 
         <span className="palette-footer-hint">
           <Kbd size="sm">{modEnterHint}</Kbd>
           <span>{t('modals.palette.footerSplit')}</span>
+        </span>
+        {secondaryActionLabel !== undefined && (
+          <span className="palette-footer-hint">
+            <Kbd size="sm">Alt+Enter</Kbd>
+            <span>{secondaryActionLabel}</span>
+          </span>
+        )}
+        <span className="palette-footer-hint">
+          <Kbd size="sm">Tab</Kbd>
+          <span>{t('modals.omnibox.footerSwitchScope')}</span>
         </span>
         <span className="palette-footer-hint">
           <Kbd size="sm">Esc</Kbd>

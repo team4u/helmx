@@ -36,6 +36,7 @@ export function PluginSettingsPanelsCard({ pluginId, panels, locale, t }: Plugin
         <div
           key={`${panel.pluginId}/${panel.spec.id}`}
           className="plugin-settings-panels"
+          data-search-anchor={`panel:${pluginId}/${panel.spec.id}`}
         >
           {panels.length > 1 && (
             <div className="plugin-settings-panel-title">

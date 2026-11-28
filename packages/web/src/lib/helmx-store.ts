@@ -18,6 +18,7 @@ import type {
   HostProfilesSlice,
   LocalizedText,
   NodeInfo,
+  PluginConfigCatalogEntry,
   PluginSummary,
   ProviderConfig,
   SkillSummary,
@@ -59,6 +60,7 @@ import {
   type HelmxStoreValue,
   type LocalePreference,
   type ResolvedTarget,
+  type SearchFocusAnchor,
   type ThemeMode,
   type ThemePreference,
   type ToastNotice,
@@ -165,6 +167,7 @@ export class HelmxExternalStore {
     credentials: [],
     skills: [],
     actions: [],
+    pluginConfigCatalog: [],
   }
   private profilesSlice: ProfilesSlice = {
     profiles: [],
@@ -243,6 +246,7 @@ export class HelmxExternalStore {
       workbenchParams: null,
       activeModal: bootLocation.activeModal,
       highlightedEntry: null,
+      searchFocusAnchor: null,
     }
     this.locationTargetsSlice = {
       primaryTarget: this.navState.primaryTarget,
@@ -358,6 +362,8 @@ export class HelmxExternalStore {
       closeAllDrawers: this.navActions.closeAllDrawers,
       openSpace: this.navActions.openSpace,
       setActiveModal: this.navActions.setActiveModal,
+      focusSearchAnchor: this.navActions.focusSearchAnchor,
+      clearSearchFocusAnchor: this.navActions.clearSearchFocusAnchor,
       dismissNotice: this.dismissNotice,
       pauseNoticeTimer: this.pauseNoticeTimer,
       resumeNoticeTimer: this.resumeNoticeTimer,
@@ -639,6 +645,7 @@ export class HelmxExternalStore {
   getCredentials = (): CredentialSummary[] => this.catalogState.credentials
   getSkills = (): SkillSummary[] => this.catalogState.skills
   getActionsList = (): ActionManifest[] => this.catalogState.actions
+  getPluginConfigCatalog = (): PluginConfigCatalogEntry[] => this.catalogState.pluginConfigCatalog
   getLiveState = (): LiveState => this.live.getLiveState()
   getConversations = (): ConversationSummary[] => this.live.getConversations()
   getConversationDetailsMap = (): Record<number, ConversationDetail> => this.live.getConversationDetailsMap()
@@ -666,6 +673,7 @@ export class HelmxExternalStore {
   getLocationState = (): WorkspaceLocationState => this.locationStateCache
   getConversationBackgroundSlice = (): ConversationBackgroundSlice => this.live.getConversationBackgroundSlice()
   getHighlightedEntry = (): { conversationId: number; entryId: string } | null => this.navState.highlightedEntry
+  getSearchFocusAnchor = (): SearchFocusAnchor | null => this.navState.searchFocusAnchor
   getHomeLandingPending = (): boolean => this.homeLandingPendingCache
   getNotices = (): ToastNotice[] => this.notices.getNotices()
 
@@ -696,6 +704,7 @@ export class HelmxExternalStore {
       credentials: this.catalogState.credentials,
       skills: this.catalogState.skills,
       actions: this.catalogState.actions,
+      pluginConfigCatalog: this.catalogState.pluginConfigCatalog,
       conversationArtifacts: this.artifactsState,
       loadErrors: this.loadErrorsState,
       ...this.navState,
@@ -845,6 +854,7 @@ export class HelmxExternalStore {
     if (next.credentials !== prev.credentials) { plan.domains.add('credentials'); changed = true }
     if (next.skills !== prev.skills) { plan.domains.add('skills'); changed = true }
     if (next.actions !== prev.actions) { plan.domains.add('actions'); changed = true }
+    if (next.pluginConfigCatalog !== prev.pluginConfigCatalog) { plan.domains.add('pluginConfigCatalog'); changed = true }
     if (!changed) return
     this.catalogState = next
     plan.domains.add('catalog')
@@ -976,6 +986,7 @@ export class HelmxExternalStore {
       next.workbenchParams !== prev.workbenchParams
     const modalChanged = next.activeModal !== prev.activeModal
     const highlightChanged = next.highlightedEntry !== prev.highlightedEntry
+    const searchFocusChanged = next.searchFocusAnchor !== prev.searchFocusAnchor
 
     if (
       !primaryChanged &&
@@ -986,7 +997,8 @@ export class HelmxExternalStore {
       !drawerStackChanged &&
       !wbChanged &&
       !modalChanged &&
-      !highlightChanged
+      !highlightChanged &&
+      !searchFocusChanged
     ) {
       return
     }
@@ -1044,6 +1056,9 @@ export class HelmxExternalStore {
       plan.domains.add('highlightedEntry')
       if (prev.highlightedEntry !== null) plan.highlightIds.add(prev.highlightedEntry.conversationId)
       if (next.highlightedEntry !== null) plan.highlightIds.add(next.highlightedEntry.conversationId)
+    }
+    if (searchFocusChanged) {
+      plan.domains.add('searchFocusAnchor')
     }
     if (removedSecondaryIds.length > 0) {
       this.pruneConversationCaches(removedSecondaryIds, plan, true)
@@ -1175,6 +1190,7 @@ export class HelmxExternalStore {
         workbenchParams: null,
         pendingEscAbortConversationId: null,
         highlightedEntry: null,
+        searchFocusAnchor: null,
       },
       plan,
       true,
@@ -1197,6 +1213,7 @@ export class HelmxExternalStore {
         credentials: [],
         skills: [],
         actions: [],
+        pluginConfigCatalog: [],
       },
       plan,
       true,
