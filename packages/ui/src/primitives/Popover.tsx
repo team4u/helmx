@@ -1,7 +1,16 @@
 import * as React from 'react'
 import * as PopoverPrimitive from '@radix-ui/react-popover'
+import { HelmxIcon } from '../icons.js'
 import { useOverlayChildStyle } from './overlay-stack.js'
 import { useUiScopeId } from '../ui-scope-context.js'
+
+function joinClass(...parts: Array<string | undefined>): string {
+  return parts.filter(Boolean).join(' ')
+}
+
+function hasRenderable(node: React.ReactNode): boolean {
+  return node !== undefined && node !== null && typeof node !== 'boolean'
+}
 
 export interface PopoverPortalProps extends PopoverPrimitive.PopoverPortalProps {}
 
@@ -77,6 +86,101 @@ export const PopoverArrow = React.forwardRef<
 ))
 PopoverArrow.displayName = 'PopoverArrow'
 
+export interface PopoverHeaderProps extends Omit<React.HTMLAttributes<HTMLDivElement>, 'title'> {
+  title?: React.ReactNode
+  subtitle?: React.ReactNode
+  trailing?: React.ReactNode
+  divider?: boolean
+}
+
+export const PopoverHeader = React.forwardRef<HTMLDivElement, PopoverHeaderProps>(function PopoverHeader(
+  { className, title, subtitle, trailing, divider = false, children, ...rest },
+  ref,
+) {
+  const showMain = hasRenderable(title) || hasRenderable(subtitle)
+  return (
+    <div
+      ref={ref}
+      className={joinClass('popover-header', divider ? 'popover-header-divider' : undefined, className)}
+      {...rest}
+    >
+      {showMain ? (
+        <>
+          <div className="popover-header-main">
+            {hasRenderable(title) && <span className="popover-header-title">{title}</span>}
+            {hasRenderable(subtitle) && <span className="popover-header-subtitle">{subtitle}</span>}
+          </div>
+          {children}
+        </>
+      ) : (
+        children
+      )}
+      {hasRenderable(trailing) && <div className="popover-header-trailing">{trailing}</div>}
+    </div>
+  )
+})
+PopoverHeader.displayName = 'PopoverHeader'
+
+export interface PopoverItemProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
+  active?: boolean
+  selected?: boolean
+  danger?: boolean
+  icon?: string | React.ReactNode
+  meta?: React.ReactNode
+  trailing?: React.ReactNode
+}
+
+export const PopoverItem = React.forwardRef<HTMLButtonElement, PopoverItemProps>(function PopoverItem(
+  {
+    className,
+    type = 'button',
+    active = false,
+    selected = false,
+    danger = false,
+    icon,
+    meta,
+    trailing,
+    children,
+    ...rest
+  },
+  ref,
+) {
+  const hasStructuredSlots = hasRenderable(icon) || hasRenderable(meta) || hasRenderable(trailing)
+  return (
+    <button
+      ref={ref}
+      type={type}
+      className={joinClass(
+        'popover-item',
+        active ? 'popover-item-active' : undefined,
+        danger ? 'popover-item-danger' : undefined,
+        className,
+      )}
+      data-active={active ? 'true' : undefined}
+      data-selected={selected ? 'true' : undefined}
+      {...rest}
+    >
+      {hasStructuredSlots ? (
+        <>
+          {hasRenderable(icon) && (
+            <span className="popover-item-icon" aria-hidden="true">
+              {typeof icon === 'string' ? <HelmxIcon name={icon} size={13} /> : icon}
+            </span>
+          )}
+          <span className="popover-item-body">
+            {children}
+            {hasRenderable(meta) && <span className="popover-item-meta">{meta}</span>}
+          </span>
+          {hasRenderable(trailing) && <span className="popover-item-trailing">{trailing}</span>}
+        </>
+      ) : (
+        children
+      )}
+    </button>
+  )
+})
+PopoverItem.displayName = 'PopoverItem'
+
 /**
  * Generic Radix Popover wrapper component.
  */
@@ -91,3 +195,5 @@ Popover.Portal = PopoverPortal
 Popover.Content = PopoverContent
 Popover.Arrow = PopoverArrow
 Popover.Close = PopoverClose
+Popover.Header = PopoverHeader
+Popover.Item = PopoverItem

@@ -365,3 +365,11 @@
     max-height: 90dvh;
   }
 }
+
+.palette-close-btn {
+  height: 22px;
+  padding: 0 6px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+}

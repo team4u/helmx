@@ -118,7 +118,6 @@ export function NodeDetailDrawer({
     : node
       ? getNodeDisplayName(node, t)
       : t('nodes.drawer.titleFallback')
-  const iconName = isLocal ? 'laptop' : 'server'
 
   const rawOrigin = typeof window !== 'undefined' ? window.location?.origin : undefined
   const localHubAccess = useMemo(
@@ -382,7 +381,6 @@ export function NodeDetailDrawer({
       }
       meta={!isNew && node?.id ? <MonoId value={node.id} /> : undefined}
       metaClassName="text-subtle break-word"
-      icon={<HelmxIcon name={iconName} size={22} />}
       aria-label={displayName}
       closeLabel={t('common.close')}
       footer={

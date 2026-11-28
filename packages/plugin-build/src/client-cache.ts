@@ -26,8 +26,9 @@ import { isInside, realpathOrNull, safeFileName, sha256 } from './client-paths.j
  * v8: controlled npm declaration set recorded in cache credentials;
  * v9: mtime/size stat fast-path on `npmDependencies` outside the 2s filesystem race window;
  * v10: add `@helmx/ui` shared external virtualization (`globalThis.__helmx_shared_ui`).
+ * v11: add PopoverHeader, PopoverItem, useListKeyboardNav, MasterDetail, BatchBar to `UI_SHARED_EXPORTS`.
  */
-export const DEPS_LIST_VERSION = 10;
+export const DEPS_LIST_VERSION = 11;
 const MAX_MEMORY_COMPILED_CACHE = 128;
 const CONTENT_HASH_PATTERN = /^[a-f0-9]{16,64}$/i;
 

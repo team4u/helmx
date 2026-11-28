@@ -123,8 +123,8 @@
 }
 
 /* 侧栏分组头 24px 紧凑图标按钮：叠加于 IconButton(.btn.btn-ghost.btn-icon-xs)，
- * 用双类选择器在级联顺序（navigation.css 先于 primitives.css）下无 !important 保持 24px 尺寸；
- * 普通开关激活态由 primitives.css .btn-ghost.is-active / .btn-icon-xs.is-active 统一提供。 */
+ * 用双类选择器在级联顺序（@helmx/ui Button.css 先于 navigation.css）下无 !important 保持 24px 尺寸；
+ * 普通开关激活态由 @helmx/ui Button.css .btn-ghost.is-active / .btn-icon-xs.is-active 统一提供。 */
 .btn.sidebar-header-icon-btn {
   width: 24px;
   height: 24px;
@@ -553,13 +553,31 @@
   white-space: nowrap;
 }
 
-/* 对话空间紧凑搜索（外壳与聚焦态复用 primitives.css .search-box-subtle + .search-box-sm） */
+/* 对话空间紧凑搜索（外壳与聚焦态复用 @helmx/ui SearchBox.css .search-box-subtle + .search-box-sm） */
 .sidebar-search {
   margin-bottom: 4px;
 }
 
 .sidebar-search-empty.loading-state {
   padding: 10px 8px;
+}
+
+/* 侧栏搜索框内层输入中性覆写 */
+.sidebar-search .sidebar-search-input,
+.sidebar-search-input {
+  border: none;
+  background: transparent;
+  box-shadow: none;
+  outline: none;
+  padding: 0;
+  height: auto;
+  min-height: 0;
+}
+.sidebar-search .sidebar-search-input:focus,
+.sidebar-search-input:focus {
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
 }
 
 .activity-rail-brand {

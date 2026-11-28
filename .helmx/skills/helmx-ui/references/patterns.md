@@ -391,7 +391,7 @@ export function CatalogScreen({ entries, selectedId, onSelect, onOpenView, onIns
 
 ## 3. Right-Side `DetailDrawer` Form
 
-Pair with `useScreenDrawer` for URL-hash and Back-stack integration. Form fields use `md (32px)` height parity, `Input` native `prefix`/`suffix`, `ModelPickerControl variant="field"`, `Cmd/Ctrl + Enter` submission, dirty-state gating, and the canonical left-danger / right-cancel / rightmost-primary footer.
+Pair with `useScreenDrawer` for URL-hash and Back-stack integration. Headers are minimal and icon-free (no left icon box); create mode shows only `"New <Entity>"`, while edit mode shows the entity title, status `<Badge>`, and `<MonoId>` in `meta`. Form fields use `md (32px)` height parity, `Input` native `prefix`/`suffix`, `ModelPickerControl variant="field"`, `Cmd/Ctrl + Enter` submission, dirty-state gating, and the canonical left-danger / right-cancel / rightmost-primary footer.
 
 ```tsx
 import type { KeyboardEvent, ReactNode } from 'react'
@@ -402,6 +402,7 @@ import {
   DetailDrawer,
   Field,
   Input,
+  MonoId,
   SegmentedControl,
   Stack,
   Textarea,
@@ -457,6 +458,7 @@ export function TierFormDrawer({
       onClose={onClose}
       title={mode === 'create' ? 'New Tier' : `tier/${draft.id}`}
       titleExtra={mode === 'edit' ? <Badge tone="ok">Active</Badge> : undefined}
+      meta={mode === 'edit' ? <MonoId value={draft.id} /> : undefined}
       footer={
         <>
           {mode === 'edit' && onRequestDelete !== undefined && (
@@ -806,6 +808,146 @@ export function SavePresetModal({
         )}
       </Stack>
     </ModalDialog>
+  )
+}
+```
+
+## 6. Interactive Popover List, Collapsible Sections, `BatchBar`, and `MasterDetail`
+
+Compose `<MasterDetail>` inside `<Screen layout="full-bleed">` for responsive two-pane stages, collapsible `<ScreenSection collapsible rule count>` + `<BatchBar>` for grouped governance, and `<PopoverHeader>` + `<PopoverItem>` + `useListKeyboardNav` for keyboard-navigable picker popovers.
+
+```tsx
+import { useState, type ReactNode } from 'react'
+import {
+  BatchBar,
+  Button,
+  EmptyState,
+  Kbd,
+  List,
+  ListRow,
+  MasterDetail,
+  Popover,
+  PopoverContent,
+  PopoverHeader,
+  PopoverItem,
+  PopoverTrigger,
+  Screen,
+  ScreenSection,
+  ScreenToolbar,
+  SearchBox,
+  useListKeyboardNav,
+} from '@helmx/ui'
+
+interface WorkspaceItem {
+  id: string
+  name: string
+  path: string
+}
+
+export function WorkspaceInspectorStage({ items }: { items: WorkspaceItem[] }): ReactNode {
+  const [selectedIds, setSelectedIds] = useState<string[]>([])
+  const [activeId, setActiveId] = useState<string | null>(items[0]?.id ?? null)
+  const [pickerOpen, setPickerOpen] = useState(false)
+  const [query, setQuery] = useState('')
+
+  const filtered = items.filter((item) => item.name.toLowerCase().includes(query.toLowerCase()))
+  const pickItem = (id: string): void => {
+    setActiveId(id)
+    setPickerOpen(false)
+  }
+  const nav = useListKeyboardNav({
+    count: filtered.length,
+    enabled: pickerOpen,
+    onSelect: (idx) => {
+      const picked = filtered[idx]
+      if (picked !== undefined) pickItem(picked.id)
+    },
+  })
+
+  const selectedItem = items.find((item) => item.id === activeId)
+
+  return (
+    <Screen
+      layout="full-bleed"
+      title="Workspace Files"
+      toolbar={
+        <ScreenToolbar
+          actions={
+            <Popover open={pickerOpen} onOpenChange={setPickerOpen}>
+              <PopoverTrigger asChild>
+                <Button size="sm">Quick jump</Button>
+              </PopoverTrigger>
+              <PopoverContent align="end">
+                <PopoverHeader divider title="Jump to file" trailing={<Kbd size="sm">Enter</Kbd>} />
+                <SearchBox
+                  size="sm"
+                  surface="subtle"
+                  value={query}
+                  onChange={setQuery}
+                  onKeyDown={nav.onKeyDown}
+                  placeholder="Filter files..."
+                  ariaLabel="Filter files"
+                />
+                {filtered.map((item, idx) => (
+                  <PopoverItem
+                    key={item.id}
+                    ref={nav.getItemRef(idx)}
+                    icon="file-text"
+                    meta={item.path}
+                    active={idx === nav.activeIndex}
+                    selected={item.id === activeId}
+                    onMouseEnter={() => nav.setActiveIndex(idx)}
+                    onClick={() => pickItem(item.id)}
+                  >
+                    {item.name}
+                  </PopoverItem>
+                ))}
+              </PopoverContent>
+            </Popover>
+          }
+        >
+          {selectedIds.length > 0 && (
+            <BatchBar
+              selectedCount={selectedIds.length}
+              selectedLabel={`${selectedIds.length} selected`}
+              onExit={() => setSelectedIds([])}
+              actions={<Button size="sm" onClick={() => setSelectedIds([])}>Clear</Button>}
+            />
+          )}
+        </ScreenToolbar>
+      }
+    >
+      <MasterDetail
+        masterWidth={300}
+        masterLabel="File list"
+        detailLabel="File details"
+        mobilePane={selectedItem ? 'detail' : 'master'}
+        master={
+          <ScreenSection collapsible rule title="Changed files" count={filtered.length}>
+            <List density="compact">
+              {filtered.map((item) => (
+                <ListRow
+                  key={item.id}
+                  title={item.name}
+                  meta={item.path}
+                  selected={item.id === activeId}
+                  onSelect={() => setActiveId(item.id)}
+                />
+              ))}
+            </List>
+          </ScreenSection>
+        }
+        detail={
+          selectedItem ? (
+            <ScreenSection title={selectedItem.name}>
+              <div className="mono text-muted">{selectedItem.path}</div>
+            </ScreenSection>
+          ) : (
+            <EmptyState compact title="Select a file" />
+          )
+        }
+      />
+    </Screen>
   )
 }
 ```

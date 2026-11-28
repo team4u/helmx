@@ -29,55 +29,17 @@
   border-color: var(--accent);
 }
 
+/* Composer 命令 / 模型浮层相对 @helmx/ui Overlays.css 基础 .popover-item / .popover-header 的双列布局微调 */
 .composer-popover .popover-item {
-  display: flex;
-  align-items: center;
   justify-content: space-between;
   gap: 10px;
-  width: 100%;
-  min-height: 30px;
   padding: 4px 10px;
-  border: none;
-  border-radius: var(--radius-xs);
-  background: transparent;
-  color: var(--fg-secondary);
-  font-size: 12.5px;
-  text-align: left;
-  cursor: pointer;
-}
-.composer-popover .popover-item:focus-visible,
-.composer-popover .popover-item-active {
-  background: var(--bg-hover);
-  color: var(--fg);
-  outline: none;
-  box-shadow: none;
-}
-@media (hover: hover) {
-  .composer-popover .popover-item:hover {
-    background: var(--bg-hover);
-    color: var(--fg);
-    outline: none;
-    box-shadow: none;
-  }
 }
 .composer-popover .popover-item-meta {
-  font-size: 11px;
-  color: var(--fg-muted);
-  font-family: var(--font-mono);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
   max-width: 180px;
 }
 .composer-popover .popover-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
   padding: 6px 10px 4px;
-  font-size: 11px;
-  color: var(--fg-muted);
-  user-select: none;
 }
 
 .popover-kbd-hint {

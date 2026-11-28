@@ -197,15 +197,6 @@
   padding: 6px 10px;
 }
 
-.agent-standby-profile-item-main {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 2px;
-  min-width: 0;
-  flex: 1 1 auto;
-}
-
 .agent-standby-profile-item-head {
   display: flex;
   align-items: center;
@@ -222,20 +213,9 @@
   font-weight: 500;
 }
 
-.agent-standby-profile-item[data-active='true'] .agent-standby-profile-item-label {
+.agent-standby-profile-item[data-selected='true'] .agent-standby-profile-item-label {
   font-weight: 600;
   color: var(--fg);
-}
-
-.agent-standby-profile-item-meta {
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 11px;
-  color: var(--fg-muted);
-  font-family: var(--font-mono);
-  line-height: 1.25;
 }
 
 .agent-standby-profile-item-check {

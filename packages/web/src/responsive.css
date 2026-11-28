@@ -376,7 +376,7 @@ button, a, input, select, textarea { touch-action: manipulation; }
   }
 }
 
-/* 命令面板关闭按钮响应式（基础尺寸与对齐归属 primitives.css .palette-close-btn） */
+/* 命令面板关闭按钮响应式（基础尺寸与对齐归属 modals.css .palette-close-btn） */
 .palette-close-desktop { display: inline-flex; }
 .palette-close-mobile { display: none; align-items: center; gap: 4px; }
 .palette-close-mobile-label { font-size: 11.5px; }
@@ -398,7 +398,6 @@ button, a, input, select, textarea { touch-action: manipulation; }
 
 @media (pointer: coarse) {
   .composer-icon-button { min-width: 34px; min-height: 34px; }
-  .pane-more-popover .popover-item { min-height: 36px; }
 }
 
 @media (prefers-reduced-motion: reduce) {

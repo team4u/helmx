@@ -3,7 +3,7 @@
  * used by ConversationOverview and SidebarConversationList.
  */
 import type { ReactNode } from 'react'
-import { Button, ConfirmDialog } from '@helmx/ui'
+import { BatchBar, Button, ConfirmDialog } from '@helmx/ui'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 
 export interface BatchActionBarProps {
@@ -44,41 +44,36 @@ export function BatchActionBar({
   const anyBusy = deleting || busy
   return (
     <>
-      <div className={className ? `batch-bar ${className}` : 'batch-bar'}>
-        <div className="batch-bar-header">
-          <span className="batch-bar-count tabular-nums">
-            {t('shell.batch.selected', { count: selectedCount })}
-          </span>
-          <Button
-            variant="ghost"
-            size="xs"
-            disabled={anyBusy}
-            title={exitTitle}
-            onClick={onExit}
-          >
-            {t('shell.batch.exit')}
-          </Button>
-        </div>
-        <div className="batch-bar-actions">
-          <Button
-            size="sm"
-            disabled={selectableCount === 0 || anyBusy}
-            onClick={onToggleSelectAll}
-          >
-            {isAllSelected ? t('shell.batch.clear') : t('shell.batch.selectAll')}
-          </Button>
-          {extraActions}
-          <Button
-            variant="danger"
-            size="sm"
-            pending={deleting}
-            disabled={selectedCount === 0 || busy}
-            onClick={onRequestDelete}
-          >
-            {deleting ? t('shell.batch.deleting') : t('shell.batch.deleteCount', { count: selectedCount })}
-          </Button>
-        </div>
-      </div>
+      <BatchBar
+        className={className}
+        selectedCount={selectedCount}
+        selectedLabel={t('shell.batch.selected', { count: selectedCount })}
+        exitLabel={t('shell.batch.exit')}
+        exitTitle={exitTitle}
+        exitDisabled={anyBusy}
+        onExit={onExit}
+        actions={
+          <>
+            <Button
+              size="sm"
+              disabled={selectableCount === 0 || anyBusy}
+              onClick={onToggleSelectAll}
+            >
+              {isAllSelected ? t('shell.batch.clear') : t('shell.batch.selectAll')}
+            </Button>
+            {extraActions}
+            <Button
+              variant="danger"
+              size="sm"
+              pending={deleting}
+              disabled={selectedCount === 0 || busy}
+              onClick={onRequestDelete}
+            >
+              {deleting ? t('shell.batch.deleting') : t('shell.batch.deleteCount', { count: selectedCount })}
+            </Button>
+          </>
+        }
+      />
       <ConfirmDialog
         open={confirmOpen}
         onOpenChange={onConfirmOpenChange}

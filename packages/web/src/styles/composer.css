@@ -928,3 +928,35 @@ button.attachment-chip:disabled {
   min-width: 240px;
 }
 
+/* 紧凑原生图标按钮（26px x 26px，圆角 7px） */
+.composer-icon-button,
+.composer-toolbar .composer-icon-button {
+  width: 26px;
+  height: 26px;
+  min-width: 26px;
+  min-height: 26px;
+  padding: 0 !important;
+  border-radius: 7px;
+  border: none;
+  background: transparent;
+  color: var(--fg-muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+@media (hover: hover) {
+  .composer-icon-button:hover:not(:disabled),
+  .composer-toolbar .composer-icon-button:hover:not(:disabled) {
+    background: var(--bg-muted);
+    color: var(--fg);
+  }
+}
+.composer-icon-button:disabled,
+.composer-toolbar .composer-icon-button:disabled {
+  opacity: 0.48;
+  cursor: not-allowed;
+}
+

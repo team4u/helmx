@@ -1,0 +1,54 @@
+/* Full-bleed MasterDetail shell (Archetype 5). */
+
+.helmx-master-detail {
+  --helmx-master-width: 280px;
+  display: grid;
+  grid-template-columns: var(--helmx-master-width) minmax(0, 1fr);
+  flex: 1 1 0%;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.helmx-master-detail-master {
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--border);
+  background: var(--bg-subtle);
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.helmx-master-detail-detail {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+}
+
+@container (max-width: 680px) {
+  .helmx-master-detail {
+    grid-template-columns: minmax(0, 1fr);
+    flex: 1 0 auto;
+    overflow: visible;
+  }
+
+  .helmx-master-detail[data-mobile-pane='master'] .helmx-master-detail-detail {
+    display: none;
+  }
+
+  .helmx-master-detail[data-mobile-pane='detail'] .helmx-master-detail-master {
+    display: none;
+  }
+
+  .helmx-master-detail-master {
+    border-right: none;
+    overflow: visible;
+  }
+
+  .helmx-master-detail-detail {
+    overflow: visible;
+  }
+}

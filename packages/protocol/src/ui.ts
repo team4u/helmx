@@ -758,15 +758,16 @@ export interface PluginClientContext {
  *      createLocaleTranslator);
  *    - accessibility & overlay primitives: Switch / Checkbox / Select / MultiSelect /
  *      Tabs family (Tabs / TabsList / TabsTrigger / TabsContent / TabCount / SegmentedControl) /
- *      Dialog family / ModalDialog / Popover family / Tooltip family / DropdownMenu family /
+ *      Dialog family / ModalDialog / Popover family (incl. PopoverHeader / PopoverItem /
+ *      useListKeyboardNav) / Tooltip family / DropdownMenu family /
  *      AlertDialog family / ConfirmDialog;
  *    - form, card, list & feedback primitives: ViewBoundary / Callout / StatusLight +
  *      STATUS_LIGHT_TONES / normalizeStatusLightTone / isKnownStatusLightStatus /
  *      Button / IconButton / Badge / Kbd / Stack / Input / Textarea / Field /
  *      HelperText / ErrorText / Card / SelectCard / CardGrid / List / ListRow / MonoId /
  *      SearchBox / EmptyState / LoadingState;
- *    - layout shells: Screen / ScreenSection / ScreenToolbar / DataTable / KvGrid /
- *      DetailDrawer / DockTray / DockTrayRow;
+ *    - layout shells: Screen / ScreenSection / ScreenToolbar / MasterDetail / BatchBar /
+ *      DataTable / KvGrid / DetailDrawer / DockTray / DockTrayRow;
  *    - clipboard, icons & formatting: CopyButton / copyToClipboard / HelmxIcon /
  *      formatTime / formatCompactTimestamp / formatDurationMs / formatStopwatchMs /
  *      formatOffsetMs / resolveConversationTiming / formatBytes.
@@ -965,6 +966,9 @@ export const UI_SHARED_EXPORTS = [
   'PopoverPortal',
   'PopoverClose',
   'PopoverContent',
+  'PopoverHeader',
+  'PopoverItem',
+  'useListKeyboardNav',
   'Tooltip',
   'TooltipProvider',
   'TooltipRoot',
@@ -1017,6 +1021,8 @@ export const UI_SHARED_EXPORTS = [
   'Screen',
   'ScreenSection',
   'ScreenToolbar',
+  'MasterDetail',
+  'BatchBar',
   'DataTable',
   'KvGrid',
   'DetailDrawer',

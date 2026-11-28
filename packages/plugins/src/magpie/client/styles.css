@@ -86,20 +86,11 @@
 }
 
 .magpie-quota-popover-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.magpie-quota-popover-title-wrap {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
+  padding: 0 0 8px;
 }
 
 .magpie-quota-popover-title {
+  display: block;
   font-size: 13px;
   font-weight: 600;
   color: var(--fg);
@@ -109,6 +100,7 @@
 }
 
 .magpie-quota-popover-subtitle {
+  display: block;
   font-size: 11px;
   color: var(--fg-muted);
   overflow: hidden;
@@ -149,12 +141,11 @@
   display: flex;
   flex-direction: column;
   gap: 4px;
-  padding-top: 8px;
-  border-top: 1px solid var(--border);
 }
 
-.magpie-quota-account:first-child {
-  padding-top: 6px;
+.magpie-quota-account + .magpie-quota-account {
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
 }
 
 .magpie-quota-account-header {
@@ -228,8 +219,7 @@
 }
 
 .magpie-quota-empty {
-  padding: 6px 0 2px;
-  border-top: 1px solid var(--border);
+  padding: 2px 0;
   font-size: 12px;
   color: var(--fg-muted);
   line-height: 1.45;

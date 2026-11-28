@@ -19,6 +19,7 @@ import {
   Popover,
   PopoverClose,
   PopoverContent,
+  PopoverHeader,
   PopoverTrigger,
   resolveLocalizedText,
 } from '@helmx/ui'
@@ -123,22 +124,28 @@ function OrchestratorStatusBadgeConversation({
         collisionPadding={12}
         className="tiers-orch-popover"
       >
-        <div className="tiers-orch-popover-header">
-          <div className="tiers-orch-popover-title-wrap">
-            <span className="tiers-orch-popover-title mono">{`tier/${tierId}`}</span>
-            <Badge tone="neutral">
-              {phase === 'execution' ? t(C.orchestratorPhaseExecution) : t(C.orchestratorPhasePlanning)}
-            </Badge>
-          </div>
-          <PopoverClose asChild>
-            <IconButton
-              variant="ghost"
-              size="xs"
-              icon="x"
-              label={t(C.close)}
-            />
-          </PopoverClose>
-        </div>
+        <PopoverHeader
+          divider
+          className="tiers-orch-popover-header"
+          title={
+            <span className="tiers-orch-popover-title-wrap">
+              <span className="tiers-orch-popover-title mono">{`tier/${tierId}`}</span>
+              <Badge tone="neutral">
+                {phase === 'execution' ? t(C.orchestratorPhaseExecution) : t(C.orchestratorPhasePlanning)}
+              </Badge>
+            </span>
+          }
+          trailing={
+            <PopoverClose asChild>
+              <IconButton
+                variant="ghost"
+                size="xs"
+                icon="x"
+                label={t(C.close)}
+              />
+            </PopoverClose>
+          }
+        />
         <div className="tiers-orch-popover-rows">
           <div className="tiers-orch-popover-row" data-active={phase === 'planning' ? 'true' : undefined}>
             <div className="tiers-orch-popover-row-head">

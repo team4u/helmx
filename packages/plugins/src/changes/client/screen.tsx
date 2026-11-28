@@ -14,6 +14,7 @@ import {
   Callout,
   EmptyState,
   LoadingState,
+  MasterDetail,
   Screen,
   ScreenToolbar,
   SearchBox,
@@ -792,72 +793,80 @@ export function ChangesInspectorScreen(props: ChangesInspectorScreenProps): Reac
           </Callout>
         </div>
       ) : (
-        <div className={`chg-split-stage ${showNarrowDiffPane ? 'chg-mode-diff' : 'chg-mode-list'}`}>
-          <aside className="chg-sidebar">
-            {showSearch ? (
-              <div className="chg-sidebar-search">
-                <SearchBox
-                  size="sm"
-                  value={searchQuery}
-                  onChange={setSearchQuery}
-                  placeholder={t(CHG_COPY.searchFiles)}
-                  ariaLabel={t(CHG_COPY.searchFiles)}
-                />
-              </div>
-            ) : null}
-
-            <div
-              className="chg-files-list"
-              role="listbox"
-              aria-label="Changed files"
-              tabIndex={0}
-              onKeyDown={handleFileListKeyDown}
-            >
-              {activeFiles.length === 0 ? (
-                <EmptyState compact title={t(CHG_COPY.noFiles)} />
-              ) : filteredFiles.length === 0 ? (
-                <EmptyState compact title={t(CHG_COPY.noMatchingFiles)} />
-              ) : (
-                filteredFiles.map((file) => {
-                  const selected = selectedFileEntry?.path === file.path
-                  const { dir, name } = splitFilePath(file.path)
-                  return (
-                    <button
-                      key={file.path}
-                      type="button"
-                      role="option"
-                      aria-selected={selected}
-                      className={`chg-file-row${selected ? ' is-selected' : ''}`}
-                      onClick={() => selectFile(file.path)}
-                    >
-                      <span className={`chg-status-glyph chg-status-${file.status}`}>{file.status}</span>
-                      <span className="chg-file-name-wrap" title={file.oldPath ? `${file.oldPath} -> ${file.path}` : file.path}>
-                        <span className="chg-file-name">{name}</span>
-                        {dir !== '' ? <span className="chg-file-dir mono">{dir}</span> : null}
-                      </span>
-                      <span className="chg-file-stats mono tabular-nums">
-                        {file.binary ? (
-                          <span className="text-muted">BIN</span>
-                        ) : file.untracked ? (
-                          <span className="chg-stat-add">NEW</span>
-                        ) : (
-                          <>
-                            {file.additions > 0 ? <span className="chg-stat-add">{`+${file.additions}`}</span> : null}
-                            {file.deletions > 0 ? <span className="chg-stat-del">{`−${file.deletions}`}</span> : null}
-                          </>
-                        )}
-                      </span>
-                    </button>
-                  )
-                })
-              )}
-              {(currentWorktree?.filesTruncated || (currentWorkspace?.isGitRepo && currentWorkspace.filesTruncated)) ? (
-                <div className="chg-files-truncated-note">{t(CHG_COPY.filesTruncatedNote)}</div>
+        <MasterDetail
+          className="chg-split-stage"
+          masterWidth={300}
+          masterLabel="Changed files"
+          detailLabel="Diff viewer"
+          mobilePane={showNarrowDiffPane ? 'detail' : 'master'}
+          masterClassName="chg-sidebar"
+          detailClassName="chg-main-diff"
+          master={
+            <>
+              {showSearch ? (
+                <div className="chg-sidebar-search">
+                  <SearchBox
+                    size="sm"
+                    value={searchQuery}
+                    onChange={setSearchQuery}
+                    placeholder={t(CHG_COPY.searchFiles)}
+                    ariaLabel={t(CHG_COPY.searchFiles)}
+                  />
+                </div>
               ) : null}
-            </div>
-          </aside>
 
-          <main className="chg-main-diff">
+              <div
+                className="chg-files-list"
+                role="listbox"
+                aria-label="Changed files"
+                tabIndex={0}
+                onKeyDown={handleFileListKeyDown}
+              >
+                {activeFiles.length === 0 ? (
+                  <EmptyState compact title={t(CHG_COPY.noFiles)} />
+                ) : filteredFiles.length === 0 ? (
+                  <EmptyState compact title={t(CHG_COPY.noMatchingFiles)} />
+                ) : (
+                  filteredFiles.map((file) => {
+                    const selected = selectedFileEntry?.path === file.path
+                    const { dir, name } = splitFilePath(file.path)
+                    return (
+                      <button
+                        key={file.path}
+                        type="button"
+                        role="option"
+                        aria-selected={selected}
+                        className={`chg-file-row${selected ? ' is-selected' : ''}`}
+                        onClick={() => selectFile(file.path)}
+                      >
+                        <span className={`chg-status-glyph chg-status-${file.status}`}>{file.status}</span>
+                        <span className="chg-file-name-wrap" title={file.oldPath ? `${file.oldPath} -> ${file.path}` : file.path}>
+                          <span className="chg-file-name">{name}</span>
+                          {dir !== '' ? <span className="chg-file-dir mono">{dir}</span> : null}
+                        </span>
+                        <span className="chg-file-stats mono tabular-nums">
+                          {file.binary ? (
+                            <span className="text-muted">BIN</span>
+                          ) : file.untracked ? (
+                            <span className="chg-stat-add">NEW</span>
+                          ) : (
+                            <>
+                              {file.additions > 0 ? <span className="chg-stat-add">{`+${file.additions}`}</span> : null}
+                              {file.deletions > 0 ? <span className="chg-stat-del">{`−${file.deletions}`}</span> : null}
+                            </>
+                          )}
+                        </span>
+                      </button>
+                    )
+                  })
+                )}
+                {(currentWorktree?.filesTruncated || (currentWorkspace?.isGitRepo && currentWorkspace.filesTruncated)) ? (
+                  <div className="chg-files-truncated-note">{t(CHG_COPY.filesTruncatedNote)}</div>
+                ) : null}
+              </div>
+            </>
+          }
+          detail={
             <DiffViewer
               filePath={selectedFileEntry?.path}
               oldPath={selectedFileEntry?.oldPath}
@@ -875,8 +884,8 @@ export function ChangesInspectorScreen(props: ChangesInspectorScreenProps): Reac
               onRetry={() => void loadSelectedFile(true)}
               onBack={isNarrowDiff ? backToFiles : undefined}
             />
-          </main>
-        </div>
+          }
+        />
       )}
     </Screen>
   )

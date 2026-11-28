@@ -7,7 +7,17 @@
  *   and restores focus cleanly to the composer textarea on keyboard/pick close.
  */
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
-import { EmptyState, HelmxIcon, Kbd, Popover, PopoverContent, PopoverTrigger, SearchBox } from '@helmx/ui'
+import {
+  EmptyState,
+  HelmxIcon,
+  Kbd,
+  Popover,
+  PopoverContent,
+  PopoverHeader,
+  PopoverItem,
+  PopoverTrigger,
+  SearchBox,
+} from '@helmx/ui'
 import { usePanelShortcut } from '@helmx/plugin-client'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { formatModShiftShortcut } from '../shell/shortcuts-model.js'
@@ -218,10 +228,11 @@ export function StandbyProfilePicker({
                 />
               </div>
             ) : null}
-            <div className="popover-header">
+            <PopoverHeader
+              trailing={<Kbd size="sm" desktopOnly>{t('composer.kbd.navConfirm')}</Kbd>}
+            >
               <span>{t('composer.standby.switchProfileHeader')}</span>
-              <Kbd size="sm" desktopOnly>{t('composer.kbd.navConfirm')}</Kbd>
-            </div>
+            </PopoverHeader>
             <div
               ref={listRef}
               tabIndex={-1}
@@ -237,37 +248,33 @@ export function StandbyProfilePicker({
                   const active = idx === activeIndex
                   const meta = formatStandbyProfileMeta(opt)
                   return (
-                    <button
+                    <PopoverItem
                       key={opt.profileId}
                       ref={(node) => {
                         itemRefs.current[idx] = node
                       }}
-                      type="button"
                       role="option"
                       aria-selected={selected}
+                      active={active}
+                      selected={selected}
                       data-profile-id={opt.profileId}
-                      data-active={selected ? 'true' : undefined}
-                      className={`popover-item agent-standby-profile-item${active ? ' popover-item-active' : ''}`}
+                      className="agent-standby-profile-item"
+                      meta={meta !== '' ? <span title={meta}>{meta}</span> : undefined}
+                      trailing={
+                        selected ? (
+                          <HelmxIcon name="check" size={13} className="agent-standby-profile-item-check" />
+                        ) : undefined
+                      }
                       onMouseEnter={() => setActiveIndex(idx)}
                       onFocus={() => setActiveIndex(idx)}
                       onClick={() => handlePick(opt.profileId)}
                     >
-                      <span className="agent-standby-profile-item-main">
-                        <span className="agent-standby-profile-item-head">
-                          <HelmxIcon name="bot" size={13} className="agent-standby-profile-icon" />
-                          <span className="agent-standby-profile-item-label">{opt.label}</span>
-                          {opt.remoteNodeId !== null ? <RemoteNodeTag nodeId={opt.remoteNodeId} /> : null}
-                        </span>
-                        {meta !== '' ? (
-                          <span className="agent-standby-profile-item-meta" title={meta}>
-                            {meta}
-                          </span>
-                        ) : null}
+                      <span className="agent-standby-profile-item-head">
+                        <HelmxIcon name="bot" size={13} className="agent-standby-profile-icon" />
+                        <span className="agent-standby-profile-item-label">{opt.label}</span>
+                        {opt.remoteNodeId !== null ? <RemoteNodeTag nodeId={opt.remoteNodeId} /> : null}
                       </span>
-                      {selected ? (
-                        <HelmxIcon name="check" size={13} className="agent-standby-profile-item-check" />
-                      ) : null}
-                    </button>
+                    </PopoverItem>
                   )
                 })
               )}

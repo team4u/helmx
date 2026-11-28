@@ -41,8 +41,6 @@ export interface DetailDrawerProps {
   title: ReactNode
   /** Inline extras right of the title (badges, versions; laid out by .primary-drawer-title-row). */
   titleExtra?: ReactNode
-  /** Optional icon block on the left of the title column (.primary-drawer-icon-wrap, e.g. <HelmxIcon name="monitor" />). */
-  icon?: ReactNode
   /** Secondary mono line below the title (entity id / file path). */
   meta?: ReactNode
   /** Extra consumer-styled line(s) below the meta line inside the title column. */
@@ -88,9 +86,9 @@ export interface DetailDrawerProps {
 
 /**
  * Right-side detail drawer frame over the host .primary-drawer-* common
- * vocabulary: header (icon + title row + meta line + close), scrollable body
- * and optional footer. Composes the SSR-safe Dialog primitives of this
- * package; state and data stay with the caller.
+ * vocabulary: minimal icon-free header (title row + meta line + close),
+ * scrollable body and optional footer. Composes the SSR-safe Dialog primitives
+ * of this package; state and data stay with the caller.
  */
 export function DetailDrawer(props: DetailDrawerProps): ReactNode {
   const t = useUiTranslator()
@@ -101,7 +99,6 @@ export function DetailDrawer(props: DetailDrawerProps): ReactNode {
     inline,
     title,
     titleExtra,
-    icon,
     meta,
     belowTitle,
     titleClassName,
@@ -142,7 +139,6 @@ export function DetailDrawer(props: DetailDrawerProps): ReactNode {
         >
           <div className="primary-drawer-header">
             <div className="primary-drawer-header-left">
-              {icon !== undefined && <div className="primary-drawer-icon-wrap">{icon}</div>}
               <div className="primary-drawer-title-col">
                 <div className="primary-drawer-title-row">
                   <DialogTitle className={joinClass('primary-drawer-title', titleClassName)}>{title}</DialogTitle>

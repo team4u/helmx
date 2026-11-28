@@ -514,6 +514,11 @@ describe('port-forward-client-interactions', () => {
     try {
       const drawer = loadingNodesMount.host.querySelector('[role="dialog"]')
       assert.ok(drawer !== null)
+      assert.ok(drawer.querySelector('.primary-drawer-icon-wrap') === null, 'edit drawer header must stay icon-free')
+      assert.equal(drawer.querySelector('.primary-drawer-title')?.textContent, 'broken-port')
+      assert.match(drawer.querySelector('.primary-drawer-id')?.textContent ?? '', /r-error/)
+      const initialSaveBtn = [...drawer.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Save')
+      assert.ok(initialSaveBtn !== undefined && initialSaveBtn.disabled === true, 'edit Save starts disabled until dirty')
       assert.ok(drawer.querySelector('.kv-grid') !== null, 'edit drawer shows compact runtime KvGrid')
       assert.match(drawer.textContent ?? '', /EADDRINUSE: already in use/)
       const selectTrigger = drawer.querySelector<HTMLButtonElement>('.helmx-select-trigger')
@@ -565,6 +570,8 @@ describe('port-forward-client-interactions', () => {
     try {
       const drawer = createMount.host.querySelector('[role="dialog"]')
       assert.ok(drawer !== null)
+      assert.ok(drawer.querySelector('.primary-drawer-icon-wrap') === null, 'create drawer header must stay icon-free')
+      assert.ok(drawer.querySelector('.primary-drawer-id') === null, 'create drawer must not render MonoId meta')
       assert.equal(drawer.querySelector('.kv-grid') === null, true, 'create drawer has no runtime KvGrid')
       const listenHostInput = drawer.querySelector<HTMLInputElement>('input[placeholder="127.0.0.1"]')
       const listenPortInput = drawer.querySelector<HTMLInputElement>('input[placeholder="8080"]')
@@ -608,6 +615,63 @@ describe('port-forward-client-interactions', () => {
       assert.deepEqual(paramPatches.at(-1), { create: undefined, edit: undefined })
     } finally {
       createMount.unmount()
+    }
+
+    // 4. Edit mode dirty-state gating + Cmd/Ctrl + Enter submit shortcut
+    const editSpy = makeSpyCtx()
+    setBuiltinClientStub({
+      docs: { rules: SAMPLE_RULES, runtime: SAMPLE_RUNTIME },
+      hostNodes: SAMPLE_NODES,
+      config: { allowPublicBind: false },
+    })
+    const editMount = await mount(
+      editSpy,
+      e(components.PortForwardManagerScreen, {
+        pluginId: 'builtin:port-forward',
+        screenId: 'main',
+        isSplit: false,
+        params: { edit: 'r-error' },
+        setParams: () => {},
+        inlineDrawer: true,
+      }),
+    )
+    try {
+      const drawer = editMount.host.querySelector('[role="dialog"]')
+      assert.ok(drawer !== null)
+      const saveBtn = [...drawer.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Save')
+      const nameInput = drawer.querySelector<HTMLInputElement>('input')
+      assert.ok(saveBtn !== undefined && nameInput !== null)
+      assert.equal(saveBtn.disabled, true, 'Save stays disabled before editing any field')
+
+      await act(async () => {
+        nameInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', ctrlKey: true, bubbles: true, cancelable: true }))
+      })
+      assert.equal(editSpy.actionCalls.length, 0, 'Ctrl+Enter must not submit while clean')
+
+      await act(async () => {
+        setInputValue(nameInput, 'broken-port-updated')
+      })
+      assert.equal(saveBtn.disabled, false, 'Save enables once draft differs from rule')
+
+      await act(async () => {
+        nameInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', metaKey: true, bubbles: true, cancelable: true }))
+      })
+      assert.equal(editSpy.actionCalls.length, 1)
+      assert.deepEqual(editSpy.actionCalls[0], {
+        actionId: 'update',
+        input: {
+          id: 'r-error',
+          name: 'broken-port-updated',
+          nodeId: 'local',
+          listenHost: '127.0.0.1',
+          listenPort: 19000,
+          targetHost: '127.0.0.1',
+          targetPort: 9000,
+          enabled: true,
+        },
+      })
+    } finally {
+      editMount.unmount()
     }
   })
 

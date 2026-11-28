@@ -1,8 +1,8 @@
 /**
  * DetailDrawer (right-side detail drawer shell) UI tests:
  * - real React renderToString SSR: renders full markup without a DOM using the
- *   .primary-drawer-* vocabulary;
- * - composable slots: icon / titleExtra badges / meta / belowTitle / footer / aux;
+ *   .primary-drawer-* vocabulary with a minimal icon-free header;
+ * - composable slots: titleExtra badges / meta / belowTitle / footer / aux;
  * - DOM interaction contract: header close button and Radix Escape chain funnel
  *   into onClose (single close channel); onEscapeKeyDown preventDefault keeps open;
  * - open=false renders nothing.
@@ -16,7 +16,6 @@ const { act } = await import('react')
 const { renderToString } = await import('react-dom/server')
 const { createRoot } = await import('react-dom/client')
 const { DetailDrawer } = await import('../src/index.js')
-const { HelmxIcon } = await import('../src/icons.js')
 
 const e = React.createElement
 
@@ -30,7 +29,6 @@ test('DetailDrawer SSR: renders the full .primary-drawer-* frame with composable
         onClose: () => {},
         title: 'node-7f3a',
         titleExtra: e('span', { className: 'badge badge-ok' }, 'online'),
-        icon: e(HelmxIcon, { name: 'monitor', size: 22 }),
         meta: 'node-7f3a@example',
         'aria-label': 'Node detail: node-7f3a',
         footer: e('button', { type: 'button', className: 'btn btn-primary btn-sm' }, 'Save'),
@@ -43,7 +41,7 @@ test('DetailDrawer SSR: renders the full .primary-drawer-* frame with composable
   assert.ok(html.includes('primary-drawer-backdrop'), 'frame binds the shared backdrop class')
   assert.ok(html.includes('primary-drawer-content'), 'frame binds the shared content class')
   assert.ok(html.includes('primary-drawer-header'), 'header structure uses the shared class')
-  assert.ok(html.includes('primary-drawer-icon-wrap'), 'optional icon renders into the icon wrap')
+  assert.ok(!html.includes('primary-drawer-icon-wrap'), 'DetailDrawer header stays minimal and icon-free')
   assert.ok(html.includes('primary-drawer-title-row'), 'title row uses the shared class')
   assert.ok(html.includes('primary-drawer-title'), 'title binds the shared class')
   assert.ok(html.includes('badge badge-ok'), 'titleExtra badges render inline in the title row')
@@ -55,7 +53,7 @@ test('DetailDrawer SSR: renders the full .primary-drawer-* frame with composable
   assert.ok(html.includes('Node detail: node-7f3a'), 'aria-label lands on the dialog content')
 })
 
-test('DetailDrawer SSR: no icon / meta / footer slots render nothing extra; className extensions are appended', { timeout: 60_000 }, () => {
+test('DetailDrawer SSR: no meta / footer slots render nothing extra; className extensions are appended', { timeout: 60_000 }, () => {
   const html = renderToString(
     e(
       DetailDrawer,
@@ -71,7 +69,7 @@ test('DetailDrawer SSR: no icon / meta / footer slots render nothing extra; clas
       },
     ),
   )
-  assert.ok(!html.includes('primary-drawer-icon-wrap'), 'icon wrap is opt-in')
+  assert.ok(!html.includes('primary-drawer-icon-wrap'), 'retired icon wrap never renders')
   assert.ok(!html.includes('primary-drawer-id'), 'meta line is opt-in')
   assert.ok(!html.includes('primary-drawer-footer'), 'footer is opt-in')
   assert.ok(html.includes('primary-drawer-content workflow-lib-drawer'), 'content class extension is appended')

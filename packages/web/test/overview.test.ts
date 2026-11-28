@@ -1785,7 +1785,7 @@ test('ConversationOverview section collapse hides cards, excludes them from batc
   const mount = await mountOverview(store)
   try {
     const quietSection = mount.container.querySelector<HTMLElement>('[data-group-key="bucket:quiet"]')
-    const quietToggle = quietSection?.querySelector<HTMLButtonElement>('.overview-section-toggle')
+    const quietToggle = quietSection?.querySelector<HTMLButtonElement>('.screen-section-toggle')
     assert.ok(quietToggle !== null && quietToggle !== undefined)
     assert.equal(quietToggle.getAttribute('aria-expanded'), 'true')
     assert.equal(mount.container.querySelectorAll('.overview-card').length, 3)
@@ -1831,7 +1831,7 @@ test('ConversationOverview section collapse hides cards, excludes them from batc
     })
     assert.equal(mount.container.querySelectorAll('.overview-card').length, 1, 'search expands the matching section so the quiet card is never hidden')
     assert.equal(
-      mount.container.querySelector<HTMLButtonElement>('[data-group-key="bucket:quiet"] .overview-section-toggle')?.getAttribute('aria-expanded'),
+      mount.container.querySelector<HTMLButtonElement>('[data-group-key="bucket:quiet"] .screen-section-toggle')?.getAttribute('aria-expanded'),
       'true',
     )
 
@@ -1840,7 +1840,7 @@ test('ConversationOverview section collapse hides cards, excludes them from batc
       clearBtn?.click()
     })
     assert.equal(
-      mount.container.querySelector<HTMLButtonElement>('[data-group-key="bucket:quiet"] .overview-section-toggle')?.getAttribute('aria-expanded'),
+      mount.container.querySelector<HTMLButtonElement>('[data-group-key="bucket:quiet"] .screen-section-toggle')?.getAttribute('aria-expanded'),
       'false',
       'clearing search restores the previous section collapse preference',
     )

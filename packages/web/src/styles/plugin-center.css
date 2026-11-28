@@ -268,3 +268,15 @@
   color: var(--fg-secondary);
   word-break: break-all;
 }
+
+/* 同插件多 settings.panel：面板间分隔与独立挂载区域 */
+.plugin-settings-panels + .plugin-settings-panels {
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+}
+.plugin-settings-panel-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg-muted);
+  margin-bottom: 4px;
+}

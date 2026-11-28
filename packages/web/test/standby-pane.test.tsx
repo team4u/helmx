@@ -353,7 +353,7 @@ describe('standby-pane UX', () => {
     assert.ok(assistantItem.querySelector('.agent-standby-profile-item-check') !== null, 'current profile shows check icon')
     assert.ok(coderItem.querySelector('.agent-standby-profile-item-check') === null)
     assert.match(coderItem.textContent ?? '', /remote-1/, 'remote-node profile shows remote node tag')
-    assert.match(coderItem.querySelector('.agent-standby-profile-item-meta')?.textContent ?? '', /\/remote\/repo · gpt-5/)
+    assert.match(coderItem.querySelector('.popover-item-meta')?.textContent ?? '', /\/remote\/repo · gpt-5/)
 
     await act(async () => {
       coderItem.click()

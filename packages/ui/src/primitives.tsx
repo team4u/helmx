@@ -12,7 +12,7 @@
  * - This file only exports components and TS types (same contract as the host
  *   Fast Refresh rule).
  */
-import { Children, Fragment, isValidElement, type AriaRole, type ReactElement, type ReactNode } from 'react'
+import { Children, Fragment, isValidElement, useId, useState, type AriaRole, type HTMLAttributes, type ReactElement, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { useUiTranslator } from './ui-locale-context.js'
 import { HelmxIcon } from './icons.js'
@@ -258,24 +258,117 @@ export function Screen(props: ScreenProps): ReactNode {
 // ScreenSection: page section
 // ---------------------------------------------------------------------------
 
-export interface ScreenSectionProps {
+export interface ScreenSectionProps extends Omit<HTMLAttributes<HTMLElement>, 'title'> {
   /** Section title text (plain strings recommended; compose with titleExtra for complex titles). */
   title?: ReactNode
   /** Extra content on the right of the title row (e.g. count badge, entry button). */
   titleExtra?: ReactNode
-  className?: string
+  /** Optional leading icon/status indicator placed before the title. */
+  leading?: ReactNode
+  /** Optional numeric/string count pill displayed beside the title. */
+  count?: ReactNode
+  /** Enable interactive expand/collapse toggle header. */
+  collapsible?: boolean
+  /** Controlled expanded state when `collapsible` is true. */
+  open?: boolean
+  /** Initial uncontrolled expanded state when `collapsible` is true (default true). */
+  defaultOpen?: boolean
+  /** Callback invoked when expanded state toggles in collapsible mode. */
+  onOpenChange?: (open: boolean) => void
+  /** Render a trailing hairline horizontal rule after the header. */
+  rule?: boolean
+  /** Explicit DOM id on the heading/toggle element (`aria-labelledby` target). */
+  headingId?: string
+  /** Extra class appended to the title text wrapper. */
+  titleClassName?: string
+  /** Extra class appended to the collapsible toggle button. */
+  toggleClassName?: string
   children?: ReactNode
 }
 
-/** Page section: optional title + vertically stacked content. */
+/** Page section: optional title/collapsible header + vertically stacked content. */
 export function ScreenSection(props: ScreenSectionProps): ReactNode {
-  const { title, titleExtra, className, children } = props
+  const {
+    title,
+    titleExtra,
+    leading,
+    count,
+    collapsible = false,
+    open,
+    defaultOpen = true,
+    onOpenChange,
+    rule = false,
+    headingId,
+    className,
+    titleClassName,
+    toggleClassName,
+    children,
+    ...rest
+  } = props
+
+  const generatedId = useId()
+  const resolvedHeadingId = headingId ?? generatedId
+  const [uncontrolledOpen, setUncontrolledOpen] = useState<boolean>(defaultOpen)
+  const isControlled = open !== undefined
+  const isOpen = isControlled ? open : uncontrolledOpen
+
+  if (collapsible) {
+    const handleToggle = () => {
+      const next = !isOpen
+      if (!isControlled) setUncontrolledOpen(next)
+      onOpenChange?.(next)
+    }
+    return (
+      <section
+        className={joinClass('screen-section', className)}
+        aria-labelledby={resolvedHeadingId}
+        data-collapsible="true"
+        data-open={isOpen ? 'true' : 'false'}
+        {...rest}
+      >
+        <div className="screen-section-head">
+          <button
+            type="button"
+            id={resolvedHeadingId}
+            className={joinClass('screen-section-toggle', toggleClassName)}
+            aria-expanded={isOpen}
+            onClick={handleToggle}
+          >
+            <HelmxIcon
+              name={isOpen ? 'chevron-down' : 'chevron-right'}
+              size={13}
+              className="screen-section-chevron"
+            />
+            {leading}
+            {hasRenderable(title) && (
+              <span className={joinClass('screen-section-title-text', titleClassName)}>{title}</span>
+            )}
+            {hasRenderable(count) && <span className="screen-section-count tabular-nums">{count}</span>}
+          </button>
+          {hasRenderable(titleExtra) && <span className="screen-subtitle">{titleExtra}</span>}
+          {rule && <span className="screen-section-rule" aria-hidden="true" />}
+        </div>
+        {isOpen && children}
+      </section>
+    )
+  }
+
+  const showStaticHeader = hasRenderable(leading) || hasRenderable(title) || hasRenderable(count) || hasRenderable(titleExtra) || rule
   return (
-    <section className={joinClass('screen-section', className)}>
-      {(title !== undefined || titleExtra !== undefined) && (
-        <div className="screen-section-title">
-          {title}
-          {titleExtra !== undefined && <span className="screen-subtitle">{titleExtra}</span>}
+    <section
+      className={joinClass('screen-section', className)}
+      aria-labelledby={showStaticHeader && headingId !== undefined ? headingId : undefined}
+      {...rest}
+    >
+      {showStaticHeader && (
+        <div className="screen-section-title" id={headingId}>
+          {leading}
+          {hasRenderable(title) && (
+            <span className={joinClass('screen-section-title-text', titleClassName)}>{title}</span>
+          )}
+          {hasRenderable(count) && <span className="screen-section-count tabular-nums">{count}</span>}
+          {hasRenderable(titleExtra) && <span className="screen-subtitle">{titleExtra}</span>}
+          {rule && <span className="screen-section-rule" aria-hidden="true" />}
         </div>
       )}
       {children}

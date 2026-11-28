@@ -3,13 +3,14 @@
  * - 通用设计系统令牌与原语样式（tokens / base / Button / SearchBox / Screen / Tabs /
  *   StatusLight 等）统一归属独立包 `@helmx/ui`（`packages/ui/src/`）；
  * - 宿主样式分片（`packages/web/src/styles/`）只保留宿主业务与宿主耦合控件（如
- *   `ModelPickerControl` / `ToolCallDetails` / `.batch-bar`），绝不点名内置插件私有类；
+ *   `ModelPickerControl` / `ToolCallDetails`），绝不点名内置插件私有类；
  * - `@helmx/plugin-client` 渲染的全部字面 className 词元必须被 `@helmx/ui` ∪ 宿主 CSS
  *   覆盖；`{ui, web, plugin-client, plugins}` 全量 `var(--token)` 必须闭合；
- * - Round 2 已退场的 7 组旧样式族严禁回流 `web/src/styles/` 或 `ui/src/`。
+ * - Round 2 已退场的 7 组旧样式族与 Round 4 退场的 `primitives.css` /
+ *   `.primary-drawer-icon-wrap` 严禁回流 `web/src/styles/` 或 `ui/src/`。
  */
 import assert from 'node:assert/strict'
-import { readFileSync, readdirSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { test } from 'node:test'
@@ -20,7 +21,6 @@ const STYLES_DIR = join(__dirname, '../src/styles')
 const UI_SRC_DIR = join(__dirname, '../../ui/src')
 const UI_PRIMITIVES_DIR = join(UI_SRC_DIR, 'primitives')
 const SDK_SRC_DIR = join(__dirname, '../../plugin-client/src')
-const primitives = readFileSync(join(STYLES_DIR, 'primitives.css'), 'utf8')
 
 /** Selector-ownership probe: a shard owns a rule when the selector is declared at line start. */
 const ownsRule = (css: string, selector: string): boolean =>
@@ -381,7 +381,8 @@ test('样式边界：主舞台 .screen-host-body / SearchBox / EmptyState 与 Ta
   const modelCenter = stripCssComments(readFileSync(join(STYLES_DIR, 'model-center.css'), 'utf8'))
   const strippedScreen = stripCssComments(screenCss)
   const strippedSearchBox = stripCssComments(searchBoxCss)
-  const strippedPrimitives = stripCssComments(primitives)
+
+  assert.equal(existsSync(join(STYLES_DIR, 'primitives.css')), false, '已收口的 web/src/styles/primitives.css 必须保持删除状态')
 
   assert.ok(ownsRule(screenCss, '.screen-host-body'), '@helmx/ui Screen.css 应定义公共原语规则 .screen-host-body')
   for (const selector of ['.search-box-toolbar', '.search-box-clear']) {
@@ -405,8 +406,6 @@ test('样式边界：主舞台 .screen-host-body / SearchBox / EmptyState 与 Ta
   }
   assert.ok(!strippedScreen.includes('.screen-host-stage'), 'Screen.css 不得再包含 .screen-host-stage')
   assert.ok(!strippedScreen.includes(':has('), 'Screen.css 不得再包含 :has() 舞台补丁')
-  assert.ok(!strippedPrimitives.includes('.screen-host-stage'), 'primitives.css 不得再包含 .screen-host-stage')
-  assert.ok(!strippedPrimitives.includes(':has('), 'primitives.css 不得再包含 :has() 舞台补丁')
 
   for (const selector of ['.helmx-tabs-pills', '.tabs-pills', '.tabs-pill']) {
     assert.ok(ownsRule(tabsCss, selector), `@helmx/ui Tabs.css 应定义 Tabs pills 规则 ${selector}`)
@@ -447,19 +446,27 @@ test('样式边界：主舞台 .screen-host-body / SearchBox / EmptyState 与 Ta
   )
 })
 
-test('样式边界：统一批量操作栏 .batch-bar 族归属 web primitives.css，.btn-danger-sm 归属 @helmx/ui Button.css（sidebar/overview 仅留布局微调）', { timeout: 60_000 }, () => {
+test('样式边界：统一批量操作栏 .batch-bar 族与 .popover-* 族归属 @helmx/ui，.btn-danger-sm 归属 @helmx/ui Button.css（sidebar/overview 仅留布局微调）', { timeout: 60_000 }, () => {
   const buttonCss = readFileSync(join(UI_PRIMITIVES_DIR, 'Button.css'), 'utf8')
+  const batchBarCss = readFileSync(join(UI_PRIMITIVES_DIR, 'BatchBar.css'), 'utf8')
+  const overlaysCss = readFileSync(join(UI_PRIMITIVES_DIR, 'Overlays.css'), 'utf8')
+  const masterDetailCss = readFileSync(join(UI_PRIMITIVES_DIR, 'MasterDetail.css'), 'utf8')
   const shards = readdirSync(STYLES_DIR)
-    .filter((name) => name.endsWith('.css') && name !== 'primitives.css')
+    .filter((name) => name.endsWith('.css'))
     .map((name) => ({ name, css: readFileSync(join(STYLES_DIR, name), 'utf8') }))
   for (const selector of ['.batch-bar', '.batch-bar-header', '.batch-bar-count', '.batch-bar-actions']) {
-    assert.ok(ownsRule(primitives, selector), `primitives.css 应定义公共批量栏规则 ${selector}`)
+    assert.ok(ownsRule(batchBarCss, selector), `@helmx/ui BatchBar.css 应定义公共批量栏规则 ${selector}`)
     for (const { name, css } of shards) {
       assert.ok(!ownsRule(css, selector), `分片 ${name} 不得重新定义公共批量栏壳 ${selector}`)
     }
   }
+  for (const selector of ['.popover-header', '.popover-item', '.popover-item-meta']) {
+    assert.ok(ownsRule(overlaysCss, selector), `@helmx/ui Overlays.css 应定义公共浮层原语规则 ${selector}`)
+  }
+  assert.ok(overlaysCss.includes('.popover-item-active'), '@helmx/ui Overlays.css 应定义 .popover-item-active')
+  assert.ok(ownsRule(masterDetailCss, '.helmx-master-detail'), '@helmx/ui MasterDetail.css 应定义 .helmx-master-detail')
   assert.ok(ownsRule(buttonCss, '.btn-danger-sm'), '@helmx/ui Button.css 应定义 .btn-danger-sm')
-  for (const { name, css } of [{ name: 'primitives.css', css: primitives }, ...shards]) {
+  for (const { name, css } of shards) {
     assert.ok(!ownsRule(css, '.btn-danger-sm'), `宿主分片 ${name} 不得重复定义 .btn-danger-sm`)
   }
   const overview = readFileSync(join(STYLES_DIR, 'overview.css'), 'utf8')
@@ -657,6 +664,7 @@ test('样式边界：Round 2 已退场的 7 组旧容器/表单/浮层样式族�
     'form-grid-value',
     'kv-list',
     'dropdown-panel',
+    'primary-drawer-icon-wrap',
   ] as const
 
   for (const { name, css } of allCss) {

@@ -44,6 +44,7 @@ import {
   IconButton,
   LoadingState,
   Screen,
+  ScreenSection,
   ScreenToolbar,
   SearchBox,
   SegmentedControl,
@@ -939,72 +940,55 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
           {cardGroups.map((group) => {
             const collapsed = activeCollapsedKeys.has(group.key)
             const headingId = `${sectionIdPrefix}-${group.key}`
+            const leading =
+              group.kind === 'bucket' && group.bucket !== undefined ? (
+                <span
+                  className={`overview-section-dot overview-section-dot-${group.bucket}`}
+                  aria-hidden="true"
+                />
+              ) : group.kind === 'profile' ? (
+                <HelmxIcon name="bot" size={12} className="overview-section-icon" />
+              ) : group.kind === 'node' ? (
+                <HelmxIcon
+                  name={group.nodeId === 'local' ? 'laptop' : 'server'}
+                  size={12}
+                  className="overview-section-icon"
+                />
+              ) : undefined
             return (
-              <section
+              <ScreenSection
                 key={group.key}
                 className={`overview-section overview-section-${group.kind}${group.bucket ? ` overview-section-${group.bucket}` : ''}`}
                 data-group-key={group.key}
-                aria-labelledby={headingId}
+                headingId={headingId}
+                collapsible
+                open={!collapsed}
+                onOpenChange={() => toggleGroupCollapsed(group.key)}
+                rule
+                leading={leading}
+                title={group.label}
+                titleClassName={group.kind === 'node' && group.nodeId !== 'local' ? 'mono' : undefined}
+                count={group.cards.length}
               >
-                <div className="overview-section-head">
-                  <button
-                    type="button"
-                    id={headingId}
-                    className="overview-section-toggle"
-                    aria-expanded={!collapsed}
-                    onClick={() => toggleGroupCollapsed(group.key)}
-                  >
-                    <HelmxIcon
-                      name={collapsed ? 'chevron-right' : 'chevron-down'}
-                      size={13}
-                      className="overview-section-chevron"
+                <div className="overview-grid">
+                  {group.cards.map((card) => (
+                    <OverviewCardView
+                      key={card.root.id}
+                      card={card}
+                      onOpenConversation={openConversation}
+                      onDrawerPeek={drawerPeek}
+                      onOpenSplit={openSplit}
+                      viewedConversationIds={viewedConversationIds}
+                      batchMode={batch.batchMode}
+                      selectable={isConversationBulkSelectable(card.root)}
+                      selected={batch.selectedIds.has(card.root.id)}
+                      expanded={expandedCardIds.has(card.root.id)}
+                      onToggleSelect={batch.toggleSelect}
+                      onToggleExpanded={toggleCardExpanded}
                     />
-                    {group.kind === 'bucket' && group.bucket !== undefined && (
-                      <span
-                        className={`overview-section-dot overview-section-dot-${group.bucket}`}
-                        aria-hidden="true"
-                      />
-                    )}
-                    {group.kind === 'profile' && (
-                      <HelmxIcon name="bot" size={12} className="overview-section-icon" />
-                    )}
-                    {group.kind === 'node' && (
-                      <HelmxIcon
-                        name={group.nodeId === 'local' ? 'laptop' : 'server'}
-                        size={12}
-                        className="overview-section-icon"
-                      />
-                    )}
-                    <span
-                      className={`overview-section-title${group.kind === 'node' && group.nodeId !== 'local' ? ' mono' : ''}`}
-                    >
-                      {group.label}
-                    </span>
-                    <span className="overview-section-count tabular-nums">{group.cards.length}</span>
-                  </button>
-                  <span className="overview-section-rule" aria-hidden="true" />
+                  ))}
                 </div>
-                {!collapsed && (
-                  <div className="overview-grid">
-                    {group.cards.map((card) => (
-                      <OverviewCardView
-                        key={card.root.id}
-                        card={card}
-                        onOpenConversation={openConversation}
-                        onDrawerPeek={drawerPeek}
-                        onOpenSplit={openSplit}
-                        viewedConversationIds={viewedConversationIds}
-                        batchMode={batch.batchMode}
-                        selectable={isConversationBulkSelectable(card.root)}
-                        selected={batch.selectedIds.has(card.root.id)}
-                        expanded={expandedCardIds.has(card.root.id)}
-                        onToggleSelect={batch.toggleSelect}
-                        onToggleExpanded={toggleCardExpanded}
-                      />
-                    ))}
-                  </div>
-                )}
-              </section>
+              </ScreenSection>
             )
           })}
         </div>

@@ -15,7 +15,6 @@
 @import './styles/timeline.css' layer(host-components);
 @import './styles/tool-trace.css' layer(host-components);
 @import './styles/forms.css' layer(host-components);
-@import './styles/primitives.css' layer(host-components);
 @import './styles/composer.css' layer(host-components);
 @import './styles/modals.css' layer(host-components);
 @import './styles/centers.css' layer(host-components);

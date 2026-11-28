@@ -640,7 +640,7 @@ test('helmx-ui HIG single-source sync: repo skill (.helmx/skills/helmx-ui) match
   )
 
   const patternTsxBlocks = extractTsxBlocks(patternsRaw)
-  assert.equal(patternTsxBlocks.length, 5, '.helmx/skills/helmx-ui/references/patterns.md must provide all 5 canonical tsx recipes')
+  assert.equal(patternTsxBlocks.length, 6, '.helmx/skills/helmx-ui/references/patterns.md must provide all 6 canonical tsx recipes')
   for (const [index, block] of patternTsxBlocks.entries()) {
     assert.ok(
       !block.includes('variant="default"') &&

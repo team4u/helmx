@@ -95,7 +95,6 @@ export function CoreCapabilityDetailDrawer({
       onClose={onClose}
       overlayClassName="plugin-drawer-backdrop"
       className="plugin-drawer-content"
-      icon={owner?.icon ?? 'shield'}
       title={owner?.name ?? t('plugins.core.drawerTitleFallback')}
       titleExtra={
         owner ? (

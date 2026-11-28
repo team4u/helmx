@@ -110,8 +110,22 @@ export {
   PopoverPortal,
   PopoverClose,
   PopoverContent,
+  PopoverHeader,
+  PopoverItem,
 } from './primitives/Popover.js'
-export type { PopoverPortalProps, PopoverContentProps, PopoverArrowProps } from './primitives/Popover.js'
+export type {
+  PopoverPortalProps,
+  PopoverContentProps,
+  PopoverArrowProps,
+  PopoverHeaderProps,
+  PopoverItemProps,
+} from './primitives/Popover.js'
+export { useListKeyboardNav } from './primitives/use-list-keyboard-nav.js'
+export type {
+  UseListKeyboardNavKeyEvent,
+  UseListKeyboardNavOptions,
+  UseListKeyboardNavResult,
+} from './primitives/use-list-keyboard-nav.js'
 export {
   Tooltip,
   TooltipProvider,
@@ -219,6 +233,10 @@ export type {
   DataTableProps,
   KvGridProps,
 } from './primitives.js'
+export { MasterDetail } from './primitives/MasterDetail.js'
+export type { MasterDetailMobilePane, MasterDetailProps } from './primitives/MasterDetail.js'
+export { BatchBar } from './primitives/BatchBar.js'
+export type { BatchBarProps } from './primitives/BatchBar.js'
 export { Callout } from './callout.js'
 export type { CalloutProps } from './callout.js'
 export { DetailDrawer } from './primitives/DetailDrawer.js'

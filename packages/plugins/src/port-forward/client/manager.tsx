@@ -2,7 +2,7 @@
  * Full-screen management UI for `builtin:port-forward` (`PortForwardManagerScreen`).
  * Fast Refresh compliant: exports only React components and TypeScript types.
  */
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
 import './styles.css'
 import type { ScreenProps } from '@helmx/protocol/browser'
 import {
@@ -25,6 +25,7 @@ import {
   List,
   ListRow,
   LoadingState,
+  MonoId,
   Screen,
   ScreenToolbar,
   SearchBox,
@@ -350,6 +351,23 @@ export function PortForwardManagerScreen(
 
   const nodeOptions = buildNodeSelectOptions(nodes, draft.nodeId, locale)
   const nonLoopbackDraft = !isLoopbackHostInput(draft.listenHost)
+  const baselineDraft = editingRule !== undefined ? ruleToDraft(editingRule) : undefined
+  const draftDirty =
+    baselineDraft !== undefined &&
+    (draft.name !== baselineDraft.name ||
+      draft.nodeId !== baselineDraft.nodeId ||
+      draft.listenHost !== baselineDraft.listenHost ||
+      draft.listenPort !== baselineDraft.listenPort ||
+      draft.targetHost !== baselineDraft.targetHost ||
+      draft.targetPort !== baselineDraft.targetPort ||
+      draft.enabled !== baselineDraft.enabled)
+  const canSave = !actions.pending && (creating || (editingRule !== undefined && draftDirty))
+  const handleFormKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
+    if ((event.metaKey || event.ctrlKey) && event.key === 'Enter' && canSave) {
+      event.preventDefault()
+      void handleSubmitDraft()
+    }
+  }
   const statusTabs: Array<{ value: StatusFilter; label: string; count: number }> = [
     { value: 'all', label: t(PF_FILTER_ALL), count: counts.all },
     { value: 'active', label: t(PF_FILTER_ACTIVE), count: counts.active },
@@ -580,12 +598,11 @@ export function PortForwardManagerScreen(
         open={drawerOpen}
         onClose={closeDrawer}
         inline={props.inlineDrawer}
-        icon={<HelmxIcon name="network" size={16} />}
         title={
           creating
             ? t(PF_DRAWER_CREATE_TITLE)
             : editingRule !== undefined
-              ? t(PF_DRAWER_EDIT_TITLE)
+              ? editingRule.name || t(PF_DRAWER_EDIT_TITLE)
               : t(PF_DRAWER_NOT_FOUND_TITLE)
         }
         titleExtra={
@@ -595,7 +612,7 @@ export function PortForwardManagerScreen(
             </Badge>
           ) : undefined
         }
-        meta={editingRule?.id}
+        meta={!creating && editingRule !== undefined ? <MonoId value={editingRule.id} /> : undefined}
         footer={
           creating || editingRule !== undefined ? (
             <>
@@ -622,7 +639,7 @@ export function PortForwardManagerScreen(
                 size="sm"
                 icon="check"
                 pending={actions.pendingKey === 'save-drawer'}
-                disabled={actions.pending}
+                disabled={!canSave}
                 onClick={() => void handleSubmitDraft()}
               >
                 {creating ? t(PF_CREATE) : t(PF_SAVE)}
@@ -638,7 +655,8 @@ export function PortForwardManagerScreen(
         {!creating && editingRule === undefined ? (
           <Callout tone="warn">{t(PF_DRAWER_NOT_FOUND_BODY)}</Callout>
         ) : (
-          <Stack gap="md">
+          <div onKeyDown={handleFormKeyDown}>
+            <Stack gap="md">
             {(formError !== null || actions.error !== undefined) && (
               <Callout tone="err">
                 <span>{formError ?? actions.error}</span>
@@ -753,7 +771,8 @@ export function PortForwardManagerScreen(
                 onChange={(checked) => setDraft((prev) => ({ ...prev, enabled: checked }))}
               />
             </Field>
-          </Stack>
+            </Stack>
+          </div>
         )}
       </DetailDrawer>
 

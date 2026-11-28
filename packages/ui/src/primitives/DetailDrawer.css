@@ -56,19 +56,6 @@
   min-width: 0;
 }
 
-.primary-drawer-icon-wrap {
-  width: 36px;
-  height: 36px;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--border);
-  background: var(--bg-subtle);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  color: var(--fg);
-}
-
 .primary-drawer-title-col {
   display: flex;
   flex-direction: column;

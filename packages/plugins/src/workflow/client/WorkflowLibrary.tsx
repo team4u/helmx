@@ -204,7 +204,6 @@ function WorkflowLibraryDrawer(props: {
             {item.metadataError ? <Badge tone="warn">{t(COPY.libMetadataBadge)}</Badge> : null}
           </>
         }
-        icon={<HelmxIcon name="workflow" size={18} />}
         meta={item.path ?? item.name}
         closeLabel={t(COPY.close)}
         footer={

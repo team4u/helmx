@@ -14,6 +14,7 @@ import {
   Popover,
   PopoverClose,
   PopoverContent,
+  PopoverHeader,
   PopoverTrigger,
 } from '@helmx/ui'
 import {
@@ -244,35 +245,39 @@ export function MagpieComposerQuotaStatus(props: ComposerStatusSlotProps): React
         collisionPadding={12}
         className="magpie-quota-popover"
       >
-        <div className="magpie-quota-popover-header">
-          <div className="magpie-quota-popover-title-wrap">
-            <span className="magpie-quota-popover-title">{activeModel.displayModelName}</span>
-            {activeModel.isRoutingGroup && summary.providers.length > 0 ? (
+        <PopoverHeader
+          divider
+          className="magpie-quota-popover-header"
+          title={<span className="magpie-quota-popover-title">{activeModel.displayModelName}</span>}
+          subtitle={
+            activeModel.isRoutingGroup && summary.providers.length > 0 ? (
               <span className="magpie-quota-popover-subtitle">
                 {t(MAGPIE_COMPOSER_ROUTING_GROUP_PREFIX)} {summary.providers.join(', ')}
               </span>
-            ) : null}
-          </div>
-          <div className="magpie-quota-popover-actions">
-            {ageLabel ? <span className="magpie-quota-popover-age">{ageLabel}</span> : null}
-            <IconButton
-              variant="ghost"
-              size="xs"
-              icon="refresh-cw"
-              pending={refreshAction.pending}
-              onClick={handleManualRefresh}
-              label={t(MAGPIE_COMPOSER_REFRESH_NOW)}
-            />
-            <PopoverClose asChild>
+            ) : undefined
+          }
+          trailing={
+            <div className="magpie-quota-popover-actions">
+              {ageLabel ? <span className="magpie-quota-popover-age">{ageLabel}</span> : null}
               <IconButton
                 variant="ghost"
                 size="xs"
-                icon="x"
-                label={t(MAGPIE_COMPOSER_CLOSE)}
+                icon="refresh-cw"
+                pending={refreshAction.pending}
+                onClick={handleManualRefresh}
+                label={t(MAGPIE_COMPOSER_REFRESH_NOW)}
               />
-            </PopoverClose>
-          </div>
-        </div>
+              <PopoverClose asChild>
+                <IconButton
+                  variant="ghost"
+                  size="xs"
+                  icon="x"
+                  label={t(MAGPIE_COMPOSER_CLOSE)}
+                />
+              </PopoverClose>
+            </div>
+          }
+        />
         {activeError !== undefined ? (
           <div className="magpie-quota-popover-error" role="alert">
             {activeError}

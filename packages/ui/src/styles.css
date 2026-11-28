@@ -21,6 +21,8 @@
 @import './primitives/MonoId.css' layer(ui-primitives);
 @import './primitives/DataTable.css' layer(ui-primitives);
 @import './primitives/Screen.css' layer(ui-primitives);
+@import './primitives/MasterDetail.css' layer(ui-primitives);
+@import './primitives/BatchBar.css' layer(ui-primitives);
 @import './primitives/Overlays.css' layer(ui-primitives);
 @import './primitives/ModalDialog.css' layer(ui-primitives);
 @import './primitives/DetailDrawer.css' layer(ui-primitives);

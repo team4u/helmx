@@ -79,7 +79,7 @@ Choose the selector strictly by physical placement and cardinality. \`TabsVarian
 
 ### Overlays, Modals, Shortcuts, Composer Pills, and Empty / Loading States
 
-- **Unified Overlay Surface & \`<DropdownMenuItem>\`**: \`Popover\`, \`DropdownMenu\`, \`Select\`, and \`ModelPicker\` share ONE canonical overlay surface (\`var(--pop-bg)\` backdrop-blur, \`1px solid var(--border)\`, \`var(--radius-md)\` \`10px\`, \`var(--shadow-lg)\`). Never hand-roll popover or menu item CSS; use \`<DropdownMenuItem icon description shortcut trailing checked danger>\` for structured rows (\`icon\` accepts a \`HelmxIcon\` name string or \`ReactNode\`; \`checked\` renders the check indicator and \`data-checked\`).
+- **Unified Overlay Surface, \`<PopoverHeader>\`, \`<PopoverItem>\`, & \`<DropdownMenuItem>\`**: \`Popover\`, \`DropdownMenu\`, \`Select\`, and \`ModelPicker\` share ONE canonical overlay surface (\`var(--pop-bg)\` backdrop-blur, \`1px solid var(--border)\`, \`var(--radius-md)\` \`10px\`, \`var(--shadow-lg)\`). Never hand-roll popover or menu item CSS; use \`<DropdownMenuItem icon description shortcut trailing checked danger>\` for dropdown menus, \`<PopoverHeader title subtitle trailing divider>\` + \`<PopoverItem active selected danger icon meta trailing>\` inside custom popovers, and \`useListKeyboardNav\` for keyboard arrow/Home/End/Enter navigation with IME composition guards, boundary clamping, and \`scrollIntoView\`.
 - **\`<ModalDialog>\` & \`<Kbd>\`**:
   - Use \`<ModalDialog size="sm|md|lg|fullscreen">\` (\`open\`, \`onClose\`, \`title\`, \`icon?\`, \`titleExtra?\`, \`description?\`, \`flushBody?\`, \`headerActions?\`, \`footer?\`, \`closeDisabled?\`, \`closeLabel?\`, \`inline?\`, \`onOpenAutoFocus?\`, \`onEscapeKeyDown?\`) for all centered modals instead of raw \`.modal-backdrop\`, \`.modal-header\`, or \`.modal-footer\`.
   - Use \`<Kbd size="sm|md" desktopOnly?>\` (\`20px\` \`md\` / \`18px\` \`sm\`, monospace shortcut badge) for keyboard shortcuts instead of raw \`<kbd className="kbd-hint">\` or \`<span className="kbd-hint">\`.
@@ -94,9 +94,9 @@ Choose the stage/list layout that best serves the domain's information model. **
 | :--- | :--- | :--- | :--- |
 | **1. Hairline Roster List** | \`<List density="default\\|compact">\` + \`<ListRow>\` | Rules, configs, port mappings, scheduled triggers, workflow libraries, run histories, templates, narrow-panel item lists | \`1px\` bordered container + hairline dividers; sibling-slot a11y (\`<button aria-pressed>\` main trigger + always-visible \`trailing\` + hover/focus-revealed \`actions\` inside \`@media (hover: hover)\`, always visible on touch); collapses to single column at \`@container (max-width: 680px)\` and \`@media (max-width: 680px)\`. |
 | **2. Object Card Grid** | \`<CardGrid minWidth="sm\\|md\\|lg">\` + \`<SelectCard>\` | Browsable asset and marketplace catalogs (Profiles, Model Providers, Plugins/Core Capabilities, Skills, Nodes) | Built-in \`32x32\` rounded \`icon\` box (string resolves via \`HelmxIcon\`), inline header \`badges\`, 2-line clamped \`description\`, sibling \`actions\`, body \`children\`, and \`footer\`. **Anatomy discipline**: put domain capability/status tags inside card body (\`children\`) using sharp \`5px\` (\`--radius-xs\`) \`<Badge>\` (never mix rounded \`pill\` chips with sharp \`<Badge>\`); keep \`footer\` strictly single-line with \`size="xs"\` actions so cards in the same row align horizontally. Zero per-page card CSS clones. |
-| **3. Grouped Triage Stage** | \`<Screen toolbar>\` + collapsible domain sections + SDK controls | Multi-dimension operational boards (exemplar: \`ConversationOverview\`) with status/dimension groups, bulk governance, and aggregate cards with sub-chips | Uses the unified \`<Screen toolbar>\` shell, \`sm (28px)\` filter controls, \`sp.*\` URL params, and SDK buttons/menus/badges. |
+| **3. Grouped Triage Stage** | \`<Screen toolbar>\` + collapsible \`<ScreenSection collapsible rule leading count>\` + \`<BatchBar>\` + SDK controls | Multi-dimension operational boards (exemplar: \`ConversationOverview\`) with status/dimension groups, bulk governance, and aggregate cards with sub-chips | Uses the unified \`<Screen toolbar>\` shell, collapsible \`<ScreenSection>\` headers, \`<BatchBar>\` for multi-item batch actions, \`sm (28px)\` filter controls, \`sp.*\` URL params, and SDK buttons/menus/badges. |
 | **4. Structured Data Table** | \`<DataTable loading empty columns label>\` | **Only** multi-column horizontal numeric comparison and aligned scanning (quota matrices, ledgers, billing reports) | \`--bg-subtle\` header, \`tabular-nums\` numbers, automatic \`<LoadingState>\` and \`<EmptyState compact>\` rows. **Hard rule**: narrow panels/drawers (\`< 560px\`) MUST NEVER exceed 3 columns—use \`<List>\` instead. |
-| **5. Master-Detail / Full-Bleed Canvas** | \`<Screen layout="full-bleed">\` | Side-by-side Diff inspectors (\`builtin:changes\`), DAG/topology canvases, zoomable diagrams (\`builtin:mermaid\`), custom multi-pane workbenches | Edge-to-edge stage below the unified 46px topbar and optional sticky \`toolbar\`. |
+| **5. Master-Detail / Full-Bleed Canvas** | \`<Screen layout="full-bleed">\` + \`<MasterDetail master detail mobilePane masterWidth>\` | Side-by-side Diff inspectors (\`builtin:changes\`), DAG/topology canvases, zoomable diagrams (\`builtin:mermaid\`), custom multi-pane workbenches | Edge-to-edge stage below the unified 46px topbar and optional sticky \`toolbar\`; \`<MasterDetail>\` automatically collapses to single-pane \`mobilePane\` switching (\`master\` / \`detail\`) at \`@container (max-width: 680px)\`. |
 
 **New domain-specific patterns are explicitly welcome**: when none of the 5 archetypes fits (e.g., Kanban lanes, calendar matrix, waterfall trace), design a domain-native stage while composing exclusively from the unified \`<Screen>\` topbar/toolbar/drawer shell, \`32/28/22px\` SDK controls, semantic tokens, and standard interaction grammar.
 
@@ -123,7 +123,10 @@ Core System Centers, Conversation Overview, and Plugin Screens share ONE \`<Scre
 
 ### 4 Container Density Boundaries
 
-1. **Full-Screen Stage (\`Screen\`)**: Topbar and toolbar locked to \`sm (28px)\`. Selecting or creating an item opens a right-side \`<DetailDrawer>\` (\`520–560px\` desktop, \`100vw\` at \`<= 680px\`) paired with \`useScreenDrawer\` for URL-hash and browser/mobile Back sync. Drawer forms use \`md (32px)\` fields, \`Cmd/Ctrl + Enter\` submit, dirty-state gating on edit, and a sticky footer: left \`danger\` delete (edit mode) + \`<div className="flex-1" />\` + \`ghost\` cancel + rightmost \`primary\` save.
+1. **Full-Screen Stage (\`Screen\`)**: Topbar and toolbar locked to \`sm (28px)\`. Selecting or creating an item opens a right-side \`<DetailDrawer>\` (\`520–560px\` desktop, \`100vw\` at \`<= 680px\`) paired with \`useScreenDrawer\` for URL-hash and browser/mobile Back sync:
+   - **Minimal icon-free header**: \`DetailDrawer\` renders \`title\` + optional \`titleExtra\` status \`<Badge>\` + optional \`<MonoId>\` \`meta\` + optional \`belowTitle\` + right close button — never render a left \`36x36\` square icon box (\`DetailDrawer\` intentionally has no \`icon\` prop).
+   - **Create vs Edit parity**: Create drawers show only \`"New <Entity>"\` (no \`meta\` ID, no status badge); edit drawers show the entity name as \`title\`, status \`<Badge>\` in \`titleExtra\`, and \`<MonoId>\` in \`meta\`.
+   - **Form grouping & footer**: Single-group forms (\`<= 6\` fields) stack \`<Field>\` in \`<Stack gap="md">\`; multi-section forms group sections in \`<Card variant="subtle">\`; all fields use \`md (32px)\` parity, \`Cmd/Ctrl + Enter\` submit, dirty-state gating on edit, and a \`size="sm"\` sticky footer (\`danger\` delete on edit + \`<div className="flex-1" />\` + \`ghost\` cancel + rightmost \`primary\` create/save).
 2. **Narrow Side Panels (\`workbenchPanel\`, \`settingsPanel\`, drawer \`slot\`, \`360–520px\`)**: Use \`sm (28px)\` and \`xs (22px)\` controls only. Never render multi-column \`<CardGrid>\` or \`> 3\`-column \`<DataTable>\`; compose with \`<KvGrid>\`, \`<List density="compact">\`, and single-column \`<Card variant="subtle">\`. Use \`Tabs(variant="underline")\` + \`<TabsList scrollable>\` for divider tab bars. Never repeat a redundant top-level screen title.
 3. **Timeline Inline Blocks (\`toolView\`, \`timelineRenderer\`, \`json-render\`)**: Follow Quiet Surface \`26px\` single-line traces with left chevron at \`x=8px\` (\`6px\` in \`<= 450px\` panes). Keep inline cards compact; on \`replaceRow\` cards, let the host IO panel handle input/output disclosure instead of rendering duplicate \`ToolCallDetails\`.
 4. **Centered Modals (\`<ModalDialog>\` / \`<ConfirmDialog>\`)**: Use \`<ModalDialog size="sm|md|lg|fullscreen">\` (\`sm\`/\`md\` cover standard \`440–560px\` modals; \`lg\`/\`fullscreen\` are reserved for rich previews or diff/diagram inspection). Strictly limited to destructive confirmation, short forms (\`<= 4\` fields, e.g., Save Template or Install Plugin), single-credential entry, keyboard cheat sheets, and media preview. Never cram catalogs, multi-dimensional search, or management lists into a modal.
@@ -141,12 +144,12 @@ Core System Centers, Conversation Overview, and Plugin Screens share ONE \`<Scre
 - [ ] **Zero Emoji** across all UI copy, titles, icons, badges, and empty states.
 - [ ] **Zero \`variant="default"\`** on \`Button\`, \`IconButton\`, or \`Tabs\`; at most **1 \`primary\`** per focus zone, placed rightmost.
 - [ ] **Physical-location Tabs**: \`underline\` + \`<TabsList scrollable>\` ONLY for container/drawer divider bars; \`segmented\` for 2–5 modes; \`pills\` + \`<TabCount>\` for multi-filter bars.
-- [ ] **Zero native \`<select>\`**, **zero \`<input type="search">\`**, and **zero hand-rolled search/popover/modal/kbd markup**: use \`<Select>\`/\`<MultiSelect>\`, \`<SearchBox surface="default|subtle|frameless">\`, \`<DropdownMenuItem icon description shortcut trailing checked danger>\`, \`<ModalDialog size="sm|md|lg|fullscreen">\`, and \`<Kbd>\`.
-- [ ] **Zero retired legacy classes on intrinsic tags**: no raw \`.btn*\`, \`.input*\`, \`.section-flat\`, \`.form-grid\`, \`.kv-list\`, \`.card\`, \`.tabs-bar\`, \`.tab-btn\`, \`.modal-header\`, \`.modal-footer\`, \`.dropdown-panel\`, or \`.kbd-hint\`.
+- [ ] **Zero native \`<select>\`**, **zero \`<input type="search">\`**, and **zero hand-rolled search/popover/modal/kbd/master-detail/batch-bar markup**: use \`<Select>\`/\`<MultiSelect>\`, \`<SearchBox surface="default|subtle|frameless">\`, \`<PopoverHeader>\`/\`<PopoverItem>\`/\`useListKeyboardNav\`, \`<DropdownMenuItem icon description shortcut trailing checked danger>\`, \`<ModalDialog size="sm|md|lg|fullscreen">\`, \`<MasterDetail>\`, \`<ScreenSection collapsible>\`, \`<BatchBar>\`, and \`<Kbd>\`.
+- [ ] **Zero retired legacy classes on intrinsic tags**: no raw \`.btn*\`, \`.input*\`, \`.section-flat\`, \`.form-grid\`, \`.kv-list\`, \`.card\`, \`.tabs-bar\`, \`.tab-btn\`, \`.modal-header\`, \`.modal-footer\`, \`.dropdown-panel\`, \`.kbd-hint\`, or \`.primary-drawer-icon-wrap\`.
 - [ ] **Exact height parity**: \`md (32px)\` in drawer/modal forms, \`sm (28px)\` in topbars/toolbars/narrow panels, \`xs (22px)\` for row micro-actions, \`SelectCard\` single-line footers, and \`.helmx-toolbar-pill\` composer pills.
 - [ ] **\`SelectCard\` anatomy & Empty/Loading discipline**: domain capability/status tags live inside card body (\`children\`) as sharp \`5px\` \`<Badge>\` (no pill mixing); card \`footer\` stays single-line at \`size="xs"\`; empty/loading states use \`<EmptyState compact|prominent>\` and \`<LoadingState>\`.
 - [ ] **Single-layer \`<Screen toolbar={<ScreenToolbar />}>\`**: left switch/filter, right \`SearchBox(variant="toolbar", size="sm")\`; view-level Create/Refresh in \`<Screen actions>\` with \`<span className="pane-action-label">\`.
-- [ ] **Right-side \`DetailDrawer\` + \`useScreenDrawer\`** for deep item inspection/editing; \`ConfirmDialog(danger)\` for irreversible deletes; \`< 560px\` panels have no \`CardGrid\` and \`<= 3\` \`DataTable\` columns.
+- [ ] **Right-side \`DetailDrawer\` + \`useScreenDrawer\` with minimal icon-free header & Create/Edit parity**: no \`36x36\` icon box; create shows \`"New <Entity>"\` with no \`meta\` ID/status badge, edit shows entity name + \`<Badge>\` in \`titleExtra\` + \`<MonoId>\` in \`meta\`; \`ConfirmDialog(danger)\` for irreversible deletes; \`< 560px\` panels have no \`CardGrid\` and \`<= 3\` \`DataTable\` columns.
 - [ ] **CSS & runtime hygiene**: all \`:hover\` inside \`@media (hover: hover)\`, light + dark semantic tokens only, Fast Refresh compliant (\`.tsx\` exports components and types only), SSR \`renderToString\` safe.
 - [ ] **Verification**: run \`helmx plugins doctor <dir> --json\` (external plugins) or \`pnpm verify\` / relevant unit & browser checks (in-repo).
 
@@ -546,7 +549,7 @@ export function CatalogScreen({ entries, selectedId, onSelect, onOpenView, onIns
 
 ## 3. Right-Side \`DetailDrawer\` Form
 
-Pair with \`useScreenDrawer\` for URL-hash and Back-stack integration. Form fields use \`md (32px)\` height parity, \`Input\` native \`prefix\`/\`suffix\`, \`ModelPickerControl variant="field"\`, \`Cmd/Ctrl + Enter\` submission, dirty-state gating, and the canonical left-danger / right-cancel / rightmost-primary footer.
+Pair with \`useScreenDrawer\` for URL-hash and Back-stack integration. Headers are minimal and icon-free (no left icon box); create mode shows only \`"New <Entity>"\`, while edit mode shows the entity title, status \`<Badge>\`, and \`<MonoId>\` in \`meta\`. Form fields use \`md (32px)\` height parity, \`Input\` native \`prefix\`/\`suffix\`, \`ModelPickerControl variant="field"\`, \`Cmd/Ctrl + Enter\` submission, dirty-state gating, and the canonical left-danger / right-cancel / rightmost-primary footer.
 
 \`\`\`tsx
 import type { KeyboardEvent, ReactNode } from 'react'
@@ -557,6 +560,7 @@ import {
   DetailDrawer,
   Field,
   Input,
+  MonoId,
   SegmentedControl,
   Stack,
   Textarea,
@@ -612,6 +616,7 @@ export function TierFormDrawer({
       onClose={onClose}
       title={mode === 'create' ? 'New Tier' : \`tier/\${draft.id}\`}
       titleExtra={mode === 'edit' ? <Badge tone="ok">Active</Badge> : undefined}
+      meta={mode === 'edit' ? <MonoId value={draft.id} /> : undefined}
       footer={
         <>
           {mode === 'edit' && onRequestDelete !== undefined && (
@@ -961,6 +966,146 @@ export function SavePresetModal({
         )}
       </Stack>
     </ModalDialog>
+  )
+}
+\`\`\`
+
+## 6. Interactive Popover List, Collapsible Sections, \`BatchBar\`, and \`MasterDetail\`
+
+Compose \`<MasterDetail>\` inside \`<Screen layout="full-bleed">\` for responsive two-pane stages, collapsible \`<ScreenSection collapsible rule count>\` + \`<BatchBar>\` for grouped governance, and \`<PopoverHeader>\` + \`<PopoverItem>\` + \`useListKeyboardNav\` for keyboard-navigable picker popovers.
+
+\`\`\`tsx
+import { useState, type ReactNode } from 'react'
+import {
+  BatchBar,
+  Button,
+  EmptyState,
+  Kbd,
+  List,
+  ListRow,
+  MasterDetail,
+  Popover,
+  PopoverContent,
+  PopoverHeader,
+  PopoverItem,
+  PopoverTrigger,
+  Screen,
+  ScreenSection,
+  ScreenToolbar,
+  SearchBox,
+  useListKeyboardNav,
+} from '@helmx/ui'
+
+interface WorkspaceItem {
+  id: string
+  name: string
+  path: string
+}
+
+export function WorkspaceInspectorStage({ items }: { items: WorkspaceItem[] }): ReactNode {
+  const [selectedIds, setSelectedIds] = useState<string[]>([])
+  const [activeId, setActiveId] = useState<string | null>(items[0]?.id ?? null)
+  const [pickerOpen, setPickerOpen] = useState(false)
+  const [query, setQuery] = useState('')
+
+  const filtered = items.filter((item) => item.name.toLowerCase().includes(query.toLowerCase()))
+  const pickItem = (id: string): void => {
+    setActiveId(id)
+    setPickerOpen(false)
+  }
+  const nav = useListKeyboardNav({
+    count: filtered.length,
+    enabled: pickerOpen,
+    onSelect: (idx) => {
+      const picked = filtered[idx]
+      if (picked !== undefined) pickItem(picked.id)
+    },
+  })
+
+  const selectedItem = items.find((item) => item.id === activeId)
+
+  return (
+    <Screen
+      layout="full-bleed"
+      title="Workspace Files"
+      toolbar={
+        <ScreenToolbar
+          actions={
+            <Popover open={pickerOpen} onOpenChange={setPickerOpen}>
+              <PopoverTrigger asChild>
+                <Button size="sm">Quick jump</Button>
+              </PopoverTrigger>
+              <PopoverContent align="end">
+                <PopoverHeader divider title="Jump to file" trailing={<Kbd size="sm">Enter</Kbd>} />
+                <SearchBox
+                  size="sm"
+                  surface="subtle"
+                  value={query}
+                  onChange={setQuery}
+                  onKeyDown={nav.onKeyDown}
+                  placeholder="Filter files..."
+                  ariaLabel="Filter files"
+                />
+                {filtered.map((item, idx) => (
+                  <PopoverItem
+                    key={item.id}
+                    ref={nav.getItemRef(idx)}
+                    icon="file-text"
+                    meta={item.path}
+                    active={idx === nav.activeIndex}
+                    selected={item.id === activeId}
+                    onMouseEnter={() => nav.setActiveIndex(idx)}
+                    onClick={() => pickItem(item.id)}
+                  >
+                    {item.name}
+                  </PopoverItem>
+                ))}
+              </PopoverContent>
+            </Popover>
+          }
+        >
+          {selectedIds.length > 0 && (
+            <BatchBar
+              selectedCount={selectedIds.length}
+              selectedLabel={\`\${selectedIds.length} selected\`}
+              onExit={() => setSelectedIds([])}
+              actions={<Button size="sm" onClick={() => setSelectedIds([])}>Clear</Button>}
+            />
+          )}
+        </ScreenToolbar>
+      }
+    >
+      <MasterDetail
+        masterWidth={300}
+        masterLabel="File list"
+        detailLabel="File details"
+        mobilePane={selectedItem ? 'detail' : 'master'}
+        master={
+          <ScreenSection collapsible rule title="Changed files" count={filtered.length}>
+            <List density="compact">
+              {filtered.map((item) => (
+                <ListRow
+                  key={item.id}
+                  title={item.name}
+                  meta={item.path}
+                  selected={item.id === activeId}
+                  onSelect={() => setActiveId(item.id)}
+                />
+              ))}
+            </List>
+          </ScreenSection>
+        }
+        detail={
+          selectedItem ? (
+            <ScreenSection title={selectedItem.name}>
+              <div className="mono text-muted">{selectedItem.path}</div>
+            </ScreenSection>
+          ) : (
+            <EmptyState compact title="Select a file" />
+          )
+        }
+      />
+    </Screen>
   )
 }
 \`\`\`

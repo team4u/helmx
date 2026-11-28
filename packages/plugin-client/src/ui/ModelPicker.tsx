@@ -12,6 +12,7 @@ import {
   Popover,
   PopoverAnchor,
   PopoverContent,
+  PopoverHeader,
   PopoverPortal,
   PopoverTrigger,
   SearchBox,
@@ -947,9 +948,9 @@ export function ModelPickerControl({
             <div className="composer-model-scroll" onMouseLeave={() => setActiveIndex(-1)}>
               {filteredTiers.length > 0 ? (
                 <>
-                  <div className="popover-header">
+                  <PopoverHeader>
                     <span>{copy.tiersHeader}</span>
-                  </div>
+                  </PopoverHeader>
                   {filteredTiers.map((tier, idx) => (
                     <ModelPickerTierRow
                       key={`${MODEL_TIER_PREFIX}/${tier.id}`}
@@ -968,9 +969,9 @@ export function ModelPickerControl({
                   ))}
                 </>
               ) : null}
-              <div className="popover-header">
+              <PopoverHeader>
                 <span>{copy.listHeader}</span>
-              </div>
+              </PopoverHeader>
               {filteredModels.map((model, modelIdx) => {
                 const idx = filteredTiers.length + modelIdx
                 return (

@@ -491,12 +491,13 @@ describe('changes-client-interactions', { timeout: 60_000 }, () => {
       assert.ok(ui.container.querySelector('.chg-commits-section') === null)
       assert.ok(ui.container.querySelector('button[aria-label="Inspect commit"]') === null)
 
-      // Multi-file initial state without sp.file -> chg-mode-list, no chg-is-narrow-diff, no mobile back button
+      // Multi-file initial state without sp.file -> data-mobile-pane="master", no chg-is-narrow-diff, no mobile back button
       const screenEl = ui.container.querySelector('.chg-screen')
       const stageEl = ui.container.querySelector('.chg-split-stage')
       assert.ok(screenEl !== null && stageEl !== null)
+      assert.equal(stageEl.classList.contains('helmx-master-detail'), true)
       assert.equal(screenEl.classList.contains('chg-is-narrow-diff'), false)
-      assert.equal(stageEl.classList.contains('chg-mode-list'), true)
+      assert.equal(stageEl.getAttribute('data-mobile-pane'), 'master')
       assert.ok(ui.container.querySelector('.chg-mobile-back') === null)
 
       // DiffViewer renders single sticky line number column alongside dual gutters & default horizontal scroll
@@ -513,12 +514,12 @@ describe('changes-client-interactions', { timeout: 60_000 }, () => {
       assert.equal(wrapBtnActive.getAttribute('aria-pressed'), 'true')
       assert.equal(ui.container.querySelector('.chg-diff-surface')?.classList.contains('is-wrap'), true)
 
-      // Click binary file -> pushes `file` to URL -> switches to chg-mode-diff + chg-is-narrow-diff + shows ← Files & 2/3 pager
+      // Click binary file -> pushes `file` to URL -> switches to data-mobile-pane="detail" + chg-is-narrow-diff + shows ← Files & 2/3 pager
       await act(async () => { buttonByText(ui.container, 'logo.png').click() })
       await act(async () => { await flushMacrotask(0) })
       assert.match(ui.container.textContent ?? '', /Binary file/)
       assert.equal(screenEl.classList.contains('chg-is-narrow-diff'), true)
-      assert.equal(stageEl.classList.contains('chg-mode-diff'), true)
+      assert.equal(stageEl.getAttribute('data-mobile-pane'), 'detail')
       assert.equal(ui.container.querySelector('.chg-file-pager-count')?.textContent, '2/3')
       assert.ok(ui.container.querySelector('.chg-mobile-back') !== null)
       const filePushUpdate = h.logs.paramUpdates.find((u) => u.patch['file'] === 'assets/logo.png')
@@ -536,11 +537,11 @@ describe('changes-client-interactions', { timeout: 60_000 }, () => {
       assert.equal(stepUpdate?.patch['file'], 'dist/bundle.min.js')
       assert.notEqual(stepUpdate?.push, true, 'Stepping next/prev file replaces URL instead of pushing history')
 
-      // Clicking `← Files` clears sp.file and restores chg-mode-list
+      // Clicking `← Files` clears sp.file and restores data-mobile-pane="master"
       const backBtn = ui.container.querySelector('.chg-mobile-back') as HTMLButtonElement
       await act(async () => { backBtn.click() })
       await act(async () => { await flushMacrotask(0) })
-      assert.equal(stageEl.classList.contains('chg-mode-list'), true)
+      assert.equal(stageEl.getAttribute('data-mobile-pane'), 'master')
       assert.equal(screenEl.classList.contains('chg-is-narrow-diff'), false)
 
       // Switch to `Commits` scope -> compact Commit `Select` renders in toolbar
@@ -555,8 +556,8 @@ describe('changes-client-interactions', { timeout: 60_000 }, () => {
       await act(async () => { await flushMacrotask(0) })
       assert.match(ui.container.textContent ?? '', /unpushed-only\.ts/)
       assert.match(ui.container.textContent ?? '', /Untracked file \(full bounded preview\)/)
-      assert.equal(stageEl.classList.contains('chg-mode-diff'), true)
-      assert.equal(screenEl.classList.contains('chg-is-narrow-diff'), false, 'Single-file mode keeps topbar visible')
+      assert.equal(ui.container.querySelector('.chg-split-stage')?.getAttribute('data-mobile-pane'), 'detail')
+      assert.equal(ui.container.querySelector('.chg-screen')?.classList.contains('chg-is-narrow-diff'), false, 'Single-file mode keeps topbar visible')
       assert.ok(ui.container.querySelector('.chg-mobile-back') === null)
 
       // Switch to managed worktree (`wt`) + `Committed` scope -> Commit Select shows `All committed`
