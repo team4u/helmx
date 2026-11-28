@@ -279,43 +279,10 @@
   color: var(--err);
 }
 
-/* ---- Composer status-row orchestrator phase indicator & popover ---- */
+/* Composer orchestrator status pill (22px geometry, neutral surface, hover & open states inherited from .helmx-toolbar-pill) */
 .tiers-orch-status-trigger {
-  appearance: none;
   position: relative;
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  min-width: 0;
   max-width: 100%;
-  margin: 0;
-  padding: 1px 4px;
-  border: 0;
-  border-radius: var(--radius-xs);
-  background: transparent;
-  color: var(--fg-muted);
-  font-family: inherit;
-  font-size: 11.5px;
-  font-weight: 400;
-  line-height: 1.4;
-  white-space: nowrap;
-  cursor: pointer;
-  transition: background-color var(--dur-fast) ease, color var(--dur-fast) ease;
-}
-
-.tiers-orch-status-trigger[data-state='open'],
-.tiers-orch-status-trigger:focus-visible {
-  background: var(--bg-hover);
-  color: var(--fg);
-  outline: none;
-  box-shadow: none;
-}
-
-@media (hover: hover) {
-  .tiers-orch-status-trigger:hover {
-    background: var(--bg-hover);
-    color: var(--fg);
-  }
 }
 
 .tiers-orch-status-phase,

@@ -1972,6 +1972,16 @@ describe("tiers-client-interactions", () => {
 
         const trigger = composerHost.querySelector<HTMLButtonElement>('.composer-status-row .tiers-orch-status-trigger')
         assert.ok(trigger !== null, 'status row renders OrchestratorStatusBadge trigger')
+        assert.ok(
+          trigger.classList.contains('helmx-toolbar-pill'),
+          'status-row trigger uses shared .helmx-toolbar-pill surface',
+        )
+        assert.ok(
+          !trigger.classList.contains('helmx-toolbar-pill--accent') &&
+            !trigger.classList.contains('helmx-toolbar-pill--warn') &&
+            !trigger.classList.contains('helmx-toolbar-pill--err'),
+          'execution phase stays neutral without accent/warn/err pill tone modifier',
+        )
         assert.ok(trigger.querySelector('svg') === null, 'status-row trigger stays pure quiet text without pill icon')
         assert.ok(
           trigger.classList.contains('tiers-orch-status-trigger--execution') === false,
@@ -2125,6 +2135,16 @@ describe("tiers-client-interactions", () => {
       try {
         const trigger = zhMount.host.querySelector<HTMLButtonElement>('.tiers-orch-status-trigger')
         assert.ok(trigger !== null)
+        assert.ok(
+          trigger.classList.contains('helmx-toolbar-pill'),
+          'planning status-row trigger uses shared .helmx-toolbar-pill surface',
+        )
+        assert.ok(
+          !trigger.classList.contains('helmx-toolbar-pill--accent') &&
+            !trigger.classList.contains('helmx-toolbar-pill--warn') &&
+            !trigger.classList.contains('helmx-toolbar-pill--err'),
+          'planning phase stays neutral without accent/warn/err pill tone modifier',
+        )
         assert.equal(trigger.getAttribute('data-tiers-orchestrator-phase'), 'planning')
         assert.match(trigger.textContent ?? '', /^规划·flagship$/)
         assert.equal(EMOJI_RE.test(trigger.textContent ?? ''), false)

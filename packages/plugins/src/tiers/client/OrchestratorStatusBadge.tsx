@@ -101,7 +101,7 @@ function OrchestratorStatusBadgeConversation({
       <PopoverTrigger asChild>
         <button
           type="button"
-          className="tiers-orch-status-trigger"
+          className="helmx-toolbar-pill tiers-orch-status-trigger"
           data-tiers-orchestrator-phase={phase}
           data-tiers-orchestrator-tier={tierId}
           aria-label={statusTitle}

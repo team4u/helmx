@@ -15,16 +15,10 @@
   overflow-wrap: anywhere;
 }
 
-/* Composer quota pill (22px geometry, tones, and hover states inherited from .helmx-toolbar-pill) */
+/* Composer quota pill (22px geometry, tones, hover, and open states inherited from .helmx-toolbar-pill) */
 .magpie-quota-trigger {
   max-width: 100%;
   text-overflow: ellipsis;
-}
-
-.magpie-quota-trigger[data-state='open']:not(.helmx-toolbar-pill--warn):not(.helmx-toolbar-pill--err) {
-  background: var(--bg-hover);
-  border-color: var(--border-strong);
-  color: var(--fg);
 }
 
 .magpie-quota-trigger-items {

@@ -117,6 +117,12 @@ button.helmx-toolbar-pill[aria-busy='true']:disabled {
   }
 }
 
+:where(button, a).helmx-toolbar-pill[data-state='open']:not(.helmx-toolbar-pill--accent):not(.helmx-toolbar-pill--warn):not(.helmx-toolbar-pill--err) {
+  background: var(--bg-hover);
+  border-color: var(--border-strong);
+  color: var(--fg);
+}
+
 .helmx-toolbar-pill--accent {
   background: color-mix(in srgb, var(--accent) 10%, transparent);
   border-color: color-mix(in srgb, var(--accent) 26%, transparent);
