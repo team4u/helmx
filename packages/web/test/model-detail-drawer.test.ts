@@ -712,8 +712,17 @@ test('ModelDetailDrawer: custom gateway create & delete confirm flow', { timeout
         ),
       )
     })
+    const deleteGatewayBtn = findButtonByText(container, 'Delete gateway')
+    assert.ok(deleteGatewayBtn !== undefined)
+    assert.equal(deleteGatewayBtn.classList.contains('btn-danger'), true, 'Delete gateway uses danger variant')
+    assert.equal(deleteGatewayBtn.classList.contains('btn-sm'), true, 'Delete gateway uses sm size')
+    assert.equal(deleteGatewayBtn.classList.contains('text-err'), false, 'Delete gateway drops ghost + text-err')
+    const saveConfigBtn = findButtonByText(container, 'Save configuration')
+    assert.ok(saveConfigBtn !== undefined)
+    assert.equal(saveConfigBtn.classList.contains('btn-primary'), true)
+    assert.equal(saveConfigBtn.classList.contains('btn-sm'), true, 'ModelDetailDrawer footer primary button uses sm size')
     await act(async () => {
-      findButtonByText(container, 'Delete gateway')!.click()
+      deleteGatewayBtn.click()
     })
     assert.equal(deleted.length, 0, 'delete must wait for ConfirmDialog confirmation')
     const alertDialog = container.querySelector('[role="alertdialog"]')
@@ -776,6 +785,12 @@ test('ModelDetailDrawer: saving omits inline status text and standalone save pus
         ),
       )
     })
+
+    const deleteCredBtn = findButtonByText(container, 'Delete credentials')
+    assert.ok(deleteCredBtn !== undefined)
+    assert.equal(deleteCredBtn.classList.contains('btn-danger'), true)
+    assert.equal(deleteCredBtn.classList.contains('btn-sm'), true)
+    assert.equal(deleteCredBtn.classList.contains('text-err'), false)
 
     const apiKeyInput = container.querySelector('input[type="password"]') as HTMLInputElement
     assert.ok(apiKeyInput)

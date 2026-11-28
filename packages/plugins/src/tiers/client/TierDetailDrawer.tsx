@@ -129,7 +129,7 @@ export function TierDetailDrawer({
         mode === 'create' ? (
           t(C.drawerCreateTitle)
         ) : editingItem !== undefined ? (
-          <span className="mono tiers-drawer-title-id">
+          <span className="mono">
             <span className="tiers-prefix">tier/</span>
             {editingItem.id}
           </span>

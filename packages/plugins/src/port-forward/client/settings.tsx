@@ -6,6 +6,7 @@ import { useMemo, type ReactNode } from 'react'
 import './styles.css'
 import {
   Button,
+  HelperText,
   HelmxIcon,
   KvGrid,
   LoadingState,
@@ -77,7 +78,7 @@ export function PortForwardSettingsPanel(): ReactNode {
             ]}
           />
         )}
-        <p className="text-muted">{t(PF_SETTINGS_NOTE)}</p>
+        <HelperText>{t(PF_SETTINGS_NOTE)}</HelperText>
         <div>
           <Button
             size="sm"

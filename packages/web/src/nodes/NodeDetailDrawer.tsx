@@ -388,10 +388,9 @@ export function NodeDetailDrawer({
           <div>
             {canDelete && (
               <Button
-                variant="ghost"
+                variant="danger"
                 size="sm"
-                icon="trash"
-                className="text-err"
+                icon="trash-2"
                 disabled={deleting}
                 onClick={() => setConfirmDeleteOpen(true)}
               >

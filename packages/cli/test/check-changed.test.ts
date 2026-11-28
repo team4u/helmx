@@ -1092,7 +1092,7 @@ export function CleanView({ kind, prefix, mode }: { kind: string; prefix: string
       <p>Don&apos;t use native controls: {hint}</p>
       <p>Visit https://example.com/docs</p>
       <CopyButton className="btn btn-ghost btn-sm" text={hint} />
-      <Button variant="danger" size="sm" className="btn-danger-sm">Delete</Button>
+      <Button variant="danger" size="sm" className="custom-danger-action">Delete</Button>
       <SearchBox variant="toolbar" size="sm" value="" onChange={() => {}} />
       <Select value={kind} options={[{ value: 'a', label: 'A' }]} onChange={() => {}} />
       <button type="button" className="chg-compact-slot-btn">Domain button</button>

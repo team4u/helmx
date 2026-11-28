@@ -1158,6 +1158,9 @@ test('NodeDetailDrawer: delete confirms via ConfirmDialog, surfaces failures cle
     }
     const deleteBtn = findButton(/^Delete node$/)
     assert.ok(deleteBtn !== undefined, 'Delete node button rendered in footer')
+    assert.equal(deleteBtn.classList.contains('btn-danger'), true, 'Delete node button uses danger variant')
+    assert.equal(deleteBtn.classList.contains('btn-sm'), true, 'Delete node button uses sm size')
+    assert.equal(deleteBtn.classList.contains('text-err'), false, 'Delete node button drops ghost + text-err')
     await act(async () => {
       deleteBtn.click()
     })

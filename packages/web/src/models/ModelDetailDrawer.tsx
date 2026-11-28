@@ -477,6 +477,7 @@ export function ModelDetailDrawer({
             </div>
             <Button
               variant="primary"
+              size="sm"
               icon="check"
               pending={asyncState.saving}
               onClick={handleSaveProvider}

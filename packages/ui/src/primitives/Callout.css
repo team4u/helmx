@@ -15,7 +15,8 @@
 
 .callout span,
 .callout-text {
-  word-break: break-all;
+  word-break: normal;
+  overflow-wrap: anywhere;
 }
 
 .callout-warn {

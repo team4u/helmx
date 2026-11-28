@@ -291,10 +291,9 @@ export function ProviderCredentialsSection({
           <Stack direction="horizontal" gap="sm" align="center">
             {provider.configured && !provider.pluginId && (
               <Button
-                variant="ghost"
+                variant="danger"
                 size="sm"
-                icon="trash"
-                className="text-err"
+                icon="trash-2"
                 onClick={onRequestDeleteCredential}
                 disabled={deleting}
               >
@@ -303,10 +302,9 @@ export function ProviderCredentialsSection({
             )}
             {provider.custom === true && hasDeleteCustomGateway && (
               <Button
-                variant="ghost"
+                variant="danger"
                 size="sm"
-                icon="trash"
-                className="text-err"
+                icon="trash-2"
                 onClick={onRequestDeleteGateway}
                 disabled={deleting}
               >

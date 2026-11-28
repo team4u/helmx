@@ -154,21 +154,6 @@
   border-radius: var(--control-radius-sm);
 }
 
-/* 实心小型危险按钮（批量操作栏删除动作等）：保留警示底色与可读反色 */
-.btn-danger-sm {
-  color: var(--fg-on-solid, #fff);
-  background-color: var(--err, #ef4444);
-  border-color: var(--err, #ef4444);
-}
-@media (hover: hover) {
-  .btn-danger-sm:hover:not(:disabled) {
-    color: var(--fg-on-solid, #fff);
-    background-color: var(--err, #ef4444);
-    border-color: var(--err, #ef4444);
-    filter: brightness(0.95);
-  }
-}
-
 /* 紧凑小按钮：列表行尾 / 胶囊卡头部 / 工作台窄列内联动作 */
 .btn-xs {
   height: var(--control-h-xs);

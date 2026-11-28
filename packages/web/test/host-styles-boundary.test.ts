@@ -446,8 +446,7 @@ test('样式边界：主舞台 .screen-host-body / SearchBox / EmptyState 与 Ta
   )
 })
 
-test('样式边界：统一批量操作栏 .batch-bar 族与 .popover-* 族归属 @helmx/ui，.btn-danger-sm 归属 @helmx/ui Button.css（sidebar/overview 仅留布局微调）', { timeout: 60_000 }, () => {
-  const buttonCss = readFileSync(join(UI_PRIMITIVES_DIR, 'Button.css'), 'utf8')
+test('样式边界：统一批量操作栏 .batch-bar 族与 .popover-* 族归属 @helmx/ui，.btn-danger-sm 彻底退场（sidebar/overview 仅留布局微调）', { timeout: 60_000 }, () => {
   const batchBarCss = readFileSync(join(UI_PRIMITIVES_DIR, 'BatchBar.css'), 'utf8')
   const overlaysCss = readFileSync(join(UI_PRIMITIVES_DIR, 'Overlays.css'), 'utf8')
   const masterDetailCss = readFileSync(join(UI_PRIMITIVES_DIR, 'MasterDetail.css'), 'utf8')
@@ -465,9 +464,19 @@ test('样式边界：统一批量操作栏 .batch-bar 族与 .popover-* 族归�
   }
   assert.ok(overlaysCss.includes('.popover-item-active'), '@helmx/ui Overlays.css 应定义 .popover-item-active')
   assert.ok(ownsRule(masterDetailCss, '.helmx-master-detail'), '@helmx/ui MasterDetail.css 应定义 .helmx-master-detail')
-  assert.ok(ownsRule(buttonCss, '.btn-danger-sm'), '@helmx/ui Button.css 应定义 .btn-danger-sm')
-  for (const { name, css } of shards) {
-    assert.ok(!ownsRule(css, '.btn-danger-sm'), `宿主分片 ${name} 不得重复定义 .btn-danger-sm`)
+  const allCssShards = [
+    ...listCssFiles(UI_SRC_DIR).map((file) => ({
+      name: `ui/${file.slice(UI_SRC_DIR.length + 1)}`,
+      css: stripCssComments(readFileSync(file, 'utf8')),
+    })),
+    ...listCssFiles(join(__dirname, '../src')).map((file) => ({
+      name: `web/${file.slice(join(__dirname, '../src').length + 1)}`,
+      css: stripCssComments(readFileSync(file, 'utf8')),
+    })),
+  ]
+  assert.ok(allCssShards.length > 0, '应能读取 @helmx/ui 与 @helmx/web 样式分片')
+  for (const { name, css } of allCssShards) {
+    assert.ok(!css.includes('.btn-danger-sm'), `样式分片 ${name} 不得保留已退场的 .btn-danger-sm（请使用 <Button variant="danger" size="sm">）`)
   }
   const overview = readFileSync(join(STYLES_DIR, 'overview.css'), 'utf8')
   const responsive = readFileSync(join(__dirname, '../src/responsive.css'), 'utf8')

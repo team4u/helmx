@@ -423,7 +423,7 @@
   flex-direction: column;
   background: var(--bg);
   border-left: 1px solid var(--border);
-  box-shadow: -8px 0 24px rgba(0, 0, 0, 0.28);
+  box-shadow: var(--shadow-drawer);
   overflow: hidden;
   animation: drawerSlideIn var(--dur-normal) var(--ease-out);
   transition: width var(--dur-normal) var(--ease-out);

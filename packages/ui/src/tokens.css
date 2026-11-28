@@ -149,6 +149,8 @@
   --shadow-sm: 0 1px 1px rgba(0, 0, 0, 0.04);
   --shadow-md: 0 2px 8px rgba(20, 22, 30, 0.06), 0 0 0 0.5px rgba(20, 22, 30, 0.1);
   --shadow-lg: 0 16px 44px rgba(20, 22, 30, 0.16), 0 2px 8px rgba(20, 22, 30, 0.06), 0 0 0 0.5px rgba(20, 22, 30, 0.1);
+  --shadow-drawer: -8px 0 28px rgba(20, 22, 30, 0.10), -1px 0 0 rgba(20, 22, 30, 0.04);
+  --shadow-modal: 0 0 0 1px var(--border), 0 20px 48px rgba(20, 22, 30, 0.16), 0 2px 8px rgba(20, 22, 30, 0.06);
   --shadow-toast: 0 10px 28px rgba(20, 22, 30, 0.11), 0 2px 6px rgba(20, 22, 30, 0.05), 0 0 0 0.5px rgba(20, 22, 30, 0.06);
   --pop-bg: rgba(255, 255, 255, 0.94);
 
@@ -257,6 +259,8 @@
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.28);
   --shadow-md: 0 4px 14px rgba(0, 0, 0, 0.4), 0 0 0 0.5px rgba(255, 255, 255, 0.08);
   --shadow-lg: 0 16px 44px rgba(0, 0, 0, 0.55), 0 2px 8px rgba(0, 0, 0, 0.3), 0 0 0 0.5px rgba(255, 255, 255, 0.1);
+  --shadow-drawer: -12px 0 36px rgba(0, 0, 0, 0.48), -1px 0 0 rgba(255, 255, 255, 0.06);
+  --shadow-modal: 0 0 0 1px var(--border), 0 24px 60px rgba(0, 0, 0, 0.55), 0 2px 10px rgba(0, 0, 0, 0.3);
   --shadow-toast: inset 0 0.5px 0 rgba(255, 255, 255, 0.08), 0 12px 32px rgba(0, 0, 0, 0.48), 0 2px 8px rgba(0, 0, 0, 0.28);
   --pop-bg: rgba(38, 38, 43, 0.96);
 }
