@@ -114,8 +114,8 @@ test('parsePluginSource: npm normalization and rejection', { timeout: 60_000 }, 
     'npm:foo\tbar',
     'npm:builtin:evil',
     'npm:core:evil',
-    'builtin:profile',
-    'builtin%3Aprofile',
+    'builtin:mentions',
+    'builtin%3Amentions',
     'core:conversations',
     'core%3Aconversations',
     'core%3aconversations',
@@ -799,7 +799,7 @@ test('remove protects builtin: and core: namespaces with 403 and rejects unmanag
   const env = makeEnv()
   try {
     await assert.rejects(
-      env.manager.remove('builtin:profile'),
+      env.manager.remove('builtin:mentions'),
       (err: unknown) => err instanceof HelmxError && err.code === 'plugin_locked' && err.status === 403,
     )
     await assert.rejects(
@@ -807,7 +807,7 @@ test('remove protects builtin: and core: namespaces with 403 and rejects unmanag
       (err: unknown) => err instanceof HelmxError && err.code === 'plugin_locked' && err.status === 403,
     )
     await assert.rejects(
-      env.manager.update('builtin:profile'),
+      env.manager.update('builtin:mentions'),
       (err: unknown) => err instanceof HelmxError && err.code === 'unknown_plugin_package' && err.status === 404,
     )
     await assert.rejects(

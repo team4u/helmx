@@ -173,7 +173,7 @@ export interface ActionManifest extends PluginPromptFields {
   presentationMetaSchema?: JsonSchema
   /**
    * Whether this non-tool public action is advertised in the `<available_actions>` prompt catalog (default true).
-   * Public actions with dedicated CLI/HTTP paths (such as `skill_catalog`) may set `false` to save system prompt
+   * Public actions with dedicated CLI/HTTP paths (such as `core:skills.catalog`) may set `false` to save system prompt
    * tokens; UI-only and internal actions should declare `visibility: 'ui' | 'internal'` instead.
    */
   exposeToPrompt?: boolean

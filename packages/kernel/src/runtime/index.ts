@@ -61,6 +61,47 @@ export { ConversationProfileService } from './conversation-profile.js'
 export { ConversationInputPipeline, submitDurableInput, type DurableInputTracker } from './conversation-input.js'
 export { createRunActionTool, type KernelToolHost } from './kernel-tools.js'
 export {
+  AGENTS_MD_FILENAME,
+  MAX_AGENTS_MD_BYTES,
+  MAX_AGENTS_MD_CHARS,
+  computeAgentsMdSection,
+  type AgentsMdHostPort,
+  type AgentsMdInjection,
+} from './agents-md.js'
+export {
+  DEFAULT_NODE_MACHINE_SKILL_ROOTS,
+  MAX_NODE_SKILLS,
+  MAX_NODE_SKILL_FILE_BYTES,
+  MAX_NODE_SKILL_REFERENCES,
+  MAX_NODE_SKILL_REFERENCE_DEPTH,
+  NODE_SKILLS_CACHE_TTL_MS,
+  NODE_SKILLS_RELATIVE_DIR,
+  NODE_SKILL_SCAN_CONCURRENCY,
+  invalidateNodeSkillsCache,
+  nodeSkillsUnavailableSection,
+  readNodeSkillFile,
+  scanNodeSkills,
+  type NodeSkillScan,
+  type NodeSkillScanOptions,
+  type NodeSkillsHostPort,
+} from './node-skills.js'
+export {
+  ScopedSkillService,
+  listScopedSkills,
+  type HubSkillsPort,
+  type ScopedSkillServiceDeps,
+} from './scoped-skills.js'
+export { LOAD_SKILL_TOOL_NAME, createLoadSkillTool } from './tools/skill-tools.js'
+export {
+  POST_HOOK_SKILL_SECTION_IDS,
+  PRE_HOOK_PROFILE_SECTION_IDS,
+  TurnContextAssembler,
+  projectManagedSections,
+  type PreparedTurnContext,
+  type PromptSection,
+  type TurnContextAssemblerDeps,
+} from './turn-context.js'
+export {
   runOmniboxSearch,
   OMNIBOX_DEFAULT_LIMIT,
   OMNIBOX_MAX_ITEMS_PER_PLUGIN,

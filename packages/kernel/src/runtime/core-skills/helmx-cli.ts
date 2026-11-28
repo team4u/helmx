@@ -73,7 +73,7 @@ managedByPlugin: {{MANAGED_BY}}
 - \`helmx omnibox search <query> [--limit <n>] [--locale en|zh-CN] [--conversation <id> | --current]\` (CLI-only): unified Omnibox search combining FTS5 conversation messages with active \`helmx.search\` plugin providers.
 
 ### Profiles and skills
-- **In-session turns (Action-first)**: for Profile management, load the \`profiles\` skill and call \`core:profiles.*\` (\`list\`, \`get\`, \`create\`, \`update\`, \`delete\`) via \`run_action\` instead of shelling out to \`helmx profiles ...\`. For skills, \`core:skills.list\` and \`core:skills.read\` are scope-blocked inside conversations — always use the \`load_skill\` tool in-session; \`helmx skills list\` / \`helmx skills read\` are for terminal/script reference only.
+- **In-session turns (Action-first)**: for Profile management, load the \`profiles\` skill and call \`core:profiles.*\` (\`list\`, \`get\`, \`create\`, \`update\`, \`delete\`) via \`run_action\` instead of shelling out to \`helmx profiles ...\`. For skills, \`core:skills.*\` (\`list\`, \`catalog\`, \`read\`) are scope-blocked inside conversations — always use the \`load_skill\` tool in-session; \`helmx skills list\` / \`helmx skills read\` are for terminal/script reference only.
 - \`helmx profiles list\` / \`helmx profiles get <id>\`
 - \`helmx profiles create [id] --name/--model/--thinking/--node/--cwd/--tags/--restrict-to-cwd/--system[-file]/--skills/--all-skills/--starters/--input <json>\` (extension capabilities follow the current turn's plugin actions and skill catalog)
 - \`helmx profiles update <id> ...\`: supports the same semantic flags (incl. \`--restrict-to-cwd\` / \`--restrict-to-cwd=false\`) via GET-then-merge-PUT (bound fields are not lost); \`--input\` alone is a full replacement.

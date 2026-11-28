@@ -370,18 +370,18 @@ test('HelmxPluginConfigStore: pluginEnabled persists to config.json independentl
 
   // Shares config.json with existing plugins config without interfering with each other
   await store.setEnabled('builtin:herdr', false);
-  await store.setEnabled('builtin:profile', true);
+  await store.setEnabled('builtin:mentions', true);
   await store.set('builtin:herdr', { endpoint: 'unix:///x' }, { endpoint: { type: 'string' } });
 
   const raw = JSON.parse(readFileSync(join(dataDir, 'config.json'), 'utf8')) as Record<string, unknown>;
-  assert.deepEqual(raw['pluginEnabled'], { 'builtin:herdr': false, 'builtin:profile': true });
+  assert.deepEqual(raw['pluginEnabled'], { 'builtin:herdr': false, 'builtin:mentions': true });
   assert.deepEqual(raw['plugins'], { 'builtin:herdr': { endpoint: 'unix:///x' } }, 'pluginEnabled and plugins config are separate');
 
   // New instance (simulated restart): getEnabled can read synchronously after load warmup
   const store2 = new HelmxPluginConfigStore({ config: new ConfigService(dataDir), credentials: new CredentialService(credentialsDir) });
   await store2.load();
   assert.equal(store2.getEnabled('builtin:herdr'), false);
-  assert.equal(store2.getEnabled('builtin:profile'), true);
+  assert.equal(store2.getEnabled('builtin:mentions'), true);
   assert.equal(store2.getEnabled('p:unknown'), undefined);
   assert.equal(store2.get('builtin:herdr')['endpoint'], 'unix:///x');
 });
@@ -426,14 +426,14 @@ test('locked plugin stays enabled even when registered with enabled:false, and d
   const host = makeHost(store);
   const started: string[] = [];
   await host.register(
-    servicePlugin('builtin:profile', { onStart: () => started.push('start'), locked: true }),
+    servicePlugin('builtin:mentions', { onStart: () => started.push('start'), locked: true }),
     { enabled: false },
   );
-  assert.equal(host.list().find((p) => p.id === 'builtin:profile')!.enabled, true);
+  assert.equal(host.list().find((p) => p.id === 'builtin:mentions')!.enabled, true);
   assert.deepEqual(started, ['start']);
-  await assertRejectsCode(() => host.disable('builtin:profile'), 'plugin_locked');
+  await assertRejectsCode(() => host.disable('builtin:mentions'), 'plugin_locked');
   // locked does not persist any toggle state (rejected disable produces no write side effects)
-  assert.equal(store.enabled.has('builtin:profile'), false);
+  assert.equal(store.enabled.has('builtin:mentions'), false);
 });
 
 // ---------------------------------------------------------------------------

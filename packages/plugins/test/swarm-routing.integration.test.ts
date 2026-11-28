@@ -579,7 +579,7 @@ describe('builtin:swarm board routing, settlement & self-healing', { concurrency
       await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
       await kernel.conversations.waitForIdle(coord.id)
 
-      // 1) Forked readwrite worker: inherits context, gets rule 4 boundary, strips dispatch tools & profile.catalog, keeps work tools
+      // 1) Forked readwrite worker: inherits context, gets rule 4 boundary, strips dispatch tools & mentions.catalog, keeps work tools
       assert.equal(forkedRwSawHistory, true, 'forked_rw must inherit fork source history')
       assert.ok(forkedRwMeta, 'must capture forked_rw request metadata')
       const rwSec = forkedRwMeta.sectionsById['swarm.active_group'] ?? ''
@@ -591,18 +591,18 @@ describe('builtin:swarm board routing, settlement & self-healing', { concurrency
       for (const kept of ['swarm_board_post', 'bash', 'read', 'write']) {
         assert.equal(forkedRwMeta.toolNames.includes(kept), true, `forked_rw must retain ${kept}`)
       }
-      assert.equal(forkedRwMeta.sectionsById['profile.catalog'], undefined, 'forked_rw must suppress profile.catalog')
+      assert.equal(forkedRwMeta.sectionsById['mentions.catalog'], undefined, 'forked_rw must suppress mentions.catalog')
 
-      // 2) Forked readonly worker: keeps rule 4 readonly + rule 5 boundary, strips dispatch tools & profile.catalog
+      // 2) Forked readonly worker: keeps rule 4 readonly + rule 5 boundary, strips dispatch tools & mentions.catalog
       assert.ok(forkedRoMeta, 'must capture forked_ro request metadata')
       const roSec = forkedRoMeta.sectionsById['swarm.active_group'] ?? ''
       assert.ok(roSec.includes('4. Your access is readonly:'), 'forked readonly worker must keep rule 4 readonly')
       assert.ok(roSec.includes('5. Context boundary:'), 'forked readonly worker must append rule 5 context boundary')
       assert.equal(forkedRoMeta.toolNames.includes('subagent'), false)
       assert.equal(forkedRoMeta.toolNames.includes('SubagentWorkflow'), false)
-      assert.equal(forkedRoMeta.sectionsById['profile.catalog'], undefined)
+      assert.equal(forkedRoMeta.sectionsById['mentions.catalog'], undefined)
 
-      // 3) Default non-forked worker: NO context boundary clause, defaults to depth-1 leaf (strips dispatch tools & profile.catalog, rejects workflow.run)
+      // 3) Default non-forked worker: NO context boundary clause, defaults to depth-1 leaf (strips dispatch tools & mentions.catalog, rejects workflow.run)
       assert.ok(plainRwMeta, 'must capture plain_rw request metadata')
       const plainSec = plainRwMeta.sectionsById['swarm.active_group'] ?? ''
       assert.equal(plainSec.includes('Context boundary:'), false, 'non-forked worker must not get forked context boundary')
@@ -613,7 +613,7 @@ describe('builtin:swarm board routing, settlement & self-healing', { concurrency
       for (const kept of ['swarm_board_post', 'bash', 'read', 'write']) {
         assert.equal(plainRwMeta.toolNames.includes(kept), true, `default non-forked worker retains ${kept}`)
       }
-      assert.equal(plainRwMeta.sectionsById['profile.catalog'], undefined, 'default non-forked worker suppresses profile.catalog')
+      assert.equal(plainRwMeta.sectionsById['mentions.catalog'], undefined, 'default non-forked worker suppresses mentions.catalog')
       await assert.rejects(
         () =>
           kernel.plugins.invokeAction(WORKFLOW_ID, 'run', {
@@ -640,8 +640,8 @@ describe('builtin:swarm board routing, settlement & self-healing', { concurrency
       assert.equal(delegatingRwMeta.toolNames.includes('subagent'), true, 'non-forked worker retains subagent under ceiling 2')
       assert.equal(delegatingRwMeta.toolNames.includes('SubagentWorkflow'), true, 'non-forked worker retains SubagentWorkflow under ceiling 2')
       assert.equal(delegatingRwMeta.toolNames.includes('swarm_board_post'), true)
-      assert.ok(typeof delegatingRwMeta.sectionsById['profile.catalog'] === 'string', 'non-forked worker retains profile.catalog under ceiling 2')
-      assert.ok(delegatingRwMeta.sectionsById['profile.catalog'].includes('id="reviewer"'))
+      assert.ok(typeof delegatingRwMeta.sectionsById['mentions.catalog'] === 'string', 'non-forked worker retains mentions.catalog under ceiling 2')
+      assert.ok(delegatingRwMeta.sectionsById['mentions.catalog'].includes('id="reviewer"'))
 
       // 5) Persisted forked=true in board_status and meta.json (no extra maxSubagentDepth field)
       const status = (await kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'board_status', { groupId }, { conversationId: coord.id })) as BoardViewDoc

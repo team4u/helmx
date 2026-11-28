@@ -108,9 +108,9 @@ const makeSnapshot = (): HelmxSnapshot => ({
   pendingAsks: [],
   plugins: [
     {
-      id: 'builtin:profile',
-      name: 'Profile',
-      locked: true,
+      id: 'builtin:mentions',
+      name: 'Role Mentions',
+      locked: false,
       enabled: true,
       hooks: [],
       actions: [],
@@ -722,7 +722,7 @@ describe("helmx-store-rerender-isolation", () => {
       return <div data-testid="plugin-a-summary">{typeof summary?.name === 'string' ? summary.name : ''}</div>
     }
     const PluginBProbe = (): React.ReactNode => {
-      const summary = usePluginSummary('builtin:profile')
+      const summary = usePluginSummary('builtin:mentions')
       pluginBRenders++
       return <div data-testid="plugin-b-summary">{typeof summary?.name === 'string' ? summary.name : ''}</div>
     }
@@ -770,12 +770,12 @@ describe("helmx-store-rerender-isolation", () => {
     pluginBRenders = 0
     uiViewRenders = 0
 
-    // 更新无关插件 builtin:profile：仅 PluginBProbe 重渲染，PluginAProbe 与 PluginUiView('test:plugin') 零重渲染
+    // 更新无关插件 builtin:mentions：仅 PluginBProbe 重渲染，PluginAProbe 与 PluginUiView('test:plugin') 零重渲染
     await act(async () => {
       store.updateLive((prev) => ({
         ...prev,
         plugins: prev.plugins.map((p) =>
-          p.id === 'builtin:profile' ? { ...p, name: 'Profile Updated' } : p,
+          p.id === 'builtin:mentions' ? { ...p, name: 'Mentions Updated' } : p,
         ),
       }))
     })
@@ -794,7 +794,7 @@ describe("helmx-store-rerender-isolation", () => {
       }))
     })
     assert.equal(pluginARenders, 1)
-    assert.equal(pluginBRenders, 1, '反向隔离：builtin:profile 不应因 test:plugin 更新而重渲染')
+    assert.equal(pluginBRenders, 1, '反向隔离：builtin:mentions 不应因 test:plugin 更新而重渲染')
     assert.equal(uiViewRenders, 0, '同插件仅元信息变化且 expectedHash 未变时，PluginUiView 保持零重渲染')
     assert.equal(seenContexts.length, 1)
 

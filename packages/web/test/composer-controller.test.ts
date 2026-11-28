@@ -337,6 +337,12 @@ function stubFetch(captured: CapturedRequest[], ok: boolean): () => void {
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const path = String(input)
     if (path.includes('/client.mjs')) return new Response('', { headers: { 'x-helmx-client-hash': 'seeded' } })
+    if (path.startsWith('/api/skills/scoped/catalog')) {
+      return new Response(JSON.stringify({ nodeId: 'local', skills: [], shadowedNodeSkillIds: [] }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }
     captured.push({ method: String(init?.method ?? 'GET'), path, body: init?.body ? JSON.parse(String(init.body)) : {} })
     if (!ok) {
       return new Response(JSON.stringify({ error: { code: 'validation_error', message: '服务端拒绝' } }), {

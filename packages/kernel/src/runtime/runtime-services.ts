@@ -48,6 +48,8 @@ import { RuntimeTriggerDispatcher } from './runtime-triggers.js'
 import { RuntimeAgentSpawn } from './runtime-agent-spawn.js'
 import { trustedPlatformFromEnvFabric } from './target-cwd.js'
 import { RuntimeOwnershipManager } from './runtime-ownership.js'
+import { ScopedSkillService } from './scoped-skills.js'
+import { TurnContextAssembler } from './turn-context.js'
 import type { RuntimeServicesHost } from './runtime-types.js'
 import type { BootstrappedKernelContext } from './runtime-bootstrap.js'
 
@@ -76,6 +78,7 @@ export interface RuntimeServicesInit extends BootstrappedKernelContext {
 export interface AssembledRuntimeServices {
   profilesSvc: ProfileService
   skillsSvc: SkillService
+  scopedSkillsSvc: ScopedSkillService
   configSvc: ConfigService
   credentialsSvc: CredentialService
   providersSvc: ProviderService
@@ -240,7 +243,30 @@ export function assembleRuntimeServices(
       }
     },
     get cliBinDir(): string | undefined { return nodes?.cliBinDir },
+    loadSkillForConversation: (conversationId, input) =>
+      scopedSkillsSvc.loadSkillForConversation(conversationId, input),
   }
+
+  const scopedSkillsSvc = new ScopedSkillService({
+    skills: skillsSvc,
+    profiles: profilesSvc,
+    getConversation: (id) => conversations.getConversation(id),
+    executionEnv: (nodeId, cwd) => envFabric.envFor(nodeId, cwd),
+    redact: (t) => options.stashService.redact(t),
+    isNodeOnline: (nodeId) => envFabric.isOnline(nodeId),
+    listPlugins: () => runtime.listPluginsSnapshot(),
+  })
+
+  const turnContextAssembler = new TurnContextAssembler({
+    profiles: profilesSvc,
+    scopedSkills: scopedSkillsSvc,
+    executionEnv: (nodeId, cwd) => envFabric.envFor(nodeId, cwd),
+    isNodeOnline: (nodeId) => envFabric.isOnline(nodeId),
+    redact: (t) => options.stashService.redact(t),
+    notifyWarning: ({ title, body }) => {
+      events.publish('notification', { level: 'warning', title, body })
+    },
+  })
 
   nodes = new NodeManager({
     dataDir: init.dataDir,
@@ -343,6 +369,7 @@ export function assembleRuntimeServices(
     artifacts: artifactsSvc,
     shouldResetRuntimeModelOnRunEnd: (id) => conversations.hasAutoResetRuntimeModel(id),
     onAfterRunBoundary: (id) => conversations.resetRuntimeModelOnRunEnd(id),
+    turnContext: turnContextAssembler,
     onHookDiagnostic: ({ source, message, error }) => {
       init.emitDiagnostic({ level: 'warn', source, message, error })
     },
@@ -464,6 +491,7 @@ export function assembleRuntimeServices(
   return {
     profilesSvc,
     skillsSvc,
+    scopedSkillsSvc,
     configSvc,
     credentialsSvc,
     providersSvc,

@@ -280,7 +280,7 @@ test('CORE_OPERATIONS enforces exact action exclusion and governance scope secur
     assert.deepEqual(op.action.scope, EXPECTED_HOST_GOVERNANCE_SCOPE, `${key} must enforce host governance scope`)
   }
 
-  for (const key of ['asks.answer', 'skills.list', 'skills.read']) {
+  for (const key of ['asks.answer', 'skills.list', 'skills.catalog', 'skills.read']) {
     const op = byKey.get(key)
     assert.ok(op && op.action !== false, `missing actionable non-conversation operation ${key}`)
     assert.deepEqual(op.action.scope, EXPECTED_NO_CONVERSATION_SCOPE, `${key} must enforce no-conversation scope`)

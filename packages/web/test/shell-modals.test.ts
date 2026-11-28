@@ -97,7 +97,7 @@ const sidebarItems: Array<{ pluginId: string; spec: SidebarItemSpec }> = [
     spec: { id: 'watchdog', label: '巡检看门狗', icon: 'shield', target: 'conversation:profile:watchdog', order: 11 },
   },
   {
-    pluginId: 'builtin:profile',
+    pluginId: 'builtin:demo',
     spec: { id: 'root', label: '个人助理', icon: 'sparkles', target: 'conversation:1', order: 0 },
   },
   {
@@ -118,7 +118,7 @@ const profiles: Profile[] = [
 ]
 
 const plugins = [
-  { id: 'builtin:profile', enabled: true },
+  { id: 'builtin:mentions', enabled: true },
   { id: 'builtin:superagent', enabled: true },
   { id: 'builtin:triggers', enabled: true },
 ]
@@ -196,7 +196,7 @@ test('buildAgentStandings：插件停用后其 managedByPlugin 站位与 ownedBy
   const standings = buildAgentStandings(
     standingsInput({
       plugins: [
-        { id: 'builtin:profile', enabled: true },
+        { id: 'builtin:mentions', enabled: true },
         { id: 'builtin:triggers', enabled: true },
       ],
       sidebarItems: [sidebarItems[2]!],
@@ -248,15 +248,41 @@ test('buildAgentStandings：assistant 站位排序由 sidebar.item pinMeta 驱�
     locale: 'en',
     profiles: [],
     conversations: [conv({ id: 1, title: '个人助理', profileId: 'assistant' })],
-    plugins: [{ id: 'builtin:profile', enabled: true }],
+    plugins: [{ id: 'builtin:demo', enabled: true }],
     sidebarItems: [
-      { pluginId: 'builtin:profile', spec: { id: 'root', label: '个人助理', icon: 'sparkles', target: 'conversation:1', order: 0 } },
+      { pluginId: 'builtin:demo', spec: { id: 'root', label: '个人助理', icon: 'sparkles', target: 'conversation:1', order: 0 } },
     ],
   })
   assert.equal(standings[0]!.label, '个人助理')
   assert.equal(standings[0]!.order, 0)
   // 站位行不渲染图标：声明式 icon 仅对 screen 视图项生效，智能体行不再消费。
   assert.equal('icon' in standings[0]!, false)
+})
+
+test('buildAgentStandings：默认 assistant（core:profiles）无 sidebar.item 仍排在 order:0 且支持双语展示', { timeout: 60_000 }, () => {
+  const list: Profile[] = [
+    { id: 'coder', name: '编码专员' },
+    { id: 'assistant', name: 'Personal Assistant', managedByPlugin: 'core:profiles' },
+  ]
+  const zh = buildAgentStandings({
+    locale: 'zh-CN',
+    profiles: list,
+    conversations: [conv({ id: 1, title: '主对话', profileId: 'assistant' })],
+    plugins: [],
+    sidebarItems: [],
+  })
+  assert.deepEqual(zh.map((s) => s.profileId), ['assistant', 'coder'])
+  assert.equal(zh[0]!.order, 0)
+  assert.equal(zh[0]!.label, '个人助理')
+  const en = buildAgentStandings({
+    locale: 'en',
+    profiles: list,
+    conversations: [conv({ id: 1, title: 'Main', profileId: 'assistant' })],
+    plugins: [],
+    sidebarItems: [],
+  })
+  assert.equal(en[0]!.order, 0)
+  assert.equal(en[0]!.label, 'Personal Assistant')
 })
 
 test('buildAgentStandings：子代理派生会话（有父链）不挂 Agent 站位', { timeout: 60_000 }, () => {
@@ -342,9 +368,9 @@ test('buildAgentStandings：按 createdAt 倒序（updatedAt 推进不重排）�
     locale: 'en',
     profiles: [{ id: 'assistant', name: '个人助理' }],
     conversations: sameTime,
-    plugins: [{ id: 'builtin:profile', enabled: true }],
+    plugins: [{ id: 'builtin:demo', enabled: true }],
     sidebarItems: [
-      { pluginId: 'builtin:profile', spec: { id: 'pin-10', label: '置顶话题', target: 'conversation:10' } },
+      { pluginId: 'builtin:demo', spec: { id: 'pin-10', label: '置顶话题', target: 'conversation:10' } },
     ],
   })
   // #10 被 sidebar.item 指向置顶 -> 其余（含 #1）按 createdAt 倒序、同刻按 id 倒序（无根会话特判）
@@ -383,7 +409,7 @@ test('LocalizedText 侧栏显示名：站位 pin label 与视图 label 均按 lo
   const items = [
     // 会话指向型 sidebar.item：pin label 覆盖站位默认展示名（LocalizedText 地图）
     {
-      pluginId: 'builtin:profile',
+      pluginId: 'builtin:demo',
       spec: { id: 'root', label: { en: 'Assistant', 'zh-CN': '个人助理' }, target: 'conversation:1', order: 0 },
     },
     // screen: 视图项 label（LocalizedText 地图）
@@ -524,11 +550,11 @@ test('resolveTargetString conversation:profile: 优先无父链常驻会话，�
 // ---------------------------------------------------------------------------
 
 test('isProfileVisible：仅依据 managedByPlugin 字段过滤（不按 id 猜归属），任意插件 id 同样生效', { timeout: 60_000 }, () => {
-  const disabled = new Set<string>(['builtin:profile'])
+  const disabled = new Set<string>(['builtin:mentions'])
   const plain: Profile = { id: 'coder', name: '编码' }
   // 无字段的同名 Profile 不猜隐藏（用户自建同 id 资产）
   const hubNoMeta: Profile = { id: 'superagent', name: 'SuperAgent 中枢' }
-  const managed = new Set<string>(['builtin:profile', 'builtin:superagent'])
+  const managed = new Set<string>(['builtin:mentions', 'builtin:superagent'])
   const hubManaged: Profile = { id: 'superagent', name: 'SuperAgent 中枢', managedByPlugin: 'builtin:superagent' }
   // 任意第三方插件的托管资产同样按字段过滤（验证不依赖特定插件 id）
   const thirdParty: Profile = { id: 'custom-x', managedByPlugin: 'community:reporter' }
@@ -538,20 +564,21 @@ test('isProfileVisible：仅依据 managedByPlugin 字段过滤（不按 id 猜�
   assert.equal(isProfileVisible(hubManaged, disabled), false)
   assert.equal(isProfileVisible(thirdParty, disabled), false)
   assert.equal(isProfileVisible(herdrManaged, disabled), false)
-  const enabled = new Set<string>(['builtin:profile', 'builtin:superagent', 'builtin:herdr', 'community:reporter'])
+  const enabled = new Set<string>(['builtin:mentions', 'builtin:superagent', 'builtin:herdr', 'community:reporter'])
   assert.equal(isProfileVisible(hubManaged, enabled), true)
   assert.equal(isProfileVisible(thirdParty, enabled), true)
   assert.equal(isProfileVisible(herdrManaged, enabled), true)
 })
 
 test('isHumanSelectableProfile：与 isProfileVisible 一致，启用插件的托管与普通 Profile 均可选', { timeout: 60_000 }, () => {
-  const enabled = new Set<string>(['builtin:profile', 'builtin:superagent', 'community:reporter'])
-  const assistant: Profile = { id: 'assistant', name: '个人助理' }
+  const enabled = new Set<string>(['builtin:mentions', 'builtin:superagent', 'community:reporter'])
+  const assistant: Profile = { id: 'assistant', name: '个人助理', managedByPlugin: 'core:profiles' }
   const hub: Profile = { id: 'superagent', name: 'SuperAgent 中枢', managedByPlugin: 'builtin:superagent' }
   const pluginExpert: Profile = { id: 'reporter', name: '周报专员', managedByPlugin: 'community:reporter' }
   const userHubNamed: Profile = { id: 'superagent', name: '我的自定义角色' }
-  const disabled = new Set<string>(['builtin:profile'])
+  const disabled = new Set<string>(['builtin:mentions'])
   assert.equal(isHumanSelectableProfile(assistant, enabled), true)
+  assert.equal(isHumanSelectableProfile(assistant, disabled), true, 'core:profiles 托管角色不受插件开关隐藏')
   assert.equal(isHumanSelectableProfile(hub, enabled), true)
   assert.equal(isHumanSelectableProfile(pluginExpert, enabled), true)
   assert.equal(isHumanSelectableProfile(userHubNamed, enabled), true)
@@ -559,25 +586,25 @@ test('isHumanSelectableProfile：与 isProfileVisible 一致，启用插件的�
 })
 
 test('isSkillVisible：仅依据 managedByPlugin 字段过滤（任意插件 id），不按 skill id 猜', { timeout: 60_000 }, () => {
-  const disabled = new Set<string>(['builtin:profile'])
+  const disabled = new Set<string>(['builtin:mentions'])
   const plain: SkillSummary = { id: 'weekly-report', name: '周报', references: [] }
   // 无字段同名 skill 不猜隐藏（用户自建）
   const legacy: SkillSummary = { id: 'watchdog-playbooks', name: '巡检手册', references: [] }
-  const managed = new Set<string>(['builtin:profile', 'builtin:superagent'])
+  const managed = new Set<string>(['builtin:mentions', 'builtin:superagent'])
   const managedPlaybooks: SkillSummary = { id: 'watchdog-playbooks', name: '巡检手册', references: [], managedByPlugin: 'builtin:superagent' }
   const herdrManaged: SkillSummary = { id: 'herdr-flow', name: 'Herdr 流程', references: [], managedByPlugin: 'builtin:herdr' }
   assert.equal(isSkillVisible(plain, disabled), true)
   assert.equal(isSkillVisible(legacy, disabled), true, '无 managedByPlugin 字段不得按 id 猜测隐藏')
   assert.equal(isSkillVisible(managedPlaybooks, disabled), false)
   assert.equal(isSkillVisible(herdrManaged, disabled), false)
-  const enabled = new Set<string>(['builtin:profile', 'builtin:superagent', 'builtin:herdr'])
+  const enabled = new Set<string>(['builtin:mentions', 'builtin:superagent', 'builtin:herdr'])
   assert.equal(isSkillVisible(managedPlaybooks, enabled), true)
   assert.equal(isSkillVisible(herdrManaged, enabled), true)
 })
 
 test('collectEnabledPluginIds 仅收集处于活跃运行态的插件（排除 disabled 与 enabled=true 但 status=failed/带 error）', { timeout: 60_000 }, () => {
   const ids = collectEnabledPluginIds([
-    { id: 'builtin:profile', enabled: true },
+    { id: 'builtin:mentions', enabled: true },
     { id: 'builtin:herdr', enabled: false },
     { id: 'builtin:superagent', enabled: true, status: 'active' },
     {
@@ -592,7 +619,7 @@ test('collectEnabledPluginIds 仅收集处于活跃运行态的插件（排除 d
       error: { code: 'plugin_enable_failed', message: 'boom', stage: 'enable' },
     },
   ])
-  assert.deepEqual([...ids].sort(), ['builtin:profile', 'builtin:superagent'])
+  assert.deepEqual([...ids].sort(), ['builtin:mentions', 'builtin:superagent'])
   assert.equal(isProfileVisible({ id: 'p-fail', name: 'Fail', managedByPlugin: 'ext:dep-failed' }, ids), false)
   assert.equal(isSkillVisible({ id: 's-fail', name: 'FailSkill', references: [], managedByPlugin: 'ext:dep-failed' }, ids), false)
   assert.equal(isProfileVisible({ id: 'p-ok', name: 'Ok', managedByPlugin: 'builtin:superagent' }, ids), true)
@@ -805,7 +832,7 @@ function makeTestStore(partial: TestStoreOverrides = {}): HelmxExternalStore {
       conv({ id: 10, title: '用户会话1', profileId: 'assistant' }),
       conv({ id: 11, title: '用户会话2', profileId: 'assistant' }),
     ],
-    plugins: [{ id: 'builtin:profile', name: '个人助理', locked: true, enabled: true, hooks: [], actions: [], tools: [] }],
+    plugins: [{ id: 'builtin:mentions', name: '角色点名', locked: false, enabled: true, hooks: [], actions: [], tools: [] }],
     profiles: [{ id: 'assistant', name: '个人助理' }],
     models: [
       {
@@ -834,7 +861,7 @@ test('批量选择状态计算：全选、反选与单选切换', { timeout: 60_
       conv({ id: 21, title: '系统中枢', profileId: 'coder', ownedBy: 'helmx', status: 'working' }),
       conv({ id: 22, title: '会话 22', profileId: 'coder' }),
     ],
-    plugins: [{ id: 'builtin:profile', enabled: true }],
+    plugins: [{ id: 'builtin:mentions', enabled: true }],
     sidebarItems: [],
   })
 

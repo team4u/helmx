@@ -50,6 +50,7 @@ import type {
   ProviderConfig,
   PublicPluginDoc,
   PublicPluginSessionDoc,
+  ScopedSkillCatalog,
   SearchHit,
   SetModelFilterBody,
   SkillSummary,
@@ -669,9 +670,18 @@ export const assetsApi = {
   },
 
   listSkills: (opts?: { signal?: AbortSignal }) => apiRequest<SkillSummary[]>('GET', '/api/skills', undefined, opts?.signal),
-  readSkill: (id: string, path?: string, opts?: { signal?: AbortSignal }) => {
-    const qs = path ? `?path=${encodeURIComponent(path)}` : ''
-    return apiRequest<{ text: string }>('GET', `/api/skills/${encodeURIComponent(id)}${qs}`, undefined, opts?.signal)
+  getScopedSkillCatalog: (scope: { nodeId: string; cwd?: string }, opts?: { signal?: AbortSignal }) => {
+    const params = new URLSearchParams({ nodeId: scope.nodeId })
+    if (scope.cwd !== undefined && scope.cwd !== '') params.set('cwd', scope.cwd)
+    return apiRequest<ScopedSkillCatalog>('GET', `/api/skills/scoped/catalog?${params.toString()}`, undefined, opts?.signal)
+  },
+  readSkill: (id: string, path?: string, opts?: { nodeId?: string; cwd?: string; signal?: AbortSignal }) => {
+    const params = new URLSearchParams()
+    if (path !== undefined && path !== '') params.set('path', path)
+    if (opts?.nodeId !== undefined && opts.nodeId !== '') params.set('nodeId', opts.nodeId)
+    if (opts?.cwd !== undefined && opts.cwd !== '') params.set('cwd', opts.cwd)
+    const qs = params.toString()
+    return apiRequest<{ text: string }>('GET', `/api/skills/${encodeURIComponent(id)}${qs ? `?${qs}` : ''}`, undefined, opts?.signal)
   },
 }
 

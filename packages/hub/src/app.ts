@@ -1,6 +1,6 @@
 import { hubVersion, KernelRuntime, loadExternalPlugins } from '@helmx/kernel';
 import { createPluginBuildProvider, createPluginPackageManager } from '@helmx/plugin-build';
-import { createProfilePlugin } from '@helmx/plugins/profile';
+import { createMentionsPlugin } from '@helmx/plugins/mentions';
 import { createWorkflowPlugin } from '@helmx/plugins/workflow';
 import { createWorktreePlugin } from '@helmx/plugins/worktree';
 import { createChangesPlugin } from '@helmx/plugins/changes';
@@ -103,11 +103,11 @@ export async function createHelmx(options: HelmxOptions = {}) {
   };
   offClose = kernel.onClose(disposeAutoUpgrade);
   try {
-    // Default-enabled (17): profile (locked), workflow, worktree, changes, swarm, memory, json-render, mermaid, triggers, magpie, token-speed, tiers, duo, title, plan, steps, port-forward.
+    // Default-enabled (17): mentions, workflow, worktree, changes, swarm, memory, json-render, mermaid, triggers, magpie, token-speed, tiers, duo, title, plan, steps, port-forward.
     // Post-startup recovery ordering (workflow child-session convergence before worktree crashed-lease
     // reclamation) is enforced by PluginHost.reconcile() topological order via service.reconcileAfter,
     // independent of plugin registration order here.
-    await kernel.plugins.register(createProfilePlugin());
+    await kernel.plugins.register(createMentionsPlugin());
     await kernel.plugins.register(createWorkflowPlugin());
     await kernel.plugins.register(createWorktreePlugin());
     await kernel.plugins.register(createChangesPlugin());

@@ -13,7 +13,6 @@ import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/provid
 
 import { createPluginBuildProvider } from '@helmx/plugin-build'
 import { KernelRuntime } from '@helmx/kernel'
-import { createProfilePlugin } from '../src/profile.js'
 import { createSwarmPlugin } from '../src/swarm.js'
 import { createWorkflowPlugin } from '../src/workflow.js'
 import { createWorktreePlugin } from '../src/worktree.js'
@@ -1176,7 +1175,6 @@ describe('builtin:swarm crash replay & boot reconciliation', { concurrency: 2, t
         },
       })
 
-      await kernel.plugins.register(createProfilePlugin())
       // Deliberately register swarm BEFORE workflow and worktree!
       await kernel.plugins.register(wrapReconcile(createSwarmPlugin()))
       await kernel.plugins.register(wrapReconcile(createWorkflowPlugin()))

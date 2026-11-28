@@ -922,11 +922,7 @@ describe('builtin:swarm lifecycle, activation & index governance', { concurrency
         0,
         'builtin:swarm must not register duplicate ui.command',
       )
-      const loadedSkill = (await kernel.plugins.executeTool(
-        'load_skill',
-        { skillId: SWARM_SKILL_ID },
-        { conversationId: coord.id },
-      )) as { text: string }
+      const loadedSkill = await kernel.scopedSkills.loadSkillForConversation(coord.id, { skillId: SWARM_SKILL_ID })
       assert.match(loadedSkill.text, /Coordinator Rule: Do Not Do the Work/)
       for (const toolName of [
         'swarm_create_group',
@@ -1080,7 +1076,7 @@ describe('builtin:swarm lifecycle, activation & index governance', { concurrency
       await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
       await kernel.plugins.disable(SWARM_PLUGIN_ID)
       await assert.rejects(
-        () => kernel.plugins.executeTool('load_skill', { skillId: SWARM_SKILL_ID }, { conversationId: coord.id }),
+        () => kernel.scopedSkills.loadSkillForConversation(coord.id, { skillId: SWARM_SKILL_ID }),
         (err: unknown) => err instanceof HelmxError && err.code === 'skill_not_available',
       )
     } finally {
@@ -1448,11 +1444,7 @@ describe('builtin:swarm lifecycle, activation & index governance', { concurrency
       assert.equal(runActionResultText.includes(g1.groupId), false, 'status=active filter must exclude closed group')
 
       // Swarm skill documents list-groups
-      const loadedSkill = (await kernel.plugins.executeTool(
-        'load_skill',
-        { skillId: SWARM_SKILL_ID },
-        { conversationId: observer.id },
-      )) as { text: string }
+      const loadedSkill = await kernel.scopedSkills.loadSkillForConversation(observer.id, { skillId: SWARM_SKILL_ID })
       assert.ok(loadedSkill.text.includes('helmx swarm list-groups'))
       assert.ok(loadedSkill.text.includes('builtin:swarm.list_groups'))
 

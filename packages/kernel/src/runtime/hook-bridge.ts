@@ -22,6 +22,7 @@ import type {
   HookPayloadMap,
   HookResult,
   JsonSchema,
+  MaybePromise,
 } from '@helmx/protocol'
 import {
   KERNEL_TOOL_PRESENTATION_META_SCHEMAS,
@@ -50,6 +51,8 @@ import {
   type GuardToolResultOptions,
 } from './tools/tool-result-contract.js'
 import { ASK_USER_PROMPT_SNIPPET, ASK_USER_SCOPE, ASK_USER_TOOL_NAME } from './tools/ask-tools.js'
+import { LOAD_SKILL_TOOL_NAME } from './tools/skill-tools.js'
+import type { PreparedTurnContext, TurnContextAssembler } from './turn-context.js'
 import {
   consumeRegistryToolAbortFallback,
   lookupRegistryToolSchemas,
@@ -93,6 +96,8 @@ interface HookBridgeOptions {
   readonly shouldResetRuntimeModelOnRunEnd?: (conversationId: number) => boolean
   /** Optional run-end boundary callback to restore baseline runtime model before queued `followUp` turns start. */
   readonly onAfterRunBoundary?: (conversationId: number) => Promise<void>
+  /** Optional kernel turn context assembler (injects profile.system / profile.agents / profile.workspace-boundary / profile.skills). */
+  readonly turnContext?: Pick<TurnContextAssembler, 'prepare' | 'applyPreSections' | 'applyPostSections'>
   /** Optional diagnostic sink for non-fatal hook bridge boundary errors. */
   readonly onHookDiagnostic?: (info: { source: string; message: string; error: unknown }) => void
 }
@@ -234,36 +239,70 @@ export class HookBridge {
         ? this.scopeLocalTools(kernelScopedTools, unscopedByName, scopedPluginTools)
         : kernelScopedTools
     const original = request.messages as unknown as Array<Record<string, unknown>>
-    const payload: BeforeTurnHookPayload = {
-      conversation: summary,
-      inputs: this.options.currentRunInputs(conversationId),
-      tools: effectiveTools.map((spec) => {
-        const schemas = this.resolveToolSchemas(spec.name, unscopedByName)
-        return {
-          name: spec.name,
-          description: spec.description,
-          inputSchema: spec.parameters as Record<string, unknown>,
-          ...(schemas.structuredOutputSchema !== undefined
-            ? { structuredOutputSchema: schemas.structuredOutputSchema }
-            : {}),
-          ...(schemas.presentationMetaSchema !== undefined
-            ? { presentationMetaSchema: schemas.presentationMetaSchema }
-            : {}),
-        }
-      }) as unknown as BeforeTurnHookPayload['tools'],
-      sections: systemSectionsOf(request.messages),
-      messages: original,
+    const initialSections = systemSectionsOf(request.messages)
+    let preparedTurn: PreparedTurnContext | undefined
+    const buildPayload = async (): Promise<BeforeTurnHookPayload> => {
+      preparedTurn =
+        this.options.turnContext !== undefined
+          ? await this.options.turnContext.prepare(summary)
+          : undefined
+      const seededSections =
+        preparedTurn !== undefined
+          ? this.options.turnContext!.applyPreSections(initialSections, preparedTurn.preSections)
+          : initialSections
+      return {
+        conversation: summary,
+        inputs: this.options.currentRunInputs(conversationId),
+        tools: effectiveTools.map((spec) => {
+          const schemas = this.resolveToolSchemas(spec.name, unscopedByName)
+          return {
+            name: spec.name,
+            description: spec.description,
+            inputSchema: spec.parameters as Record<string, unknown>,
+            ...(schemas.structuredOutputSchema !== undefined
+              ? { structuredOutputSchema: schemas.structuredOutputSchema }
+              : {}),
+            ...(schemas.presentationMetaSchema !== undefined
+              ? { presentationMetaSchema: schemas.presentationMetaSchema }
+              : {}),
+          }
+        }) as unknown as BeforeTurnHookPayload['tools'],
+        sections: seededSections,
+        messages: original,
+      }
     }
-    const outcome = await this.runHookChain('before_turn', payload)
-    // Host final scoped projection: regardless of whether hooks transformed, overwrite `prompt.tools.*`
-    // sections according to final active tools (only active tools enter the prompt; disabled/stripped tools
-    // have their sections cleared immediately, leaving no phantom prompts). Uses live PluginHost declarations.
+    let resolvedPayload: BeforeTurnHookPayload | undefined
+    const outcome = await this.runHookChain('before_turn', async () => {
+      resolvedPayload = await buildPayload()
+      return resolvedPayload
+    })
+    const payload = resolvedPayload ?? (await buildPayload())
+    // Host final scoped projection: regardless of whether hooks transformed, overwrite `profile.skills*` and
+    // `prompt.tools.*` sections according to final active tools (only active tools enter the prompt; disabled/stripped
+    // tools have their sections cleared immediately, leaving no phantom prompts). Uses live PluginHost declarations.
     const activeTools = this.activeToolPrompts(scopedPluginTools, effectiveTools, outcome)
     const outcomeSections = outcome?.action === 'transform'
       ? outcome.value.sections
       : payload.sections
+    const requestNames = new Set(effectiveTools.map((tool) => tool.name))
+    const finalNames =
+      outcome?.action === 'transform'
+        ? new Set(
+            ((outcome.value as { tools?: Array<{ name?: unknown }> }).tools ?? [])
+              .filter((t) => typeof t.name === 'string')
+              .map((t) => t.name as string),
+          )
+        : requestNames
+    const loadSkillActive = requestNames.has(LOAD_SKILL_TOOL_NAME) && finalNames.has(LOAD_SKILL_TOOL_NAME)
+    const postSkillSections =
+      preparedTurn !== undefined
+        ? this.options.turnContext!.applyPostSections(
+            outcomeSections,
+            preparedTurn.resolvePostSections(loadSkillActive),
+          )
+        : outcomeSections
     const projected = projectActionPromptSection(
-      projectToolPromptSections(outcomeSections, activeTools),
+      projectToolPromptSections(postSkillSections, activeTools),
       this.renderActionDirectory(host, summary, effectiveTools, outcome),
     )
     const value: BeforeTurnHookPayload = outcome?.action === 'transform'
@@ -277,7 +316,7 @@ export class HookBridge {
     //    history body must never be overwritten by plugins — prevents inplace diff mutation corruption of system header);
     // 3. Remaining non-system history keeps strict original ordering (prefix trimming only; never fabricate/rewrite history).
     let messages = original
-    const sectionsChanged = !sectionsEqual(value.sections, payload.sections)
+    const sectionsChanged = !sectionsEqual(value.sections, initialSections)
     const messagesChanged = value.messages !== payload.messages
     if (messagesChanged) messages = assertSafeMessageSurgery(original, value.messages)
     if (sectionsChanged) messages = withSections(messages, value.sections)
@@ -384,16 +423,16 @@ export class HookBridge {
   /** Run a unified hook pipeline; converts `continue` into `undefined` so callers apply default behavior. */
   async runHookChain<K extends HookName>(
     name: K,
-    payload: HookPayloadMap[K],
+    payload: HookPayloadMap[K] | (() => MaybePromise<HookPayloadMap[K]>),
   ): Promise<HookResult<HookPayloadMap[K]> | undefined>
   async runHookChain(name: HookName, payload: unknown): Promise<HookDecision | undefined>
   async runHookChain<K extends HookName>(
     name: K,
-    payload: HookPayloadMap[K] | unknown,
+    payload: HookPayloadMap[K] | (() => MaybePromise<HookPayloadMap[K]>) | unknown,
   ): Promise<HookResult<HookPayloadMap[K]> | HookDecision | undefined> {
     const host = this.options.pluginHost()
     if (!host) return undefined
-    const result = await host.runHook(name, payload as HookPayloadMap[K])
+    const result = await host.runHook(name, payload as HookPayloadMap[K] | (() => MaybePromise<HookPayloadMap[K]>))
     if (result.action === 'continue') return undefined
     return result
   }

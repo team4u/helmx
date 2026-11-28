@@ -3,7 +3,7 @@
  * `core-actions`). Extracting these interfaces into a leaf module eliminates type-only cycles against
  * `runtime.ts` without changing runtime behavior.
  */
-import type { MaybePromise, PluginSkillAsset } from '@helmx/protocol'
+import type { MaybePromise, PluginSkillAsset, PluginSummary } from '@helmx/protocol'
 import type { EnvFabric } from '../env/index.js'
 import type { NodeForwardService } from '../env/forward.js'
 import type { PluginHost } from '../plugins/index.js'
@@ -22,6 +22,7 @@ import type { NodeManager } from './node-manager.js'
 import type { RuntimeAgentSpawn } from './runtime-agent-spawn.js'
 import type { RuntimeOwnershipManager } from './runtime-ownership.js'
 import type { RuntimeTriggerDispatcher } from './runtime-triggers.js'
+import type { ScopedSkillService } from './scoped-skills.js'
 
 /** Minimal runtime surface required by `assembleRuntimeServices` (`runtime-services.ts`). */
 export interface RuntimeServicesHost {
@@ -31,6 +32,7 @@ export interface RuntimeServicesHost {
   readonly started: boolean
   readonly processToken: string | undefined
   readonly plugins: PluginHost
+  listPluginsSnapshot(): ReadonlyArray<PluginSummary>
 }
 
 /** Structural runtime surface required by `registerCoreActions` (`core-actions.ts`). */
@@ -43,6 +45,7 @@ export interface CoreActionsRuntimeHost {
   readonly ownership: RuntimeOwnershipManager
   readonly profiles: ProfileService
   readonly skills: SkillService
+  readonly scopedSkills: ScopedSkillService
   readonly stash: SecretStash
 }
 

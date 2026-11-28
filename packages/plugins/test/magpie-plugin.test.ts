@@ -1367,35 +1367,22 @@ test('magpie28: 受管技能 magpie 启动自举、停用即时消失（零幻�
       assert.ok(skillMd.includes(`builtin:magpie.${actionId}`), `magpie SKILL.md 应涵盖 builtin:magpie.${actionId}`)
     }
 
-    const readSkillsSection = async () => {
-      const res = await kernel.plugins.runHook('before_turn', {
-        conversation: kernel.conversations.getConversation(1),
-        inputs: [],
-        sections: [],
-        tools: [],
-        messages: [],
-      })
-      assert.equal(res.action, 'transform')
-      return res.value.sections.find((s) => s.id === 'profile.skills')?.text ?? ''
-    }
+    const listAvailableIds = async () =>
+      (await kernel.scopedSkills.listAvailableForConversation('assistant', kernel.conversations.getConversation(1))).available.map((s) => s.id)
 
-    assert.ok((await readSkillsSection()).includes('id="magpie"'), '启用时 <available_skills> 应包含 magpie')
-    const loaded = (await kernel.plugins.executeTool(
-      'load_skill',
-      { skillId: MAGPIE_SKILL_ID },
-      { conversationId: 1 },
-    )) as { text: string }
+    assert.ok((await listAvailableIds()).includes(MAGPIE_SKILL_ID), '启用时可用技能应包含 magpie')
+    const loaded = await kernel.scopedSkills.loadSkillForConversation(1, { skillId: MAGPIE_SKILL_ID })
     assert.ok(loaded.text.includes('# Magpie Dynamic Model Gateway'))
 
     await kernel.plugins.disable(MAGPIE)
-    assert.equal((await readSkillsSection()).includes('id="magpie"'), false, '停用后 <available_skills> 不得残留 magpie 技能')
+    assert.equal((await listAvailableIds()).includes(MAGPIE_SKILL_ID), false, '停用后不得残留 magpie 技能')
     await assert.rejects(
-      () => kernel.plugins.executeTool('load_skill', { skillId: MAGPIE_SKILL_ID }, { conversationId: 1 }),
+      () => kernel.scopedSkills.loadSkillForConversation(1, { skillId: MAGPIE_SKILL_ID }),
       (err: unknown) => err instanceof HelmxError && err.code === 'skill_not_available' && err.status === 403,
     )
 
     await kernel.plugins.enable(MAGPIE)
-    assert.ok((await readSkillsSection()).includes('id="magpie"'), '重新启用后 magpie 技能应恢复')
+    assert.ok((await listAvailableIds()).includes(MAGPIE_SKILL_ID), '重新启用后 magpie 技能应恢复')
   } finally {
     await app?.close().catch(() => {})
     fetchMock.restore()

@@ -6,7 +6,7 @@ import { useLayoutEffect, useMemo } from 'react'
 import type { ConversationSummary, HelmxLocale, Profile } from '@helmx/protocol/browser'
 import { buildSlashMenuItems, type QualifiedCommand, type SlashMenuItem } from '../lib/commands-model.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
-import { useGroupedUi, usePlugins, useSkills, useStoreActions } from '../lib/store-context.js'
+import { useGroupedUi, usePlugins, useSkills } from '../lib/store-context.js'
 import { collectEnabledPluginIds } from '../shell/conversation-status-model.js'
 import type { SkillScope } from '../skills/skill-scope-model.js'
 import { useScopedSkillCatalog } from '../skills/use-scoped-skills.js'
@@ -56,7 +56,6 @@ export function useComposerCompletions({
   const groupedUi = useGroupedUi()
   const plugins = usePlugins()
   const skills = useSkills()
-  const { invokePluginAction } = useStoreActions()
   const { t } = useWebLocale()
 
   useLayoutEffect(() => {
@@ -77,7 +76,7 @@ export function useComposerCompletions({
   })
 
   const enabledPluginIds = useMemo(() => collectEnabledPluginIds(plugins), [plugins])
-  const scopedSkillCatalog = useScopedSkillCatalog(skillScope, invokePluginAction, t)
+  const scopedSkillCatalog = useScopedSkillCatalog(skillScope, t)
   const availableSkills = useMemo(
     () =>
       slashMenuSkillsWithScope(

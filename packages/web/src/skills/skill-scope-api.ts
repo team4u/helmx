@@ -1,31 +1,28 @@
 /**
- * builtin:profile 技能目录 / 节点技能读取 action 的 Web 适配层。
+ * Web adapter for coordinate-scoped skill catalog and node skill reading (`core:skills.catalog` / `core:skills.read`).
  *
- * 契约：
- * - `skill_catalog`：input `{ nodeId, cwd? }` → `{ nodeId, cwd?, skills, shadowedNodeSkillIds,
- *   nodeUnavailable? }`，skills 为 Hub + 节点机器级根目录（及可选工作区）合并目录；
- * - `skill_read`：input `{ nodeId, cwd?, skillId, path? }` → `{ text }`，只用于
- *   节点源技能（Hub 源技能继续走 /api/skills/:id/read）。
+ * Contract:
+ * - `GET /api/skills/scoped/catalog?nodeId=...&cwd=...` -> `{ nodeId, cwd?, skills, shadowedNodeSkillIds, nodeUnavailable? }`
+ * - `GET /api/skills/:id?path=...&nodeId=...&cwd=...` -> `{ text }`
  *
- * Web 经 HTTP action 调用（不带 conversationId）；本模块在消费边界对输出做
- * 严格形状校验，非法输出显式抛错，绝不静默降级或编造数据。
+ * Validates response shapes strictly at the boundary; malformed outputs throw explicitly without fallback.
  */
 import type { SkillSummary } from '@helmx/protocol/browser'
 import type { WebMessageTranslator } from '../i18n/catalog.js'
+import { assetsApi } from '../lib/api.js'
 import type { SkillScope } from './skill-scope-model.js'
 
-export const SKILLS_PLUGIN_ID = 'builtin:profile'
-export const SKILL_CATALOG_ACTION_ID = 'skill_catalog'
-export const SKILL_READ_ACTION_ID = 'skill_read'
+/** Injectable scoped-skill transport (defaults to `assetsApi`; tests may inject a stub). */
+export interface ScopedSkillTransport {
+  listCatalog(scope: { nodeId: string; cwd?: string }): Promise<unknown>
+  readFile(id: string, path?: string, opts?: { nodeId?: string; cwd?: string }): Promise<unknown>
+}
 
-/** 宿主 action 调用面（生产为 store 的 invokePluginAction；测试可注入桩）。 */
-export type SkillActionInvoker = (
-  pluginId: string,
-  actionId: string,
-  input: unknown,
-) => Promise<unknown>
+const DEFAULT_SCOPED_SKILL_TRANSPORT: ScopedSkillTransport = {
+  listCatalog: (scope) => assetsApi.getScopedSkillCatalog(scope),
+  readFile: (id, path, opts) => assetsApi.readSkill(id, path, opts),
+}
 
-/** 合并技能目录结果（已通过边界校验）。 */
 export interface ScopedSkillCatalog {
   skills: SkillSummary[]
   shadowedNodeSkillIds: string[]
@@ -38,7 +35,6 @@ function catalogError(t: WebMessageTranslator, detail: string): Error {
   return new Error(t('skills.scopeApi.catalogInvalid', { detail }))
 }
 
-/** 校验单个技能摘要条目（字段级拒绝，不静默丢弃）。 */
 function parseSkillSummaryEntry(raw: unknown, index: number, t: WebMessageTranslator): SkillSummary {
   if (typeof raw !== 'object' || raw === null) {
     throw catalogError(t, t('skills.scopeApi.skillEntryNotObject', { index }))
@@ -73,9 +69,6 @@ function parseSkillSummaryEntry(raw: unknown, index: number, t: WebMessageTransl
   }
 }
 
-/** 边界校验 skill_catalog 输出（外部输入显式拒绝，绝不静默截断）。
- * outputSchema 中的 required echo 字段 nodeId 必须是非空字符串；cwd 可选，
- * 若存在也必须是非空字符串。 */
 export function parseSkillCatalogResult(raw: unknown, t: WebMessageTranslator): ScopedSkillCatalog {
   if (typeof raw !== 'object' || raw === null) {
     throw catalogError(t, t('skills.scopeApi.notObject'))
@@ -112,7 +105,6 @@ export function parseSkillCatalogResult(raw: unknown, t: WebMessageTranslator): 
   }
 }
 
-/** 边界校验 skill_read 输出。 */
 export function parseSkillReadResult(raw: unknown, t: WebMessageTranslator): { text: string } {
   if (typeof raw !== 'object' || raw === null) {
     throw new Error(t('skills.scopeApi.readNotObject'))
@@ -124,30 +116,32 @@ export function parseSkillReadResult(raw: unknown, t: WebMessageTranslator): { t
   return { text }
 }
 
-/** 拉取节点（及可选工作区）的合并技能目录。 */
+/** Fetch merged skill catalog for a target node (and optional workspace cwd). */
 export function fetchScopedSkillCatalog(
-  invoke: SkillActionInvoker,
   scope: SkillScope,
   t: WebMessageTranslator,
+  transport: Pick<ScopedSkillTransport, 'listCatalog'> = DEFAULT_SCOPED_SKILL_TRANSPORT,
 ): Promise<ScopedSkillCatalog> {
-  return invoke(SKILLS_PLUGIN_ID, SKILL_CATALOG_ACTION_ID, {
-    nodeId: scope.nodeId,
-    ...(scope.cwd !== undefined && scope.cwd !== '' ? { cwd: scope.cwd } : {}),
-  }).then((raw) => parseSkillCatalogResult(raw, t))
+  return transport
+    .listCatalog({
+      nodeId: scope.nodeId,
+      ...(scope.cwd !== undefined && scope.cwd !== '' ? { cwd: scope.cwd } : {}),
+    })
+    .then((raw) => parseSkillCatalogResult(raw, t))
 }
 
-/** 读取节点源技能文件（path 缺省读主 SKILL.md，与 Hub 读取约定一致）。 */
+/** Read a node-sourced skill file (path defaults to SKILL.md on the server). */
 export function readScopedSkillFile(
-  invoke: SkillActionInvoker,
   scope: SkillScope,
   skillId: string,
   path: string | undefined,
   t: WebMessageTranslator,
+  transport: Pick<ScopedSkillTransport, 'readFile'> = DEFAULT_SCOPED_SKILL_TRANSPORT,
 ): Promise<{ text: string }> {
-  return invoke(SKILLS_PLUGIN_ID, SKILL_READ_ACTION_ID, {
-    nodeId: scope.nodeId,
-    ...(scope.cwd !== undefined && scope.cwd !== '' ? { cwd: scope.cwd } : {}),
-    skillId,
-    ...(path !== undefined && path !== '' ? { path } : {}),
-  }).then((raw) => parseSkillReadResult(raw, t))
+  return transport
+    .readFile(skillId, path !== undefined && path !== '' ? path : undefined, {
+      nodeId: scope.nodeId,
+      ...(scope.cwd !== undefined && scope.cwd !== '' ? { cwd: scope.cwd } : {}),
+    })
+    .then((raw) => parseSkillReadResult(raw, t))
 }

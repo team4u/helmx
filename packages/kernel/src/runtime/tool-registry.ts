@@ -40,6 +40,7 @@ import {
   createAskUserTool,
   createBashTool,
   createEditTool,
+  createLoadSkillTool,
   createReadArtifactTool,
   createReadTool,
   createRegisterArtifactTool,
@@ -283,6 +284,7 @@ export class RuntimeToolRegistry {
           redact,
         }),
       ),
+      wrapToolRegistration(createLoadSkillTool(toolDeps)),
     ]
     this.kernelToolSchemas.clear()
     for (const tool of kernelTools) {

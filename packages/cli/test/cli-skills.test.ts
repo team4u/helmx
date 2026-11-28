@@ -1,12 +1,12 @@
 /**
  * CLI tests for `skills list/read` scoping flags (`--current`, `--node`+`--cwd`):
- * - No scope flags keeps the Hub global semantics (GET /api/skills, no action calls).
+ * - No scope flags keeps the Hub global semantics (GET /api/skills).
  * - --current reads HELMX_CONVERSATION_ID, resolves the conversation's (nodeId, cwd) via
- *   GET /api/conversations/:id, then posts explicit coordinates only — the action call
- *   never carries conversationId; missing env / missing workspace cwd fail explicitly.
- * - Explicit --node+--cwd travel in the action input verbatim (trusted CLI surface).
+ *   GET /api/conversations/:id, then calls GET /api/skills/scoped/catalog or GET /api/skills/:id
+ *   with explicit coordinates only; missing env / missing workspace cwd fail explicitly.
+ * - Explicit --node+--cwd travel in query parameters verbatim (trusted CLI surface).
  * - Local validation: --node/--cwd pair enforcement, mutual exclusion with --current, empty values.
- * - Boundary validation: malformed skill_catalog/skill_read responses fail explicitly.
+ * - Boundary validation: malformed scoped catalog / read responses fail explicitly.
  * - Human vs --json rendering for the scoped catalog (scope line, shadowed ids, nodeUnavailable).
  */
 import test from 'node:test'
@@ -19,8 +19,6 @@ import {
   useTempDir,
 } from './helpers/cli-harness.js'
 
-const CATALOG_ROUTE = 'POST /api/actions/builtin%3Aprofile/skill_catalog'
-const READ_ROUTE = 'POST /api/actions/builtin%3Aprofile/skill_read'
 const CONVERSATION_42 = 'GET /api/conversations/42?limit=1'
 const CONVERSATION_42_BODY = { id: 42, title: 'work', nodeId: 'node-a', cwd: '/srv/work' }
 
@@ -39,7 +37,6 @@ test('skills list without scope flags keeps Hub global GET semantics', { timeout
   const hub = await startMockHub(
     {
       'GET /api/skills': () => ({ body: [{ id: 'helmx-cli', name: 'Helmx CLI', references: [] }] }),
-      [CATALOG_ROUTE]: () => ({ body: CATALOG_OK }),
     },
     { autoRegisterCleanup: t },
   )
@@ -47,27 +44,28 @@ test('skills list without scope flags keeps Hub global GET semantics', { timeout
   const env = makeCliEnv(hub.url, dir, { HELMX_CONVERSATION_ID: '7' })
   const r = await runCliCaptured(['skills', 'list', '--json'], env)
   assert.equal(r.code, 0, r.err)
-  const actionHits = hub.hits.filter((h) => h.path.includes('/api/actions/'))
-  assert.equal(actionHits.length, 0)
+  assert.equal(hub.hits.filter((h) => h.path.includes('/api/skills/scoped/catalog')).length, 0)
+  assert.equal(hub.hits.filter((h) => h.path.includes('/api/actions/')).length, 0)
   assert.deepEqual(JSON.parse(r.out), [{ id: 'helmx-cli', name: 'Helmx CLI', references: [] }])
 })
 
-test('skills list --current resolves conversation coordinates and posts them explicitly', { timeout: 60_000 }, async (t) => {
+test('skills list --current resolves conversation coordinates and requests scoped catalog explicitly', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helmx-cli-skills-')
   const hub = await startMockHub(
     {
       'GET /api/conversations/42?limit=1': () => ({ body: { id: 42, title: 'work', nodeId: 'node-a', cwd: '/srv/work' } }),
-      [CATALOG_ROUTE]: () => ({ body: CATALOG_OK }),
+      'GET /api/skills/scoped/catalog?nodeId=node-a&cwd=%2Fsrv%2Fwork': () => ({ body: CATALOG_OK }),
     },
     { autoRegisterCleanup: t },
   )
   const env = makeCliEnv(hub.url, dir, { HELMX_CONVERSATION_ID: '42' })
   const r = await runCliCaptured(['skills', 'list', '--current', '--json'], env)
   assert.equal(r.code, 0, r.err)
-  const hit = hub.hits.find((h) => h.method === 'POST' && h.path === '/api/actions/builtin%3Aprofile/skill_catalog')!
-  assert.ok(hit, 'skill_catalog action must be called')
-  // Explicit coordinates only: the action call never carries conversation context
-  assert.deepEqual(hit.body, { input: { nodeId: 'node-a', cwd: '/srv/work' } })
+  const hit = hub.hits.find((h) => h.method === 'GET' && h.path.startsWith('/api/skills/scoped/catalog?'))
+  assert.ok(hit, 'GET /api/skills/scoped/catalog must be called')
+  const params = new URL(`http://hub${hit!.path}`).searchParams
+  assert.equal(params.get('nodeId'), 'node-a')
+  assert.equal(params.get('cwd'), '/srv/work')
   assert.deepEqual(JSON.parse(r.out), CATALOG_OK)
 })
 
@@ -76,15 +74,17 @@ test('skills list --current defaults a missing conversation nodeId to local', { 
   const hub = await startMockHub(
     {
       'GET /api/conversations/5?limit=1': () => ({ body: { id: 5, title: 'local chat', cwd: '/home/me/proj' } }),
-      [CATALOG_ROUTE]: () => ({ body: CATALOG_OK }),
+      'GET /api/skills/scoped/catalog?nodeId=local&cwd=%2Fhome%2Fme%2Fproj': () => ({ body: CATALOG_OK }),
     },
     { autoRegisterCleanup: t },
   )
   const env = makeCliEnv(hub.url, dir, { HELMX_CONVERSATION_ID: '5' })
   const r = await runCliCaptured(['skills', 'list', '--current', '--json'], env)
   assert.equal(r.code, 0, r.err)
-  const hit = hub.hits.find((h) => h.method === 'POST')!
-  assert.deepEqual(hit.body, { input: { nodeId: 'local', cwd: '/home/me/proj' } })
+  const hit = hub.hits.find((h) => h.path.startsWith('/api/skills/scoped/catalog?'))!
+  const params = new URL(`http://hub${hit.path}`).searchParams
+  assert.equal(params.get('nodeId'), 'local')
+  assert.equal(params.get('cwd'), '/home/me/proj')
 })
 
 test('skills list --current fails explicitly when the conversation has no bound cwd', { timeout: 60_000 }, async (t) => {
@@ -92,7 +92,6 @@ test('skills list --current fails explicitly when the conversation has no bound 
   const hub = await startMockHub(
     {
       'GET /api/conversations/7?limit=1': () => ({ body: { id: 7, title: 'bare', cwd: '' } }),
-      [CATALOG_ROUTE]: () => ({ body: CATALOG_OK }),
     },
     { autoRegisterCleanup: t },
   )
@@ -100,27 +99,35 @@ test('skills list --current fails explicitly when the conversation has no bound 
   const r = await runCliCaptured(['skills', 'list', '--current', '--json'], env)
   assert.notEqual(r.code, 0)
   assert.equal(parseCliError(r).code, 'conversation_without_cwd')
-  assert.equal(hub.hits.filter((h) => h.path.includes('/api/actions/')).length, 0)
+  assert.equal(hub.hits.filter((h) => h.path.includes('/api/skills/')).length, 0)
 })
 
 test('skills list --current without HELMX_CONVERSATION_ID fails explicitly', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helmx-cli-skills-')
-  const hub = await startMockHub({ [CATALOG_ROUTE]: () => ({ body: CATALOG_OK }) }, { autoRegisterCleanup: t })
+  const hub = await startMockHub({}, { autoRegisterCleanup: t })
   const r = await runCliCaptured(['skills', 'list', '--current', '--json'], makeCliEnv(hub.url, dir))
   assert.notEqual(r.code, 0)
   assert.equal(parseCliError(r).code, 'current_conversation_missing')
   assert.equal(hub.hits.length, 0)
 })
 
-test('skills list --node+--cwd posts explicit coordinates without conversationId', { timeout: 60_000 }, async (t) => {
+test('skills list --node+--cwd sends explicit query coordinates without conversationId', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helmx-cli-skills-')
-  const hub = await startMockHub({ [CATALOG_ROUTE]: () => ({ body: CATALOG_OK }) }, { autoRegisterCleanup: t })
+  const hub = await startMockHub(
+    {
+      'GET /api/skills/scoped/catalog?nodeId=node-a&cwd=%2Fsrv%2Fwork': () => ({ body: CATALOG_OK }),
+    },
+    { autoRegisterCleanup: t },
+  )
   // Even inside a managed turn, explicit coordinates never attach conversation context
   const env = makeCliEnv(hub.url, dir, { HELMX_CONVERSATION_ID: '9' })
   const r = await runCliCaptured(['skills', 'list', '--node', 'node-a', '--cwd', '/srv/work', '--json'], env)
   assert.equal(r.code, 0, r.err)
-  const hit = hub.hits.find((h) => h.method === 'POST')!
-  assert.deepEqual(hit.body, { input: { nodeId: 'node-a', cwd: '/srv/work' } })
+  const hit = hub.hits.find((h) => h.path.startsWith('/api/skills/scoped/catalog?'))!
+  const params = new URL(`http://hub${hit.path}`).searchParams
+  assert.equal(params.get('nodeId'), 'node-a')
+  assert.equal(params.get('cwd'), '/srv/work')
+  assert.equal(params.get('conversationId'), null)
 })
 
 test('skills list --node works standalone without --cwd; --cwd alone without --node fails explicitly', { timeout: 60_000 }, async (t) => {
@@ -130,12 +137,19 @@ test('skills list --node works standalone without --cwd; --cwd alone without --n
     skills: [{ id: 'node-shared', name: 'Node Shared', references: [], source: 'node' }],
     shadowedNodeSkillIds: [],
   }
-  const hub = await startMockHub({ [CATALOG_ROUTE]: () => ({ body: catalogNodeOnly }) }, { autoRegisterCleanup: t })
+  const hub = await startMockHub(
+    {
+      'GET /api/skills/scoped/catalog?nodeId=node-a': () => ({ body: catalogNodeOnly }),
+    },
+    { autoRegisterCleanup: t },
+  )
   const env = makeCliEnv(hub.url, dir)
   const onlyNode = await runCliCaptured(['skills', 'list', '--node', 'node-a', '--json'], env)
   assert.equal(onlyNode.code, 0, onlyNode.err)
-  const hit = hub.hits.find((h) => h.method === 'POST')!
-  assert.deepEqual(hit.body, { input: { nodeId: 'node-a' } })
+  const hit = hub.hits.find((h) => h.path.startsWith('/api/skills/scoped/catalog?'))!
+  const params = new URL(`http://hub${hit.path}`).searchParams
+  assert.equal(params.get('nodeId'), 'node-a')
+  assert.equal(params.get('cwd'), null)
   assert.deepEqual(JSON.parse(onlyNode.out), catalogNodeOnly)
 
   const humanNode = await runCliCaptured(['skills', 'list', '--node', 'node-a'], env)
@@ -149,18 +163,23 @@ test('skills list --node works standalone without --cwd; --cwd alone without --n
 
 test('skills read --node works standalone without --cwd', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helmx-cli-skills-')
-  const hub = await startMockHub({ [READ_ROUTE]: () => ({ body: { text: '# node machine manual' } }) }, { autoRegisterCleanup: t })
+  const hub = await startMockHub(
+    { 'GET /api/skills/node-shared?nodeId=node-a': () => ({ body: { text: '# node machine manual' } }) },
+    { autoRegisterCleanup: t },
+  )
   const env = makeCliEnv(hub.url, dir)
   const r = await runCliCaptured(['skills', 'read', 'node-shared', '--node', 'node-a'], env)
   assert.equal(r.code, 0, r.err)
   assert.ok(r.out.startsWith('# node machine manual'))
-  const hit = hub.hits.find((h) => h.method === 'POST')!
-  assert.deepEqual(hit.body, { input: { nodeId: 'node-a', skillId: 'node-shared' } })
+  const hit = hub.hits.find((h) => h.path.startsWith('/api/skills/node-shared'))!
+  const params = new URL(`http://hub${hit.path}`).searchParams
+  assert.equal(params.get('nodeId'), 'node-a')
+  assert.equal(params.get('cwd'), null)
 })
 
 test('skills list --current conflicts with explicit --node/--cwd', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helmx-cli-skills-')
-  const hub = await startMockHub({ [CATALOG_ROUTE]: () => ({ body: CATALOG_OK }) }, { autoRegisterCleanup: t })
+  const hub = await startMockHub({}, { autoRegisterCleanup: t })
   const env = makeCliEnv(hub.url, dir, { HELMX_CONVERSATION_ID: '7' })
   const r = await runCliCaptured(['skills', 'list', '--current', '--node', 'node-a', '--cwd', '/srv/work', '--json'], env)
   assert.equal(parseCliError(r).code, 'conflicting_flags')
@@ -169,7 +188,7 @@ test('skills list --current conflicts with explicit --node/--cwd', { timeout: 60
 
 test('skills list rejects empty --node/--cwd values locally', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helmx-cli-skills-')
-  const hub = await startMockHub({ [CATALOG_ROUTE]: () => ({ body: CATALOG_OK }) }, { autoRegisterCleanup: t })
+  const hub = await startMockHub({}, { autoRegisterCleanup: t })
   const env = makeCliEnv(hub.url, dir)
   const r = await runCliCaptured(['skills', 'list', '--node', '  ', '--cwd', '/srv/work', '--json'], env)
   assert.equal(parseCliError(r).code, 'invalid_flag_value')
@@ -181,7 +200,9 @@ test('skills list human output renders scope, shadowed ids, and nodeUnavailable 
   const hub = await startMockHub(
     {
       [CONVERSATION_42]: () => ({ body: CONVERSATION_42_BODY }),
-      [CATALOG_ROUTE]: () => ({ body: { ...CATALOG_OK, nodeUnavailable: 'node node-a is offline' } }),
+      'GET /api/skills/scoped/catalog?nodeId=node-a&cwd=%2Fsrv%2Fwork': () => ({
+        body: { ...CATALOG_OK, nodeUnavailable: 'node node-a is offline' },
+      }),
     },
     { autoRegisterCleanup: t },
   )
@@ -194,12 +215,14 @@ test('skills list human output renders scope, shadowed ids, and nodeUnavailable 
   assert.ok(r.out.includes('node skill library unavailable: node node-a is offline'), r.out)
 })
 
-test('skills list fails explicitly on malformed skill_catalog responses', { timeout: 60_000 }, async (t) => {
+test('skills list fails explicitly on malformed scoped catalog responses', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helmx-cli-skills-')
   const hub = await startMockHub(
     {
       [CONVERSATION_42]: () => ({ body: CONVERSATION_42_BODY }),
-      [CATALOG_ROUTE]: () => ({ body: { nodeId: 'local', cwd: '/w', skills: 'nope', shadowedNodeSkillIds: [] } }),
+      'GET /api/skills/scoped/catalog?nodeId=node-a&cwd=%2Fsrv%2Fwork': () => ({
+        body: { nodeId: 'local', cwd: '/w', skills: 'nope', shadowedNodeSkillIds: [] },
+      }),
     },
     { autoRegisterCleanup: t },
   )
@@ -209,12 +232,12 @@ test('skills list fails explicitly on malformed skill_catalog responses', { time
   assert.equal(parseCliError(r).code, 'invalid_response')
 })
 
-test('skills read --current posts resolved coordinates with skillId and prints text', { timeout: 60_000 }, async (t) => {
+test('skills read --current requests GET /api/skills/:id with resolved coordinates and prints text', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helmx-cli-skills-')
   const hub = await startMockHub(
     {
       'GET /api/conversations/42?limit=1': () => ({ body: { id: 42, title: 'work', nodeId: 'node-a', cwd: '/srv/work' } }),
-      [READ_ROUTE]: () => ({ body: { text: '# node skill manual' } }),
+      'GET /api/skills/deploy?nodeId=node-a&cwd=%2Fsrv%2Fwork': () => ({ body: { text: '# node skill manual' } }),
     },
     { autoRegisterCleanup: t },
   )
@@ -222,14 +245,20 @@ test('skills read --current posts resolved coordinates with skillId and prints t
   const r = await runCliCaptured(['skills', 'read', 'deploy', '--current'], env)
   assert.equal(r.code, 0, r.err)
   assert.ok(r.out.startsWith('# node skill manual'))
-  const hit = hub.hits.find((h) => h.method === 'POST' && h.path === '/api/actions/builtin%3Aprofile/skill_read')!
-  assert.deepEqual(hit.body, { input: { nodeId: 'node-a', cwd: '/srv/work', skillId: 'deploy' } })
+  const hit = hub.hits.find((h) => h.path.startsWith('/api/skills/deploy'))!
+  const params = new URL(`http://hub${hit.path}`).searchParams
+  assert.equal(params.get('nodeId'), 'node-a')
+  assert.equal(params.get('cwd'), '/srv/work')
 })
 
-test('skills read --node+--cwd passes path in the action input; --json echoes {text}', { timeout: 60_000 }, async (t) => {
+test('skills read --node+--cwd passes path in query params; --json echoes {text}', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helmx-cli-skills-')
   const hub = await startMockHub(
-    { [READ_ROUTE]: () => ({ body: { text: 'runbook content' } }) },
+    {
+      'GET /api/skills/deploy?path=refs%2Frunbook.md&nodeId=node-a&cwd=%2Fsrv%2Fwork': () => ({
+        body: { text: 'runbook content' },
+      }),
+    },
     { autoRegisterCleanup: t },
   )
   const env = makeCliEnv(hub.url, dir)
@@ -238,19 +267,20 @@ test('skills read --node+--cwd passes path in the action input; --json echoes {t
     env,
   )
   assert.equal(r.code, 0, r.err)
-  const hit = hub.hits.find((h) => h.method === 'POST')!
-  assert.deepEqual(hit.body, {
-    input: { nodeId: 'node-a', cwd: '/srv/work', skillId: 'deploy', path: 'refs/runbook.md' },
-  })
+  const hit = hub.hits.find((h) => h.path.startsWith('/api/skills/deploy'))!
+  const params = new URL(`http://hub${hit.path}`).searchParams
+  assert.equal(params.get('nodeId'), 'node-a')
+  assert.equal(params.get('cwd'), '/srv/work')
+  assert.equal(params.get('path'), 'refs/runbook.md')
   assert.deepEqual(JSON.parse(r.out), { text: 'runbook content' })
 })
 
-test('skills read scoped fails explicitly on malformed skill_read responses', { timeout: 60_000 }, async (t) => {
+test('skills read scoped fails explicitly on malformed responses', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helmx-cli-skills-')
   const hub = await startMockHub(
     {
       [CONVERSATION_42]: () => ({ body: CONVERSATION_42_BODY }),
-      [READ_ROUTE]: () => ({ body: { text: 42 } }),
+      'GET /api/skills/deploy?nodeId=node-a&cwd=%2Fsrv%2Fwork': () => ({ body: { text: 42 } }),
     },
     { autoRegisterCleanup: t },
   )
@@ -265,7 +295,6 @@ test('skills read stays on GET /api/skills/:id when no scope flags are passed', 
   const hub = await startMockHub(
     {
       'GET /api/skills/demo': () => ({ body: { text: 'hub skill' } }),
-      [READ_ROUTE]: () => ({ body: { text: 'node skill' } }),
     },
     { autoRegisterCleanup: t },
   )

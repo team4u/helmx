@@ -546,7 +546,7 @@ test('PluginCenter 集成：安装成功后 syncPlugins 刷新列表并导航至
   const originalList = pluginsApi.list
 
   const builtinPlugin: PluginSummary = {
-    id: 'builtin:profile', name: '个人助理', version: '1.0.0', locked: true, enabled: true,
+    id: 'builtin:mentions', name: '角色点名', version: '1.0.0', locked: false, enabled: true,
     hooks: [], actions: [], tools: [],
   }
   let serverPlugins: PluginSummary[] = [builtinPlugin]
@@ -808,7 +808,7 @@ test('PluginCenter：顶栏「全部更新」顺序更新、汇总通知、部�
   const originalUpdate = pluginsApi.update
   const originalList = pluginsApi.list
   const builtinPlugin: PluginSummary = {
-    id: 'builtin:profile', name: 'Profile', version: '1.0.0', locked: true, enabled: true,
+    id: 'builtin:mentions', name: 'Mentions', version: '1.0.0', locked: false, enabled: true,
     hooks: [], actions: [], tools: [],
   }
   const managedA = makeManagedPlugin({ id: 'ext-a', name: 'Ext A', version: '1.0.0' })

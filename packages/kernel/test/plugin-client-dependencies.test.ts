@@ -181,11 +181,11 @@ test('inter-plugin dependencies: manifest declarations merge into definition; to
   writeJson(join(dir, 'package.json'), {
     name: 'chart-plugin-pkg',
     dependencies: { 'some-runtime-lib': '^1.0.0' },
-    helmx: { dependencies: ['builtin:profile', 'another-plugin'] },
+    helmx: { dependencies: ['builtin:mentions', 'another-plugin'] },
   })
   const normalized = await importNormalized(dir)
   // npm top-level dependencies must never enter plugin dependencies; helmx.dependencies does.
-  assert.deepEqual(normalized.dependencies, ['builtin:profile', 'another-plugin'])
+  assert.deepEqual(normalized.dependencies, ['builtin:mentions', 'another-plugin'])
 
   // plugin.json dependencies parses identically and deduplicates when merged with code declarations.
   writeJson(join(dir, 'plugin.json'), {
@@ -198,7 +198,7 @@ test('inter-plugin dependencies: manifest declarations merge into definition; to
   assert.ok(entry2)
   const raw2 = await importPluginDefinition(dir, entry2)
   const merged = normalizeDefinition({ ...raw2, dependencies: ['dep-a', 'code-dep'] }, dir)
-  assert.deepEqual(merged.dependencies, ['dep-a', 'code-dep', 'dep-b', 'builtin:profile', 'another-plugin'])
+  assert.deepEqual(merged.dependencies, ['dep-a', 'code-dep', 'dep-b', 'builtin:mentions', 'another-plugin'])
 
   // Invalid plugin ID (e.g. npm version specifiers) rejects cleanly on manifest read instead of ignoring silently.
   writeJson(join(dir, 'plugin.json'), {

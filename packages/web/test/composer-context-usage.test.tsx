@@ -1090,11 +1090,23 @@ test('Composer /plan executes registered useComposerCommand handler without bann
 
 test('ComposerInputShell + menu: Escape returns focus to .composer-plus-trigger; action selection (onCloseMenu / menuCommands) does not steal focus from opened overlay', { timeout: 60_000 }, async () => {
   const originalFetch = globalThis.fetch
-  globalThis.fetch = (async () =>
-    new Response(JSON.stringify({ ok: true }), {
+  let onCmdFocusAction: (() => void) | undefined
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url = String(input)
+    if (url.startsWith('/api/skills/scoped/catalog')) {
+      return new Response(JSON.stringify({ nodeId: 'local', skills: [], shadowedNodeSkillIds: [] }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      })
+    }
+    if (url.includes('/api/actions/builtin%3Acmd-focus-probe/run')) {
+      onCmdFocusAction?.()
+    }
+    return new Response(JSON.stringify({ ok: true }), {
       status: 200,
       headers: { 'content-type': 'application/json' },
-    })) as typeof fetch
+    })
+  }) as typeof fetch
 
   let focusTargetAfterMenuClose: (() => void) | undefined
   function MenuSlotFocusProbe(props: ComposerMenuSlotProps) {
@@ -1217,9 +1229,8 @@ test('ComposerInputShell + menu: Escape returns focus to .composer-plus-trigger;
     assert.ok(document.activeElement !== trigger, '.composer-plus-trigger must not steal focus back')
 
     // 3. Clicking a menuCommands item when focus moves to another control must also not steal focus back
-    ;(store.actions as unknown as { invokePluginAction: () => Promise<unknown> }).invokePluginAction = async () => {
+    onCmdFocusAction = () => {
       textarea.focus()
-      return { ok: true }
     }
     await openMenu()
     const cmdItem = [...document.body.querySelectorAll<HTMLElement>('.composer-plus-menu [role="menuitem"]')].find(

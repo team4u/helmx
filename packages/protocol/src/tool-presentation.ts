@@ -324,6 +324,7 @@ export const KERNEL_TOOL_NAMES = [
   'register_artifact',
   'run_action',
   'ask_user',
+  'load_skill',
 ] as const
 
 export type KernelToolName = (typeof KERNEL_TOOL_NAMES)[number]

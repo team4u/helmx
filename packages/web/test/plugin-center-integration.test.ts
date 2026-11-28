@@ -44,12 +44,12 @@ function makePlugin(partial: Partial<PluginSummary> & { id: string }): PluginSum
 
 const mockPlugins: PluginSummary[] = [
   makePlugin({
-    id: 'builtin:profile',
-    name: '个人助理',
-    locked: true,
+    id: 'builtin:mentions',
+    name: '角色点名',
+    locked: false,
     enabled: true,
-    tools: ['update_memory', 'load_skill'],
-    actions: [],
+    tools: [],
+    actions: ['list_mentionable'],
   }),
   makePlugin({
     id: 'builtin:workflow',
@@ -139,7 +139,7 @@ test('PluginCenter SSR：渲染搜索框、统计徽章与卡片网格', { timeo
 
   // 5. 响应式自适应网格与所有卡片
   assert.match(html, /class="[^"]*helmx-card-grid[^"]*"/)
-  assert.match(html, /data-plugin-id="builtin:profile"/)
+  assert.match(html, /data-plugin-id="builtin:mentions"/)
   assert.match(html, /data-plugin-id="builtin:workflow"/)
   assert.match(html, /data-plugin-id="builtin:herdr"/)
   assert.match(html, /data-plugin-id="builtin:triggers"/)

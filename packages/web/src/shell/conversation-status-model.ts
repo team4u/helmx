@@ -3,7 +3,7 @@
  * background-activity index types, and plugin-hosted asset visibility.
  */
 import type { ConversationSummary, Profile, SkillSummary } from '@helmx/protocol/browser'
-import { isSkillOwnerActive } from '@helmx/protocol/browser'
+import { isProfileOwnerActive, isSkillOwnerActive } from '@helmx/protocol/browser'
 import type { WebMessageTranslator } from '../i18n/catalog.js'
 import { isPluginSummaryActive, type PluginActivityLike } from '../lib/live-state.js'
 
@@ -25,9 +25,9 @@ export function collectEnabledPluginIds(
   return new Set(plugins.filter((p) => isPluginSummaryActive(p)).map((p) => p.id))
 }
 
-/** 插件自举/托管的 Profile 在对应插件未启用时隐藏（Profile 编辑器列表消费）。 */
+/** 内核（core:<domain>）与插件自举/托管的 Profile：合法 core:<domain> 恒定可见；插件托管 Profile 在对应插件未启用时隐藏（Profile 编辑器列表消费）。 */
 export function isProfileVisible(profile: Profile, enabledPluginIds: ReadonlySet<string>): boolean {
-  return profile.managedByPlugin === undefined || enabledPluginIds.has(profile.managedByPlugin)
+  return isProfileOwnerActive(profile.managedByPlugin, enabledPluginIds)
 }
 
 /**

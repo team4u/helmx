@@ -270,10 +270,10 @@ test('listManagedPlugins / formatUpdateResultDetail / formatBatchUpdateSummaryï¼
     managed: { source: npmSource, installId: 'inst-1', installedVersion: '1.0.0', installedAt: 1000 },
   }
   const unmanagedSummary: PluginSummary = {
-    id: 'builtin:profile',
-    name: 'Profile',
+    id: 'builtin:mentions',
+    name: 'Mentions',
     version: '1.0.0',
-    locked: true,
+    locked: false,
     enabled: true,
     hooks: [],
     actions: [],

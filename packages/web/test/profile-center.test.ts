@@ -131,6 +131,7 @@ test('profile-center-model: isSystemProfile classification rules', { timeout: 60
   assert.equal(isSystemProfile(mockProfiles[0]), true, 'superagent counts as a system profile')
   assert.equal(isSystemProfile(mockProfiles[1]), true, 'watchdog / isSystem=true counts as a system profile')
   assert.equal(isSystemProfile(mockProfiles[4]), true, 'managedByPlugin counts as a protected system profile')
+  assert.equal(isSystemProfile({ id: 'assistant', name: 'Personal Assistant', managedByPlugin: 'core:profiles' }), true, 'core:profiles-managed assistant counts as a system profile')
   assert.equal(isSystemProfile(mockProfiles[2]), false, 'custom-worker is a custom / non-system profile')
   assert.equal(isSystemProfile(mockProfiles[3]), false, 'code-reviewer is a custom profile')
 })
@@ -885,6 +886,16 @@ test('profile-center-model: effective model / global inheritance, node cwd and a
   )
   assert.equal(failedEnabledActivity.managingPluginDisabled, true)
   assert.equal(failedEnabledActivity.stateKind, 'plugin-disabled')
+
+  // core:profiles 由内核常驻托管，即使 plugins 为空也始终可见且不报 plugin-disabled
+  const coreAssistantActivity = summarizeProfileActivity(
+    { id: 'assistant', name: 'Personal Assistant', managedByPlugin: 'core:profiles' },
+    [],
+    [],
+    enT,
+  )
+  assert.equal(coreAssistantActivity.managingPluginDisabled, false)
+  assert.notEqual(coreAssistantActivity.stateKind, 'plugin-disabled')
 })
 
 test('ProfileCard: inherited model, node and cwd, conversation count, bottom-right conversation action with stopPropagation', { timeout: 60_000 }, async () => {

@@ -357,7 +357,7 @@ test('core-ops/plugins & skills: declarative specs stay structurally valid and s
   } = rootExports
 
   assert.equal(PLUGIN_CORE_OPERATIONS.length, 14)
-  assert.equal(SKILL_CORE_OPERATIONS.length, 2)
+  assert.equal(SKILL_CORE_OPERATIONS.length, 3)
   assert.ok(CORE_OPERATIONS.length >= PLUGIN_CORE_OPERATIONS.length + SKILL_CORE_OPERATIONS.length)
 
   const seenKeys = new Set<string>()

@@ -207,7 +207,7 @@ test('reloadExternalPlugin rejects builtin (403 plugin_locked), unregistered (40
   t.after(() => cleanupDir(dataDir), { timeout: 60_000 })
 
   const builtin = makeReloadHost({ enabled: true })
-  await assertRejectsCode(() => reloadExternalPlugin(dataDir, 'builtin:profile', builtin.host), 'plugin_locked', 403)
+  await assertRejectsCode(() => reloadExternalPlugin(dataDir, 'builtin:mentions', builtin.host), 'plugin_locked', 403)
   assert.deepEqual(builtin.calls, [], 'builtin plugins must be rejected before any host call')
 
   const unregistered = makeReloadHost({ enabled: true, hideAfterLists: 0 })

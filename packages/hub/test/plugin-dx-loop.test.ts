@@ -309,7 +309,7 @@ test('rescan 与 reload 全路径：增量注册不扰既有、热重载代际�
 
   // 4. 内置插件 403、未注册 404、在途任务 409、停用态保持停用
   await assert.rejects(
-    env.kernel.plugins.reloadExternalPlugin('builtin:profile'),
+    env.kernel.plugins.reloadExternalPlugin('builtin:mentions'),
     (err: unknown) => err instanceof HostHelmxError && err.code === 'plugin_locked' && err.status === 403,
   )
   await assert.rejects(
@@ -445,7 +445,7 @@ test('受管包 HTTP 路由：install（默认停用与 enable:true / body 边�
     { source: '/tmp/x', extra: true },
     { source: '' },
     { source: 'file:///tmp/x' },
-    { source: 'builtin:profile' },
+    { source: 'builtin:mentions' },
   ]) {
     assert.equal((await env.call('POST', '/api/plugins/install', bad)).status, 400)
   }
@@ -460,7 +460,7 @@ test('受管包 HTTP 路由：install（默认停用与 enable:true / body 边�
   assert.equal(updated.body.summary.version, '2.0.0')
   assert.equal(updated.body.summary.enabled, true)
   assert.equal((await env.call('POST', '/api/plugins/never-installed/update')).status, 404)
-  assert.equal((await env.call('POST', '/api/plugins/builtin%3Aprofile/update')).status, 404)
+  assert.equal((await env.call('POST', '/api/plugins/builtin%3Amentions/update')).status, 404)
 
   // remove：删除受管目录与 config 记录，保留用户源目录，重复删除 404
   const srcRm = writeLocalPackage(srcParent, 'http-rm')

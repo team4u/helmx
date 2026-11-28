@@ -267,7 +267,7 @@ test('plugins update --all: updates only managed plugins sequentially, handles m
     source: { kind: 'local' as const, raw: `/src/${id}`, path: `/src/${id}` },
   })
   let pluginsList = [
-    makePluginSummary({ id: 'builtin:profile', locked: true }),
+    makePluginSummary({ id: 'builtin:mentions' }),
     makePluginSummary({ id: 'manual-pl' }),
     makePluginSummary({ id: 'pl-up', version: '1.0.0', managed: managedMeta('pl-up', '1.0.0') }),
     makePluginSummary({ id: 'pl-same', version: '1.0.0', managed: managedMeta('pl-same', '1.0.0') }),
@@ -333,7 +333,7 @@ test('plugins update --all: updates only managed plugins sequentially, handles m
   assert.equal((JSON.parse(okAll.out) as { failed: number }).failed, 0)
 
   // Empty managed plugins -> exits 0 cleanly
-  pluginsList = [makePluginSummary({ id: 'builtin:profile', locked: true })]
+  pluginsList = [makePluginSummary({ id: 'builtin:mentions' })]
   const emptyHuman = await runCliCaptured(['plugins', 'update', '--all'], env)
   assert.equal(emptyHuman.code, 0, emptyHuman.err)
   assert.match(emptyHuman.out, /No managed external plugins installed/)

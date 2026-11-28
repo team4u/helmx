@@ -545,7 +545,7 @@ describe('agent-standby-commands', () => {
       { id: 'herdr-tool', name: '终端工具', managedByPlugin: 'builtin:herdr', references: [] },
     ]
     state.plugins = [
-      { id: 'builtin:profile', name: 'assistant', locked: true, enabled: true, hooks: [], actions: [], tools: [] },
+      { id: 'builtin:mentions', name: 'mentions', locked: false, enabled: true, hooks: [], actions: [], tools: [] },
       { id: 'builtin:herdr', name: 'herdr', locked: false, enabled: false, hooks: [], actions: [], tools: [] },
       { id: 'p1', name: 'p1', locked: false, enabled: true, hooks: [], actions: ['ping'], tools: [] },
     ]
@@ -740,14 +740,14 @@ describe('agent-standby-commands', () => {
 
   test('draft-state @: pops mentionable profile candidates (carrying profileId), filters and inserts on pick; only the later send creates and submits', { timeout: 60_000 }, async () => {
     state.plugins = [
-      { id: 'builtin:profile', name: '角色与技能底座', locked: true, enabled: true, hooks: [], actions: ['list_mentionable'], tools: [] },
+      { id: 'builtin:mentions', name: '角色点名', locked: false, enabled: true, hooks: [], actions: ['list_mentionable'], tools: [] },
     ]
     state.ui = [
       {
-        pluginId: 'builtin:profile',
+        pluginId: 'builtin:mentions',
         surface: 'composer.completer',
         spec: {
-          id: 'profile-mentions',
+          id: 'role-mentions',
           label: '点名角色',
           trigger: '@',
           priority: 100,
@@ -757,7 +757,7 @@ describe('agent-standby-commands', () => {
     ]
     state.actions = [
       {
-        pluginId: 'builtin:profile',
+        pluginId: 'builtin:mentions',
         id: 'list_mentionable',
         description: '列出可点名角色',
         idempotent: true,

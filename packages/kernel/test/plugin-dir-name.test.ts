@@ -2,7 +2,7 @@
  * Unit tests for plugin data directory name mapping (Windows compatibility hard rule).
  *
  * Background: built-in plugin IDs carry a `builtin:` prefix; using the raw ID as a directory name
- * causes Windows to interpret `builtin:profile` as an NTFS alternate data stream (mkdir ENOENT),
+ * causes Windows to interpret `builtin:mentions` as an NTFS alternate data stream (mkdir ENOENT),
  * crashing plugin registration immediately. This mapper is the single authoritative conversion
  * point, locking two invariants: safe directory names free of illegal characters, and verbatim
  * preservation of external plugin IDs.
@@ -15,14 +15,14 @@ import { strict as assert } from 'node:assert'
 import { isBuiltinPluginDataDirName, pluginDataDirName } from '../src/plugins/plugin-dir-name.js'
 
 test('built-in plugin id directory name excludes Windows reserved characters', { timeout: 60_000 }, () => {
-  assert.equal(pluginDataDirName('builtin:profile'), 'builtin%3Aprofile')
+  assert.equal(pluginDataDirName('builtin:mentions'), 'builtin%3Amentions')
   assert.equal(pluginDataDirName('builtin:workflow'), 'builtin%3Aworkflow')
   // Directory names must never contain : / \ etc. invalid characters (Windows filename hard rule).
-  for (const id of ['builtin:profile', 'builtin:herdr', 'builtin:json-render']) {
+  for (const id of ['builtin:mentions', 'builtin:herdr', 'builtin:json-render']) {
     assert.doesNotMatch(pluginDataDirName(id), /[:/\\*?"<>|]/, `${id} directory name contains invalid character`)
   }
   // Mapping must be injective: distinct IDs must not map to the same directory.
-  const names = new Set(['builtin:profile', 'builtin:workflow', 'builtin:memory'].map(pluginDataDirName))
+  const names = new Set(['builtin:mentions', 'builtin:workflow', 'builtin:memory'].map(pluginDataDirName))
   assert.equal(names.size, 3)
 })
 

@@ -475,9 +475,9 @@ test('invokeAction: reference validation failed 400 validation_error, output vio
 });
 
 test('parseQualifiedActionId:pluginId contains ":" when by first "." correct split', { timeout: 60_000 }, () => {
-  assert.deepEqual(PluginHost.parseQualifiedActionId('builtin:profile.update_memory'), {
-    pluginId: 'builtin:profile',
-    actionId: 'update_memory',
+  assert.deepEqual(PluginHost.parseQualifiedActionId('builtin:mentions.list_mentionable'), {
+    pluginId: 'builtin:mentions',
+    actionId: 'list_mentionable',
   });
   assert.deepEqual(PluginHost.parseQualifiedActionId('triggers.cron.create'), {
     pluginId: 'triggers',
@@ -902,17 +902,17 @@ test('normal disable: service by register inverse order stop', { timeout: 60_000
 test('locked plugin disable/unregister 403 plugin_locked', { timeout: 60_000 }, async () => {
   const host = makeHost();
   await host.register({
-    id: 'builtin:profile',
+    id: 'builtin:mentions',
     locked: true,
     definePlugin: () => {},
   });
-  await assert.rejects(host.disable('builtin:profile'), (err: unknown) => {
+  await assert.rejects(host.disable('builtin:mentions'), (err: unknown) => {
     assert.ok(err instanceof HelmxError);
     assert.equal(err.code, 'plugin_locked');
     assert.equal(err.status, 403);
     return true;
   });
-  await assertRejectsCode(() => host.unregister('builtin:profile'), 'plugin_locked', 403);
+  await assertRejectsCode(() => host.unregister('builtin:mentions'), 'plugin_locked', 403);
 });
 
 test('doc namespace isolation pluginId:name; get returns clone preventing unpersisted mutations', { timeout: 60_000 }, async () => {

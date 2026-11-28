@@ -9,6 +9,7 @@ import {
   PROFILE_STARTERS_MAX_ITEMS,
   PROFILE_STARTER_LABEL_MAX_LENGTH,
   PROFILE_STARTER_PROMPT_MAX_LENGTH,
+  isValidCoreOwnerId,
 } from '@helmx/protocol/browser'
 import { assetsApi } from '../lib/api.js'
 import { isPluginSummaryActive } from '../lib/live-state.js'
@@ -287,9 +288,10 @@ export function summarizeProfileActivity(
     else if (conv.status === 'error') errorCount++
   }
 
-  const managingPlugin = profile.managedByPlugin
-    ? plugins.find((plugin) => plugin.id === profile.managedByPlugin)
-    : undefined
+  const managingPlugin =
+    profile.managedByPlugin && !isValidCoreOwnerId(profile.managedByPlugin)
+      ? plugins.find((plugin) => plugin.id === profile.managedByPlugin)
+      : undefined
   const managingPluginDisabled = Boolean(managingPlugin && !isPluginSummaryActive(managingPlugin))
 
   if (managingPluginDisabled) {

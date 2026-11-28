@@ -9,15 +9,17 @@
 import { HelmxError, SKILL_CORE_OPERATIONS } from '@helmx/protocol'
 import { MAX_ARTIFACT_BYTES, type ArtifactService, type SkillService } from '../services/index.js'
 import type { ConversationService } from '../runtime/conversation-service.js'
+import { readSkillForOperation, type ScopedSkillService } from '../runtime/scoped-skills.js'
 import { createCoreOperationRouter } from './core-operation-router.js'
 import { buildContentDisposition, errorResponse, jsonOk, readBinaryBodyWithLimit, readJsonBody, type JsonRedactor } from './http-utils.js'
 import { decodeSegment } from './route-match.js'
-import { isSafeRelativePath, requireIdParam, ValidationError } from './validate.js'
+import { requireIdParam, ValidationError } from './validate.js'
 import type { RouteContext } from './route-context.js'
 
 export interface AssetRoutesTarget {
   readonly artifacts: Pick<ArtifactService, 'get' | 'readBufferForMetadata' | 'writeUploaded'>
   readonly skills: Pick<SkillService, 'list' | 'readFile'>
+  readonly scopedSkills?: Pick<ScopedSkillService, 'listCatalog' | 'readScoped'>
   readonly conversations: Pick<ConversationService, 'getConversationDetail'>
 }
 
@@ -173,29 +175,34 @@ export async function postConversationArtifact(
 // ---------------------------------------------------------------------------
 
 function dispatchSkillJsonRoutes(
-  kernel: Pick<AssetRoutesTarget, 'skills'>,
+  kernel: Pick<AssetRoutesTarget, 'skills' | 'scopedSkills'>,
 ): (ctx: RouteContext, redactor: JsonRedactor | undefined) => Promise<Response | undefined> {
   return createCoreOperationRouter(SKILL_CORE_OPERATIONS, {
     'skills.list': () => kernel.skills.list(),
 
-    'skills.read': {
-      validate: (input) => {
-        const path = input.path as string | undefined
-        if (path !== undefined && !isSafeRelativePath(path)) {
-          throw new HelmxError('path_traversal', `skill file path out of bounds: ${String(input.id)}/${path}`, 400)
-        }
-      },
-      handle: async (input) => {
-        const text = await kernel.skills.readFile(input.id as string, input.path as string | undefined)
-        return { text }
-      },
+    'skills.catalog': (input) => {
+      if (kernel.scopedSkills === undefined) {
+        throw new HelmxError('unsupported', 'scoped skill catalog service is not available', 501)
+      }
+      return kernel.scopedSkills.listCatalog({
+        nodeId: input.nodeId as string,
+        ...(input.cwd !== undefined ? { cwd: input.cwd as string } : {}),
+      })
     },
+
+    'skills.read': (input) =>
+      readSkillForOperation(kernel.skills, kernel.scopedSkills, {
+        id: input.id as string,
+        ...(input.path !== undefined ? { path: input.path as string } : {}),
+        ...(input.nodeId !== undefined ? { nodeId: input.nodeId as string } : {}),
+        ...(input.cwd !== undefined ? { cwd: input.cwd as string } : {}),
+      }),
   })
 }
 
 export async function handleSkillsDomain(
   ctx: RouteContext,
-  kernel: Pick<AssetRoutesTarget, 'skills'>,
+  kernel: Pick<AssetRoutesTarget, 'skills' | 'scopedSkills'>,
   redactor: JsonRedactor | undefined,
 ): Promise<Response> {
   // Preserve 400 validation_error on non-GET /api/skills (requireIdParam('') contract).

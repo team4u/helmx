@@ -1,18 +1,17 @@
 /** Skills commands: skills list / read.
  *
- * Scope model (node + optional workspace cwd; the action call never carries conversationId):
+ * Scope model (node + optional workspace cwd):
  * - No flags: Hub global catalog semantics (GET /api/skills), unchanged.
  * - --current: resolve the conversation id from HELMX_CONVERSATION_ID, read that
  *   conversation's (nodeId, cwd) via GET /api/conversations/:id, then call the
- *   builtin:profile action with explicit coordinates only. The CLI never guesses a
- *   cwd locally, and no conversation context is attached to the action call —
- *   keeping the call shape identical to the explicit --node/--cwd surface.
+ *   core skills HTTP endpoints with explicit coordinates only. The CLI never guesses
+ *   a cwd locally.
  * - --node <id> [--cwd <dir>]: explicit node (alone = Hub + node machine-level
  *   skills; optional --cwd also merges workspace <cwd>/.helmx/skills); --cwd
  *   requires --node and both are mutually exclusive with --current.
- * Scoped calls go through the plugin action endpoints (POST /api/actions/...) so the
- * CLI adds no server contract beyond the standard action mapping; responses are
- * boundary-validated here (external input) and failures surface verbatim.
+ * Scoped calls go through the core skills endpoints (GET /api/skills/scoped/catalog
+ * and GET /api/skills/:id?nodeId=...&cwd=...); responses are boundary-validated here
+ * (external input) and failures surface verbatim.
  */
 import { SKILL_CORE_OPERATIONS, type SkillSummary } from '@helmx/protocol'
 import { CliError } from '../errors.js'
@@ -27,10 +26,6 @@ const SKILL_READ_SPEC = SKILL_CORE_OPERATIONS.find((op) => op.key === 'skills.re
 const SKILL_READ_SCHEMA_FLAGS = new Map(
   schemaFlagsForOperation(SKILL_READ_SPEC).map((flag) => [flag.name, flag] as const),
 )
-
-/** Scoped skill access runs through builtin:profile plugin actions (no static server contract added by the CLI). */
-const SKILL_CATALOG_ACTION_PATH = `/api/actions/${encodeURIComponent('builtin:profile')}/skill_catalog`
-const SKILL_READ_ACTION_PATH = `/api/actions/${encodeURIComponent('builtin:profile')}/skill_read`
 
 /** Skill scope flags shared by `skills list` and `skills read`. */
 const SKILL_SCOPE_FLAGS = [
@@ -95,7 +90,7 @@ async function resolveSkillScope(flags: Map<string, unknown>, env: NodeJS.Proces
   return undefined
 }
 
-/** Boundary-validated skill_catalog action output (external HTTP input: shape-checked before use). */
+/** Boundary-validated scoped skill catalog output (external HTTP input: shape-checked before use). */
 interface SkillCatalogResult {
   nodeId: string
   cwd?: string
@@ -104,26 +99,26 @@ interface SkillCatalogResult {
   nodeUnavailable?: string
 }
 
-/** Validate a skill_catalog response at the CLI boundary; illegal shapes fail explicitly. */
+/** Validate a scoped skill catalog response at the CLI boundary; illegal shapes fail explicitly. */
 function parseSkillCatalogResult(raw: unknown): SkillCatalogResult {
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
-    throw new CliError('skill_catalog action returned an invalid response (expected an object)', 'invalid_response')
+    throw new CliError('scoped skill catalog endpoint returned an invalid response (expected an object)', 'invalid_response')
   }
   const obj = raw as Record<string, unknown>
   if (typeof obj['nodeId'] !== 'string' || obj['nodeId'].trim() === '') {
-    throw new CliError('skill_catalog action returned an invalid response (expected a non-empty string nodeId)', 'invalid_response')
+    throw new CliError('scoped skill catalog endpoint returned an invalid response (expected a non-empty string nodeId)', 'invalid_response')
   }
   if (obj['cwd'] !== undefined && (typeof obj['cwd'] !== 'string' || obj['cwd'].trim() === '')) {
-    throw new CliError('skill_catalog action returned an invalid response (cwd must be a non-empty string when present)', 'invalid_response')
+    throw new CliError('scoped skill catalog endpoint returned an invalid response (cwd must be a non-empty string when present)', 'invalid_response')
   }
   if (!Array.isArray(obj['skills']) || !obj['skills'].every(isSkillSummaryShape)) {
-    throw new CliError('skill_catalog action returned an invalid response (expected a skills array of {id,name,...})', 'invalid_response')
+    throw new CliError('scoped skill catalog endpoint returned an invalid response (expected a skills array of {id,name,...})', 'invalid_response')
   }
   if (!Array.isArray(obj['shadowedNodeSkillIds']) || !obj['shadowedNodeSkillIds'].every((x) => typeof x === 'string')) {
-    throw new CliError('skill_catalog action returned an invalid response (expected a shadowedNodeSkillIds string array)', 'invalid_response')
+    throw new CliError('scoped skill catalog endpoint returned an invalid response (expected a shadowedNodeSkillIds string array)', 'invalid_response')
   }
   if (obj['nodeUnavailable'] !== undefined && typeof obj['nodeUnavailable'] !== 'string') {
-    throw new CliError('skill_catalog action returned an invalid response (nodeUnavailable must be a string when present)', 'invalid_response')
+    throw new CliError('scoped skill catalog endpoint returned an invalid response (nodeUnavailable must be a string when present)', 'invalid_response')
   }
   return {
     nodeId: obj['nodeId'],
@@ -146,7 +141,7 @@ export function skillsCommands(): CommandSpec[] {
     customHandlers: {
       'skills list': {
         description:
-          'List available skills: Hub global catalog (GET /api/skills); --current or --node [--cwd] scope to a node (and optional workspace) via the builtin:profile skill_catalog action',
+          'List available skills: Hub global catalog (GET /api/skills); --current or --node [--cwd] scope to a node and optional workspace (GET /api/skills/scoped/catalog)',
         flags: SKILL_SCOPE_FLAGS,
         async run(ctx: CommandContext) {
           assertNoExtraPositionals(ctx.positionals, 0)
@@ -156,9 +151,9 @@ export function skillsCommands(): CommandSpec[] {
             printResult(ctx, await hub.get<SkillSummary[]>('/api/skills'))
             return
           }
-          const input: Record<string, unknown> = { nodeId: scope.nodeId }
-          if (scope.cwd !== undefined) input['cwd'] = scope.cwd
-          const result = parseSkillCatalogResult(await hub.post(SKILL_CATALOG_ACTION_PATH, { input }))
+          const params = new URLSearchParams({ nodeId: scope.nodeId })
+          if (scope.cwd !== undefined) params.set('cwd', scope.cwd)
+          const result = parseSkillCatalogResult(await hub.get(`/api/skills/scoped/catalog?${params.toString()}`))
           if (ctx.json) {
             printResult(ctx, result)
             return
@@ -176,7 +171,7 @@ export function skillsCommands(): CommandSpec[] {
 
       'skills read': {
         description:
-          'Read a skill document (GET /api/skills/:id[?path=]; defaults to SKILL.md); --current or --node [--cwd] read from a node (and optional workspace) via the builtin:profile skill_read action',
+          'Read a skill document (GET /api/skills/:id[?path=&nodeId=&cwd=]; defaults to SKILL.md); --current or --node [--cwd] read from a node and optional workspace',
         flags: [
           {
             ...(SKILL_READ_SCHEMA_FLAGS.get('path') ?? { name: 'path', type: 'string' as const }),
@@ -191,22 +186,16 @@ export function skillsCommands(): CommandSpec[] {
           const p = flagValue<string>(ctx.flags, 'path')
           const hub = await ctx.hub()
           const scope = await resolveSkillScope(ctx.flags, ctx.env, hub)
-          if (scope === undefined) {
-            const query = p ? `?path=${encodeURIComponent(p)}` : ''
-            const res = await hub.get<{ text: string }>(`/api/skills/${encodeURIComponent(id)}${query}`)
-            if (typeof res?.text !== 'string') {
-              throw new CliError('Hub returned an invalid skills read response (expected { text })', 'invalid_response')
-            }
-            if (ctx.json) printResult(ctx, res)
-            else printPlainText(ctx, res.text)
-            return
+          const params = new URLSearchParams()
+          if (p !== undefined) params.set('path', p)
+          if (scope !== undefined) {
+            params.set('nodeId', scope.nodeId)
+            if (scope.cwd !== undefined) params.set('cwd', scope.cwd)
           }
-          const input: Record<string, unknown> = { nodeId: scope.nodeId, skillId: id }
-          if (scope.cwd !== undefined) input['cwd'] = scope.cwd
-          if (p !== undefined) input['path'] = p
-          const res = await hub.post<{ text: string }>(SKILL_READ_ACTION_PATH, { input })
+          const qs = params.toString()
+          const res = await hub.get<{ text: string }>(`/api/skills/${encodeURIComponent(id)}${qs !== '' ? `?${qs}` : ''}`)
           if (typeof res?.text !== 'string') {
-            throw new CliError('skill_read action returned an invalid response (expected { text })', 'invalid_response')
+            throw new CliError('Hub returned an invalid skills read response (expected { text })', 'invalid_response')
           }
           if (ctx.json) printResult(ctx, res)
           else printPlainText(ctx, res.text)

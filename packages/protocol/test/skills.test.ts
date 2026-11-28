@@ -6,6 +6,7 @@ import {
   CORE_OWNER_ID_PATTERN,
   isBuiltinNamespace,
   isCoreNamespace,
+  isProfileOwnerActive,
   isReservedPluginNamespace,
   isSkillAvailable,
   isSkillOwnerActive,
@@ -43,8 +44,15 @@ test('skill policy: core:* managed skills are always active regardless of enable
   assert.equal(isSkillOwnerActive('core:conversations', emptyEnabled), true)
   assert.equal(isSkillOwnerActive('core:profiles', emptyEnabled), true)
   assert.equal(isSkillOwnerActive('core:plugins', emptyEnabled), true)
-  assert.equal(isSkillOwnerActive('builtin:profile', emptyEnabled), false)
-  assert.equal(isSkillOwnerActive('builtin:profile', new Set(['builtin:profile'])), true)
+  assert.equal(isSkillOwnerActive('builtin:mentions', emptyEnabled), false)
+  assert.equal(isSkillOwnerActive('builtin:mentions', new Set(['builtin:mentions'])), true)
+
+  assert.equal(isProfileOwnerActive(undefined, emptyEnabled), true)
+  assert.equal(isProfileOwnerActive('core:profiles', emptyEnabled), true)
+  assert.equal(isProfileOwnerActive('core:', emptyEnabled), false)
+  assert.equal(isProfileOwnerActive('core:bad.id', emptyEnabled), false)
+  assert.equal(isProfileOwnerActive('builtin:superagent', emptyEnabled), false)
+  assert.equal(isProfileOwnerActive('builtin:superagent', new Set(['builtin:superagent'])), true)
 
   assert.equal(isSkillAvailable(coreManaged, {}, emptyEnabled), true)
   assert.equal(isSkillAvailable(coreManaged, { skills: ['helmx-cli'] }, emptyEnabled), true)
@@ -64,7 +72,7 @@ test('namespace predicates: core: and builtin: detection, validation, and prefix
 
   assert.equal(isCoreNamespace('core:host'), true)
   assert.equal(isCoreNamespace('core:'), true)
-  assert.equal(isCoreNamespace('builtin:profile'), false)
+  assert.equal(isCoreNamespace('builtin:mentions'), false)
   assert.equal(isCoreNamespace('my-plugin'), false)
 
   assert.equal(isValidCoreOwnerId('core:host'), true)
@@ -74,12 +82,12 @@ test('namespace predicates: core: and builtin: detection, validation, and prefix
   assert.equal(isValidCoreOwnerId('core:a:b'), false)
   assert.equal(isValidCoreOwnerId('builtin:host'), false)
 
-  assert.equal(isBuiltinNamespace('builtin:profile'), true)
+  assert.equal(isBuiltinNamespace('builtin:mentions'), true)
   assert.equal(isBuiltinNamespace('core:host'), false)
   assert.equal(isBuiltinNamespace('custom'), false)
 
   assert.equal(isReservedPluginNamespace('core:conversations'), true)
-  assert.equal(isReservedPluginNamespace('builtin:profile'), true)
+  assert.equal(isReservedPluginNamespace('builtin:mentions'), true)
   assert.equal(isReservedPluginNamespace('community-plugin'), false)
 
   assert.equal(stripBuiltinNamespace('builtin:workflow'), 'workflow')

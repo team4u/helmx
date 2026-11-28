@@ -593,7 +593,7 @@ test('kernel builtin tool presentationMeta schemas compile and enforce strict sh
   )
 })
 
-test('KERNEL_TOOL_NAMES is the single source of truth for the 8 foundational kernel tools', { timeout: 60_000 }, () => {
+test('KERNEL_TOOL_NAMES is the single source of truth for the 9 foundational kernel tools', { timeout: 60_000 }, () => {
   const expected: readonly KernelToolName[] = [
     'bash',
     'read',
@@ -603,6 +603,7 @@ test('KERNEL_TOOL_NAMES is the single source of truth for the 8 foundational ker
     'register_artifact',
     'run_action',
     'ask_user',
+    'load_skill',
   ]
   assert.deepEqual([...KERNEL_TOOL_NAMES], [...expected])
   assert.equal(new Set(KERNEL_TOOL_NAMES).size, KERNEL_TOOL_NAMES.length)

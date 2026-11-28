@@ -146,7 +146,7 @@ export default { id: 'svc-fail', name: 'svc-fail', async definePlugin(ctx) {
   const { app, kernel } = await createHubTestApp({ dataDir, cwd: dataDir })
   try {
     const list = kernel.plugins.list()
-    assert.ok(list.some((p) => p.id === 'builtin:profile' && p.enabled))
+    assert.ok(list.some((p) => p.id === 'builtin:mentions' && p.enabled))
 
     await kernel.plugins.enable('good-plugin')
     assert.deepEqual(await kernel.plugins.invokeAction('good-plugin', 'ping', {}), { ok: true })

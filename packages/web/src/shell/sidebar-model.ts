@@ -28,6 +28,9 @@ import {
   isProfileVisible,
 } from './conversation-status-model.js'
 
+const DEFAULT_ASSISTANT_PROFILE_ID = 'assistant'
+const DEFAULT_ASSISTANT_SIDEBAR_LABEL: LocalizedText = { en: 'Personal Assistant', 'zh-CN': '个人助理' }
+
 export interface SidebarPartition {
   /** sidebar.item 的 'conversation:profile:<id>' 已指向的 profileId 集合。 */
   pinnedProfileIds: Set<string>
@@ -263,8 +266,20 @@ export function buildAgentStandings(input: AgentStandingsInput): AgentStanding[]
 
   for (const profile of visibleProfiles) {
     const meta = pinMeta.get(profile.id)
-    const order = meta?.order ?? 100
-    emitStanding(profile.id, profile, meta, order, isHumanSelectableProfile(profile, enabledPluginIds))
+    const isDefaultAssistant = profile.id === DEFAULT_ASSISTANT_PROFILE_ID
+    const effectiveMeta: SidebarPinMeta | undefined =
+      meta !== undefined
+        ? meta
+        : isDefaultAssistant
+          ? {
+              ...(profile.name === undefined || profile.name === 'Personal Assistant'
+                ? { label: DEFAULT_ASSISTANT_SIDEBAR_LABEL }
+                : {}),
+              order: 0,
+            }
+          : undefined
+    const order = effectiveMeta?.order ?? 100
+    emitStanding(profile.id, profile, effectiveMeta, order, isHumanSelectableProfile(profile, enabledPluginIds))
   }
   for (const pid of orphanProfileIds) {
     const meta = pinMeta.get(pid)

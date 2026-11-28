@@ -20,9 +20,14 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { HelmxError, type ConversationSummary } from '@helmx/protocol'
-import { PluginHost, ProfileService, type PluginHostBackend } from '@helmx/kernel'
+import { PluginHost, ProfileService, SkillService, type PluginHostBackend } from '@helmx/kernel'
+import {
+  PRE_HOOK_PROFILE_SECTION_IDS,
+  ScopedSkillService,
+  TurnContextAssembler,
+  projectManagedSections,
+} from '@helmx/kernel/testing'
 import { hostBackendStub } from '../../kernel/test/helpers/host-backend-stub.js'
-import { createProfilePlugin } from '../src/profile.js'
 import { createMemoryPlugin, MAX_MEMORY_CHARS as MEM_MAX, MemoryStore } from '../src/memory.js'
 import { createProfileFileHost } from '../../kernel/test/helpers/profile-file-host.js'
 import { createPluginHostBackendFixture } from '../../kernel/test/helpers/plugin-host-backend.js'
@@ -225,21 +230,50 @@ test('memory：同 Profile 双会话并发 update_memory append 最终不超上�
   }
 })
 
-test('profile/memory：SYSTEM 与已初始化 MEMORY 缺失时注入显式 assets-missing 节（不沉默换人格）', { timeout: 60_000 }, async () => {
+test('kernel/memory：SYSTEM 与已初始化 MEMORY 缺失时注入显式 assets-missing 节（不沉默换人格）', { timeout: 60_000 }, async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'helmx-pm-missing-'))
   try {
     const profiles = new ProfileService(dataDir)
     await profiles.ensureDefault()
+    const skills = new SkillService(dataDir)
     const backend = makeControlledBackend(dataDir)
     const host = new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir, host: backend, docs: new MemoryDocStore() })
-    await host.register(createProfilePlugin(), { enabled: true })
     await host.register(createMemoryPlugin(), { enabled: true })
 
-    // 先跑一回合建立 memory initializedProfiles 标记（惰性初始化 MEMORY.md）。
-    {
-      const turn = { conversation: makeConversation(1), sections: [], tools: [], inputs: [], messages: [] }
-      await host.runHook('before_turn', turn as never)
+    const scopedSkills = new ScopedSkillService({
+      skills,
+      profiles,
+      getConversation: (id) => backend.getConversation(id),
+      executionEnv: () => { throw new Error('unused') },
+      redact: (t) => t,
+      isNodeOnline: () => true,
+      listPlugins: () => host.list(),
+    })
+    const assembler = new TurnContextAssembler({
+      profiles,
+      scopedSkills,
+      executionEnv: () => { throw new Error('unused') },
+      isNodeOnline: () => true,
+      redact: (t) => t,
+      notifyWarning: (n) => backend.emitEvent('notification', { ...n, level: 'warning' }),
+    })
+
+    const runCombinedBeforeTurn = async (turn: {
+      conversation: ConversationSummary
+      sections: Array<{ id: string; text: string }>
+      tools: Array<{ name: string }>
+      inputs: unknown[]
+      messages: unknown[]
+    }) => {
+      const prepared = await assembler.prepare(turn.conversation)
+      const preSections = projectManagedSections(turn.sections, PRE_HOOK_PROFILE_SECTION_IDS, prepared.preSections)
+      const res = await host.runHook('before_turn', { ...turn, sections: preSections } as never)
+      const afterHooks = res.action === 'transform' ? (res.value as typeof turn).sections : preSections
+      return assembler.applyPostSections(afterHooks, prepared.resolvePostSections(false))
     }
+
+    // 先跑一回合建立 memory initializedProfiles 标记（惰性初始化 MEMORY.md）。
+    await runCombinedBeforeTurn({ conversation: makeConversation(1), sections: [], tools: [], inputs: [], messages: [] })
     unlinkSync(join(dataDir, 'profiles', 'assistant', 'MEMORY.md'))
     unlinkSync(join(dataDir, 'profiles', 'assistant', 'SYSTEM.md'))
 
@@ -250,9 +284,7 @@ test('profile/memory：SYSTEM 与已初始化 MEMORY 缺失时注入显式 asset
       inputs: [],
       messages: [],
     }
-    const result = await host.runHook('before_turn', turn as never)
-    assert.ok(result.action === 'transform')
-    const sections = (result as { value: { sections: Array<{ id: string; text: string }> } }).value.sections
+    const sections = await runCombinedBeforeTurn(turn)
     const sysMissing = sections.find((s) => s.id === 'profile.assets-missing')
     assert.ok(sysMissing !== undefined, '必须注入 profile.assets-missing 节')
     assert.ok(sysMissing.text.includes('SYSTEM.md'), '显式点名 SYSTEM.md 缺失')
@@ -272,30 +304,27 @@ test('profile/memory：SYSTEM 与已初始化 MEMORY 缺失时注入显式 asset
 
     // 同一缺失状态第二回合：不再重复告警（去重），但模型仍每回合可见。
     backend.notifications.length = 0
-    const again = await host.runHook('before_turn', { ...turn, sections: [{ id: 'base', text: 'base' }] } as never)
-    assert.ok(again.action === 'transform')
+    const sections2 = await runCombinedBeforeTurn({ ...turn, sections: [{ id: 'base', text: 'base' }] })
     assert.equal(backend.notifications.length, 0, '持续缺失不重复告警')
-    const sections2 = (again as { value: { sections: Array<{ id: string }> } }).value.sections
     assert.ok(sections2.some((s) => s.id === 'profile.assets-missing'), '模型每回合仍可见 SYSTEM 缺失说明')
     assert.ok(sections2.some((s) => s.id === 'memory.assets-missing'), '模型每回合仍可见 MEMORY 缺失说明')
 
     // 文件恢复：告警标记复位——再次缺失可重新告警。
     const memoryPath = join(dataDir, 'profiles', 'assistant', 'MEMORY.md')
     writeFileSync(memoryPath, '# Memory\n\n恢复的记忆。\n')
-    const healed = await host.runHook('before_turn', { ...turn, sections: [] } as never)
-    assert.ok(healed.action === 'transform')
-    const healedSections = (healed as { value: { sections: Array<{ id: string; text: string }> } }).value.sections
+    const healedSections = await runCombinedBeforeTurn({ ...turn, sections: [] })
     // SYSTEM 仍缺失：profile.assets-missing 节仍在；MEMORY 恢复后 memory 段落回归。
     assert.ok(healedSections.some((s) => s.id === 'profile.assets-missing'), 'SYSTEM 仍缺失时节仍在')
     assert.ok(!healedSections.some((s) => s.id === 'memory.assets-missing'), 'MEMORY 恢复后缺失节移除')
     assert.ok(healedSections.some((s) => s.id === 'memory.content'), '恢复后正常注入 memory.content')
     backend.notifications.length = 0
     unlinkSync(memoryPath)
-    await host.runHook('before_turn', { ...turn, sections: [] } as never)
+    await runCombinedBeforeTurn({ ...turn, sections: [] })
     assert.ok(
       backend.notifications.some((n) => n.title.includes('MEMORY.md') || n.title.includes('Long-term Memory')),
       '恢复后再次缺失应重新告警（去重状态已复位）',
     )
+    await host.dispose().catch(() => {})
   } finally {
     rmSync(dataDir, { recursive: true, force: true })
   }
@@ -340,34 +369,40 @@ test('memory：权限/IO 错误不被吞（仅 FileNotFoundError 走缺失路径
   }
 })
 
-test('profile：restrictToCwd 开启时注入 workspace_boundary 边界声明（关闭时不注入）', { timeout: 60_000 }, async () => {
+test('kernel：restrictToCwd 开启时注入 workspace_boundary 边界声明（关闭时不注入）', { timeout: 60_000 }, async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'helmx-pm-restrict-'))
   try {
     const profiles = new ProfileService(dataDir)
     await profiles.ensureDefault()
+    const skills = new SkillService(dataDir)
     const backend = makeControlledBackend(dataDir)
-    const host = new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir, host: backend, docs: new MemoryDocStore() })
-    await host.register(createProfilePlugin(), { enabled: true })
+    const scopedSkills = new ScopedSkillService({
+      skills,
+      profiles,
+      getConversation: (id) => backend.getConversation(id),
+      executionEnv: () => { throw new Error('unused') },
+      redact: (t) => t,
+      isNodeOnline: () => true,
+      listPlugins: () => [],
+    })
+    const assembler = new TurnContextAssembler({
+      profiles,
+      scopedSkills,
+      executionEnv: () => { throw new Error('unused') },
+      isNodeOnline: () => true,
+      redact: (t) => t,
+      notifyWarning: (n) => backend.emitEvent('notification', { ...n, level: 'warning' }),
+    })
 
-    const turn = {
-      conversation: makeConversation(1, { cwd: '/tmp/helmx/repo' }),
-      sections: [],
-      tools: [],
-      inputs: [],
-      messages: [],
-    }
+    const conv = makeConversation(1, { cwd: '/tmp/helmx/repo' })
     // 默认（未开启）：不注入边界节。
-    const off = await host.runHook('before_turn', turn as never)
-    assert.ok(off.action === 'transform')
-    const offSections = (off as { value: { sections: Array<{ id: string }> } }).value.sections
-    assert.ok(!offSections.some((s) => s.id === 'profile.workspace-boundary'), '未开启 restrictToCwd 不注入边界节')
+    const offPrepared = await assembler.prepare(conv)
+    assert.ok(!offPrepared.preSections.some((s) => s.id === 'profile.workspace-boundary'), '未开启 restrictToCwd 不注入边界节')
 
     // 开启：注入边界节，点名会话 cwd 与 path_outside_workspace。
     await profiles.save({ id: 'assistant', tags: ['assistant'], restrictToCwd: true })
-    const on = await host.runHook('before_turn', turn as never)
-    assert.ok(on.action === 'transform')
-    const onSections = (on as { value: { sections: Array<{ id: string; text: string }> } }).value.sections
-    const boundary = onSections.find((s) => s.id === 'profile.workspace-boundary')
+    const onPrepared = await assembler.prepare(conv)
+    const boundary = onPrepared.preSections.find((s) => s.id === 'profile.workspace-boundary')
     assert.ok(boundary !== undefined, '开启 restrictToCwd 必须注入边界节')
     assert.ok(boundary.text.includes('/tmp/helmx/repo'), '点名会话 cwd')
     assert.ok(boundary.text.includes('path_outside_workspace'), '点名拒绝错误码')

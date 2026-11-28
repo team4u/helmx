@@ -11,13 +11,9 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { readFileSync } from 'node:fs'
-import { AuthService, createHubHandler, PluginHost, ProfileService, type KernelHttpTarget } from '@helmx/kernel'
+import { AuthService, createHubHandler, ProfileService, type KernelHttpTarget } from '@helmx/kernel'
 import { PROFILE_STARTERS_MAX_ITEMS } from '@helmx/protocol'
-import { createProfilePlugin } from '../src/profile.js'
-import { createProfileFileHost } from '../../kernel/test/helpers/profile-file-host.js'
-import { createPluginHostBackendFixture } from '../../kernel/test/helpers/plugin-host-backend.js'
-import { createPluginBuildProvider } from '@helmx/plugin-build'
-import { MemoryDocStore, makeTempDir } from './helpers/plugin-test-env.js'
+import { makeTempDir } from './helpers/plugin-test-env.js'
 
 const freshDir = () => makeTempDir('helmx-starters-')
 
@@ -175,31 +171,20 @@ test('profiles starters HTTP：POST/GET 回读、PUT [] 清空、非法 400 不�
   assert.match(tooMany.json.error.message, /starters at most 6 items/)
 })
 
-test('profile：自举补写默认 Profile 的 managedByPlugin（缺失显式补、已有原样保留）', { timeout: 60_000 }, async () => {
-  // 场景 1：ensureDefault 创建的 Profile 无托管元数据（服务层不做归一化），
-  // 插件 service.start 显式补写 managedByPlugin: builtin:profile。
+test('profiles.ensureDefault：创建默认 assistant Profile 并声明 core:profiles 托管', { timeout: 60_000 }, async () => {
   const dataDir = await freshDir()
   const profiles = new ProfileService(dataDir)
-  await profiles.ensureDefault()
   try {
-    const before = await profiles.get('assistant')
-    assert.equal(before?.managedByPlugin, undefined, 'ensureDefault 不写托管元数据（不兼容归一化红线）')
+    await profiles.ensureDefault()
+    const assistant = await profiles.get('assistant')
+    assert.equal(assistant?.managedByPlugin, 'core:profiles', '默认 assistant Profile 由内核 core:profiles 托管')
 
-    const host = new PluginHost({ buildProvider: createPluginBuildProvider(),
-      dataDir,
-      host: Object.assign(createPluginHostBackendFixture(), createProfileFileHost(dataDir, profiles), {
-        emitEvent: async () => {},
-      }),
-      docs: new MemoryDocStore(),
-    })
-    await host.register(createProfilePlugin(), { enabled: true })
-
-    const after = await profiles.get('assistant')
-    assert.equal(after?.managedByPlugin, 'builtin:profile', '插件自举后默认 Profile 显式声明托管')
-    // 其余字段原样保留（不覆盖用户改动）
-    assert.equal(after?.name, before?.name)
-
-    await host.dispose().catch(() => {})
+    // 若已存在则不覆盖既有字段（例如自定义 name）
+    await profiles.save({ ...assistant!, name: '我的助理', tags: ['assistant'] })
+    await profiles.ensureDefault()
+    const preserved = await profiles.get('assistant')
+    assert.equal(preserved?.name, '我的助理')
+    assert.equal(preserved?.managedByPlugin, 'core:profiles')
   } finally {
     await rm(dataDir, { recursive: true, force: true })
   }

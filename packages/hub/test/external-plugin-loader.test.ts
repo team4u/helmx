@@ -243,7 +243,7 @@ test('自动发现与全链路启用：installed-plugins 代码根与 plugins �
   assert.ok(!ids.includes('some-plugin-data') && !ids.includes('data-dir-poison') && !ids.includes('.hidden'))
   assert.equal((globalThis as Record<string, unknown>).__dataDirPoisonExecuted, undefined, 'ctx.dataDir 下的代码绝不得被扫描执行')
   assert.equal((globalThis as Record<string, unknown>).__hiddenExecuted, undefined)
-  assert.ok(ids.includes('builtin:profile'))
+  assert.ok(ids.includes('builtin:mentions'))
 
   // 显式 plugin.json 默认停用且 locked=false；启用后 action / public doc / 默认 clientRoot 编译全通
   const demo = list.find((p) => p.id === 'demo-external')!

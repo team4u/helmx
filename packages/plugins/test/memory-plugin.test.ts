@@ -19,7 +19,7 @@ import { PluginHost, ProfileService, type PluginDocStore, type PluginHostBackend
 import { MAX_MEMORY_CHARS, MEMORY_PLUGIN_ID, MEMORY_SKILL_ID, createMemoryPlugin, isMemorySessionEligible, isProfileMemoryEnabled, type MemoryPluginDoc } from '../src/memory.js'
 import { MAX_MEMORY_CHARS as CLIENT_MAX_MEMORY_CHARS } from '../src/memory/client/models.js'
 import { MemoryStore } from '../src/memory/store.js'
-import { createProfilePlugin } from '../src/profile.js'
+import { createMentionsPlugin } from '../src/mentions.js'
 import { createProfileFileHost } from '../../kernel/test/helpers/profile-file-host.js'
 import { createPluginHostBackendFixture } from '../../kernel/test/helpers/plugin-host-backend.js'
 import { createPluginBuildProvider } from '@helmx/plugin-build'
@@ -457,24 +457,17 @@ test('memory 插件行为', { timeout: 60_000 }, async (t) => {
     assert.ok(memory.text.length <= MAX_MEMORY_CHARS + 500, '注入内容应截断到上限附近（含说明）')
   })
 
-  await t.test('profile 插件与 memory 插件正交：停用 memory 不影响 load_skill 与 SYSTEM 注入', async () => {
+  await t.test('mentions 插件与 memory 插件正交：停用 memory 不影响内核与点名协作', async () => {
     const dir = join(scratchRoot, 't10')
     const profiles = new ProfileService(dir)
     await profiles.ensureDefault()
     const host = new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir: dir, host: Object.assign(makeBackend(), createProfileFileHost(dir, profiles)), docs: new MemoryDocStore() })
-    await host.register(
-      {
-        id: 'builtin:profile',
-        name: '底座',
-        definePlugin() {},
-      } as never,
-      { enabled: true },
-    )
+    await host.register(createMentionsPlugin(), { enabled: true })
     await host.register(createMemoryPlugin(), { enabled: true })
-    void createProfilePlugin // 引用保持（组合层注册测试在 core.integration）
     await host.disable('builtin:memory')
     const summary = host.list().find((p) => p.id === 'builtin:memory')
     assert.equal(summary?.enabled, false)
+    assert.equal(host.list().find((p) => p.id === 'builtin:mentions')?.enabled, true)
   })
 
   await t.test('已初始化文件跨重启被删后告警不重建；写入或外部恢复自愈后再次删除可再告警', { timeout: 60_000 }, async () => {
@@ -657,35 +650,22 @@ test('memory 受管技能：启动自举、停用即时消失（零幻影提示�
       assert.ok(skillMd.includes(`builtin:memory.${actionId}`), `memory SKILL.md 应涵盖 builtin:memory.${actionId}`)
     }
 
-    const readSkillsSection = async () => {
-      const res = await kernel.plugins.runHook('before_turn', {
-        conversation: kernel.conversations.getConversation(1),
-        inputs: [],
-        sections: [],
-        tools: [],
-        messages: [],
-      })
-      assert.equal(res.action, 'transform')
-      return res.value.sections.find((s) => s.id === 'profile.skills')?.text ?? ''
-    }
+    const listAvailableIds = async () =>
+      (await kernel.scopedSkills.listAvailableForConversation('assistant', kernel.conversations.getConversation(1))).available.map((s) => s.id)
 
-    assert.ok((await readSkillsSection()).includes('id="memory"'), '启用时 <available_skills> 应包含 memory')
-    const loaded = (await kernel.plugins.executeTool(
-      'load_skill',
-      { skillId: MEMORY_SKILL_ID },
-      { conversationId: 1 },
-    )) as { text: string }
+    assert.ok((await listAvailableIds()).includes(MEMORY_SKILL_ID), '启用时可用技能应包含 memory')
+    const loaded = await kernel.scopedSkills.loadSkillForConversation(1, { skillId: MEMORY_SKILL_ID })
     assert.ok(loaded.text.includes('# Long-Term Memory'))
 
     await kernel.plugins.disable('builtin:memory')
-    assert.equal((await readSkillsSection()).includes('id="memory"'), false, '停用后 <available_skills> 不得残留 memory 技能')
+    assert.equal((await listAvailableIds()).includes(MEMORY_SKILL_ID), false, '停用后不得残留 memory 技能')
     await assert.rejects(
-      () => kernel.plugins.executeTool('load_skill', { skillId: MEMORY_SKILL_ID }, { conversationId: 1 }),
+      () => kernel.scopedSkills.loadSkillForConversation(1, { skillId: MEMORY_SKILL_ID }),
       (err: unknown) => err instanceof HelmxError && err.code === 'skill_not_available' && err.status === 403,
     )
 
     await kernel.plugins.enable('builtin:memory')
-    assert.ok((await readSkillsSection()).includes('id="memory"'), '重新启用后 memory 技能应恢复')
+    assert.ok((await listAvailableIds()).includes(MEMORY_SKILL_ID), '重新启用后 memory 技能应恢复')
   } finally {
     await app.close().catch(() => {})
   }

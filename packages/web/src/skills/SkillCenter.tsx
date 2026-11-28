@@ -61,7 +61,7 @@ export function SkillCenter({
   const hubSkills = useSkills() ?? []
   const nodes = useNodes()
   const { primaryTarget, splitTarget } = useLocationTargets()
-  const { openTarget, refreshAssets, invokePluginAction } = useStoreActions()
+  const { openTarget, refreshAssets } = useStoreActions()
   const { t } = useWebLocale()
   const [query, setQuery] = useState('')
   const [activeTab, setActiveTab] = useState<SkillCategoryTab>('all')
@@ -73,7 +73,7 @@ export function SkillCenter({
   const { nodeId, shouldNormalize } = useMemo(() => parseSkillCenterNodeId(rawNodeId), [rawNodeId])
   const scope = useMemo(() => (nodeId === undefined ? undefined : { nodeId }), [nodeId])
 
-  const scopedCatalog = useScopedSkillCatalog(scope, invokePluginAction, t, reloadSeq)
+  const scopedCatalog = useScopedSkillCatalog(scope, t, reloadSeq)
 
   const skills = useMemo(
     () => (scope === undefined ? hubSkills : scopedCatalog.catalog?.skills ?? []),
@@ -152,11 +152,11 @@ export function SkillCenter({
     return (skillId: string, path?: string) => {
       const summary = skills.find((s) => s.id === skillId)
       if (summary !== undefined && isNodeSourceSkill(summary)) {
-        return readScopedSkillFile(invokePluginAction, scope, skillId, path, t)
+        return readScopedSkillFile(scope, skillId, path, t)
       }
       return skillsApi.read(skillId, path)
     }
-  }, [scope, skills, invokePluginAction, t])
+  }, [scope, skills, t])
 
   const selectedNodeRecord = useMemo(
     () => (nodeId === undefined ? undefined : nodes.find((n) => n.id === nodeId)),

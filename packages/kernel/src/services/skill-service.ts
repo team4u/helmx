@@ -290,9 +290,8 @@ export class SkillService {
    * pruned from the references tree, and skill dirs whose SKILL.md still claims this asset's managedByPlugin owner
    * but whose id the owner no longer declares this session (rename/retire residue, e.g. swarm-collab -> swarm) are
    * removed—otherwise retired content keeps serving stale manuals via load_skill forever. Active owners that now
-   * declare zero skills (e.g. `builtin:profile` after migrating skills to `core:*`) are reconciled explicitly via
-   * `reconcileManagedOwners(activeOwners)`; disabled plugins are excluded from `activeOwners` so their on-disk skill
-   * directories remain intact while hidden from the active catalog.
+   * declare zero skills are reconciled explicitly via `reconcileManagedOwners(activeOwners)`; disabled plugins are
+   * excluded from `activeOwners` so their on-disk skill directories remain intact while hidden from the active catalog.
    *
    * Security boundary unchanged: validate skill ID, frontmatter, and all reference paths up front (invalid assets
    * write nothing); verify every directory segment along skills/<id>, references, and nested reference dirs is not a
@@ -351,8 +350,7 @@ export class SkillService {
   /**
    * Reconcile on-disk managed skill directories for the given active owners: any skill directory whose
    * `SKILL.md` frontmatter claims `managedByPlugin` matching one of `activeOwners` that was not declared via
-   * `ensureSkill` in this process (including active owners that declared zero skills, such as `builtin:profile`
-   * after migrating its skills out to `core:*`) is removed in a single pass.
+   * `ensureSkill` in this process (including active owners that declared zero skills).
    *
    * Owners NOT included in `activeOwners` (e.g. disabled or failed-to-start plugins), user-authored skills without
    * `managedByPlugin`, symlinked directories/SKILL.md files, and unparseable frontmatter are left untouched.

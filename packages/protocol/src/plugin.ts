@@ -440,7 +440,7 @@ export interface ProvidedCapability<T = unknown> {
 
 /**
  * Well-known `'helmx.dispatch-tools'` capability contract:
- * - `toolNames`: dispatch/spawn entry tools (unlocks `<available_profiles>` in `builtin:profile` and stripped at max subagent depth).
+ * - `toolNames`: dispatch/spawn entry tools (unlocks `<available_profiles>` in `builtin:mentions` and stripped at max subagent depth).
  */
 export interface DispatchToolsCapability {
   readonly toolNames: readonly string[]

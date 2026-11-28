@@ -14,6 +14,7 @@ import {
   type HookPayloadMap,
   type HookResult,
   type LocalizedText,
+  type MaybePromise,
   type PluginActionContext,
   type PluginActionSpec,
   type PluginBuildProvider,
@@ -432,7 +433,10 @@ export class PluginHostCore {
 
   // --- Hook / Action / Tool execute --------------------------------------------
 
-  async runHook<K extends HookName>(name: K, payload: HookPayloadMap[K]): Promise<HookResult<HookPayloadMap[K]>> {
+  async runHook<K extends HookName>(
+    name: K,
+    payload: HookPayloadMap[K] | (() => MaybePromise<HookPayloadMap[K]>),
+  ): Promise<HookResult<HookPayloadMap[K]>> {
     this.assertNotDisposed();
     return dispatchPluginHook(name, payload, {
       plugins: this.plugins,

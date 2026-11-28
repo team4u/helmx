@@ -68,20 +68,20 @@ test('PluginCard：未声明 description 时回退能力透视而非 ID 特判',
   const html = renderToString(
     e(PluginCard, {
       plugin: makePlugin({
-        id: 'builtin:profile',
-        name: '角色与技能底座',
+        id: 'builtin:mentions',
+        name: '角色点名',
         description: undefined,
-        tools: ['load_skill'],
-        actions: [],
-        hooks: [],
+        tools: [],
+        actions: ['list_mentionable'],
+        hooks: ['before_turn'],
       }),
       selected: false,
       onSelect: () => {},
       onToggle: () => {},
     }),
   )
-  // 无后端描述时也不再返回硬编码的 profile 文案，而是能力透视
-  assert.match(html, /1 Agent Tools/)
+  // 无后端描述时也不再返回硬编码文案，而是能力透视
+  assert.match(html, /1 Actions/)
   assert.doesNotMatch(html, /常驻角色与技能底座/)
 })
 
@@ -251,8 +251,8 @@ test('PluginCard：常驻锁定插件（locked: true）与 toggling 态禁用 Sw
 
   let toggleTriggered = false
   const lockedPlugin = makePlugin({
-    id: 'builtin:profile',
-    name: '个人助理',
+    id: 'builtin:mentions',
+    name: '角色点名',
     locked: true,
     enabled: true,
   })

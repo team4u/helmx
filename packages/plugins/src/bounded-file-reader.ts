@@ -1,6 +1,6 @@
 /**
  * Shared TOCTOU-safe bounded UTF-8 file reader for built-in plugins
- * (e.g. `builtin:profile` AGENTS.md/skills and `builtin:worktree` / `builtin:changes` untracked files).
+ * (e.g. `builtin:worktree` / `builtin:changes` untracked files).
  */
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import { targetPathShape } from '@helmx/protocol'

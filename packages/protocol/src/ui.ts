@@ -294,7 +294,7 @@ export interface PluginSlotContributionSpec extends UiSpecBase {
   priority?: number
 }
 
-/** Fully qualified name of the Profile detail drawer plugin extension sub-slot (provided by builtin:profile, injected by other plugins). */
+/** Namespace reserved by the host Profile detail drawer extension sub-slot (does not imply a builtin:profile plugin exists). */
 export const PROFILE_DETAIL_SECTION_SLOT = 'builtin:profile/detail-section' as const
 
 /** Namespace reserved by the host node center; does not imply a builtin:node plugin exists. */

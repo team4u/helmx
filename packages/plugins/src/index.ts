@@ -5,7 +5,12 @@
  * @helmx/kernel 实现；产品组合（注册顺序与缺省启停）由 @helmx/hub 负责。
  * 每个插件另提供 `@helmx/plugins/<name>` 子路径出口，供按需引用。
  */
-export { createProfilePlugin } from './profile.js';
+export {
+  createMentionsPlugin,
+  MENTIONS_PLUGIN_ID,
+  MENTIONS_CATALOG_SECTION_ID,
+  MENTIONS_COMPLETER_ID,
+} from './mentions.js';
 export { createMemoryPlugin, MEMORY_PLUGIN_ID } from './memory.js';
 export { createWorkflowPlugin, WORKFLOW_PLUGIN_ID } from './workflow.js';
 export { createWorktreePlugin, WORKTREE_PLUGIN_ID } from './worktree.js';

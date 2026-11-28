@@ -105,7 +105,7 @@ const mockSkills: [SkillSummary, SkillSummary, SkillSummary, SkillSummary, Skill
     name: 'Helmx 命令行操作手册',
     description: '指导大模型通过 helmx 命令行控制 Hub、检查状态与排查问题',
     references: ['references/cli-reference.md', 'references/generative-ui.md'],
-    managedByPlugin: 'builtin:profile',
+    managedByPlugin: 'builtin:workflow',
   }),
   makeSkill({
     id: 'code-review',
@@ -147,8 +147,8 @@ const mockSkills: [SkillSummary, SkillSummary, SkillSummary, SkillSummary, Skill
 // ---------------------------------------------------------------------------
 
 test('skill-center-model: skill category pure functions (builtin / plugin / shared / workspace)', { timeout: 60_000 }, () => {
-  const builtinAssistant = makeSkill({ id: 'assistant-helper', managedByPlugin: 'builtin:profile' })
-  const builtinCli = makeSkill({ id: 'helmx-cli', managedByPlugin: 'builtin:profile' })
+  const builtinAssistant = makeSkill({ id: 'assistant-helper', managedByPlugin: 'builtin:workflow' })
+  const builtinCli = makeSkill({ id: 'helmx-cli', managedByPlugin: 'builtin:workflow' })
   const pluginManaged = makeSkill({ id: 'custom-skill', managedByPlugin: 'vendor:tools' })
   const workspacePrivate = makeSkill({ id: 'my-private-skill' })
   const agentsShared = makeSkill({ id: 'git-commit', source: 'agents' })
@@ -184,7 +184,7 @@ test('skill-center-model: skill category pure functions (builtin / plugin / shar
 test('skill-center-model: buildSkillCategoryCounts counts each category accurately', { timeout: 60_000 }, () => {
   const counts = buildSkillCategoryCounts(mockSkills)
   // mockSkills contains:
-  // 1. helmx-cli (builtin:profile) -> builtin
+  // 1. helmx-cli (builtin:workflow) -> builtin
   // 2. code-review (no managedByPlugin) -> workspace
   // 3. database-migration (no managedByPlugin) -> workspace
   // 4. herdr-deploy (builtin:herdr) -> builtin
@@ -265,7 +265,7 @@ test('skill-center-model: filterSkills category filtering and multi-dimension se
 })
 
 test('skill-center-model: getSkillSourceBadge mapping', { timeout: 60_000 }, () => {
-  const cliSkill = makeSkill({ id: 'helmx-cli', managedByPlugin: 'builtin:profile' })
+  const cliSkill = makeSkill({ id: 'helmx-cli', managedByPlugin: 'builtin:workflow' })
   const codeSkill = makeSkill({ id: 'code-review' })
   const sharedSkill = makeSkill({ id: 'git-commit', source: 'agents' })
 
@@ -340,13 +340,13 @@ test('skill-reader-model: skillFileBasename and isSkillMarkdownFile classificati
 test('skill-reader-model: extractSkillFrontmatter parses fields and body (single-line scalars / block scalars / quotes)', { timeout: 60_000 }, () => {
   // Regular frontmatter: fields keep their original YAML order; the body strips the fence and trailing blank line
   const doc = extractSkillFrontmatter(
-    '---\nname: helmx-cli\ndescription: 手册\nmanagedByPlugin: builtin:profile\n---\n\n# 正文\n\n段落。',
+    '---\nname: helmx-cli\ndescription: 手册\nmanagedByPlugin: builtin:workflow\n---\n\n# 正文\n\n段落。',
   )
   assert.deepEqual(doc, {
     fields: [
       { key: 'name', value: 'helmx-cli' },
       { key: 'description', value: '手册' },
-      { key: 'managedByPlugin', value: 'builtin:profile' },
+      { key: 'managedByPlugin', value: 'builtin:workflow' },
     ],
     body: '# 正文\n\n段落。',
   })
@@ -420,7 +420,7 @@ test('skill-reader-model: renderSkillFrontmatterTable converts fields in order i
     renderSkillFrontmatterTable([
       { key: 'name', value: 'agent-browser' },
       { key: 'description', value: 'Browser automation CLI' },
-      { key: 'managedByPlugin', value: 'builtin:profile' },
+      { key: 'managedByPlugin', value: 'builtin:workflow' },
     ], enT),
     [
       '## Skill metadata',
@@ -429,7 +429,7 @@ test('skill-reader-model: renderSkillFrontmatterTable converts fields in order i
       '| --- | --- |',
       '| name | agent-browser |',
       '| description | Browser automation CLI |',
-      '| managedByPlugin | builtin:profile |',
+      '| managedByPlugin | builtin:workflow |',
     ].join('\n'),
   )
 
@@ -744,7 +744,7 @@ test('SkillDetailDrawer: rich mode converts frontmatter into a metadata table fl
   const root = ReactDOMClient.createRoot(host)
 
   const frontmatterDoc =
-    '---\nname: helmx-cli\ndescription: 头部元信息\nmanagedByPlugin: builtin:profile\n---\n\n# 正文标题\n\n内容段落。'
+    '---\nname: helmx-cli\ndescription: 头部元信息\nmanagedByPlugin: builtin:workflow\n---\n\n# 正文标题\n\n内容段落。'
   const reader = async () => ({ text: frontmatterDoc })
 
   await act(async () => {
@@ -779,7 +779,7 @@ test('SkillDetailDrawer: rich mode converts frontmatter into a metadata table fl
   assert.deepEqual(rows, [
     ['name', 'helmx-cli'],
     ['description', '头部元信息'],
-    ['managedByPlugin', 'builtin:profile'],
+    ['managedByPlugin', 'builtin:workflow'],
   ], 'fields keep their original YAML order')
 
   // The body follows in the same content flow; raw YAML key/value syntax never leaks
@@ -1507,7 +1507,7 @@ test('skill-scope-api: parseSkillCatalogResult 边界校验（nodeId 必填、cw
     nodeId: 'remote-1',
     cwd: '/remote/work',
     skills: [
-      { id: 'hub-skill', name: 'Hub', references: ['references/a.md'], managedByPlugin: 'builtin:profile' },
+      { id: 'hub-skill', name: 'Hub', references: ['references/a.md'], managedByPlugin: 'core:host' },
       { id: 'node-skill', name: '节点', references: [], source: 'node', description: '来自节点' },
     ],
     shadowedNodeSkillIds: ['dup'],
@@ -1523,7 +1523,7 @@ test('skill-scope-api: parseSkillCatalogResult 边界校验（nodeId 必填、cw
   assert.deepEqual(nodeOnly, { skills: [], shadowedNodeSkillIds: [] })
 
   // 非法形状显式拒绝（绝不静默截断/编造）
-  assert.throws(() => parseSkillCatalogResult(null, t), /skill_catalog/)
+  assert.throws(() => parseSkillCatalogResult(null, t), /core:skills\.catalog/)
   assert.throws(() => parseSkillCatalogResult({}, t), /nodeId/)
   assert.throws(() => parseSkillCatalogResult({ skills: [] }, t), /nodeId/)
   assert.throws(() => parseSkillCatalogResult({ nodeId: '  ', skills: [] }, t), /nodeId/)
@@ -1537,49 +1537,55 @@ test('skill-scope-api: parseSkillCatalogResult 边界校验（nodeId 必填、cw
   assert.throws(() => parseSkillCatalogResult({ nodeId: 'local', skills: [], shadowedNodeSkillIds: [1] }, t), /shadowedNodeSkillIds/)
   assert.throws(() => parseSkillCatalogResult({ nodeId: 'local', skills: [], nodeUnavailable: 5 }, t), /nodeUnavailable/)
   assert.throws(() => parseSkillCatalogResult({ nodeId: 'local', skills: [{ id: 'a', name: 'x', references: [], source: 'weird' }] }, t), /source/)
-  assert.throws(() => parseSkillCatalogResult({}, createWebTranslator('zh-CN')), /skill_catalog 输出不合法/)
+  assert.throws(() => parseSkillCatalogResult({}, createWebTranslator('zh-CN')), /core:skills\.catalog 输出不合法/)
 })
 
 test('skill-scope-api: fetch/read 调用形状（nodeId 必填、cwd 可选）', { timeout: 60_000 }, async () => {
   const t = createWebTranslator('en')
-  const calls: Array<{ pluginId: string; actionId: string; input: unknown }> = []
-  const invoke = async (pluginId: string, actionId: string, input: unknown): Promise<unknown> => {
-    calls.push({ pluginId, actionId, input })
-    if (actionId === 'skill_catalog') return { nodeId: 'remote-1', skills: [], shadowedNodeSkillIds: [] }
-    return { text: '# SKILL' }
+  const calls: Array<
+    | { kind: 'catalog'; scope: { nodeId: string; cwd?: string } }
+    | { kind: 'read'; id: string; path?: string; opts?: { nodeId?: string; cwd?: string } }
+  > = []
+  const transport = {
+    listCatalog: async (scope: { nodeId: string; cwd?: string }) => {
+      calls.push({ kind: 'catalog', scope })
+      return { nodeId: 'remote-1', skills: [], shadowedNodeSkillIds: [] }
+    },
+    readFile: async (id: string, path?: string, opts?: { nodeId?: string; cwd?: string }) => {
+      calls.push({ kind: 'read', id, ...(path !== undefined ? { path } : {}), ...(opts !== undefined ? { opts } : {}) })
+      return { text: '# SKILL' }
+    },
   }
-  const catalog = await fetchScopedSkillCatalog(invoke, { nodeId: 'remote-1' }, t)
+  const catalog = await fetchScopedSkillCatalog({ nodeId: 'remote-1' }, t, transport)
   assert.deepEqual(catalog, { skills: [], shadowedNodeSkillIds: [] })
   assert.deepEqual(calls[0], {
-    pluginId: 'builtin:profile',
-    actionId: 'skill_catalog',
-    input: { nodeId: 'remote-1' },
+    kind: 'catalog',
+    scope: { nodeId: 'remote-1' },
   })
 
-  await fetchScopedSkillCatalog(invoke, { nodeId: 'remote-1', cwd: '/w' }, t)
+  await fetchScopedSkillCatalog({ nodeId: 'remote-1', cwd: '/w' }, t, transport)
   assert.deepEqual(calls[1], {
-    pluginId: 'builtin:profile',
-    actionId: 'skill_catalog',
-    input: { nodeId: 'remote-1', cwd: '/w' },
+    kind: 'catalog',
+    scope: { nodeId: 'remote-1', cwd: '/w' },
   })
 
   // 主文件读取不携带 path 键；references 读取原样透传
-  const main = await readScopedSkillFile(invoke, { nodeId: 'remote-1' }, 'node-skill', undefined, t)
+  const main = await readScopedSkillFile({ nodeId: 'remote-1' }, 'node-skill', undefined, t, transport)
   assert.equal(main.text, '# SKILL')
-  assert.deepEqual(calls[2]!.input, { nodeId: 'remote-1', skillId: 'node-skill' })
-  await readScopedSkillFile(invoke, { nodeId: 'local', cwd: '/w' }, 'node-skill', 'references/guide.md', t)
-  assert.deepEqual(calls[3]!.input, {
-    nodeId: 'local',
-    cwd: '/w',
-    skillId: 'node-skill',
+  assert.deepEqual(calls[2], { kind: 'read', id: 'node-skill', opts: { nodeId: 'remote-1' } })
+  await readScopedSkillFile({ nodeId: 'local', cwd: '/w' }, 'node-skill', 'references/guide.md', t, transport)
+  assert.deepEqual(calls[3], {
+    kind: 'read',
+    id: 'node-skill',
     path: 'references/guide.md',
+    opts: { nodeId: 'local', cwd: '/w' },
   })
 
   // 读取输出同样过边界校验
   assert.deepEqual(parseSkillReadResult({ text: 'x' }, t), { text: 'x' })
   assert.throws(() => parseSkillReadResult({}, t), /text/)
-  assert.throws(() => parseSkillReadResult('nope', t), /skill_read/)
-  assert.throws(() => parseSkillReadResult('nope', createWebTranslator('zh-CN')), /skill_read 输出不合法/)
+  assert.throws(() => parseSkillReadResult('nope', t), /core:skills\.read/)
+  assert.throws(() => parseSkillReadResult('nope', createWebTranslator('zh-CN')), /core:skills\.read 输出不合法/)
 })
 
 // ---------------------------------------------------------------------------
@@ -1587,8 +1593,7 @@ test('skill-scope-api: fetch/read 调用形状（nodeId 必填、cwd 可选）',
 // ---------------------------------------------------------------------------
 
 interface CapturedActionCall {
-  pluginId: string
-  actionId: string
+  kind: 'catalog' | 'read'
   input: Record<string, unknown>
 }
 
@@ -1599,7 +1604,7 @@ interface ScopeFetchStub {
   restore: () => void
 }
 
-/** 桩化全局 fetch：仅响应 builtin:profile 技能 action，其余 404（测试不应触达）。 */
+/** 桩化全局 fetch：仅响应内核 /api/skills/scoped/catalog 与 /api/skills/:id 端点，其余 404（测试不应触达）。 */
 function stubSkillActions(overrides: Partial<Pick<ScopeFetchStub, 'catalogResponse' | 'readResponse'>> = {}): ScopeFetchStub {
   const originalFetch = globalThis.fetch
   const calls: CapturedActionCall[] = []
@@ -1618,17 +1623,37 @@ function stubSkillActions(overrides: Partial<Pick<ScopeFetchStub, 'catalogRespon
     },
   }
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-    const url = String(input)
-    const match = /^\/api\/actions\/([^/]+)\/([^/?]+)$/.exec(url)
-    if (match === null || String(init?.method ?? 'GET') !== 'POST') {
-      return new Response(JSON.stringify({ error: { code: 'not_found', message: `unexpected fetch ${url}` } }), { status: 404 })
+    const rawUrl = String(input)
+    const parsed = new URL(rawUrl, 'http://localhost')
+    if (String(init?.method ?? 'GET') !== 'GET') {
+      return new Response(JSON.stringify({ error: { code: 'not_found', message: `unexpected fetch ${rawUrl}` } }), { status: 404 })
     }
-    const body = JSON.parse(String(init?.body ?? '{}')) as { input?: Record<string, unknown> }
-    const actionInput = body.input ?? {}
-    calls.push({ pluginId: decodeURIComponent(match[1]!), actionId: decodeURIComponent(match[2]!), input: actionInput })
-    const payload =
-      decodeURIComponent(match[2]!) === 'skill_catalog' ? stub.catalogResponse(actionInput) : stub.readResponse(actionInput)
-    return new Response(JSON.stringify(payload), { status: 200, headers: { 'Content-Type': 'application/json' } })
+    if (parsed.pathname === '/api/skills/scoped/catalog') {
+      const actionInput: Record<string, unknown> = {
+        nodeId: parsed.searchParams.get('nodeId') ?? '',
+        ...(parsed.searchParams.has('cwd') ? { cwd: parsed.searchParams.get('cwd')! } : {}),
+      }
+      calls.push({ kind: 'catalog', input: actionInput })
+      return new Response(JSON.stringify(stub.catalogResponse(actionInput)), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }
+    const readMatch = /^\/api\/skills\/([^/]+)$/.exec(parsed.pathname)
+    if (readMatch !== null) {
+      const actionInput: Record<string, unknown> = {
+        skillId: decodeURIComponent(readMatch[1]!),
+        ...(parsed.searchParams.has('path') ? { path: parsed.searchParams.get('path')! } : {}),
+        ...(parsed.searchParams.has('nodeId') ? { nodeId: parsed.searchParams.get('nodeId')! } : {}),
+        ...(parsed.searchParams.has('cwd') ? { cwd: parsed.searchParams.get('cwd')! } : {}),
+      }
+      calls.push({ kind: 'read', input: actionInput })
+      return new Response(JSON.stringify(stub.readResponse(actionInput)), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }
+    return new Response(JSON.stringify({ error: { code: 'not_found', message: `unexpected fetch ${rawUrl}` } }), { status: 404 })
   }) as typeof fetch
   return stub
 }
@@ -1646,7 +1671,7 @@ const scopedHubSkill: SkillSummary = {
   name: 'Helmx CLI',
   description: 'Hub 技能（合并目录内）',
   references: [],
-  managedByPlugin: 'builtin:profile',
+  managedByPlugin: 'core:host',
 }
 
 function makeScopedStore(nodeId?: string): HelmxExternalStore {
@@ -1785,7 +1810,7 @@ test('SkillCenter: 节点深链渲染合并目录、节点分类与显式诊断�
     assert.ok(diagnostics.includes('目标节点 code2 当前离线'), 'nodeUnavailable 诊断如实展示')
     assert.ok(diagnostics.includes('code-review'), '同名遮蔽报告被遮蔽的节点技能 id')
 
-    assert.equal(stub.calls.filter((c) => c.actionId === 'skill_catalog').length, 1, '非 Hub 节点目录只经 action 拉取一次')
+    assert.equal(stub.calls.filter((c) => c.kind === 'catalog').length, 1, '非 Hub 节点目录只经 scoped catalog 接口拉取一次')
 
     await act(async () => {
       root.unmount()
@@ -1834,9 +1859,9 @@ test('SkillCenter: 节点技能详情经 action 读取并展示节点来源；�
     assert.ok(drawer, '详情抽屉打开')
     assert.ok(drawer.textContent?.includes('Node source: code2'), '节点来源如实标注')
     assert.ok(!drawer.textContent?.includes('undefined'), '不渲染多余的 undefined 路径')
-    assert.ok(drawer.textContent?.includes('按节点共享规程执行'), '正文来自 skill_read action')
-    const readCall = stub.calls.find((c) => c.actionId === 'skill_read')
-    assert.ok(readCall, '节点技能读取必须经 skill_read action')
+    assert.ok(drawer.textContent?.includes('按节点共享规程执行'), '正文来自技能读取接口')
+    const readCall = stub.calls.find((c) => c.kind === 'read')
+    assert.ok(readCall, '节点技能读取必须经 /api/skills/:id')
     assert.equal(readCall!.input.skillId, 'deploy-runbook')
 
     // 关闭详情：回到列表但 nodeId 仍在（目标上携带）
@@ -1937,14 +1962,12 @@ test('SkillCenter: 切换节点的代数竞争保护——慢的旧目录不得�
     code2: [{ ...scopedNodeSkill, id: 'code2-skill' }],
     lx: [{ ...scopedNodeSkill, id: 'lx-skill' }],
   }
-  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-    const url = String(input)
-    const match = /^\/api\/actions\/([^/]+)\/([^/?]+)$/.exec(url)
-    if (match === null || decodeURIComponent(match[2]!) !== 'skill_catalog') {
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const parsed = new URL(String(input), 'http://localhost')
+    if (parsed.pathname !== '/api/skills/scoped/catalog') {
       return new Response(JSON.stringify({ text: '' }), { status: 200 })
     }
-    const body = JSON.parse(String(init?.body ?? '{}')) as { input?: Record<string, unknown> }
-    const key = String(body.input?.nodeId)
+    const key = String(parsed.searchParams.get('nodeId'))
     let resolve!: () => void
     const promise = new Promise<void>((r) => { resolve = r })
     gates.set(key, { promise, resolve })
@@ -2008,7 +2031,8 @@ test('SkillCenter: ?node=local 自愈归一为 Hub 并保持详情子项', { tim
     const { host, root } = await renderSkillCenter(store)
 
     assert.deepEqual(store.getPrimaryTarget(), { kind: 'skills', skillId: 'helmx-cli' }, 'node=local 被自愈清理为 Hub 默认且保留详情')
-    assert.equal(stub.calls.length, 0, 'Hub 默认不触发目录请求')
+    assert.equal(stub.calls.filter((c) => c.kind === 'catalog').length, 0, 'Hub 默认不触发目录请求')
+    assert.equal(stub.calls.some((c) => 'nodeId' in c.input), false, 'Hub 默认详情读取不携带 nodeId')
     assert.ok(host.querySelector('.skill-scope-diagnostics') === null)
 
     await act(async () => {

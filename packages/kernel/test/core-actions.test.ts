@@ -193,7 +193,7 @@ describe('Core actions (core:*) parity, discovery, and security invariants', { t
       )
 
       // run_action({ list: true, pluginId: 'core:' }) discovers reachable actions in top-level human session #1,
-      // surfaces `cli: 'helmx ...'`, and omits `core:asks.answer` and `core:skills.{list,read}`.
+      // surfaces `cli: 'helmx ...'`, and omits `core:asks.answer` and `core:skills.{list,catalog,read}`.
       const listed = await invokeRunActionTool(kernel, { list: true, pluginId: 'core:' }, 1)
       assert.equal(listed.isError, undefined)
       const items = JSON.parse(listed.text) as Array<{ actionId: string; cli?: string; idempotent?: boolean }>
@@ -212,6 +212,7 @@ describe('Core actions (core:*) parity, discovery, and security invariants', { t
       assert.equal(endpointsMeta.idempotent, true)
       assert.equal(listedIds.has('core:asks.answer'), false, 'core:asks.answer must be hidden in any session')
       assert.equal(listedIds.has('core:skills.list'), false, 'core:skills.list must be hidden in any session')
+      assert.equal(listedIds.has('core:skills.catalog'), false, 'core:skills.catalog must be hidden in any session')
       assert.equal(listedIds.has('core:skills.read'), false, 'core:skills.read must be hidden in any session')
 
       const searchMeta = items.find((i) => i.actionId === 'core:conversations.search')!
@@ -641,7 +642,7 @@ describe('Core actions (core:*) parity, discovery, and security invariants', { t
       // Reject managedByPlugin spoofing on create.
       const spoofManaged = await postCoreAction(kernel, 'profiles', 'create', {
         id: 'spoofed',
-        managedByPlugin: 'builtin:profile',
+        managedByPlugin: 'builtin:mentions',
       })
       assert.equal(spoofManaged.status, 403)
       assert.equal(spoofManaged.code, 'profile_managed_by_plugin')
@@ -960,6 +961,7 @@ describe('Core actions (core:*) parity, discovery, and security invariants', { t
       // Blocked from ANY conversation context (even top-level human #1).
       for (const [actionId, payload] of [
         ['list', {}],
+        ['catalog', { nodeId: 'local' }],
         ['read', { id: 'demo-skill' }],
       ] as const) {
         const blocked = await postCoreAction(kernel, 'skills', actionId, payload, 1)
@@ -967,14 +969,31 @@ describe('Core actions (core:*) parity, discovery, and security invariants', { t
         assert.equal(blocked.code, 'conversation_scope_violation')
       }
 
-      // Allowed from direct HTTP (no conversationId); path traversal rejected.
+      // Allowed from direct HTTP (no conversationId); path traversal and missing nodeId checks rejected.
       const skillsList = await postCoreAction(kernel, 'skills', 'list', {})
       assert.equal(skillsList.status, 200)
       assert.ok((skillsList.body as Array<{ id: string }>).some((s) => s.id === 'demo-skill'))
 
+      const skillsCatalog = await postCoreAction(kernel, 'skills', 'catalog', { nodeId: 'local' })
+      assert.equal(skillsCatalog.status, 200)
+      assert.equal(skillsCatalog.body.nodeId, 'local')
+      assert.ok((skillsCatalog.body.skills as Array<{ id: string }>).some((s) => s.id === 'demo-skill'))
+
+      const badCatalog = await postCoreAction(kernel, 'skills', 'catalog', { nodeId: '  ' })
+      assert.equal(badCatalog.status, 400)
+      assert.equal(badCatalog.code, 'validation_error')
+
       const skillRead = await postCoreAction(kernel, 'skills', 'read', { id: 'demo-skill' })
       assert.equal(skillRead.status, 200)
       assert.match(skillRead.body.text, /Hello skill/)
+
+      const skillReadScoped = await postCoreAction(kernel, 'skills', 'read', { id: 'demo-skill', nodeId: 'local' })
+      assert.equal(skillReadScoped.status, 200)
+      assert.match(skillReadScoped.body.text, /Hello skill/)
+
+      const cwdWithoutNode = await postCoreAction(kernel, 'skills', 'read', { id: 'demo-skill', cwd: '/x' })
+      assert.equal(cwdWithoutNode.status, 400)
+      assert.equal(cwdWithoutNode.code, 'validation_error')
 
       const skillTraversal = await postCoreAction(kernel, 'skills', 'read', {
         id: 'demo-skill',
@@ -1887,7 +1906,7 @@ describe('Core actions (core:*) parity, discovery, and security invariants', { t
       assert.equal(manifestOp.inputSchema.required, undefined)
 
       const skillActions = kernel.plugins.listActions().filter((m) => m.pluginId === 'core:skills')
-      assert.deepEqual(skillActions.map((m) => m.id), ['list', 'read'])
+      assert.deepEqual(skillActions.map((m) => m.id), ['list', 'catalog', 'read'])
       for (const action of skillActions) {
         assert.deepEqual(action.scope, { conversationIds: [] })
       }

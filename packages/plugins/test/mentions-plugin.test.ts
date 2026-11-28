@@ -1,5 +1,5 @@
 /**
- * builtin:profile 跨 Profile 协作目录测试（真 PluginHost + 真 ProfileService
+ * builtin:mentions 跨 Profile 协作目录测试（真 PluginHost + 真 ProfileService
  * + 真文件系统；不 mock 计算结果）。
  *
  * 覆盖：
@@ -7,8 +7,7 @@
  *   目录排除规则（自身/humanSelectable/托管插件停用/runtime 无接管）、
  *   位置展示继承语义、目录 XML 渲染转义与 runtime 标注；
  * - 集成（真实 PluginHost）：before_turn 目录注入（fork/worker 类子会话同样
- *   注入、无派工工具不注入、工具剥离后不注入——模拟默认优先级钩子先剥离
- *   subagent）、
+ *   注入、无派工工具不注入、工具剥离后不注入、遗留陈旧 mentions.catalog 清理）；
  *   workflow 插件停用/启用对目录的影响、候选增删改实时生效、
  *   候选 SYSTEM 缺失不告警不伪造、候选 IO 错误显式上抛；
  * - 动作契约：list_mentionable 幂等补全（上下文会话身份不可被 body 伪造、
@@ -31,9 +30,12 @@ import {
 import { PluginHost, ProfileService, type PluginHostBackend } from '@helmx/kernel'
 import { createProfileFileHost } from '../../kernel/test/helpers/profile-file-host.js'
 import { createPluginHostBackendFixture } from '../../kernel/test/helpers/plugin-host-backend.js'
-import { createProfilePlugin, PROFILE_MANAGED_BY } from '../src/profile.js'
 import {
+  MENTIONS_CATALOG_SECTION_ID,
+  MENTIONS_COMPLETER_ID,
+  MENTIONS_PLUGIN_ID,
   PROFILE_SUMMARY_MAX_CODEPOINTS,
+  createMentionsPlugin,
   describeHint,
   describePosition,
   extractSystemSummary,
@@ -41,7 +43,7 @@ import {
   renderProfileCatalogSection,
   toCatalogEntry,
   truncateCodePoints,
-} from '../src/profile/catalog.js'
+} from '../src/mentions.js'
 import { createWorkflowPlugin } from '../src/workflow.js'
 import { createPluginBuildProvider } from '@helmx/plugin-build'
 import { MemoryDocStore, MemoryKvStore, makeConversationSummary } from './helpers/plugin-test-env.js'
@@ -188,7 +190,7 @@ async function makeEnv(extraPlugins: PluginDefinition[] = [], withSessionDocs = 
     kv: new MemoryKvStore(),
     ...(withSessionDocs ? { sessionDocs: new MemorySessionDocStore() } : {}),
   })
-  await host.register(createProfilePlugin(), { enabled: true })
+  await host.register(createMentionsPlugin(), { enabled: true })
   for (const plugin of extraPlugins) await host.register(plugin, { enabled: true })
   return {
     dataDir,
@@ -340,7 +342,7 @@ test('renderProfileCatalogSection：动态字段 XML 转义与边界指引', { t
 // 集成：before_turn 目录注入
 // ---------------------------------------------------------------------------
 
-test('before_turn：顶层 + 有派工工具时注入 profile.catalog；候选实时重读', { timeout: 60_000 }, async () => {
+test('before_turn：顶层 + 有派工工具时注入 mentions.catalog；候选实时重读', { timeout: 60_000 }, async () => {
   const env = await makeEnv([createWorkflowPlugin()], true)
   try {
     await seedProfile(env.profiles, env.dataDir, { id: 'coder', name: '编码专家' }, '# Coder\n\n擅长重构与测试。')
@@ -353,7 +355,7 @@ test('before_turn：顶层 + 有派工工具时注入 profile.catalog；候选�
     }
     const result = await env.host.runHook('before_turn', turn as never)
     assert.ok(result.action === 'transform')
-    const catalog = sectionsOf(result, turn).find((s) => s.id === 'profile.catalog')
+    const catalog = sectionsOf(result, turn).find((s) => s.id === MENTIONS_CATALOG_SECTION_ID)
     assert.ok(catalog, '顶层且有派工工具 → 注入目录')
     assert.ok(catalog.text.includes('id="coder"'))
     assert.ok(catalog.text.includes('擅长重构与测试'), '候选 SYSTEM 摘要进入目录')
@@ -363,8 +365,8 @@ test('before_turn：顶层 + 有派工工具时注入 profile.catalog；候选�
     await env.profiles.delete('coder')
     await seedProfile(env.profiles, env.dataDir, { id: 'ops', name: '运维' }, '# Ops\n外部执行。')
     const again = await env.host.runHook('before_turn', { ...turn, sections: [] } as never)
-    const againCatalog = sectionsOf(again, turn).find((s) => s.id === 'profile.catalog')
-    if (againCatalog === undefined) throw new Error('增删改后应保留 profile.catalog')
+    const againCatalog = sectionsOf(again, turn).find((s) => s.id === MENTIONS_CATALOG_SECTION_ID)
+    if (againCatalog === undefined) throw new Error('增删改后应保留 mentions.catalog')
     assert.ok(againCatalog.text.includes('id="ops"'))
     assert.ok(!againCatalog.text.includes('id="coder"'), '删除的候选下次回合消失')
   } finally {
@@ -386,8 +388,7 @@ test('before_turn：子会话不再一刀切排除；无派工工具不注入（
     // 顶层有工具 → 注入
     const topLevel = await env.host.runHook('before_turn', parentTurn as never)
     const topLevelSections = sectionsOf(topLevel, parentTurn)
-    assert.ok(topLevelSections.some((s) => s.id === 'profile.catalog'))
-    assert.ok(topLevelSections.find((s) => s.id === 'profile.skills')?.text.includes('<skill id="workflow">'), '启用 workflow 时目录应暴露插件技能')
+    assert.ok(topLevelSections.some((s) => s.id === MENTIONS_CATALOG_SECTION_ID))
 
     // 子会话（parentConversationId 存在，如 fork / Swarm worker）有工具同样
     // 注入：不再按父链一刀切（真正子代理由 builtin:workflow 钩子剥离工具后
@@ -397,14 +398,14 @@ test('before_turn：子会话不再一刀切排除；无派工工具不注入（
       conversation: makeConversation(2, { parentConversationId: 1 }),
     }
     const sub = await env.host.runHook('before_turn', subTurn as never)
-    assert.ok(sectionsOf(sub, subTurn).some((s) => s.id === 'profile.catalog'), 'fork/worker 类子会话同样注入（不再父链一刀切）')
+    assert.ok(sectionsOf(sub, subTurn).some((s) => s.id === MENTIONS_CATALOG_SECTION_ID), 'fork/worker 类子会话同样注入（不再父链一刀切）')
 
-    // 顶层但派工工具被默认优先级钩子剥离（模拟路由模式收敛）→ 低优先级目录钩子看到最终清单，不注入
+    // 顶层但派工工具被默认优先级钩子剥离（模拟路由模式收敛）→ 低优先级目录钩子看到最终清单，移除/不注入
     const stripperEnv = await makeEnv([createWorkflowPlugin(), makeToolStripperPlugin(['subagent', 'SubagentWorkflow'])], true)
     try {
       const stripped = await stripperEnv.host.runHook('before_turn', parentTurn as never)
       assert.ok(
-        !sectionsOf(stripped, parentTurn).some((s) => s.id === 'profile.catalog'),
+        !sectionsOf(stripped, parentTurn).some((s) => s.id === MENTIONS_CATALOG_SECTION_ID),
         '工具剥离后不注入（不教唆幻影工具）',
       )
     } finally {
@@ -416,16 +417,14 @@ test('before_turn：子会话不再一刀切排除；无派工工具不注入（
     const noWorkflowTurn = { ...parentTurn, sections: [], tools: dispatchToolsOf(env.host) }
     const noWorkflow = await env.host.runHook('before_turn', noWorkflowTurn as never)
     const noWorkflowSections = sectionsOf(noWorkflow, noWorkflowTurn)
-    assert.ok(!noWorkflowSections.some((s) => s.id === 'profile.catalog'), 'workflow 停用不注入')
-    assert.ok(!noWorkflowSections.find((s) => s.id === 'profile.skills')?.text.includes('<skill id="workflow">'), 'workflow 停用后目录移除插件技能')
+    assert.ok(!noWorkflowSections.some((s) => s.id === MENTIONS_CATALOG_SECTION_ID), 'workflow 停用不注入')
 
     // 重新启用 → 恢复注入（启停下次回合生效）
     await env.host.enable('builtin:workflow')
     const reEnabledTurn = { ...parentTurn, sections: [], tools: dispatchToolsOf(env.host) }
     const reEnabled = await env.host.runHook('before_turn', reEnabledTurn as never)
     const reEnabledSections = sectionsOf(reEnabled, reEnabledTurn)
-    assert.ok(reEnabledSections.some((s) => s.id === 'profile.catalog'), '重新启用恢复注入')
-    assert.ok(reEnabledSections.find((s) => s.id === 'profile.skills')?.text.includes('<skill id="workflow">'), 'workflow 重新启用后技能目录恢复')
+    assert.ok(reEnabledSections.some((s) => s.id === MENTIONS_CATALOG_SECTION_ID), '重新启用恢复注入')
   } finally {
     await env.close()
   }
@@ -466,14 +465,14 @@ test('before_turn：托管插件停用隐藏其 Profile', { timeout: 60_000 }, a
       messages: [],
     }
     const first = await env.host.runHook('before_turn', turn as never)
-    const catalog = sectionsOf(first, turn).find((s) => s.id === 'profile.catalog')
-    if (catalog === undefined) throw new Error('启用托管插件 Profile 后应保留 profile.catalog')
+    const catalog = sectionsOf(first, turn).find((s) => s.id === MENTIONS_CATALOG_SECTION_ID)
+    if (catalog === undefined) throw new Error('启用托管插件 Profile 后应保留 mentions.catalog')
     assert.ok(catalog.text.includes('id="custom-worker"'), '启用插件的托管 Profile 进入目录')
 
     await env.host.disable('test:rt')
     const after = await env.host.runHook('before_turn', { ...turn, sections: [] } as never)
     const afterSections = after.action === 'transform' ? after.value.sections : turn.sections
-    const afterCatalog = afterSections.find((s: { id: string }) => s.id === 'profile.catalog')
+    const afterCatalog = afterSections.find((s: { id: string }) => s.id === MENTIONS_CATALOG_SECTION_ID)
     assert.ok(
       afterCatalog === undefined || !afterCatalog.text.includes('custom-worker'),
       '托管插件停用后隐藏其托管 Profile（目录为空时不注入）',
@@ -497,18 +496,10 @@ test('before_turn：候选 SYSTEM 缺失不告警不伪造；IO 错误显式上�
       messages: [],
     }
     const result = await env.host.runHook('before_turn', turn as never)
-    const catalog = sectionsOf(result, turn).find((s) => s.id === 'profile.catalog')
+    const catalog = sectionsOf(result, turn).find((s) => s.id === MENTIONS_CATALOG_SECTION_ID)
     assert.ok(catalog, '候选缺 SYSTEM 不阻断目录注入')
     assert.ok(/<profile id="coder" name="编码" mention="@coder"( at="[^"]*")?><\/profile>/.test(catalog.text), 'summary 空元素（不伪造）')
     assert.equal(env.backend.notifications.length, 0, '候选缺失不告警（告警纪律只针对当前会话资产）')
-
-    // 当前会话自身 SYSTEM 缺失仍走既有告警（回归保护）
-    unlinkSync(join(env.dataDir, 'profiles', 'assistant', 'SYSTEM.md'))
-    await env.host.runHook('before_turn', { ...turn, sections: [] } as never)
-    assert.ok(
-      env.backend.notifications.some((n) => n.title.includes('SYSTEM.md')),
-      '当前会话 SYSTEM 缺失仍显式告警',
-    )
 
     // 候选 SYSTEM 变为不可读（EACCES）：钩子链显式失败（hook_execution_failed），不静默降级
     const denied = join(env.dataDir, 'profiles', 'coder', 'SYSTEM.md')
@@ -539,7 +530,7 @@ test('list_mentionable：上下文会话为真实身份来源；Workflow 启停�
 
     // 有调用上下文：忽略 input.conversationId（不可被 body 伪造身份）
     const byContext = (await env.host.invokeAction(
-      'builtin:profile',
+      MENTIONS_PLUGIN_ID,
       'list_mentionable',
       { query: '', conversationId: 999 },
       { conversationId: 1 },
@@ -548,19 +539,19 @@ test('list_mentionable：上下文会话为真实身份来源；Workflow 启停�
 
     await env.host.disable('builtin:workflow')
     const disabled = (await env.host.invokeAction(
-      'builtin:profile', 'list_mentionable', { query: '', conversationId: 1 }, { conversationId: 1 },
+      MENTIONS_PLUGIN_ID, 'list_mentionable', { query: '', conversationId: 1 }, { conversationId: 1 },
     )) as { items: unknown[] }
     assert.equal(disabled.items.length, 0, 'Workflow 停用时不推荐无法调用的角色')
     await env.host.enable('builtin:workflow')
     const enabled = (await env.host.invokeAction(
-      'builtin:profile', 'list_mentionable', { query: '', conversationId: 1 }, { conversationId: 1 },
+      MENTIONS_PLUGIN_ID, 'list_mentionable', { query: '', conversationId: 1 }, { conversationId: 1 },
     )) as { items: Array<{ id: string }> }
     assert.ok(enabled.items.some((i) => i.id === 'coder'), 'Workflow 重新启用后候选恢复')
 
     // 无上下文 + 显式 conversationId：真实 getConversation 校验。补全面不再
     // 按父链排除（fork / Swarm worker 同样有父链但应保留协作能力；真正
     // 子代理的回合级剥离由 builtin:workflow 钩子完成），有插件即有候选。
-    const subCtx = (await env.host.invokeAction('builtin:profile', 'list_mentionable', { conversationId: 2 })) as {
+    const subCtx = (await env.host.invokeAction(MENTIONS_PLUGIN_ID, 'list_mentionable', { conversationId: 2 })) as {
       items: Array<{ id: string }>
     }
     assert.ok(subCtx.items.length > 0, '子会话上下文不再按父链一刀切排除（fork/worker 误伤修复）')
@@ -568,13 +559,13 @@ test('list_mentionable：上下文会话为真实身份来源；Workflow 启停�
 
     // 无上下文 + 失效显式目标 → 404
     await assert.rejects(
-      () => env.host.invokeAction('builtin:profile', 'list_mentionable', { conversationId: 404 }),
+      () => env.host.invokeAction(MENTIONS_PLUGIN_ID, 'list_mentionable', { conversationId: 404 }),
       (err: unknown) => err instanceof HelmxError && err.code === 'not_found',
     )
 
     // 无上下文 + 无显式目标 → validation_error（不猜测默认会话）
     await assert.rejects(
-      () => env.host.invokeAction('builtin:profile', 'list_mentionable', {}),
+      () => env.host.invokeAction(MENTIONS_PLUGIN_ID, 'list_mentionable', {}),
       (err: unknown) => err instanceof HelmxError && err.code === 'validation_error',
     )
   } finally {
@@ -588,7 +579,7 @@ test('list_mentionable：输出 schema 严格（label/hint/insertText/icon 契�
     await seedProfile(env.profiles, env.dataDir, { id: 'coder', name: '编码专家' }, '# C\n数据库迁移专家。')
     await seedProfile(env.profiles, env.dataDir, { id: 'reviewer', name: '评审' }, '# R\n代码评审。')
 
-    const all = (await env.host.invokeAction('builtin:profile', 'list_mentionable', { query: '' }, { conversationId: 1 })) as {
+    const all = (await env.host.invokeAction(MENTIONS_PLUGIN_ID, 'list_mentionable', { query: '' }, { conversationId: 1 })) as {
       items: Array<{ id: string; label: string; insertText: string; hint: string; icon: string }>
     }
     assert.equal(all.items.length, 2)
@@ -600,12 +591,12 @@ test('list_mentionable：输出 schema 严格（label/hint/insertText/icon 契�
     assert.ok(coder.hint.includes('继承当前会话节点与目录'), 'hint 含位置继承说明')
 
     // query 过滤（id / name / summary 模糊命中）
-    const filtered = (await env.host.invokeAction('builtin:profile', 'list_mentionable', { query: '迁移' }, { conversationId: 1 })) as {
+    const filtered = (await env.host.invokeAction(MENTIONS_PLUGIN_ID, 'list_mentionable', { query: '迁移' }, { conversationId: 1 })) as {
       items: Array<{ id: string }>
     }
     assert.deepEqual(filtered.items.map((i) => i.id), ['coder'])
 
-    const none = (await env.host.invokeAction('builtin:profile', 'list_mentionable', { query: '不存在的词' }, { conversationId: 1 })) as {
+    const none = (await env.host.invokeAction(MENTIONS_PLUGIN_ID, 'list_mentionable', { query: '不存在的词' }, { conversationId: 1 })) as {
       items: unknown[]
     }
     assert.equal(none.items.length, 0)
@@ -618,12 +609,12 @@ test('list_mentionable：幂等只读（补全源绑定契约）且无副作用'
   const env = await makeEnv([createWorkflowPlugin()], true)
   try {
     await seedProfile(env.profiles, env.dataDir, { id: 'coder', name: '编码' })
-    const manifest = env.host.listActions().find((a) => a.pluginId === 'builtin:profile' && a.id === 'list_mentionable')
+    const manifest = env.host.listActions().find((a) => a.pluginId === MENTIONS_PLUGIN_ID && a.id === 'list_mentionable')
     assert.ok(manifest, '动作进入 manifest（HTTP / CLI 自动映射）')
     assert.equal(manifest.idempotent, true, '幂等声明（composerCompleter action 源前置条件）')
     const before = JSON.stringify((env.host as unknown as { docs: MemoryDocStore }).docs ?? [])
-    await env.host.invokeAction('builtin:profile', 'list_mentionable', { query: '' }, { conversationId: 1 })
-    await env.host.invokeAction('builtin:profile', 'list_mentionable', { query: '' }, { conversationId: 1 })
+    await env.host.invokeAction(MENTIONS_PLUGIN_ID, 'list_mentionable', { query: '' }, { conversationId: 1 })
+    await env.host.invokeAction(MENTIONS_PLUGIN_ID, 'list_mentionable', { query: '' }, { conversationId: 1 })
     assert.equal(before, JSON.stringify((env.host as unknown as { docs: MemoryDocStore }).docs ?? []), '重复调用零写入')
     assert.equal(env.backend.notifications.length, 0)
   } finally {
@@ -635,44 +626,78 @@ test('list_mentionable：幂等只读（补全源绑定契约）且无副作用'
 // UI 贡献：composerCompleter 声明与生命周期
 // ---------------------------------------------------------------------------
 
-test('composerCompleter：@ 触发 action 源声明进入 listUi，profile 插件常驻不消失', { timeout: 60_000 }, async () => {
+test('composerCompleter：@ 触发 action 源声明进入 listUi，停用后完整移除，重启用恢复', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
     const completers = env.host
       .listUi()
-      .filter((u) => u.surface === 'composer.completer' && u.pluginId === 'builtin:profile')
+      .filter((u) => u.surface === 'composer.completer' && u.pluginId === MENTIONS_PLUGIN_ID)
     assert.equal(completers.length, 1)
-    const spec = completers[0]!.spec as { trigger: string; source: { kind: string; actionId: string }; priority?: number }
+    const spec = completers[0]!.spec as { id: string; trigger: string; source: { kind: string; actionId: string }; priority?: number }
+    assert.equal(spec.id, MENTIONS_COMPLETER_ID)
     assert.equal(spec.trigger, '@')
     assert.equal(spec.source.kind, 'action')
     assert.equal(spec.source.actionId, 'list_mentionable')
     assert.equal(spec.priority, 100, '插件源间排序声明（不冒称高于宿主内置源）')
+
+    await env.host.disable(MENTIONS_PLUGIN_ID)
+    assert.deepEqual(
+      env.host.listUi().filter((u) => u.pluginId === MENTIONS_PLUGIN_ID),
+      [],
+      '停用 builtin:mentions 后 UI 贡献彻底消失',
+    )
+    assert.equal(
+      env.host.listActions().some((a) => a.pluginId === MENTIONS_PLUGIN_ID),
+      false,
+      '停用 builtin:mentions 后 action 清单彻底消失',
+    )
+
+    await env.host.enable(MENTIONS_PLUGIN_ID)
+    assert.equal(
+      env.host.listUi().filter((u) => u.surface === 'composer.completer' && u.pluginId === MENTIONS_PLUGIN_ID).length,
+      1,
+      '重新启用 builtin:mentions 后 UI 贡献恢复',
+    )
   } finally {
     await env.close()
   }
 })
 
 // ---------------------------------------------------------------------------
-// 兼容回归：既有消费方（SYSTEM / skills 注入不受影响）
+// 兼容回归：不覆盖已有 sections 且陈旧 mentions.catalog 自动清理
 // ---------------------------------------------------------------------------
 
-test('回归：SYSTEM 与 skills 注入不受目录逻辑影响（sections 顺序稳定）', { timeout: 60_000 }, async () => {
+test('回归：不覆盖 profile.system 等既有段落；陈旧 mentions.catalog 在失去派工工具后被剥离', { timeout: 60_000 }, async () => {
   const env = await makeEnv([createWorkflowPlugin()], true)
   try {
     await seedProfile(env.profiles, env.dataDir, { id: 'coder', name: '编码' }, '# C\n摘要。')
     const turn = {
       conversation: makeConversation(1),
-      sections: [],
+      sections: [{ id: 'profile.system', text: '# Assistant' }],
       tools: [tool('subagent')],
       inputs: [],
       messages: [],
     }
     const result = await env.host.runHook('before_turn', turn as never)
     const ids = sectionsOf(result, turn).map((s) => s.id)
-    assert.ok(ids.includes('profile.system'), 'SYSTEM 注入保留')
-    assert.ok(ids.includes('profile.skills'), 'skills 目录注入保留')
-    assert.ok(ids.includes('profile.catalog'), '协作目录注入新增')
-    assert.ok(ids.indexOf('profile.system') < ids.indexOf('profile.catalog'), 'SYSTEM 先于目录（默认优先级钩子先运行）')
+    assert.ok(ids.includes('profile.system'), '既有 profile.system 段落保留')
+    assert.ok(ids.includes(MENTIONS_CATALOG_SECTION_ID), '协作目录注入新增')
+    assert.ok(ids.indexOf('profile.system') < ids.indexOf(MENTIONS_CATALOG_SECTION_ID), 'SYSTEM 先于协作目录')
+
+    // 若携带陈旧 mentions.catalog 但工具列表不再包含派工工具，应剥离陈旧节且不重复注入
+    const staleTurn = {
+      conversation: makeConversation(1),
+      sections: [
+        { id: 'profile.system', text: '# Assistant' },
+        { id: MENTIONS_CATALOG_SECTION_ID, text: 'stale' },
+      ],
+      tools: [],
+      inputs: [],
+      messages: [],
+    }
+    const stripped = await env.host.runHook('before_turn', staleTurn as never)
+    const strippedIds = sectionsOf(stripped, staleTurn).map((s) => s.id)
+    assert.deepEqual(strippedIds, ['profile.system'])
   } finally {
     await env.close()
   }
@@ -684,7 +709,7 @@ test('list_mentionable：CLI --current 形态（仅上下文会话，input 完�
   const env = await makeEnv([createWorkflowPlugin()], true)
   try {
     await seedProfile(env.profiles, env.dataDir, { id: 'coder', name: '编码' })
-    const cliForm = (await env.host.invokeAction('builtin:profile', 'list_mentionable', {}, { conversationId: 1 })) as {
+    const cliForm = (await env.host.invokeAction(MENTIONS_PLUGIN_ID, 'list_mentionable', {}, { conversationId: 1 })) as {
       items: Array<{ id: string; label: string }>
     }
     assert.deepEqual(
@@ -705,7 +730,7 @@ test('list_mentionable：待命草稿态支持显式 profileId（无会话时校
     await seedProfile(env.profiles, env.dataDir, { id: 'reviewer', name: '代码评审' }, '# R\n代码评审。')
 
     // 无会话上下文 + 显式 profileId：排除自身，返回其余可用协作角色
-    const standby = (await env.host.invokeAction('builtin:profile', 'list_mentionable', { query: '', profileId: 'coder' })) as {
+    const standby = (await env.host.invokeAction(MENTIONS_PLUGIN_ID, 'list_mentionable', { query: '', profileId: 'coder' })) as {
       items: Array<{ id: string; insertText: string }>
     }
     assert.deepEqual(
@@ -716,7 +741,7 @@ test('list_mentionable：待命草稿态支持显式 profileId（无会话时校
     assert.ok(!standby.items.some((i) => i.id === 'coder'), '排除自身 Profile')
 
     // query 过滤生效
-    const filtered = (await env.host.invokeAction('builtin:profile', 'list_mentionable', { query: 'rev', profileId: 'coder' })) as {
+    const filtered = (await env.host.invokeAction(MENTIONS_PLUGIN_ID, 'list_mentionable', { query: 'rev', profileId: 'coder' })) as {
       items: Array<{ id: string; insertText: string }>
     }
     assert.deepEqual(filtered.items.map((i) => i.id), ['reviewer'])
@@ -724,13 +749,13 @@ test('list_mentionable：待命草稿态支持显式 profileId（无会话时校
 
     // 不存在的 profileId -> 404 not_found（绝不猜测或放行）
     await assert.rejects(
-      () => env.host.invokeAction('builtin:profile', 'list_mentionable', { profileId: 'ghost' }),
+      () => env.host.invokeAction(MENTIONS_PLUGIN_ID, 'list_mentionable', { profileId: 'ghost' }),
       (err: unknown) => err instanceof HelmxError && err.code === 'not_found',
     )
 
     // 有会话上下文（conv 1 属 assistant）时不得被 input.profileId 冒充成 coder
     const contextWins = (await env.host.invokeAction(
-      'builtin:profile',
+      MENTIONS_PLUGIN_ID,
       'list_mentionable',
       { query: '', profileId: 'coder' },
       { conversationId: 1 },
@@ -742,7 +767,7 @@ test('list_mentionable：待命草稿态支持显式 profileId（无会话时校
   }
 })
 
-test('failed-while-enabled 插件：托管 skill/load_skill、托管 Profile 与派工能力均不得视为 active', { timeout: 60_000 }, async () => {
+test('failed-while-enabled 插件：托管 Profile 与派工能力均不得视为 active', { timeout: 60_000 }, async () => {
   const basePlugin: PluginDefinition = {
     id: 'dep:base',
     name: 'Base',
@@ -780,15 +805,11 @@ test('failed-while-enabled 插件：托管 skill/load_skill、托管 Profile 与
       messages: [],
     })
 
-    // 1. 正常 active 时：托管技能、load_skill、托管 Profile 全部可用
+    // 1. 正常 active 时：托管 Profile 出现在 <available_profiles>
     const beforeFail = await env.host.runHook('before_turn', makeTurn() as never)
     assert.equal(beforeFail.action, 'transform')
-    const skillsBefore = sectionsOf(beforeFail, makeTurn()).find((s) => s.id === 'profile.skills')
-    const catalogBefore = sectionsOf(beforeFail, makeTurn()).find((s) => s.id === 'profile.catalog')
-    assert.ok(skillsBefore?.text.includes('id="dep-skill"'), '活跃时托管技能应出现在 <available_skills>')
+    const catalogBefore = sectionsOf(beforeFail, makeTurn()).find((s) => s.id === MENTIONS_CATALOG_SECTION_ID)
     assert.ok(catalogBefore?.text.includes('id="dep-bot"'), '活跃时托管 Profile 应出现在 <available_profiles>')
-    const loadedBefore = (await env.host.executeTool('load_skill', { skillId: 'dep-skill' }, { conversationId: 1 })) as { text: string }
-    assert.ok(loadedBefore.text.includes('# Dep Skill'))
 
     // 2. 强停依赖 dep:base → ext:managed-dep 落入真实 enabled=true, status='failed'
     await env.host.disable('dep:base', { force: true })
@@ -796,23 +817,15 @@ test('failed-while-enabled 插件：托管 skill/load_skill、托管 Profile 与
     assert.equal(depSummary?.enabled, true)
     assert.equal(depSummary?.status, 'failed')
 
-    // 2a. before_turn 不得再注入托管技能与托管 Profile（普通 Profile 仍保留）
+    // 2a. before_turn 不得再注入 failed-while-enabled 托管 Profile（普通 Profile 仍保留）
     const afterFail = await env.host.runHook('before_turn', makeTurn() as never)
     assert.equal(afterFail.action, 'transform')
-    const skillsAfter = sectionsOf(afterFail, makeTurn()).find((s) => s.id === 'profile.skills')
-    const catalogAfter = sectionsOf(afterFail, makeTurn()).find((s) => s.id === 'profile.catalog')
-    assert.ok(!(skillsAfter?.text.includes('id="dep-skill"') ?? false), 'failed-while-enabled 插件托管技能不得注入 <available_skills>')
+    const catalogAfter = sectionsOf(afterFail, makeTurn()).find((s) => s.id === MENTIONS_CATALOG_SECTION_ID)
     assert.ok(!(catalogAfter?.text.includes('id="dep-bot"') ?? false), 'failed-while-enabled 插件托管 Profile 不得进入 <available_profiles>')
     assert.ok(catalogAfter?.text.includes('id="plain-coder"'), '普通 Profile 不受影响')
 
-    // 2b. load_skill 显式 403 skill_not_available
-    await assert.rejects(
-      () => env.host.executeTool('load_skill', { skillId: 'dep-skill' }, { conversationId: 1 }),
-      (err: unknown) => err instanceof HelmxError && err.code === 'skill_not_available' && err.status === 403,
-    )
-
     // 2c. list_mentionable 同样排除 failed-while-enabled 插件托管 Profile
-    const mentionable = (await env.host.invokeAction('builtin:profile', 'list_mentionable', { query: '' }, { conversationId: 1 })) as {
+    const mentionable = (await env.host.invokeAction(MENTIONS_PLUGIN_ID, 'list_mentionable', { query: '' }, { conversationId: 1 })) as {
       items: Array<{ id: string }>
     }
     assert.deepEqual(mentionable.items.map((i) => i.id), ['plain-coder'])
@@ -832,14 +845,14 @@ test('failed-while-enabled 插件：托管 skill/load_skill、托管 Profile 与
           : p,
       )
     const mentionWithFailedDispatch = (await env.host.invokeAction(
-      'builtin:profile',
+      MENTIONS_PLUGIN_ID,
       'list_mentionable',
       { query: '' },
       { conversationId: 1 },
     )) as { items: Array<{ id: string }> }
     assert.deepEqual(mentionWithFailedDispatch.items, [], '派工插件为 enabled=true, status=failed 时 list_mentionable 不得暴露协作目录')
     const turnWithFailedDispatch = await env.host.runHook('before_turn', makeTurn() as never)
-    const catalogWithFailedDispatch = sectionsOf(turnWithFailedDispatch, makeTurn()).find((s) => s.id === 'profile.catalog')
+    const catalogWithFailedDispatch = sectionsOf(turnWithFailedDispatch, makeTurn()).find((s) => s.id === MENTIONS_CATALOG_SECTION_ID)
     assert.equal(catalogWithFailedDispatch, undefined, '派工插件为 enabled=true, status=failed 时 before_turn 不得注入 <available_profiles>')
   } finally {
     await env.close()
@@ -871,14 +884,14 @@ test('before_turn 与 list_mentionable：仅启用 Swarm（经 helmx.dispatch-to
       messages: [],
     }
     const result = await env.host.runHook('before_turn', turn as never)
-    const catalog = sectionsOf(result, turn).find((s) => s.id === 'profile.catalog')
+    const catalog = sectionsOf(result, turn).find((s) => s.id === MENTIONS_CATALOG_SECTION_ID)
     assert.ok(catalog, '仅有 swarm_dispatch_worker 时应注入 <available_profiles>')
     assert.ok(catalog.text.includes('id="reviewer"'))
     assert.ok(catalog.text.includes('swarm_dispatch_worker'))
     assert.ok(catalog.text.includes('profileId'))
 
     const mentionable = (await env.host.invokeAction(
-      'builtin:profile',
+      MENTIONS_PLUGIN_ID,
       'list_mentionable',
       { query: '' },
       { conversationId: 1 },
@@ -888,7 +901,7 @@ test('before_turn 与 list_mentionable：仅启用 Swarm（经 helmx.dispatch-to
     await env.host.disable('test:swarm-dispatch')
     const disabledTurn = { ...turn, sections: [], tools: [] }
     const afterDisable = await env.host.runHook('before_turn', disabledTurn as never)
-    assert.equal(sectionsOf(afterDisable, disabledTurn).find((s) => s.id === 'profile.catalog'), undefined)
+    assert.equal(sectionsOf(afterDisable, disabledTurn).find((s) => s.id === MENTIONS_CATALOG_SECTION_ID), undefined)
   } finally {
     await env.close()
   }
@@ -919,13 +932,13 @@ test('before_turn 与 list_mentionable：任意第三方插件通过 helmx.dispa
       messages: [],
     }
     const result = await env.host.runHook('before_turn', turn as never)
-    const catalog = sectionsOf(result, turn).find((s) => s.id === 'profile.catalog')
+    const catalog = sectionsOf(result, turn).find((s) => s.id === MENTIONS_CATALOG_SECTION_ID)
     assert.ok(catalog, '第三方 helmx.dispatch-tools 提供方应解锁 <available_profiles>')
     assert.ok(catalog.text.includes('custom_delegate_task'))
     assert.ok(catalog.text.includes('id="analyst"'))
 
     const mentionable = (await env.host.invokeAction(
-      'builtin:profile',
+      MENTIONS_PLUGIN_ID,
       'list_mentionable',
       { query: '' },
       { conversationId: 1 },
@@ -934,28 +947,12 @@ test('before_turn 与 list_mentionable：任意第三方插件通过 helmx.dispa
 
     await env.host.disable('ext:custom-dispatcher')
     const afterDisable = (await env.host.invokeAction(
-      'builtin:profile',
+      MENTIONS_PLUGIN_ID,
       'list_mentionable',
       { query: '' },
       { conversationId: 1 },
     )) as { items: Array<{ id: string }> }
     assert.deepEqual(afterDisable.items, [], '停用后能力自动释放，不再暴露协作目录')
-  } finally {
-    await env.close()
-  }
-})
-
-test('builtin:profile 不再自举内核核心技能（helmx-cli / app-builder / profile），仅维护默认 assistant Profile 托管标记', { timeout: 60_000 }, async () => {
-  const env = await makeEnv()
-  try {
-    const listed = await env.backend.skills.list()
-    assert.deepEqual(
-      listed.filter((s) => ['helmx-cli', 'app-builder', 'profile'].includes(s.id)),
-      [],
-      '内核核心技能已迁至 @helmx/kernel（core:*），builtin:profile 启动不得再自举这些技能',
-    )
-    const assistant = await env.profiles.get('assistant')
-    assert.equal(assistant?.managedByPlugin, PROFILE_MANAGED_BY, '默认 assistant Profile 仍由 builtin:profile 声明托管')
   } finally {
     await env.close()
   }

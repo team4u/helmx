@@ -56,6 +56,7 @@ export {
   createAskUserTool,
   type AskUserToolDeps,
 } from './tools/ask-tools.js'
+export { LOAD_SKILL_TOOL_NAME, createLoadSkillTool } from './tools/skill-tools.js'
 // Shape detection and pure lexical helpers live in `@helmx/protocol` (browser-safe, shared by kernel and
 // `@helmx/plugins`); re-exported here to preserve existing relative-path imports.
 export { isAbsoluteTargetPath, targetPathShape } from '@helmx/protocol'

@@ -74,6 +74,36 @@ export interface SkillSummary {
 }
 
 /**
+ * Coordinate-scoped merged skill catalog (`Hub` + `node` + optional workspace `cwd`).
+ * Returned by `GET /api/skills/scoped/catalog` (`core:skills.catalog`).
+ */
+export interface ScopedSkillCatalog {
+  nodeId: string
+  cwd?: string
+  /** Merged effective catalog (Hub data > Hub agents > node machine > workspace), sorted by id. */
+  skills: SkillSummary[]
+  /** Node skill ids shadowed by a same-name Hub skill (the Hub version is always effective). */
+  shadowedNodeSkillIds: string[]
+  /** Explicit redacted diagnostic when the node-side scan failed (absent when healthy; never a silent empty list). */
+  nodeUnavailable?: string
+}
+
+/**
+ * Whether a Profile's managing owner (`managedByPlugin`) is currently active:
+ * - unmanaged (`undefined`): always active;
+ * - valid kernel `core:<domain>` owner: always active (resident kernel capabilities never appear in `enabledPluginIds`);
+ * - plugin owner (`builtin:*` or external): active iff present in `enabledPluginIds`.
+ */
+export function isProfileOwnerActive(
+  managedByPlugin: string | undefined,
+  enabledPluginIds: ReadonlySet<string>,
+): boolean {
+  if (managedByPlugin === undefined) return true
+  if (isValidCoreOwnerId(managedByPlugin)) return true
+  return enabledPluginIds.has(managedByPlugin)
+}
+
+/**
  * Whether a skill's managing owner (`managedByPlugin`) is currently active:
  * - unmanaged (`undefined`): always active;
  * - valid kernel `core:<domain>` owner: always active (kernel capabilities are resident and never appear in `enabledPluginIds`);

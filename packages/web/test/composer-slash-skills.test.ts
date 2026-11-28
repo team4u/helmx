@@ -58,7 +58,7 @@ const CATALOG: SkillSummary[] = [
 // ---------------------------------------------------------------------------
 
 test('slashMenuSkills: undefined -> all visible skills; [] -> all hidden; whitelist filters exactly', { timeout: 60_000 }, () => {
-  const enabled = new Set(['builtin:profile', 'builtin:herdr'])
+  const enabled = new Set(['builtin:mentions', 'builtin:herdr'])
   // undefined: everything (including enabled-plugin managed ones)
   assert.deepEqual(
     slashMenuSkills({ id: 'p', skills: undefined }, CATALOG, enabled).map((s) => s.id),
@@ -74,12 +74,12 @@ test('slashMenuSkills: undefined -> all visible skills; [] -> all hidden; whitel
 })
 
 test('slashMenuSkills: a missing Profile shows no skills yet (never accidentally exposing all)', { timeout: 60_000 }, () => {
-  const enabled = new Set(['builtin:profile'])
+  const enabled = new Set(['builtin:mentions'])
   assert.deepEqual(slashMenuSkills(undefined, CATALOG, enabled), [], 'missing Profile -> empty skill list')
 })
 
 test('slashMenuSkills: skills of a disabled plugin are always unavailable (even on a whitelist hit)', { timeout: 60_000 }, () => {
-  const disabled = new Set(['builtin:profile'])
+  const disabled = new Set(['builtin:mentions'])
   assert.deepEqual(
     slashMenuSkills({ id: 'p', skills: undefined }, CATALOG, disabled).map((s) => s.id),
     ['review', 'tally'],
@@ -97,11 +97,11 @@ test('slashMenuSkills: skills of a disabled plugin are always unavailable (even 
 // ---------------------------------------------------------------------------
 
 test('slashMenuSkillsWithScope: 节点来源技能补入，Hub 同名胜出，白名单与启用态同样生效', { timeout: 60_000 }, () => {
-  const enabled = new Set(['builtin:profile'])
+  const enabled = new Set(['builtin:mentions'])
   const profile: Profile = { id: 'p', skills: undefined }
   const hubSkills: SkillSummary[] = [
     { id: 'review', name: '审查', references: [] },
-    { id: 'deploy', name: '部署', references: [], managedByPlugin: 'builtin:profile' },
+    { id: 'deploy', name: '部署', references: [], managedByPlugin: 'builtin:mentions' },
   ]
   const scoped: SkillSummary[] = [
     // 节点补充技能（合法新增）
@@ -109,7 +109,7 @@ test('slashMenuSkillsWithScope: 节点来源技能补入，Hub 同名胜出，�
     // 与 Hub 同名的节点条目（后端契约已排除；前端再防御一次）
     { id: 'review', name: '节点同名审查', references: [], source: 'node' },
     // 合并目录里的 Hub 条目（source 缺省）不得重复补入
-    { id: 'deploy', name: '部署', references: [], managedByPlugin: 'builtin:profile' },
+    { id: 'deploy', name: '部署', references: [], managedByPlugin: 'builtin:mentions' },
   ]
   assert.deepEqual(
     slashMenuSkillsWithScope(profile, hubSkills, enabled, scoped).map((s) => s.id),
@@ -154,7 +154,7 @@ function makeStore(conversation: ConversationSummary, opts: MountOptions): Helmx
   return makeTestStore({
     conversations: [conversation],
     plugins: opts.plugins ?? [
-      { id: 'builtin:profile', name: 'assistant', locked: true, enabled: true, hooks: [], actions: [], tools: [] },
+      { id: 'builtin:mentions', name: 'mentions', locked: false, enabled: true, hooks: [], actions: [], tools: [] },
       { id: 'builtin:herdr', name: 'herdr', locked: false, enabled: true, hooks: [], actions: [], tools: [] },
     ],
     profiles: opts.profiles,
@@ -234,7 +234,7 @@ test('interaction: profile.skills=[] -> no skills at all, only builtin commands'
 
 test('interaction: whitelisted profile -> only whitelisted skills; disabled-plugin managed skills never appear even on whitelist hits', { timeout: 60_000 }, async () => {
   const plugins = [
-    { id: 'builtin:profile', name: 'assistant', locked: true, enabled: true, hooks: [], actions: [], tools: [] },
+    { id: 'builtin:mentions', name: 'mentions', locked: false, enabled: true, hooks: [], actions: [], tools: [] },
     { id: 'builtin:herdr', name: 'herdr', locked: false, enabled: false, hooks: [], actions: [], tools: [] },
   ] as PluginSummary[]
   const { typeSlash, unmount } = await mountComposer(conv(3, 'coder'), {
@@ -272,7 +272,7 @@ test('interaction: switching Profile (simulating a store refresh) updates depend
   // useMemo([store.profiles, conversation.profileId, store.skills, enabledPluginIds]) dependency chain; the
   // pure-model layer verifies the result difference of the same input under different profiles (split view /
   // menu switching share this function).
-  const enabled = new Set(['builtin:profile'])
+  const enabled = new Set(['builtin:mentions'])
   const a = slashMenuSkills({ id: 'a', skills: undefined }, CATALOG, enabled).map((s) => s.id)
   const b = slashMenuSkills({ id: 'b', skills: ['tally'] }, CATALOG, enabled).map((s) => s.id)
   assert.deepEqual(a, ['review', 'tally'])
@@ -281,12 +281,14 @@ test('interaction: switching Profile (simulating a store refresh) updates depend
 
 test('interaction: remote node conversation merges node skills into Composer / popover without dropping Hub skills', { timeout: 60_000 }, async () => {
   const originalFetch = globalThis.fetch
-  const actionInputs: unknown[] = []
+  const catalogQueries: Array<{ nodeId: string; cwd?: string }> = []
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-    const url = String(input)
-    if (url.endsWith('/api/actions/builtin%3Aprofile/skill_catalog')) {
-      const parsed = JSON.parse(String(init?.body ?? '{}')) as { input?: unknown }
-      actionInputs.push(parsed.input)
+    const parsed = new URL(String(input), 'http://localhost')
+    if (String(init?.method ?? 'GET') === 'GET' && parsed.pathname === '/api/skills/scoped/catalog') {
+      catalogQueries.push({
+        nodeId: parsed.searchParams.get('nodeId') ?? '',
+        ...(parsed.searchParams.has('cwd') ? { cwd: parsed.searchParams.get('cwd')! } : {}),
+      })
       return new Response(
         JSON.stringify({
           nodeId: 'code2',
@@ -314,7 +316,7 @@ test('interaction: remote node conversation merges node skills into Composer / p
       const text = popover!.textContent ?? ''
       assert.match(text, /\/skill:review/)
       assert.match(text, /\/skill:remote-node-skill/)
-      assert.deepEqual(actionInputs, [{ nodeId: 'code2' }], '远端节点无 cwd 时仅传 nodeId 拉取节点机器级技能')
+      assert.deepEqual(catalogQueries, [{ nodeId: 'code2' }], '远端节点无 cwd 时仅传 nodeId 拉取节点机器级技能')
     } finally {
       await unmount()
     }

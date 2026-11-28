@@ -7,6 +7,7 @@ import {
   type HookName,
   type HookPayloadMap,
   type HookResult,
+  type MaybePromise,
 } from '@helmx/protocol';
 import type { HookPipeline, IsolatedHookError } from './hooks.js';
 import type { PluginTaskTracker } from './tracking.js';
@@ -44,7 +45,7 @@ function notifyIsolatedHookErrors(
 
 export async function dispatchPluginHook<K extends HookName>(
   name: K,
-  payload: HookPayloadMap[K],
+  payload: HookPayloadMap[K] | (() => MaybePromise<HookPayloadMap[K]>),
   deps: HookDispatchDeps,
 ): Promise<HookResult<HookPayloadMap[K]>> {
   const pipeline = deps.pipelines.get(name);
@@ -52,13 +53,17 @@ export async function dispatchPluginHook<K extends HookName>(
     throw new HelmxError('unknown_hook', `Unknown hook mount point: ${name}`, 400, { hook: name });
   }
   const participants = pipeline.entries().filter((h) => isHookActive(deps.plugins, h.pluginId));
-  if (participants.length === 0) return { action: 'continue' };
+  if (participants.length === 0) {
+    if (typeof payload === 'function') await payload();
+    return { action: 'continue' };
+  }
 
   const snapshot = new Set(participants);
   const label = `hook:${name}`;
   for (const h of participants) deps.tracker.begin(h.pluginId, label);
   try {
-    const r = await pipeline.run(payload, (h) => snapshot.has(h));
+    const resolvedPayload = typeof payload === 'function' ? await payload() : payload;
+    const r = await pipeline.run(resolvedPayload, (h) => snapshot.has(h));
     if (r.isolatedErrors !== undefined && r.isolatedErrors.length > 0) {
       notifyIsolatedHookErrors(r.isolatedErrors, deps.host, deps.redactText);
     }

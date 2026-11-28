@@ -19,6 +19,7 @@ import {
   type TurnSettledPayload,
   type MaybePromise,
   type PluginSkillAsset,
+  type PluginSummary,
   type HubActivityCounts,
   type ConversationSummary,
 } from '@helmx/protocol'
@@ -48,6 +49,7 @@ import type { RuntimeOwnershipManager } from './runtime-ownership.js'
 import type { RuntimeTriggerDispatcher } from './runtime-triggers.js'
 import type { NodeManager } from './node-manager.js'
 import type { ModelRegistry } from './model-registry.js'
+import type { ScopedSkillService } from './scoped-skills.js'
 import {
   createGlobalDocumentStore,
   createPluginHostBackend,
@@ -117,6 +119,7 @@ export class KernelRuntime {
   readonly triggers: RuntimeTriggerDispatcher
   readonly ownership: RuntimeOwnershipManager
   private readonly svc: AssembledRuntimeServices
+  private readonly offNodeSkillsCacheInvalidation: () => void
 
   readonly documentStore: {
     get<T>(key: string, initial: T): T
@@ -219,6 +222,9 @@ export class KernelRuntime {
     this.events.setHostDispatcher((event) => this.dispatchInternalEvent(event.type, event))
 
     this.nodes.bindEvents()
+    this.offNodeSkillsCacheInvalidation = this.nodes.onNodeConnectionChanged((nodeId) => {
+      this.svc.scopedSkillsSvc.invalidateNodeCache({ nodeId })
+    })
 
     // Managed process token
     const managed = this.svc.authSvc.createProcessToken()
@@ -364,8 +370,8 @@ export class KernelRuntime {
   private async reconcileActivePluginManagedSkills(): Promise<void> {
     if (this.pluginHost === undefined) return
     // Reconcile only active (enabled + started without error) plugin owners: retired directories of
-    // active plugins that now declare fewer or zero skills (e.g. `builtin:profile` after migrating
-    // core skills out) are removed, while disabled or failed-to-start plugins retain their on-disk dirs.
+    // active plugins that now declare fewer or zero skills are removed, while disabled or failed-to-start
+    // plugins retain their on-disk dirs.
     const activePluginIds = this.pluginHost
       .list()
       .filter(isPluginSummaryActive)
@@ -662,6 +668,10 @@ export class KernelRuntime {
     return this.pluginHost
   }
 
+  listPluginsSnapshot(): ReadonlyArray<PluginSummary> {
+    return this.pluginHost !== undefined ? this.pluginHost.list() : []
+  }
+
   private async dispatchTurnSettled(payload: TurnSettledPayload, consumed: ConversationInput[]): Promise<void> {
     const convId = payload.conversation.id
     if (this.conversations.hasAutoResetRuntimeModel(convId)) {
@@ -720,6 +730,7 @@ export class KernelRuntime {
   get pluginConfigStore(): HelmxPluginConfigStore { return this.svc.pluginConfig }
   get profiles(): ProfileService { return this.svc.profilesSvc }
   get skills(): SkillService { return this.svc.skillsSvc }
+  get scopedSkills(): ScopedSkillService { return this.svc.scopedSkillsSvc }
   get artifacts(): SvcArtifactService { return this.svc.artifactsSvc }
   get auth(): SvcAuthService { return this.svc.authSvc }
   get credentials(): CredentialService { return this.svc.credentialsSvc }
@@ -781,6 +792,8 @@ export class KernelRuntime {
     }
     this.closeListeners.clear()
     this.startedListeners.clear()
+    this.offNodeSkillsCacheInvalidation()
+    this.svc.scopedSkillsSvc.invalidateNodeCache()
     // With autoResume=false, `start()` may still be in flight: wait for it to settle first (ignore failures
     // so shutdown proceeds) to avoid racing teardown against plugin service startup (e.g., disposing mid-start).
     if (this.startPromise !== undefined) await this.startPromise.catch(() => {})

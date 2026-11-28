@@ -1,17 +1,17 @@
 /**
- * 跨 Profile 点名协作集成验收（builtin:profile）。
+ * 跨 Profile 点名协作集成验收（builtin:mentions）。
  *
- * 验收对象（docs/plugins/profile.md「跨 Profile 点名与协同目录」契约；实现
+ * 验收对象（docs/plugins/mentions.md「跨 Profile 点名与协同目录」契约；实现
  * 合入前本文件预期红，绝不以 mock 服务端或伪数据冒充通过）：
- * 1. plugins.listUi 暴露 builtin:profile 的 composer.completer（trigger '@'，
+ * 1. plugins.listUi 暴露 builtin:mentions 的 composer.completer（trigger '@'，
  *    source 为 action list_mentionable），且动作清单声明 idempotent:true
  *    （补全源高频只读查询的硬性前置）。
- * 2. 真 HTTP POST /api/actions/builtin%3Aprofile/list_mentionable：
+ * 2. 真 HTTP POST /api/actions/builtin%3Amentions/list_mentionable：
  *    按 query 过滤候选、insertText 为 '@<id> '（尾随空格）、动作只读
  *    （不派生会话、零模型调用）、显式校验真实会话（不存在 404）、
  *    外层 body.conversationId 存在时优先作为可信上下文（不接受 input
  *    伪造目标会话）。
- * 3. 真 runCli 动态命令 helmx profile list_mentionable（manifest 经真 HTTP
+ * 3. 真 runCli 动态命令 helmx mentions list_mentionable（manifest 经真 HTTP
  *    拉取，不 mock 服务端响应）：--current（读 HELMX_CONVERSATION_ID）与
  *    无上下文 --input 显式 conversationId 均正确；空查询命中完整目录排除
  *    规则（当前 Profile / humanSelectable:false / 停用插件托管角色）；
@@ -84,7 +84,7 @@ interface CollabEnv {
 async function makeCollabEnv(): Promise<CollabEnv> {
   const dataDir = mkdtempSync(join(tmpdir(), 'helmx-profile-collab-'))
   const faux = makeFauxProvider()
-  // 真实组合入口：真 SQLite + 真 PluginHost + 真 builtin:profile/workflow/memory。
+  // 真实组合入口：真 SQLite + 真 KernelRuntime + 真 builtin:mentions/workflow/memory。
   const app = await createHelmx({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', providers: [faux.provider] })
   const kernel = app.kernel
 
@@ -160,7 +160,7 @@ async function makeCollabHttpEnv() {
   })
   assert.equal(setup.status, 200, 'auth setup 应成功')
   const token = (JSON.parse(await setup.text()) as { token: string }).token
-  const actionPath = `/api/actions/${encodeURIComponent('builtin:profile')}/list_mentionable`
+  const actionPath = `/api/actions/${encodeURIComponent('builtin:mentions')}/list_mentionable`
   const call = async (body: unknown): Promise<{ status: number; body: string }> => {
     const response = await fetch(`${hub.url}${actionPath}`, {
       method: 'POST',
@@ -204,15 +204,15 @@ function parseItems(raw: string): MentionItem[] {
 // 1. UI 贡献与动作清单：composer.completer('@') + idempotent 动作
 // ---------------------------------------------------------------------------
 
-test('协作1: builtin:profile 注册 @ 补全源（trigger/source/label）与幂等 list_mentionable 动作清单', { timeout: 60_000 }, async () => {
+test('协作1: builtin:mentions 注册 @ 补全源（trigger/source/label）与幂等 list_mentionable 动作清单', { timeout: 60_000 }, async () => {
   const env = await makeCollabEnv()
   try {
     const host = env.app.kernel.plugins!
 
     const completer = host.listUi().find(
-      (u) => u.pluginId === 'builtin:profile' && u.surface === 'composer.completer',
+      (u) => u.pluginId === 'builtin:mentions' && u.surface === 'composer.completer',
     )
-    assert.ok(completer !== undefined, 'plugins.listUi 应包含 builtin:profile 的 composer.completer 贡献')
+    assert.ok(completer !== undefined, 'plugins.listUi 应包含 builtin:mentions 的 composer.completer 贡献')
     const spec = completer.spec as {
       id?: unknown
       label?: unknown
@@ -232,13 +232,13 @@ test('协作1: builtin:profile 注册 @ 补全源（trigger/source/label）与�
     assert.equal(spec.source!.kind, 'action', '点名补全应采用 action 数据源')
     assert.equal(spec.source!.actionId, 'list_mentionable', 'action 源应指向 list_mentionable')
     if (spec.source!.actionPluginId !== undefined) {
-      assert.equal(spec.source!.actionPluginId, 'builtin:profile', '跨插件寻址只允许指回 builtin:profile')
+      assert.equal(spec.source!.actionPluginId, 'builtin:mentions', '跨插件寻址只允许指回 builtin:mentions')
     }
 
     const manifest = host
       .listActions()
-      .find((a) => a.pluginId === 'builtin:profile' && a.id === 'list_mentionable')
-    assert.ok(manifest !== undefined, '动作清单应包含 builtin:profile/list_mentionable')
+      .find((a) => a.pluginId === 'builtin:mentions' && a.id === 'list_mentionable')
+    assert.ok(manifest !== undefined, '动作清单应包含 builtin:mentions/list_mentionable')
     assert.equal(manifest!.idempotent, true, '补全源动作必须声明 idempotent:true（高频只读查询前置）')
   } finally {
     await env.close()
@@ -320,7 +320,7 @@ test('协作2: HTTP list_mentionable——query 过滤/insertText 尾随空格/�
 // 3. 真 CLI 动态命令：--current / 无上下文 --input / 目录排除 / 冲突
 // ---------------------------------------------------------------------------
 
-test('协作3: CLI 动态命令 helmx profile list_mentionable——--current/无上下文 --input/目录排除规则/上下文身份优先', { timeout: 60_000 }, async () => {
+test('协作3: CLI 动态命令 helmx mentions list_mentionable——--current/无上下文 --input/目录排除规则/上下文身份优先', { timeout: 60_000 }, async () => {
   const env = await makeCollabHttpEnv()
   const { runCli } = await import('../../cli/src/index.js')
   const run = async (argv: string[], extraEnv: NodeJS.ProcessEnv = {}): Promise<{ code: number; out: string; err: string }> => {
@@ -343,7 +343,7 @@ test('协作3: CLI 动态命令 helmx profile list_mentionable——--current/�
   try {
     // --- --current（HELMX_CONVERSATION_ID 真实解析）+ --query 动态旗标
     const current = await run(
-      ['profile', 'list_mentionable', '--query', 'review', '--current', '--json'],
+      ['mentions', 'list_mentionable', '--query', 'review', '--current', '--json'],
       { HELMX_CONVERSATION_ID: String(env.rootId) },
     )
     assert.equal(current.code, 0, current.err)
@@ -354,7 +354,7 @@ test('协作3: CLI 动态命令 helmx profile list_mentionable——--current/�
 
     // --- 无会话上下文：input.conversationId 显式指定同样正确
     const explicit = await run([
-      'profile', 'list_mentionable', '--json',
+      'mentions', 'list_mentionable', '--json',
       '--input', JSON.stringify({ query: 'review', conversationId: env.rootId }),
     ])
     assert.equal(explicit.code, 0, explicit.err)
@@ -365,7 +365,7 @@ test('协作3: CLI 动态命令 helmx profile list_mentionable——--current/�
 
     // --- 空查询：完整目录排除规则（当前 Profile / 内部角色 / 停用插件托管角色）
     const broad = await run([
-      'profile', 'list_mentionable', '--json',
+      'mentions', 'list_mentionable', '--json',
       '--input', JSON.stringify({ query: '', conversationId: env.rootId }),
     ])
     assert.equal(broad.code, 0, broad.err)
@@ -373,13 +373,13 @@ test('协作3: CLI 动态命令 helmx profile list_mentionable——--current/�
     assert.deepEqual(ids, ['reviewer', 'tester'], `点名目录应恰含可委派角色：${JSON.stringify(ids)}`)
 
     // --- 无任何会话目标：显式非零（动作必须校验真实会话，不猜测缺省）
-    const noTarget = await run(['profile', 'list_mentionable', '--query', 'review', '--json'])
+    const noTarget = await run(['mentions', 'list_mentionable', '--query', 'review', '--json'])
     assert.notEqual(noTarget.code, 0, '缺少会话目标应显式失败')
 
     // --- --current 与 --input 目标同时存在时，外层当前会话优先，不允许 input 冒充身份
     const contextWins = await run(
       [
-        'profile', 'list_mentionable', '--current', '--json',
+        'mentions', 'list_mentionable', '--current', '--json',
         '--input', JSON.stringify({ query: 'review', conversationId: env.secondConvId }),
       ],
       { HELMX_CONVERSATION_ID: String(env.rootId) },

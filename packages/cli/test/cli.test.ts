@@ -729,7 +729,7 @@ test('search,models,plugins,actions list,status', { timeout: 60_000 }, async (t)
           },
         }
       },
-      'GET /api/plugins': () => ({ body: [makePluginSummary({ id: 'builtin:profile', name: 'assistant', locked: true })] }),
+      'GET /api/plugins': () => ({ body: [makePluginSummary({ id: 'builtin:mentions', name: 'Role Mentions', locked: false })] }),
       'POST /api/plugins/builtin%3Aherdr/disable': () => ({ body: { ok: 1 } }),
       'GET /api/plugins/builtin%3Aherdr/config': () => ({ body: { values: { a: 1 }, schema: {} } }),
       'PUT /api/plugins/builtin%3Aherdr/config': (body) => {
@@ -885,7 +885,7 @@ test('search,models,plugins,actions list,status', { timeout: 60_000 }, async (t)
 
   const p = await runCliCaptured(['plugins', 'list', '--json'], env)
   assert.equal(p.code, 0, p.err)
-  assert.equal(JSON.parse(p.out)[0]?.id, 'builtin:profile')
+  assert.equal(JSON.parse(p.out)[0]?.id, 'builtin:mentions')
 
   const d = await runCliCaptured(['plugins', 'disable', 'builtin:herdr', '--json'], env)
   assert.equal(d.code, 0, d.err)

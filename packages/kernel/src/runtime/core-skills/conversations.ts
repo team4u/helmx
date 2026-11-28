@@ -66,7 +66,7 @@ All lifecycle operations run via \`run_action({ actionId: "core:conversations.<i
 - **Watchdog Ownership Red Line**: \`helmx\`-owned background/automated sessions MAY read human conversations (\`search\`, \`list\`, \`get\`, \`entry\`) for recall and diagnostics, but CANNOT mutate human-owned conversations (\`update\`, \`send\`, \`withdraw\`, \`abort\`, \`reset\`, \`compact\`, \`delete\`) — rejected with \`403 ownership_violation\`.
 - **Self-Mutation Forbidden**: Inside a conversation, calling \`core:conversations.abort\`, \`core:conversations.reset\`, or \`core:conversations.delete\` against your own \`conversationId\` is rejected with \`409 self_mutation_forbidden\`.
 - **Honest \`origin\` Enforcement**: Calling \`core:conversations.send\` inside any conversation context always records \`origin: "agent"\`.
-- **Scope-Blocked Core Actions**: Never call \`core:skills.*\` (\`list\`/\`read\`) or \`core:asks.answer\` from inside a conversation — both carry \`scope: { conversationIds: [] }\` and fail with \`403\` before reaching handlers. Use \`load_skill\` for skills, and let humans answer approval asks.
+- **Scope-Blocked Core Actions**: Never call \`core:skills.*\` (\`list\`/\`catalog\`/\`read\`) or \`core:asks.answer\` from inside a conversation — both carry \`scope: { conversationIds: [] }\` and fail with \`403\` before reaching handlers. Use \`load_skill\` for skills, and let humans answer approval asks.
 - **Host-Governance Mutations**: Host-level mutations (\`core:nodes.{remove,upgrade,forward_stop}\`, \`core:plugins.{config_set,enable,disable,reload,rescan}\`, \`core:asks.cancel\`) require a top-level \`ownedBy: "human"\` conversation and are rejected from subagent or automated sessions.
 `
 

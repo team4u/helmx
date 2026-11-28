@@ -18,7 +18,7 @@ import { getCurrentTools } from '@earendil-works/pi-ai/utils/transcript'
 import { KernelRuntime } from '@helmx/kernel'
 import { createPluginBuildProvider } from '@helmx/plugin-build'
 import { createHelmx } from '../../../hub/src/app.js'
-import { createProfilePlugin } from '../../src/profile.js'
+import { createMentionsPlugin } from '../../src/mentions.js'
 import { createSwarmPlugin } from '../../src/swarm.js'
 import { createWorkflowPlugin } from '../../src/workflow.js'
 import { createWorktreePlugin } from '../../src/worktree.js'
@@ -47,7 +47,7 @@ const DIST_DEPS = [
   join(REPO_ROOT, 'packages/env-io/dist/index.js'),
   join(REPO_ROOT, 'packages/kernel/dist/index.js'),
   join(REPO_ROOT, 'packages/plugin-build/dist/index.js'),
-  join(REPO_ROOT, 'packages/plugins/dist/profile.js'),
+  join(REPO_ROOT, 'packages/plugins/dist/mentions.js'),
   join(REPO_ROOT, 'packages/plugins/dist/workflow.js'),
   join(REPO_ROOT, 'packages/plugins/dist/worktree.js'),
   join(REPO_ROOT, 'packages/plugins/dist/swarm.js'),
@@ -72,7 +72,7 @@ export const PLUGIN_BUILD_URL = SEEDER_USE_DIST
   ? pathToFileURL(join(REPO_ROOT, 'packages/plugin-build/dist/index.js')).href
   : import.meta.resolve('@helmx/plugin-build')
 export const HUB_APP_URL = resolveSeederModuleUrl('packages/hub/dist/app.js', 'packages/hub/src/app.ts')
-export const PROFILE_PLUGIN_URL = resolveSeederModuleUrl('packages/plugins/dist/profile.js', 'packages/plugins/src/profile.ts')
+export const MENTIONS_PLUGIN_URL = resolveSeederModuleUrl('packages/plugins/dist/mentions.js', 'packages/plugins/src/mentions.ts')
 export const WORKFLOW_PLUGIN_URL = resolveSeederModuleUrl('packages/plugins/dist/workflow.js', 'packages/plugins/src/workflow.ts')
 export const WORKTREE_PLUGIN_URL = resolveSeederModuleUrl('packages/plugins/dist/worktree.js', 'packages/plugins/src/worktree.ts')
 export const SWARM_PLUGIN_URL = resolveSeederModuleUrl('packages/plugins/dist/swarm.js', 'packages/plugins/src/swarm.ts')
@@ -89,14 +89,14 @@ function tsxDirectArgs(): readonly string[] {
 
 /**
  * Generate the inline ESM bootstrap snippet for SIGKILL seeders that opens a real
- * 4-plugin Swarm runtime (`profile`, `workflow`, `worktree`, `swarm`) with the same
- * registration and startup lifecycle as `createHelmx`, without loading 9 unrelated plugins.
+ * 4-plugin Swarm runtime (`mentions`, `workflow`, `worktree`, `swarm`) with kernel Profile/Skills,
+ * matching `createHelmx` without loading unrelated plugins.
  */
 export function buildSwarmSeederOpenSnippet(): string {
   return `
 import { KernelRuntime } from ${JSON.stringify(KERNEL_URL)}
 import { createPluginBuildProvider } from ${JSON.stringify(PLUGIN_BUILD_URL)}
-import { createProfilePlugin } from ${JSON.stringify(PROFILE_PLUGIN_URL)}
+import { createMentionsPlugin } from ${JSON.stringify(MENTIONS_PLUGIN_URL)}
 import { createWorkflowPlugin } from ${JSON.stringify(WORKFLOW_PLUGIN_URL)}
 import { createWorktreePlugin } from ${JSON.stringify(WORKTREE_PLUGIN_URL)}
 import { createSwarmPlugin } from ${JSON.stringify(SWARM_PLUGIN_URL)}
@@ -110,7 +110,7 @@ async function openSwarmApp({ dataDir, cwd, model, providers }) {
     providers,
     autoResume: false,
   })
-  await kernel.plugins.register(createProfilePlugin())
+  await kernel.plugins.register(createMentionsPlugin())
   await kernel.plugins.register(createWorkflowPlugin())
   await kernel.plugins.register(createWorktreePlugin())
   await kernel.plugins.register(createSwarmPlugin())
@@ -190,9 +190,9 @@ export interface OpenSwarmRuntimeOptions {
   autoStart?: boolean
   hubPlatform?: () => string | undefined
   /**
-   * When `true`, boots full `createHelmx` with all 13 builtin plugins (for tests explicitly
+   * When `true`, boots full `createHelmx` with all builtin plugins (for tests explicitly
    * asserting default `createHelmx` composition). Default `false` boots real `KernelRuntime`
-   * with the 4 core Swarm-stack plugins (`profile`, `workflow`, `worktree`, `swarm`).
+   * with the 4 core Swarm-stack plugins (`mentions`, `workflow`, `worktree`, `swarm`).
    */
   fullHub?: boolean
 }
@@ -224,7 +224,7 @@ export async function openSwarmRuntime(options: OpenSwarmRuntimeOptions): Promis
     ...(hubPlatform !== undefined ? { hubPlatform } : {}),
   })
   try {
-    await kernel.plugins.register(createProfilePlugin())
+    await kernel.plugins.register(createMentionsPlugin())
     await kernel.plugins.register(createWorkflowPlugin())
     await kernel.plugins.register(createWorktreePlugin())
     await kernel.plugins.register(createSwarmPlugin())

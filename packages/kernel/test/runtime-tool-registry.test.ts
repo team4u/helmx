@@ -47,7 +47,7 @@ describe('RuntimeToolRegistry and wrapToolExecute unit tests', { timeout: 60_000
     assert.deepEqual(res.output, [{ type: 'text', text: 'normal-output' }])
   })
 
-  it('installKernelTools: registers helmx-core extension (8 core tools) all wrapped with wrapToolExecute', { timeout: 60_000 }, async () => {
+  it('installKernelTools: registers helmx-core extension (9 core tools) all wrapped with wrapToolExecute', { timeout: 60_000 }, async () => {
     const installed: Extension[] = []
     const fakeRegistry = {
       install(ext: Extension) {
@@ -65,6 +65,12 @@ describe('RuntimeToolRegistry and wrapToolExecute unit tests', { timeout: 60_000
         get: async () => ({} as never),
         readContent: async () => '',
         readBuffer: async () => new Uint8Array(),
+      },
+      loadSkillForConversation: async (_convId, input) => {
+        if (input.skillId === 'forbidden') {
+          throw new HelmxError('skill_not_available', 'blocked secret detail', 403)
+        }
+        return { text: `skill ${input.skillId}:${input.path ?? 'SKILL.md'} with secret` }
       },
     }
 
@@ -125,8 +131,22 @@ describe('RuntimeToolRegistry and wrapToolExecute unit tests', { timeout: 60_000
     const toolNames = coreExt.tools!.map((t) => t.name)
     assert.deepEqual(
       toolNames.sort(),
-      ['ask_user', 'bash', 'edit', 'read', 'read_artifact', 'register_artifact', 'run_action', 'write'].sort(),
+      ['ask_user', 'bash', 'edit', 'load_skill', 'read', 'read_artifact', 'register_artifact', 'run_action', 'write'].sort(),
     )
+
+    const loadSkillTool = coreExt.tools!.find((t) => t.name === 'load_skill') as unknown as {
+      execute: (args: { skillId: string; path?: string }, api: { conversationId: number }, ctx: { abortSignal?: AbortSignal }) => Promise<{
+        output: Array<{ type: 'text'; text: string }>
+        isError?: boolean
+      }>
+    }
+    assert.ok(loadSkillTool)
+    const skillOk = await loadSkillTool.execute({ skillId: 'demo', path: 'references/a.md' }, { conversationId: 1 }, {})
+    assert.equal(skillOk.isError, undefined)
+    assert.equal(skillOk.output[0]!.text, 'skill demo:references/a.md with [REDACTED]')
+    const skillErr = await loadSkillTool.execute({ skillId: 'forbidden' }, { conversationId: 1 }, {})
+    assert.equal(skillErr.isError, true)
+    assert.equal(skillErr.output[0]!.text, 'skill_not_available: blocked [REDACTED] detail')
 
     // Verify run_action meta-tool behavior
     const runActionTool = coreExt.tools!.find((t) => t.name === 'run_action') as unknown as {

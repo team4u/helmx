@@ -162,7 +162,7 @@ test('T3 & T4: /plan <task> first turn transforms input, derives clean title, en
     assert.match(clientMod.code, /PlanWorkbenchPanel/)
     assert.match(clientMod.code, /PlanToolRow/)
 
-    // Create a second profile so profile.catalog would normally appear when dispatch tools are active
+    // Create a second profile so mentions.catalog would normally appear when dispatch tools are active
     await kernel.profiles.save({
       id: 'reviewer',
       name: 'Reviewer',
@@ -189,8 +189,8 @@ test('T3 & T4: /plan <task> first turn transforms input, derives clean title, en
     }
     assert.equal(normalReq.sectionsById[PLAN_MODE_SECTION_ID], undefined)
     assert.ok(
-      typeof normalReq.sectionsById['profile.catalog'] === 'string',
-      'normal mode with subagent active should still allow profile.catalog',
+      typeof normalReq.sectionsById['mentions.catalog'] === 'string',
+      'normal mode with subagent active should still allow mentions.catalog',
     )
 
     // T4 (scope guards): subagent & helmx-owned conversations reject toggle/set_mode with 400 plan_unsupported_conversation
@@ -285,7 +285,7 @@ test('T3 & T4: /plan <task> first turn transforms input, derives clean title, en
       `unexpected tool leaked into planning mode: ${planReq.toolNames.join(', ')}`,
     )
     assert.equal(
-      planReq.sectionsById['profile.catalog'] ?? null,
+      planReq.sectionsById['mentions.catalog'] ?? null,
       null,
       'stripping dispatch tools before -100 must suppress <available_profiles>',
     )
@@ -1220,35 +1220,22 @@ test('T9: builtin:plan bootstraps managed skill plan and removes it cleanly from
       assert.ok(skillMd.includes(token), `plan SKILL.md must document ${token}`)
     }
 
-    const readSkillsSection = async () => {
-      const res = await kernel.plugins.runHook('before_turn', {
-        conversation: kernel.conversations.getConversation(1),
-        inputs: [],
-        sections: [],
-        tools: [],
-        messages: [],
-      })
-      assert.equal(res.action, 'transform')
-      return res.value.sections.find((s) => s.id === 'profile.skills')?.text ?? ''
-    }
+    const listAvailableIds = async () =>
+      (await kernel.scopedSkills.listAvailableForConversation('assistant', kernel.conversations.getConversation(1))).available.map((s) => s.id)
 
-    assert.ok((await readSkillsSection()).includes('id="plan"'), 'enabled builtin:plan must expose plan in <available_skills>')
-    const loaded = (await kernel.plugins.executeTool(
-      'load_skill',
-      { skillId: PLAN_SKILL_ID },
-      { conversationId: 1 },
-    )) as { text: string }
+    assert.ok((await listAvailableIds()).includes(PLAN_SKILL_ID), 'enabled builtin:plan must expose plan in available skills')
+    const loaded = await kernel.scopedSkills.loadSkillForConversation(1, { skillId: PLAN_SKILL_ID })
     assert.ok(loaded.text.includes('# Plan Mode'))
 
     await kernel.plugins.disable(PLAN_PLUGIN_ID)
-    assert.equal((await readSkillsSection()).includes('id="plan"'), false, 'disabled builtin:plan must leave zero phantom plan skill in <available_skills>')
+    assert.equal((await listAvailableIds()).includes(PLAN_SKILL_ID), false, 'disabled builtin:plan must leave zero phantom plan skill')
     await assert.rejects(
-      () => kernel.plugins.executeTool('load_skill', { skillId: PLAN_SKILL_ID }, { conversationId: 1 }),
+      () => kernel.scopedSkills.loadSkillForConversation(1, { skillId: PLAN_SKILL_ID }),
       (err: unknown) => err instanceof HelmxError && err.code === 'skill_not_available' && err.status === 403,
     )
 
     await kernel.plugins.enable(PLAN_PLUGIN_ID)
-    assert.ok((await readSkillsSection()).includes('id="plan"'), 're-enabled builtin:plan must restore plan in <available_skills>')
+    assert.ok((await listAvailableIds()).includes(PLAN_SKILL_ID), 're-enabled builtin:plan must restore plan in available skills')
   } finally {
     await env.close()
   }

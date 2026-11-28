@@ -166,7 +166,7 @@ test('ownedBy 实时投射与事件广播及插件受管 Profile/Skill 自举标
     assert.deepEqual(helperJson.skills, ['managed-playbooks'])
 
     const profiles = await kernel.profiles.list()
-    assert.equal(profiles.find((p) => p.id === 'assistant')?.managedByPlugin, 'builtin:profile')
+    assert.equal(profiles.find((p) => p.id === 'assistant')?.managedByPlugin, 'core:profiles')
     assert.match(
       readFileSync(join(env.dataDir, 'skills', 'managed-playbooks', 'SKILL.md'), 'utf8'),
       new RegExp(`^managedByPlugin: ${TEST_MANAGED_PLUGIN_ID}$`, 'm'),

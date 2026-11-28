@@ -267,6 +267,7 @@ export class ProfileService {
       id: DEFAULT_PROFILE_ID,
       name: DEFAULT_PROFILE_NAME,
       tags: [DEFAULT_PROFILE_ID],
+      managedByPlugin: 'core:profiles',
     }
     const dir = profileDir(this.dataDir, profile.id)
     const filePath = join(dir, 'profile.json')
@@ -620,6 +621,7 @@ export async function patchManagedGuardedProfile(
 /**
  * Delete a Profile via user/action boundary (`DELETE /api/profiles/:id`, `core:profiles.delete`):
  * - Fast-path in-use check (`409 profile_in_use`);
+ * - Blocks deleting the built-in default Profile (`403 profile_default_locked`);
  * - Blocks deleting plugin-managed Profiles (`403 profile_managed_by_plugin`);
  * - Delegates to `store.delete(profileId, { isProfileInUse })` which re-checks bindings right
  *   before removing files (preventing TOCTOU races) and enforces default-profile protection (`403`).
@@ -634,6 +636,14 @@ export async function deleteManagedGuardedProfile(
       'profile_in_use',
       `profile ${profileId} is still bound by conversations; unbind before deleting`,
       409,
+      { profileId },
+    )
+  }
+  if (profileId === DEFAULT_PROFILE_ID) {
+    throw new HelmxError(
+      'profile_default_locked',
+      `default profile '${DEFAULT_PROFILE_ID}' cannot be deleted`,
+      403,
       { profileId },
     )
   }

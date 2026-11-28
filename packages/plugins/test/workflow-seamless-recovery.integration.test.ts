@@ -27,7 +27,6 @@ import { createPluginBuildProvider } from '@helmx/plugin-build'
 import { HelmxError, type AgentSpawnRequest, type HelmxEventFrame } from '@helmx/protocol'
 import { KernelRuntime, startHub } from '@helmx/kernel'
 import type { WorkflowRunSummary } from '../src/contracts.js'
-import { createProfilePlugin } from '../src/profile.js'
 import { createWorkflowPlugin } from '../src/workflow.js'
 import { createWorktreePlugin } from '../src/worktree.js'
 import { readJournal } from '../src/workflow/dsl/index.js'
@@ -197,7 +196,6 @@ async function openWorkflowHubRuntime(dataDir: string, faux: ReturnType<typeof m
     autoResume: false,
   })
   try {
-    await kernel.plugins.register(createProfilePlugin())
     await kernel.plugins.register(createWorkflowPlugin())
     await kernel.plugins.register(createWorktreePlugin())
     await kernel.start()

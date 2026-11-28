@@ -162,7 +162,7 @@ test('plugins config --unset: rejects empty key or key containing = (invalid_fla
 test('plugins list: passes through PluginSummary with status/error', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helmx-cli-gov-')
   const summary = [
-    makePluginSummary({ id: 'builtin:profile', name: 'Profile Base', locked: true, status: 'active' }),
+    makePluginSummary({ id: 'builtin:mentions', name: 'Role Mentions', status: 'active' }),
     makePluginSummary({
       id: 'external:broken',
       name: 'Broken Plugin',

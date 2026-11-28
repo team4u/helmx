@@ -14,7 +14,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { parseNonEmptyLocalizedText, type LocalizedText, type PluginDefinition } from '@helmx/protocol'
 
-import { createProfilePlugin } from '../src/profile.js'
+import { createMentionsPlugin } from '../src/mentions.js'
 import { createWorkflowPlugin } from '../src/workflow.js'
 import { createWorktreePlugin } from '../src/worktree.js'
 import { createChangesPlugin } from '../src/changes.js'
@@ -35,7 +35,7 @@ const timeout = { timeout: 60_000 } as const
 
 /** 全部内置插件工厂（与 @helmx/hub 注册清单一一对应）。 */
 const FACTORIES: ReadonlyArray<() => PluginDefinition> = [
-  createProfilePlugin,
+  createMentionsPlugin,
   createWorkflowPlugin,
   createWorktreePlugin,
   createChangesPlugin,

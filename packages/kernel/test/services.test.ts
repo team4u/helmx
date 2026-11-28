@@ -165,6 +165,7 @@ test('profiles: ensureDefault leaves model empty, skips overwriting existing ent
   const p = await profiles.ensureDefault()
   assert.equal(p.id, 'assistant')
   assert.equal(p.model, undefined) // unconfigured default triggers explicit runtime error
+  assert.equal(p.managedByPlugin, 'core:profiles')
   assert.ok(p.tags?.includes('assistant'))
   assert.ok((await profiles.getSystem('assistant')).length > 0)
 
@@ -974,15 +975,15 @@ test('skills: bootstrapCoreSkills and reconcileManagedOwners retire zero-skill a
   const dataDir = await freshDataDir()
   const skills = new SkillService(dataDir)
 
-  // Seed legacy pre-migration layout under builtin:profile, a retired core:host dir, a disabled plugin skill,
+  // Seed legacy pre-migration layout under a built-in zero-skill plugin, a retired core:host dir, a disabled plugin skill,
   // a user-authored skill, a symlinked skill dir, a dir with symlinked SKILL.md, and malformed frontmatter.
   const writeRawSkill = async (id: string, skillMd: string) => {
     await mkdir(join(dataDir, 'skills', id), { recursive: true })
     await writeFile(join(dataDir, 'skills', id, 'SKILL.md'), skillMd)
   }
-  await writeRawSkill('helmx-cli', '---\nname: helmx-cli\ndescription: old\nmanagedByPlugin: builtin:profile\n---\nold\n')
-  await writeRawSkill('app-builder', '---\nname: app-builder\ndescription: old\nmanagedByPlugin: builtin:profile\n---\nold\n')
-  await writeRawSkill('profile', '---\nname: profile\ndescription: legacy\nmanagedByPlugin: builtin:profile\n---\nlegacy\n')
+  await writeRawSkill('helmx-cli', '---\nname: helmx-cli\ndescription: old\nmanagedByPlugin: builtin:mentions\n---\nold\n')
+  await writeRawSkill('app-builder', '---\nname: app-builder\ndescription: old\nmanagedByPlugin: builtin:mentions\n---\nold\n')
+  await writeRawSkill('mentions-legacy', '---\nname: mentions-legacy\ndescription: legacy\nmanagedByPlugin: builtin:mentions\n---\nlegacy\n')
   await writeRawSkill('legacy-core-host', '---\nname: legacy-core-host\ndescription: stale\nmanagedByPlugin: core:host\n---\nstale\n')
   await writeRawSkill('triggers', '---\nname: triggers\ndescription: disabled plugin\nmanagedByPlugin: builtin:triggers\n---\nkeep\n')
   await seedSkill(dataDir, 'user-custom')
@@ -990,23 +991,23 @@ test('skills: bootstrapCoreSkills and reconcileManagedOwners retire zero-skill a
 
   const outsideDir = join(scratchRoot, 'outside-retired-target')
   await mkdir(outsideDir, { recursive: true })
-  await writeFile(join(outsideDir, 'SKILL.md'), '---\nname: linked\nmanagedByPlugin: builtin:profile\n---\noutside\n')
+  await writeFile(join(outsideDir, 'SKILL.md'), '---\nname: linked\nmanagedByPlugin: builtin:mentions\n---\noutside\n')
   await symlink(outsideDir, join(dataDir, 'skills', 'linked-retired-dir'))
 
   await mkdir(join(dataDir, 'skills', 'linked-skill-md-dir'), { recursive: true })
   await symlink(join(outsideDir, 'SKILL.md'), join(dataDir, 'skills', 'linked-skill-md-dir', 'SKILL.md'))
 
   // Step 1: Kernel core skills bootstrap overwrites helmx-cli/app-builder to core:*, writes conversations/profiles,
-  // and sweeps stale core:host residue while leaving builtin:profile/disabled plugin dirs untouched.
+  // and sweeps stale core:host residue while leaving builtin:mentions/disabled plugin dirs untouched.
   await bootstrapCoreSkills(skills)
   assert.ok(!existsSync(join(dataDir, 'skills', 'legacy-core-host')), 'retired core:host dir must be swept')
-  assert.ok(existsSync(join(dataDir, 'skills', 'profile', 'SKILL.md')), 'plugin-owned dir waits for active plugin reconciliation')
+  assert.ok(existsSync(join(dataDir, 'skills', 'mentions-legacy', 'SKILL.md')), 'plugin-owned dir waits for active plugin reconciliation')
 
-  // Step 2: Reconcile active plugin owners (builtin:profile is active with zero declared skills; builtin:triggers is disabled and omitted).
-  await skills.reconcileManagedOwners(['builtin:profile'])
+  // Step 2: Reconcile active plugin owners (builtin:mentions is active with zero declared skills; builtin:triggers is disabled and omitted).
+  await skills.reconcileManagedOwners(['builtin:mentions'])
 
-  // Legacy builtin:profile dir is retired; migrated core:* skills survive; disabled plugin & user & symlinked entries survive.
-  assert.ok(!existsSync(join(dataDir, 'skills', 'profile')), 'retired builtin:profile skill dir must be removed')
+  // Legacy builtin:mentions dir is retired; migrated core:* skills survive; disabled plugin & user & symlinked entries survive.
+  assert.ok(!existsSync(join(dataDir, 'skills', 'mentions-legacy')), 'retired builtin:mentions skill dir must be removed')
   assert.equal(parseSkillFrontmatter(await skills.readFile('helmx-cli')).managedByPlugin, 'core:host')
   assert.equal(parseSkillFrontmatter(await skills.readFile('app-builder')).managedByPlugin, 'core:plugins')
   assert.equal(parseSkillFrontmatter(await skills.readFile('conversations')).managedByPlugin, 'core:conversations')
@@ -1019,17 +1020,17 @@ test('skills: bootstrapCoreSkills and reconcileManagedOwners retire zero-skill a
   assert.ok(existsSync(join(dataDir, 'skills', 'linked-skill-md-dir', 'SKILL.md')), 'dir with symlinked SKILL.md must be skipped')
 })
 
-test('runtime: startup bootstraps core:* skills, retires active zero-skill builtin:profile dirs while keeping disabled plugin skills, and unifies ensurePluginSkill frontmatter parsing', { timeout: 60_000 }, async () => {
+test('runtime: startup bootstraps core:* skills, retires active zero-skill builtin:mentions dirs while keeping disabled plugin skills, and unifies ensurePluginSkill frontmatter parsing', { timeout: 60_000 }, async () => {
   const dataDir = await freshDataDir()
-  await mkdir(join(dataDir, 'skills', 'profile'), { recursive: true })
+  await mkdir(join(dataDir, 'skills', 'mentions-legacy'), { recursive: true })
   await writeFile(
-    join(dataDir, 'skills', 'profile', 'SKILL.md'),
-    '---\nname: profile\ndescription: legacy\nmanagedByPlugin: builtin:profile\n---\nlegacy\n',
+    join(dataDir, 'skills', 'mentions-legacy', 'SKILL.md'),
+    '---\nname: mentions-legacy\ndescription: legacy\nmanagedByPlugin: builtin:mentions\n---\nlegacy\n',
   )
   await mkdir(join(dataDir, 'skills', 'helmx-cli'), { recursive: true })
   await writeFile(
     join(dataDir, 'skills', 'helmx-cli', 'SKILL.md'),
-    '---\nname: helmx-cli\ndescription: old\nmanagedByPlugin: builtin:profile\n---\nold\n',
+    '---\nname: helmx-cli\ndescription: old\nmanagedByPlugin: builtin:mentions\n---\nold\n',
   )
   await mkdir(join(dataDir, 'skills', 'disabled-guide'), { recursive: true })
   await writeFile(
@@ -1056,11 +1057,11 @@ test('runtime: startup bootstraps core:* skills, retires active zero-skill built
       (err: unknown) => err instanceof HelmxError && err.code === 'managed_skill_readonly' && err.status === 403,
     )
 
-    // Register an active zero-skill builtin:profile plugin and a disabled ext-disabled plugin, then start().
+    // Register an active zero-skill builtin:mentions plugin and a disabled ext-disabled plugin, then start().
     await kernel.plugins.register(
       {
-        id: 'builtin:profile',
-        name: 'Profile Stub',
+        id: 'builtin:mentions',
+        name: 'Mentions Stub',
         version: '0.1.0',
         definePlugin() {},
       },
@@ -1077,7 +1078,7 @@ test('runtime: startup bootstraps core:* skills, retires active zero-skill built
     )
     await kernel.start()
 
-    assert.ok(!existsSync(join(dataDir, 'skills', 'profile')), 'active zero-skill builtin:profile must retire old profile skill dir')
+    assert.ok(!existsSync(join(dataDir, 'skills', 'mentions-legacy')), 'active zero-skill builtin:mentions must retire old skill dir')
     assert.ok(existsSync(join(dataDir, 'skills', 'disabled-guide', 'SKILL.md')), 'disabled plugin skill dir must survive startup')
     assert.ok(existsSync(join(dataDir, 'skills', 'user-custom', 'SKILL.md')), 'user skill must survive startup')
 

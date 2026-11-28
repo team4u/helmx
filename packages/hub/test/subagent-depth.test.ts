@@ -16,7 +16,7 @@
  *
  * Three enforcement layers:
  * 1. `before_turn`: strips `subagent`, `SubagentWorkflow`, and all active `helmx.dispatch-tools`
- *    declarations on leaf turns at the subtree ceiling (naturally suppressing `profile.catalog`);
+ *    declarations on leaf turns at the subtree ceiling (naturally suppressing `mentions.catalog`);
  * 2. Tool/action boundaries: `subagent` tool, `SubagentWorkflow` tool, and `run` action reject
  *    before creating any run record (`HelmxError('subagent_depth_exceeded')`, status 403);
  * 3. `agent_spawn` fallback: `builtin:workflow` (priority 300, ahead of `builtin:worktree`
@@ -242,7 +242,7 @@ describe('workflow & swarm subagent depth contract (default ceiling 1)', { timeo
 
     const rootTools = observedToolsByConvId.get(rootId)
     assert.ok(rootTools?.includes('subagent') && rootTools.includes('SubagentWorkflow'), 'root keeps dispatch tools')
-    assert.ok(typeof observedSectionsByConvId.get(rootId)?.['profile.catalog'] === 'string', 'root gets profile.catalog')
+    assert.ok(typeof observedSectionsByConvId.get(rootId)?.['mentions.catalog'] === 'string', 'root gets mentions.catalog')
 
     const child = sharedApp.kernel.conversations.listConversations().find((c) => c.parentConversationId === rootId)
     assert.ok(child, 'top-level spawn should create a real child conversation')
@@ -254,7 +254,7 @@ describe('workflow & swarm subagent depth contract (default ceiling 1)', { timeo
     assert.equal(entry['parentConversationId'], rootId)
     assert.equal(entry['maxSubagentDepth'], 1, 'default subtree ceiling is 1')
 
-    // Depth-1 `before_turn`: dispatch tools and profile.catalog are stripped at default ceiling 1.
+    // Depth-1 `before_turn`: dispatch tools and mentions.catalog are stripped at default ceiling 1.
     sharedFaux.setResponses([fauxAssistantMessage('depth-1 leaf directly answers')])
     await sharedApp.kernel.conversations.submitInput(child.id, 'direct turn on depth-1 leaf')
     await sharedApp.kernel.conversations.waitForIdle(child.id)
@@ -264,9 +264,9 @@ describe('workflow & swarm subagent depth contract (default ceiling 1)', { timeo
     assert.equal(childTools.includes('SubagentWorkflow'), false, 'default depth-1 subagent strips SubagentWorkflow')
     assert.equal(childTools.includes('bash'), true, 'non-dispatch tools stay intact (bash present)')
     assert.equal(
-      observedSectionsByConvId.get(child.id)?.['profile.catalog'],
+      observedSectionsByConvId.get(child.id)?.['mentions.catalog'],
       undefined,
-      'default depth-1 subagent suppresses profile.catalog',
+      'default depth-1 subagent suppresses mentions.catalog',
     )
 
     const beforeRunIds = new Set(
@@ -372,7 +372,7 @@ describe('workflow & swarm subagent depth contract (default ceiling 1)', { timeo
 
     const c1Tools = observedToolsByConvId.get(child1.id)
     assert.ok(c1Tools?.includes('subagent') && c1Tools.includes('SubagentWorkflow'), 'depth-1 with ceiling=2 retains dispatch tools')
-    assert.ok(typeof observedSectionsByConvId.get(child1.id)?.['profile.catalog'] === 'string', 'depth-1 with ceiling=2 retains profile.catalog')
+    assert.ok(typeof observedSectionsByConvId.get(child1.id)?.['mentions.catalog'] === 'string', 'depth-1 with ceiling=2 retains mentions.catalog')
 
     await sharedApp.kernel.kvStore.flush()
     const e1 = registryEntry(sharedDir, child1.id)
@@ -392,7 +392,7 @@ describe('workflow & swarm subagent depth contract (default ceiling 1)', { timeo
     assert.equal(leafTools.includes('subagent'), false)
     assert.equal(leafTools.includes('SubagentWorkflow'), false)
     assert.equal(leafTools.includes('bash'), true)
-    assert.equal(observedSectionsByConvId.get(child2.id)?.['profile.catalog'], undefined)
+    assert.equal(observedSectionsByConvId.get(child2.id)?.['mentions.catalog'], undefined)
 
     await assert.rejects(
       () => sharedApp.kernel.agentSpawn.spawnAgent({ parentConversationId: child2.id, prompt: 'depth3 attempt' }),
@@ -799,7 +799,7 @@ describe('workflow & swarm subagent depth contract (default ceiling 1)', { timeo
 
         await app.kernel.conversations.submitInput(1, 'remember FORK_FACT_42')
         await app.kernel.conversations.waitForIdle(1)
-        assert.ok(typeof topLevelMeta?.sectionsById['profile.catalog'] === 'string')
+        assert.ok(typeof topLevelMeta?.sectionsById['mentions.catalog'] === 'string')
 
         await app.kernel.conversations.submitInput(1, 'delegate forked leaf')
         await app.kernel.conversations.waitForIdle(1)
@@ -819,7 +819,7 @@ describe('workflow & swarm subagent depth contract (default ceiling 1)', { timeo
         assert.equal(childMeta.toolNames.includes('subagent'), false)
         assert.equal(childMeta.toolNames.includes('SubagentWorkflow'), false)
         assert.equal(childMeta.toolNames.includes('bash'), true)
-        assert.equal(childMeta.sectionsById['profile.catalog'], undefined)
+        assert.equal(childMeta.sectionsById['mentions.catalog'], undefined)
         const forkSection = childMeta.sectionsById['workflow.forked_context'] ?? ''
         assert.ok(forkSection.includes('<forked_subagent_context>'))
         assert.ok(forkSection.includes('ALREADY been fulfilled'))
@@ -842,7 +842,7 @@ describe('workflow & swarm subagent depth contract (default ceiling 1)', { timeo
         assert.ok(resumedChildMeta)
         assert.equal(resumedChildMeta.toolNames.includes('subagent'), false)
         assert.equal(resumedChildMeta.toolNames.includes('SubagentWorkflow'), false)
-        assert.equal(resumedChildMeta.sectionsById['profile.catalog'], undefined)
+        assert.equal(resumedChildMeta.sectionsById['mentions.catalog'], undefined)
         assert.ok((resumedChildMeta.sectionsById['workflow.forked_context'] ?? '').includes('<forked_subagent_context>'))
 
         await app.kernel.kvStore.flush()
@@ -873,7 +873,7 @@ describe('workflow & swarm subagent depth contract (default ceiling 1)', { timeo
         assert.ok(afterRestartMeta)
         assert.equal(afterRestartMeta.toolNames.includes('subagent'), false)
         assert.equal(afterRestartMeta.toolNames.includes('SubagentWorkflow'), false)
-        assert.equal(afterRestartMeta.sectionsById['profile.catalog'], undefined)
+        assert.equal(afterRestartMeta.sectionsById['mentions.catalog'], undefined)
         assert.ok((afterRestartMeta.sectionsById['workflow.forked_context'] ?? '').includes('<forked_subagent_context>'))
       } finally {
         await app.close()
@@ -931,13 +931,13 @@ describe('workflow & swarm subagent depth contract (default ceiling 1)', { timeo
 
     assert.ok(depth1Meta)
     assert.ok(depth1Meta.toolNames.includes('subagent') && depth1Meta.toolNames.includes('SubagentWorkflow'))
-    assert.ok(typeof depth1Meta.sectionsById['profile.catalog'] === 'string')
+    assert.ok(typeof depth1Meta.sectionsById['mentions.catalog'] === 'string')
     assert.ok((depth1Meta.sectionsById['workflow.forked_context'] ?? '').includes('<forked_subagent_context>'))
 
     assert.ok(depth2Meta)
     assert.equal(depth2Meta.toolNames.includes('subagent'), false)
     assert.equal(depth2Meta.toolNames.includes('SubagentWorkflow'), false)
-    assert.equal(depth2Meta.sectionsById['profile.catalog'], undefined)
+    assert.equal(depth2Meta.sectionsById['mentions.catalog'], undefined)
     assert.equal(depth2Meta.sectionsById['workflow.forked_context'], undefined)
 
     await sharedApp.kernel.kvStore.flush()
@@ -1060,7 +1060,7 @@ describe('workflow & swarm subagent depth contract (default ceiling 1)', { timeo
         for (const stripped of ['subagent', 'SubagentWorkflow', 'swarm_create_group', 'swarm_dispatch_worker']) {
           assert.equal(leafWorkerMeta.toolNames.includes(stripped), false, `default swarm worker must strip ${stripped}`)
         }
-        assert.equal(leafWorkerMeta.sectionsById['profile.catalog'], undefined)
+        assert.equal(leafWorkerMeta.sectionsById['mentions.catalog'], undefined)
         assert.equal(leafWorkerMeta.toolNames.includes('swarm_board_post'), true)
         assert.equal(leafWorkerMeta.toolNames.includes('bash'), true)
 
@@ -1105,7 +1105,7 @@ describe('workflow & swarm subagent depth contract (default ceiling 1)', { timeo
         assert.equal((optinWorkerMeta.sectionsById['swarm.active_group'] ?? '').includes('Context boundary:'), false)
         assert.equal(optinWorkerMeta.toolNames.includes('subagent'), true)
         assert.equal(optinWorkerMeta.toolNames.includes('SubagentWorkflow'), true)
-        assert.ok(typeof optinWorkerMeta.sectionsById['profile.catalog'] === 'string')
+        assert.ok(typeof optinWorkerMeta.sectionsById['mentions.catalog'] === 'string')
 
         const childConv = app.kernel.conversations.listConversations().find((c) => c.parentConversationId === optinWorkerId)
         assert.ok(childConv, 'optin_worker should spawn depth-2 child conversation under ceiling 2')
@@ -1113,7 +1113,7 @@ describe('workflow & swarm subagent depth contract (default ceiling 1)', { timeo
         assert.ok(optinChildMeta)
         assert.equal(optinChildMeta.toolNames.includes('subagent'), false)
         assert.equal(optinChildMeta.toolNames.includes('SubagentWorkflow'), false)
-        assert.equal(optinChildMeta.sectionsById['profile.catalog'], undefined)
+        assert.equal(optinChildMeta.sectionsById['mentions.catalog'], undefined)
 
         await app.kernel.kvStore.flush()
         const childEntry = registryEntry(dir, optinChildId)
@@ -1140,7 +1140,7 @@ describe('workflow & swarm subagent depth contract (default ceiling 1)', { timeo
         assert.equal(forkedWorkerMeta.sectionsById['workflow.forked_context'], undefined, 'must not double-inject workflow.forked_context on swarm worker')
         assert.equal(forkedWorkerMeta.toolNames.includes('subagent'), false)
         assert.equal(forkedWorkerMeta.toolNames.includes('SubagentWorkflow'), false)
-        assert.equal(forkedWorkerMeta.sectionsById['profile.catalog'], undefined)
+        assert.equal(forkedWorkerMeta.sectionsById['mentions.catalog'], undefined)
         await assert.rejects(
           () => app.kernel.agentSpawn.spawnAgent({ parentConversationId: forkedWorkerId, prompt: 'forked worker blocked' }),
           (err: unknown) => err instanceof HelmxError && err.code === 'subagent_depth_exceeded' && err.status === 403,

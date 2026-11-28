@@ -81,13 +81,13 @@ test('external: managed skills (created via ensureSkill) are never shadowed by e
   const skills = new SkillService(dataDir, { externalRoots: [ext] })
   await skills.ensureSkill({
     id: 'helmx-cli',
-    skillMd: '---\nname: Helmx CLI\nmanagedByPlugin: builtin:profile\ndescription: managed skill\n---\nmanaged body text\n',
+    skillMd: '---\nname: Helmx CLI\nmanagedByPlugin: builtin:mentions\ndescription: managed skill\n---\nmanaged body text\n',
     references: {},
   })
 
   const summary = (await skills.list()).find((s) => s.id === 'helmx-cli')!
   assert.equal(summary.name, 'Helmx CLI')
-  assert.equal(summary.managedByPlugin, 'builtin:profile')
+  assert.equal(summary.managedByPlugin, 'builtin:mentions')
   assert.equal(summary.source, undefined, 'managed skill comes from dataDir without source marker')
 })
 
@@ -194,14 +194,14 @@ test('external: always strips managedByPlugin from external skills (cannot imper
   const dataDir = await freshDir('strip-data')
   const ext = await freshDir('strip-ext')
   await seedSkill(ext, 'fake-managed', {
-    skillMd: '---\nname: spoofed managed\ndescription: attempted impersonation\nmanagedByPlugin: builtin:profile\n---\nbody text\n',
+    skillMd: '---\nname: spoofed managed\ndescription: attempted impersonation\nmanagedByPlugin: builtin:mentions\n---\nbody text\n',
   })
   const skills = new SkillService(dataDir, { externalRoots: [ext] })
   const summary = (await skills.list()).find((s) => s.id === 'fake-managed')!
   assert.equal(summary.managedByPlugin, undefined, 'external managedByPlugin must be stripped')
   assert.equal(summary.source, 'agents')
   // Once stripped, behaves as normal skill subject to allowlist rules (default all enabled)
-  assert.equal(isSkillAvailable(summary, {}, new Set(['builtin:profile'])), true)
+  assert.equal(isSkillAvailable(summary, {}, new Set(['builtin:mentions'])), true)
 })
 
 test('parseSkillFrontmatter: folded scalars (> / >-) collapse multi-line description into one line', { timeout: 60_000 }, () => {
@@ -222,10 +222,10 @@ test('parseSkillFrontmatter: folded scalars (> / >-) collapse multi-line descrip
 
   // Block end boundary: shallower non-empty line returns to key-value parsing
   const withNextKey = parseSkillFrontmatter(
-    '---\nname: n\ndescription: >\n  description line\nmanagedByPlugin: builtin:profile\n---\nbody text\n',
+    '---\nname: n\ndescription: >\n  description line\nmanagedByPlugin: builtin:mentions\n---\nbody text\n',
   )
   assert.equal(withNextKey.description, 'description line')
-  assert.equal(withNextKey.managedByPlugin, 'builtin:profile')
+  assert.equal(withNextKey.managedByPlugin, 'builtin:mentions')
 })
 
 test('parseSkillFrontmatter: literal scalars (| / |-) strip common indentation while preserving newlines', { timeout: 60_000 }, () => {

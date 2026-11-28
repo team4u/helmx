@@ -204,22 +204,36 @@ const capturedRequests: Array<{
   assistantTexts: string[]
 }> = []
 
+function recordCapturedRequest(
+  context: {
+    messages: ReadonlyArray<{
+      role: string
+      content: unknown
+      sections?: Record<string, string | null>
+    }>
+  },
+): ReturnType<typeof fauxAssistantMessage> {
+  capturedRequests.push({
+    roles: context.messages.map((m) => m.role),
+    systemSections: context.messages
+      .filter((m) => m.role === 'system')
+      .flatMap((m) => Object.values(m.sections ?? {}).filter((v): v is string => typeof v === 'string')),
+    userTexts: context.messages
+      .filter((m) => m.role === 'user')
+      .map((m) => (typeof m.content === 'string' ? m.content : JSON.stringify(m.content))),
+    assistantTexts: context.messages
+      .filter((m) => m.role === 'assistant')
+      .flatMap((m) =>
+        (m.content as Array<{ type: string; text?: string }>)
+          .filter((c): c is { type: 'text'; text: string } => c.type === 'text' && typeof c.text === 'string')
+          .map((c) => c.text),
+      ),
+  })
+  return fauxAssistantMessage('captured')
+}
+
 function captureStep(): FauxResponseStep {
-  return (context) => {
-    capturedRequests.push({
-      roles: context.messages.map((m) => m.role),
-      systemSections: context.messages
-        .filter((m) => m.role === 'system')
-        .flatMap((m) => Object.values((m as { sections?: Record<string, string> }).sections ?? {})),
-      userTexts: context.messages
-        .filter((m) => m.role === 'user')
-        .map((m) => (typeof m.content === 'string' ? m.content : JSON.stringify(m.content))),
-      assistantTexts: context.messages
-        .filter((m) => m.role === 'assistant')
-        .flatMap((m) => m.content.filter((c): c is { type: 'text'; text: string } => c.type === 'text').map((c) => c.text)),
-    })
-    return fauxAssistantMessage('captured')
-  }
+  return (context) => recordCapturedRequest(context)
 }
 
 before(async () => {
@@ -240,12 +254,18 @@ test('核心协同 1：profile/memory 默认装配与锁定保护、SYSTEM/MEMOR
   const { kernel, faux } = mainEnv
   const host = kernel.plugins
 
-  const profileSummary = host.list().find((p) => p.id === 'builtin:profile')!
-  assert.equal(profileSummary.locked, true)
-  assert.equal(profileSummary.enabled, true)
-  assert.ok(profileSummary.tools.includes('load_skill'))
-  await rejectsExplicitly(() => host.disable('builtin:profile'), { code: 'plugin_locked', message: /lock/ })
-  await rejectsExplicitly(() => host.unregister('builtin:profile'), { code: 'plugin_locked', message: /lock/ })
+  assert.equal(host.list().find((p) => p.id === 'builtin:profile'), undefined, 'builtin:profile 已合入内核并退出插件清单')
+  const mentionsSummary = host.list().find((p) => p.id === 'builtin:mentions')!
+  assert.equal(mentionsSummary.locked, false)
+  assert.equal(mentionsSummary.enabled, true)
+  assert.ok(mentionsSummary.actions.includes('list_mentionable'))
+  await host.disable('builtin:mentions')
+  try {
+    assert.equal(host.list().find((p) => p.id === 'builtin:mentions')?.enabled, false)
+  } finally {
+    await host.enable('builtin:mentions')
+  }
+  assert.equal(host.list().find((p) => p.id === 'builtin:mentions')?.enabled, true)
 
   const memorySummary = host.list().find((p) => p.id === 'builtin:memory')!
   assert.equal(memorySummary.locked, false)
@@ -354,26 +374,34 @@ test('核心协同 2：load_skill 读取与路径防护、Profile skills 白名�
   writeSkill(dataDir, 'managed-guide', '---\nname: hosting manual\ndescription: hosting\nmanagedByPlugin: test:managed-skill\n---\n# hosting', {})
 
   const defaultConv = await kernel.conversations.createConversation({ title: 'skill-default' })
-  assert.ok(((await host.executeTool('load_skill', { skillId: 'deploy-playbook' }, { conversationId: defaultConv.id })) as { text: string }).text.includes('deploy'))
-  assert.ok(((await host.executeTool('load_skill', { skillId: 'deploy-playbook', path: 'references/rollback.md' }, { conversationId: defaultConv.id })) as { text: string }).text.includes('helmx rollback'))
+  assert.ok((await kernel.scopedSkills.loadSkillForConversation(defaultConv.id, { skillId: 'deploy-playbook' })).text.includes('deploy'))
+  assert.ok((await kernel.scopedSkills.loadSkillForConversation(defaultConv.id, { skillId: 'deploy-playbook', path: 'references/rollback.md' })).text.includes('helmx rollback'))
 
   await rejectsExplicitly(
-    () => host.executeTool('load_skill', { skillId: 'deploy-playbook', path: '../profiles/assistant/MEMORY.md' }, { conversationId: defaultConv.id }),
+    () => kernel.scopedSkills.loadSkillForConversation(defaultConv.id, { skillId: 'deploy-playbook', path: '../profiles/assistant/MEMORY.md' }),
     { message: /forbidden path traversal|reference validation failed/ },
   )
   await rejectsExplicitly(
-    () => host.executeTool('load_skill', { skillId: 'deploy-playbook', path: '/etc/passwd' }, { conversationId: defaultConv.id }),
+    () => kernel.scopedSkills.loadSkillForConversation(defaultConv.id, { skillId: 'deploy-playbook', path: '/etc/passwd' }),
     { message: /absolute path|reference validation failed/ },
   )
   await rejectsExplicitly(
-    () => host.executeTool('load_skill', { skillId: 'no-such-skill' }, { conversationId: defaultConv.id }),
+    () => kernel.scopedSkills.loadSkillForConversation(defaultConv.id, { skillId: 'no-such-skill' }),
     { code: 'not_found', message: /missing|no-such-skill/ },
   )
 
   capturedRequests.length = 0
-  faux.setResponses([captureStep()])
+  let loadedViaKernelTool = ''
+  faux.setResponses([
+    fauxAssistantMessage([fauxToolCall('load_skill', { skillId: 'deploy-playbook' })], { stopReason: 'toolUse' }),
+    (ctx) => {
+      loadedViaKernelTool = JSON.stringify(ctx.messages)
+      return recordCapturedRequest(ctx)
+    },
+  ])
   await kernel.conversations.submitInput(defaultConv.id, 'check default catalog')
   await kernel.conversations.waitForIdle(defaultConv.id)
+  assert.ok(loadedViaKernelTool.includes('see references/.'), '内核 load_skill 工具应经 pi-durable 真实执行并返回技能正文')
   const defaultCatalog = capturedRequests[0]!.systemSections.find((s) => s.includes('<available_skills>'))!
   for (const item of ['deploy-playbook', 'references/db-migrate.md', 'helmx-cli', 'alpha-guide', 'beta-guide', 'generative-ui']) {
     assert.ok(defaultCatalog.includes(item))
@@ -386,16 +414,16 @@ test('核心协同 2：load_skill 读取与路径防护、Profile skills 白名�
   const convWhite = await kernel.conversations.createConversation({ title: 'white', profileId: 'white-profile' })
   const convNone = await kernel.conversations.createConversation({ title: 'none', profileId: 'none-profile' })
 
-  assert.ok(((await host.executeTool('load_skill', { skillId: 'alpha-guide', path: 'references/intro.md' }, { conversationId: convWhite.id })) as { text: string }).text.includes('blank name single'))
-  await rejectsExplicitly(() => host.executeTool('load_skill', { skillId: 'beta-guide' }, { conversationId: convWhite.id }), { code: 'skill_not_available', message: /is unavailable for profile/ })
-  await rejectsExplicitly(() => host.executeTool('load_skill', { skillId: 'managed-guide' }, { conversationId: convWhite.id }), { code: 'skill_not_available', message: /is unavailable for profile|is disabled/ })
+  assert.ok((await kernel.scopedSkills.loadSkillForConversation(convWhite.id, { skillId: 'alpha-guide', path: 'references/intro.md' })).text.includes('blank name single'))
+  await rejectsExplicitly(() => kernel.scopedSkills.loadSkillForConversation(convWhite.id, { skillId: 'beta-guide' }), { code: 'skill_not_available', message: /is unavailable for profile/ })
+  await rejectsExplicitly(() => kernel.scopedSkills.loadSkillForConversation(convWhite.id, { skillId: 'managed-guide' }), { code: 'skill_not_available', message: /is unavailable for profile|is disabled/ })
 
   capturedRequests.length = 0
   faux.setResponses([captureStep()])
   await kernel.conversations.submitInput(convNone.id, 'none turn')
   await kernel.conversations.waitForIdle(convNone.id)
   assert.equal(capturedRequests[0]!.systemSections.find((s) => s.includes('<available_skills>')), undefined)
-  await rejectsExplicitly(() => host.executeTool('load_skill', { skillId: 'helmx-cli' }, { conversationId: convNone.id }), { code: 'skill_not_available', message: /is unavailable for profile/ })
+  await rejectsExplicitly(() => kernel.scopedSkills.loadSkillForConversation(convNone.id, { skillId: 'helmx-cli' }), { code: 'skill_not_available', message: /is unavailable for profile/ })
 
   capturedRequests.length = 0
   faux.setResponses([captureStep()])
@@ -407,7 +435,7 @@ test('核心协同 2：load_skill 读取与路径防护、Profile skills 白名�
 
   await host.enable('test:managed-skill')
   try {
-    assert.ok(((await host.executeTool('load_skill', { skillId: 'managed-guide' }, { conversationId: convWhite.id })) as { text: string }).text.includes('hosting'))
+    assert.ok((await kernel.scopedSkills.loadSkillForConversation(convWhite.id, { skillId: 'managed-guide' })).text.includes('hosting'))
     capturedRequests.length = 0
     faux.setResponses([captureStep()])
     await kernel.conversations.submitInput(convWhite.id, 'white after enable')
@@ -994,7 +1022,7 @@ test('跨重启持久闭环：helmx-cli 受管技能篡改恢复与只读门禁�
 
   const first = await createHubTestApp({ dataDir, cwd: dataDir })
   try {
-    // 校验内核受管技能（helmx-cli / app-builder / conversations / profiles）与 generative-ui 归属，随后模拟磁盘篡改/误删 + 遗留 builtin:profile 旧目录 + 用户自建技能
+    // 校验内核受管技能（helmx-cli / app-builder / conversations / profiles）与 generative-ui 归属，随后模拟磁盘篡改/误删 + 遗留 builtin:mentions 零技能旧目录 + 用户自建技能
     const skills = await first.kernel.skills.list()
     const helmxCli = skills.find((s) => s.id === 'helmx-cli')!
     assert.equal(helmxCli.managedByPlugin, 'core:host')
@@ -1024,7 +1052,7 @@ test('跨重启持久闭环：helmx-cli 受管技能篡改恢复与只读门禁�
     writeFileSync(join(dataDir, 'skills', 'helmx-cli', 'SKILL.md'), '---\nname: helmx-cli\ndescription: tampered\n---\ntampered\n')
     rmSync(join(dataDir, 'skills', 'helmx-cli', 'references', 'skill-and-plugin-dev.md'))
     rmSync(join(dataDir, 'skills', 'helmx-cli', 'references', 'plugin-client-code-splitting.md'))
-    writeSkill(dataDir, 'profile', '---\nname: profile\ndescription: legacy\nmanagedByPlugin: builtin:profile\n---\nlegacy\n', {})
+    writeSkill(dataDir, 'mentions-legacy', '---\nname: mentions-legacy\ndescription: legacy\nmanagedByPlugin: builtin:mentions\n---\nlegacy\n', {})
     writeSkill(dataDir, 'user-skill', '---\nname: user-skill\ndescription: user self create\n---\nbody\n', { 'notes.md': '# user\n' })
 
     // 初始会话历史落库 + 双 Profile 独立 SYSTEM/MEMORY 校验
@@ -1053,7 +1081,7 @@ test('跨重启持久闭环：helmx-cli 受管技能篡改恢复与只读门禁�
 
   const second = await openHubHttpEnv({ dataDir, cwd: dataDir })
   try {
-    // 1. 受管技能覆盖回源码且写接口 403，旧 builtin:profile 目录退役，用户自建技能完好可写
+    // 1. 受管技能覆盖回源码且写接口 403，旧 builtin:mentions 零技能目录退役，用户自建技能完好可写
     assert.equal(readFileSync(join(dataDir, 'skills', 'helmx-cli', 'SKILL.md'), 'utf8'), expectedHelmxCliMd)
     assert.equal(
       readFileSync(join(dataDir, 'skills', 'helmx-cli', 'references', 'skill-and-plugin-dev.md'), 'utf8'),
@@ -1063,7 +1091,7 @@ test('跨重启持久闭环：helmx-cli 受管技能篡改恢复与只读门禁�
       readFileSync(join(dataDir, 'skills', 'helmx-cli', 'references', 'plugin-client-code-splitting.md'), 'utf8'),
       expectedCodeSplittingMd,
     )
-    assert.ok(!existsSync(join(dataDir, 'skills', 'profile')), '重启后 builtin:profile 遗留的旧 profile 技能目录应退役清除')
+    assert.ok(!existsSync(join(dataDir, 'skills', 'mentions-legacy')), '重启后 builtin:mentions 遗留的零技能旧目录应退役清除')
     await assert.rejects(
       () => second.kernel.skills.writeFile('helmx-cli', 'SKILL.md', 'tamper'),
       (err: unknown) => err instanceof HelmxError && err.code === 'managed_skill_readonly' && err.status === 403,

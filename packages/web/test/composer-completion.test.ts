@@ -125,7 +125,7 @@ test('verifyCompletionActionManifest: requires a real manifest with idempotent:t
 
 test('buildCompletionActionCall: a real conversation passes conversationId; draft state decides profileId by schema or rejects explicitly', { timeout: 60_000 }, () => {
   const profileAware: ActionManifest = {
-    pluginId: 'builtin:profile',
+    pluginId: 'builtin:mentions',
     id: 'list_mentionable',
     description: '',
     idempotent: true,
@@ -344,8 +344,8 @@ test('interaction: Enter with the @ popover open only picks the profile and keep
     return { id: 1, text: '', role: 'user', createdAt: Date.now() } as any
   }) as any
   const app = await mount(conv(1), {
-    ui: [docCompleter('builtin:profile', '@', 'profiles')],
-    docs: { 'builtin:profile/profiles': { items: [{ id: 'coder', label: '@coder · 程序员', insertText: '@coder ' }] } },
+    ui: [docCompleter('builtin:mentions', '@', 'profiles')],
+    docs: { 'builtin:mentions/profiles': { items: [{ id: 'coder', label: '@coder · 程序员', insertText: '@coder ' }] } },
   })
   try {
     await app.type('@')

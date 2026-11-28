@@ -105,8 +105,8 @@ export const skillsMessages = {
 
   // Scoped node-skill API validation errors
   'skills.scopeApi.catalogInvalid': {
-    en: 'skill_catalog invalid output: {detail}',
-    'zh-CN': 'skill_catalog 输出不合法：{detail}',
+    en: 'core:skills.catalog invalid output: {detail}',
+    'zh-CN': 'core:skills.catalog 输出不合法：{detail}',
   },
   'skills.scopeApi.notObject': {
     en: 'return value is not an object',
@@ -161,11 +161,11 @@ export const skillsMessages = {
     'zh-CN': 'nodeUnavailable 必须是字符串',
   },
   'skills.scopeApi.readNotObject': {
-    en: 'skill_read invalid output: return value is not an object',
-    'zh-CN': 'skill_read 输出不合法：返回值不是对象',
+    en: 'core:skills.read invalid output: return value is not an object',
+    'zh-CN': 'core:skills.read 输出不合法：返回值不是对象',
   },
   'skills.scopeApi.readTextInvalid': {
-    en: 'skill_read invalid output: text must be a string',
-    'zh-CN': 'skill_read 输出不合法：text 必须是字符串',
+    en: 'core:skills.read invalid output: text must be a string',
+    'zh-CN': 'core:skills.read 输出不合法：text 必须是字符串',
   },
 } satisfies MessageTable

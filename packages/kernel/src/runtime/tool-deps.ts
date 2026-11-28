@@ -34,6 +34,8 @@ export interface HelmxToolDeps {
   restrictToCwdOf?: (conversationId: number) => Promise<boolean>
   /** Directory containing `helmx` CLI wrapper scripts (prepended to `PATH` so managed children can run `helmx`). */
   cliBinDir?: string
+  /** Scoped skill loader for the built-in `load_skill` tool. */
+  loadSkillForConversation?: (conversationId: number, input: { skillId: string; path?: string }) => Promise<{ text: string }>
 }
 
 /**

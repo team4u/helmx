@@ -1315,7 +1315,7 @@ function makeServiceHost(options: { actionFail?: boolean } = {}): WorkflowServic
     listActions() {
       return [
         {
-          pluginId: 'builtin:profile',
+          pluginId: 'builtin:demo',
           id: 'update.memory',
           description: '',
           inputSchema: {},
@@ -1451,7 +1451,7 @@ describe('WorkflowService', () => {
 
     const good = await service.run({
       conversationId: 1,
-      script: META('svc3') + 'const v = await action("builtin:profile.update.memory", {})\nreturn v',
+      script: META('svc3') + 'const v = await action("builtin:demo.update.memory", {})\nreturn v',
     })
     const goodResult = await service.wait(good.id)
     assert.deepEqual(goodResult, { ok: true, n: 1, input: {} })
@@ -1539,7 +1539,7 @@ describe('WorkflowService', () => {
     const service = new WorkflowService({ dataDir, host, kv: state })
     const first = await service.run({
       conversationId: 1,
-      script: META('svc-failed-action') + 'const v = await action("builtin:profile.update.memory", {})\nreturn v',
+      script: META('svc-failed-action') + 'const v = await action("builtin:demo.update.memory", {})\nreturn v',
     })
     await service.wait(first.id)
     assert.equal(host.actionCount(), 1)
@@ -1992,7 +1992,7 @@ describe('WorkflowService', () => {
       },
       listActions: () => [
         {
-          pluginId: 'builtin:profile',
+          pluginId: 'builtin:demo',
           id: 'good_act',
           description: '',
           idempotent: true,
@@ -2042,7 +2042,7 @@ describe('WorkflowService', () => {
         META('resume-preflight') +
         `
         const s1 = await agent("step1")
-        const s2 = await action("builtin:profile.good_act", { count: 42 }, { idempotent: true, label: "my-good-step", phase: "execution" })
+        const s2 = await action("builtin:demo.good_act", { count: 42 }, { idempotent: true, label: "my-good-step", phase: "execution" })
         return [s1, s2]
       `,
       resumeFromRunId: sum1.id,
