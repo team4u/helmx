@@ -48,32 +48,62 @@ function readCachedText(file: string): string {
   return text
 }
 
-function parseCachedAst(file: string): ts.SourceFile {
+function parseNoParentAst(file: string): ts.SourceFile {
   let ast = astCache.get(file)
   if (ast === undefined) {
-    ast = ts.createSourceFile(file, readCachedText(file), ts.ScriptTarget.Latest, true)
+    ast = ts.createSourceFile(file, readCachedText(file), ts.ScriptTarget.Latest, false)
     astCache.set(file, ast)
   }
   return ast
 }
 
-function imports(file: string): Array<{ specifier: string; typeOnly: boolean }> {
-  const cached = importsCache.get(file)
-  if (cached !== undefined) return cached
-  const source = parseCachedAst(file)
+function lineNumberAt(text: string, pos: number): number {
+  let line = 1
+  let idx = -1
+  while ((idx = text.indexOf('\n', idx + 1)) !== -1 && idx < pos) {
+    line += 1
+  }
+  return line
+}
+
+function imports(file: string, needTypeOnly = false): Array<{ specifier: string; typeOnly: boolean }> {
+  if (!needTypeOnly) {
+    const cached = importsCache.get(file)
+    if (cached !== undefined) return cached
+  }
+  const text = readCachedText(file)
+  if (!/\b(?:import|export|require)\b/.test(text)) {
+    const empty: Array<{ specifier: string; typeOnly: boolean }> = []
+    importsCache.set(file, empty)
+    return empty
+  }
+  if (!needTypeOnly && !/\bdeclare\s+module\b/.test(text)) {
+    const pre = ts.preProcessFile(text, true, true)
+    const result = pre.importedFiles.map((entry) => ({ specifier: entry.fileName, typeOnly: false }))
+    importsCache.set(file, result)
+    return result
+  }
+  const source = parseNoParentAst(file)
   const result: Array<{ specifier: string; typeOnly: boolean }> = []
   const add = (node: ts.Node | undefined, typeOnly = false) => {
     if (node && ts.isStringLiteralLike(node)) result.push({ specifier: node.text, typeOnly })
   }
-  const visit = (node: ts.Node): void => {
-    if (ts.isImportDeclaration(node)) add(node.moduleSpecifier, Boolean(node.importClause?.isTypeOnly))
-    if (ts.isExportDeclaration(node)) add(node.moduleSpecifier, Boolean(node.isTypeOnly))
-    if (ts.isImportTypeNode(node) && ts.isLiteralTypeNode(node.argument)) add(node.argument.literal, true)
-    if (ts.isCallExpression(node) && (node.expression.kind === ts.SyntaxKind.ImportKeyword || (ts.isIdentifier(node.expression) && node.expression.text === 'require'))) add(node.arguments[0], false)
-    ts.forEachChild(node, visit)
+  if (!/\b(?:import\s*\(|require\s*\()/.test(text)) {
+    for (const st of source.statements) {
+      if (ts.isImportDeclaration(st)) add(st.moduleSpecifier, Boolean(st.importClause?.isTypeOnly))
+      else if (ts.isExportDeclaration(st)) add(st.moduleSpecifier, Boolean(st.isTypeOnly))
+    }
+  } else {
+    const visit = (node: ts.Node): void => {
+      if (ts.isImportDeclaration(node)) add(node.moduleSpecifier, Boolean(node.importClause?.isTypeOnly))
+      if (ts.isExportDeclaration(node)) add(node.moduleSpecifier, Boolean(node.isTypeOnly))
+      if (ts.isImportTypeNode(node) && ts.isLiteralTypeNode(node.argument)) add(node.argument.literal, true)
+      if (ts.isCallExpression(node) && (node.expression.kind === ts.SyntaxKind.ImportKeyword || (ts.isIdentifier(node.expression) && node.expression.text === 'require'))) add(node.arguments[0], false)
+      ts.forEachChild(node, visit)
+    }
+    visit(source)
   }
-  visit(source)
-  importsCache.set(file, result)
+  if (!needTypeOnly) importsCache.set(file, result)
   return result
 }
 
@@ -134,7 +164,7 @@ test('production packages maintain one-way dependencies and cross boundaries onl
       const isPluginsBrowserClient =
         manifest.name === '@helmx/plugins' &&
         /\/src\/[^/]+\/client\//.test(file.replaceAll(sep, '/'))
-      for (const { specifier, typeOnly } of imports(file)) {
+      for (const { specifier, typeOnly } of imports(file, manifest.name === '@helmx/test-kit')) {
         const label = `${relative(packagesDir, file)}: ${specifier}`
         if (isAbsolute(specifier) || specifier.startsWith('file:')) {
           violations.push(`${label} absolute path bypasses package entry`)
@@ -344,51 +374,125 @@ test('browser sources and @helmx/protocol/browser transitive closure never impor
   assert.deepEqual(violations, [], violations.join('\n'))
 })
 
+const REGEX_PREFIX_TOKENS = new Set<ts.SyntaxKind>([
+  ts.SyntaxKind.Unknown,
+  ts.SyntaxKind.OpenParenToken,
+  ts.SyntaxKind.OpenBracketToken,
+  ts.SyntaxKind.OpenBraceToken,
+  ts.SyntaxKind.CommaToken,
+  ts.SyntaxKind.ColonToken,
+  ts.SyntaxKind.SemicolonToken,
+  ts.SyntaxKind.ExclamationToken,
+  ts.SyntaxKind.TildeToken,
+  ts.SyntaxKind.QuestionToken,
+  ts.SyntaxKind.EqualsToken,
+  ts.SyntaxKind.EqualsGreaterThanToken,
+  ts.SyntaxKind.PlusEqualsToken,
+  ts.SyntaxKind.MinusEqualsToken,
+  ts.SyntaxKind.AsteriskEqualsToken,
+  ts.SyntaxKind.PercentEqualsToken,
+  ts.SyntaxKind.AmpersandAmpersandToken,
+  ts.SyntaxKind.BarBarToken,
+  ts.SyntaxKind.QuestionQuestionToken,
+  ts.SyntaxKind.ReturnKeyword,
+  ts.SyntaxKind.ThrowKeyword,
+  ts.SyntaxKind.CaseKeyword,
+  ts.SyntaxKind.ElseKeyword,
+  ts.SyntaxKind.DoKeyword,
+  ts.SyntaxKind.YieldKeyword,
+  ts.SyntaxKind.AwaitKeyword,
+  ts.SyntaxKind.TypeOfKeyword,
+  ts.SyntaxKind.VoidKeyword,
+  ts.SyntaxKind.DeleteKeyword,
+])
+
+function scanAnyAndSuppressions(
+  file: string,
+  text: string,
+  suppressionPattern: RegExp,
+  violations: string[],
+): void {
+  const mayHaveSuppression = suppressionPattern.test(text)
+  const mayHaveAny = /\bany\b/.test(text)
+  if (!mayHaveSuppression && !mayHaveAny) return
+
+  const variant = file.endsWith('.tsx') ? ts.LanguageVariant.JSX : ts.LanguageVariant.Standard
+  const scanner = ts.createScanner(ts.ScriptTarget.Latest, false, variant, text)
+  const templateBraceDepths: number[] = []
+  let prevToken = ts.SyntaxKind.Unknown
+  let sawCandidateAny = false
+
+  for (;;) {
+    let token = scanner.scan()
+    if (token === ts.SyntaxKind.EndOfFileToken) break
+
+    if (token === ts.SyntaxKind.TemplateHead) {
+      templateBraceDepths.push(0)
+    } else if (token === ts.SyntaxKind.OpenBraceToken) {
+      if (templateBraceDepths.length > 0) {
+        templateBraceDepths[templateBraceDepths.length - 1]! += 1
+      }
+    } else if (token === ts.SyntaxKind.CloseBraceToken && templateBraceDepths.length > 0) {
+      if (templateBraceDepths[templateBraceDepths.length - 1] === 0) {
+        token = scanner.reScanTemplateToken(false)
+        if (token === ts.SyntaxKind.TemplateTail) templateBraceDepths.pop()
+      } else {
+        templateBraceDepths[templateBraceDepths.length - 1]! -= 1
+      }
+    } else if (
+      (token === ts.SyntaxKind.SlashToken || token === ts.SyntaxKind.SlashEqualsToken) &&
+      REGEX_PREFIX_TOKENS.has(prevToken)
+    ) {
+      token = scanner.reScanSlashToken()
+    }
+
+    if (
+      token === ts.SyntaxKind.SingleLineCommentTrivia ||
+      token === ts.SyntaxKind.MultiLineCommentTrivia
+    ) {
+      if (mayHaveSuppression) {
+        const start = scanner.getTokenStart()
+        const snippet = text.slice(start, scanner.getTokenEnd())
+        const match = suppressionPattern.exec(snippet)
+        if (match) {
+          violations.push(`${relative(packagesDir, file)}:${lineNumberAt(text, start)}: forbidden use of ${match[0]}`)
+        }
+      }
+      continue
+    }
+
+    if (token === ts.SyntaxKind.WhitespaceTrivia || token === ts.SyntaxKind.NewLineTrivia) {
+      continue
+    }
+
+    if (mayHaveAny && token === ts.SyntaxKind.AnyKeyword && prevToken !== ts.SyntaxKind.DotToken) {
+      sawCandidateAny = true
+    }
+
+    prevToken = token
+  }
+
+  if (sawCandidateAny) {
+    // Only files containing a non-property `any` token parse AST to exclude object keys / JSX text.
+    const source = parseNoParentAst(file)
+    const visit = (node: ts.Node): void => {
+      if (node.kind === ts.SyntaxKind.AnyKeyword) {
+        const { line } = source.getLineAndCharacterOfPosition(node.getStart(source))
+        violations.push(`${relative(packagesDir, file)}:${line + 1}: forbidden use of explicit any type (as any / : any / <any>)`)
+      }
+      ts.forEachChild(node, visit)
+    }
+    visit(source)
+  }
+}
+
 test('all workspace packages/*/src contain zero any types and zero TS suppression directives', { timeout: 60_000 }, () => {
   const violations: string[] = []
   const suppressionPattern = /@(?:ts-ignore|ts-expect-error|ts-nocheck)\b/
 
   for (const { root } of workspacePackages()) {
     for (const file of sourceFiles(join(root, 'src'))) {
-      const text = readCachedText(file)
-      const mayHaveSuppression = suppressionPattern.test(text)
-      const mayHaveAny = /\bany\b/.test(text)
-      if (!mayHaveSuppression && !mayHaveAny) continue
-
-      const source = parseCachedAst(file)
-      const seenComments = mayHaveSuppression ? new Set<string>() : undefined
-
-      const checkCommentRanges = (ranges: readonly ts.CommentRange[] | undefined) => {
-        if (!ranges || !seenComments) return
-        for (const range of ranges) {
-          const key = `${range.pos}:${range.end}`
-          if (seenComments.has(key)) continue
-          seenComments.add(key)
-          const snippet = text.slice(range.pos, range.end)
-          const match = suppressionPattern.exec(snippet)
-          if (match) {
-            const { line } = source.getLineAndCharacterOfPosition(range.pos)
-            violations.push(`${relative(packagesDir, file)}:${line + 1}: forbidden use of ${match[0]}`)
-          }
-        }
-      }
-
-      const visit = (node: ts.Node): void => {
-        if (mayHaveSuppression) {
-          checkCommentRanges(ts.getLeadingCommentRanges(text, node.getFullStart()))
-          checkCommentRanges(ts.getTrailingCommentRanges(text, node.getEnd()))
-        }
-        if (mayHaveAny && node.kind === ts.SyntaxKind.AnyKeyword) {
-          const { line } = source.getLineAndCharacterOfPosition(node.getStart(source))
-          violations.push(`${relative(packagesDir, file)}:${line + 1}: forbidden use of explicit any type (as any / : any / <any>)`)
-        }
-        ts.forEachChild(node, visit)
-      }
-
-      visit(source)
-      if (mayHaveSuppression) {
-        checkCommentRanges(ts.getLeadingCommentRanges(text, source.endOfFileToken.getFullStart()))
-      }
+      scanAnyAndSuppressions(file, readCachedText(file), suppressionPattern, violations)
     }
   }
 

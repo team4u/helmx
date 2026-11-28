@@ -97,13 +97,14 @@ test('boundary wrapper turns null inputs and unknown readers into structured err
 // ---------------------------------------------------------------------------
 
 test('envExec never leaks host HELMX_TOKEN into children while honoring managed input.env injections', { timeout: 60_000 }, async (t) => {
-  // Simulate a daemon host carrying HELMX_TOKEN by swapping process.env (restored via t.after).
+  // Simulate a daemon host carrying HELMX_TOKEN via per-key assignment (restored via t.after).
   // Upstream NodeExecutionEnv inherits process.env by default, so this proves stripping works
   // genuinely when HELMX_TOKEN is present rather than passing only by deleting global env vars.
-  const base = process.env;
-  process.env = { ...base, HELMX_TOKEN: 'host-secret-token-do-not-leak' } as NodeJS.ProcessEnv;
+  const prevToken = process.env.HELMX_TOKEN;
+  process.env.HELMX_TOKEN = 'host-secret-token-do-not-leak';
   t.after(() => {
-    process.env = base;
+    if (prevToken === undefined) delete process.env.HELMX_TOKEN;
+    else process.env.HELMX_TOKEN = prevToken;
   });
 
   const dir = await tempDir('token-iso-');

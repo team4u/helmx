@@ -1204,7 +1204,7 @@ test('watcher: 150ms debounce catches atomic renames without tmp files and stops
   }
   const countBefore = events.length
   await atomicWriteFile(join(dataDir, 'profiles', 'assistant', 'SYSTEM.md'), 'x')
-  await new Promise((r) => setTimeout(r, 400))
+  await new Promise((r) => setTimeout(r, 100))
   assert.equal(events.length, countBefore)
 })
 

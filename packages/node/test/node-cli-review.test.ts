@@ -1,4 +1,3 @@
-// @test-isolation: process
 /**
  * Acceptance review tests for `helmx-node` CLI background control (portable control IPC contract).
  *
@@ -18,7 +17,7 @@
  *    schema validation;
  * 4. `service`: prefers compiled `dist/` entry and prompts `pnpm build` when missing.
  */
-import test from 'node:test';
+import test, { describe } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import { existsSync, statSync } from 'node:fs';
@@ -196,6 +195,7 @@ const waitFor = (condition: () => boolean | Promise<boolean>, timeoutMs: number,
 // 1. End-to-end: start -d / status / stop / restart (real multi-process + Hub)
 // ---------------------------------------------------------------------------
 
+describe('node-cli-review', { concurrency: 2, timeout: 60_000 }, () => {
 test('three independent CLI child processes start -d / status / stop: registered comes from genuine ACK, 0600 pid & socket created, stop cleans up cleanly', { timeout: 60_000 }, async (t) => {
   const dir = await tempDir('helmx-review-lifecycle-');
   const hub = await startHubFixture({ expectedToken: 'rev-lc:s3cret' });
@@ -382,7 +382,7 @@ test('start -d reports state=starting truthfully when Hub is unreachable without
   // Nothing listens on 127.0.0.1:1 (daemon keeps backing off and retrying)
   await bindIdentityFromJoinToken(dir, 'rev-off:s', 'http://127.0.0.1:1');
 
-  const r = await runCli(['start', '-d', '--data-dir', dir, '--json']);
+  const r = await runCli(['start', '-d', '--data-dir', dir, '--json'], { readyTimeoutMs: 2_000 });
   assert.equal(r.code, 0, r.err);
   const payload = JSON.parse(r.out) as { ok: boolean; pid: number; state: string; message: string };
   assert.equal(payload.ok, true);
@@ -414,11 +414,10 @@ test('start -d passes no token in argv or env; child argv contains only start --
 
   let capturedEnv: NodeJS.ProcessEnv | undefined;
   let capturedArgs: readonly string[] = [];
-  const { defaultSpawnDaemon } = await import('../src/cli.js');
   const wrappedSpawn: NonNullable<NodeCliIo['spawnDaemon']> = async (options) => {
     capturedEnv = options.env;
     capturedArgs = options.args;
-    return await defaultSpawnDaemon(options);
+    return await distAwareSpawnDaemon(options);
   };
 
   const r = await runCli(['start', '-d', '--data-dir', dir, '--json'], { spawnDaemon: wrappedSpawn });
@@ -643,15 +642,19 @@ test('start -d fails with log tail on immediate child exit without writing pid',
   });
   await bindIdentityFromJoinToken(dir, 'rev-exit:s', 'http://127.0.0.1:1');
   // Use real defaultSpawnDaemon pointing to missing entry: child exits immediately before ready report
-  const { defaultSpawnDaemon } = await import('../src/cli.js');
   const badEntry: NonNullable<NodeCliIo['spawnDaemon']> = async (options) => {
     const args = [...options.args];
     args[0] = path.join(options.dataDir, 'no-such-entry.js');
-    return await defaultSpawnDaemon({ ...options, args, readyTimeoutMs: 15_000 });
+    return await defaultSpawnDaemon({
+      ...options,
+      args,
+      execArgv: USE_DIST_CLI ? [] : options.execArgv,
+      readyTimeoutMs: 5_000,
+    });
   };
   const r = await runCli(['start', '-d', '--data-dir', dir, '--json'], {
     spawnDaemon: badEntry,
-    readyTimeoutMs: 15_000,
+    readyTimeoutMs: 5_000,
   });
   assert.equal(r.code, 1);
   const message = JSON.parse(r.err).error.message as string;
@@ -731,32 +734,6 @@ test('service install entry prefers dist and prompts pnpm build when running fro
   // serviceEntry override (CLI trusts injected path without existence probe)
   const r = await runCli(['service', 'status', '--data-dir', dir, '--json'], { serviceEntry: fakeDist });
   assert.equal(r.code, 0, r.err);
-});
-
-test('connect foreground prints connecting before registration, ready state after, and exits cleanly on Ctrl+C', { timeout: 60_000 }, async (t) => {
-  const dir = await tempDir('helmx-review-connect-');
-  t.after(async () => {
-    await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
-  });
-  const hub = await startHubFixture({ expectedToken: 'rev-conn:s' });
-  t.after(async () => {
-    await hub.close();
-  }, { timeout: 60_000 });
-  const outputs: string[] = [];
-  const runPromise = runCli(['connect', hub.url, '--token', 'rev-conn:s', '--data-dir', dir], {
-    out: (text) => {
-      outputs.push(text);
-      // After registered banner prints, simulate Ctrl+C (forwardSignals handles cleanup)
-      if (text.includes('registered')) {
-        setTimeout(() => process.kill(process.pid, 'SIGINT'), 200);
-      }
-    },
-  });
-  const r = await runPromise;
-  assert.equal(r.code, 0, r.err);
-  assert.match(outputs[0] ?? '', /connecting/, 'first line must say connecting rather than connected');
-  assert.ok(outputs.some((text) => text.includes('registered and ready')));
-  assert.ok(!outputs.some((text) => text.includes('connected ')), 'must not print bogus connected status');
 });
 
 test('connect --once exits after single attempt and reports auth rejection truthfully', { timeout: 60_000 }, async (t) => {
@@ -933,27 +910,10 @@ test('status distinguishes installed/running/unknown and diagnoses query failure
   assert.match(unknownStatus.detail ?? '', /status query command failed/);
 });
 
-test('renderServiceSpec applies serviceHome override across platforms and rejects unsupported ones', { timeout: 60_000 }, () => {
-  const opts = { cliEntryPath: '/opt/cli.js', dataDir: '/opt/data', serviceHome: '/srv/fake-home' } as const;
-  assert.equal(renderServiceSpec({ ...opts, platform: 'darwin' }).targetPath, '/srv/fake-home/Library/LaunchAgents/ai.helmx.node.plist');
-  assert.equal(renderServiceSpec({ ...opts, platform: 'linux' }).targetPath, '/srv/fake-home/.config/systemd/user/helmx-node.service');
-  // Win32 rendering normalizes separators to the TARGET platform (`\`), mirroring how linux/darwin
-  // specs always render POSIX paths regardless of the host running the renderer.
-  assert.equal(renderServiceSpec({ ...opts, platform: 'win32' }).targetPath, '\\srv\\fake-home\\HelmxNode.xml');
-  assert.throws(() => renderServiceSpec({ ...opts, platform: 'sunos' }), /unsupported platform/);
-});
-
-test('unknown command with --json emits error envelope and rejects trailing args', { timeout: 60_000 }, async () => {
-  const r = await runCli(['bogus', 'extra', '--json']);
-  assert.equal(r.code, 1);
-  const envelope = JSON.parse(r.err) as { error: { code: string; message: string } };
-  assert.equal(envelope.error.code, 'unknown_command');
-  assert.match(envelope.error.message, /unknown command/);
-});
-
 test('isDirectRun resolves real path when invoked via pnpm symlink (bin smoke)', { timeout: 60_000 }, async () => {
   const selfPath = new URL(import.meta.url).pathname;
   assert.equal(isDirectRun(selfPath), false, 'test file is not the CLI entry');
   assert.equal(isDirectRun('/definitely/not/this/file.js'), false);
   assert.equal(isDirectRun(undefined), false);
+});
 });

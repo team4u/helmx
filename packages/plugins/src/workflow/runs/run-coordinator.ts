@@ -74,6 +74,8 @@ export interface WorkflowServiceOptions {
   deferReconcile?: boolean
   /** Fires when a newly saved `replayedFrom` run takes over a prior run, carrying the updated prior summary. */
   onTakeoverUpdated?: (priorSummary: WorkflowRunSummary) => void
+  /** Optional stderr sink for diagnostics (defaults to `process.stderr.write`). */
+  writeStderr?: (chunk: string) => void
 }
 
 function validatePositiveCap(name: string, value: number): number {
@@ -137,6 +139,7 @@ export class WorkflowService {
       caps,
       autoRecoverOption: options.autoRecoverOnRestart,
       releaseRuntimeReady,
+      writeStderr: options.writeStderr,
     })
     // Share the exact same `active` Map between CancellationTracker and RunCoordinatorCore.
     Object.assign(this.core, { active })

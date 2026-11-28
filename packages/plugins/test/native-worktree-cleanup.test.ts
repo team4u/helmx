@@ -48,8 +48,8 @@ function makeGitRepo(dir: string): string {
   return gitTemplate.cloneTo(dir)
 }
 
-describe('cleanup_worktree 安全与清理全链路', { concurrency: 2, timeout: 60_000 }, () => {
-describe('cleanup_worktree', { timeout: 60_000 }, () => {
+describe('cleanup_worktree 安全与清理全链路', { concurrency: 4, timeout: 60_000 }, () => {
+describe('cleanup_worktree', { concurrency: 4, timeout: 60_000 }, () => {
   it('脏工作区（未提交文件）force=false 显式拒绝 worktree_dirty', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 't6a')
     const repo = makeGitRepo(join(dir, 'repo'))
@@ -176,14 +176,14 @@ describe('cleanup_worktree', { timeout: 60_000 }, () => {
 
   it('未登记路径显式 not_found（绝不误删外部目录）；缺参数 validation_error', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 't6d')
-    const repo = makeGitRepo(join(dir, 'repo'))
-    const th = await openSpawnHarness(repo, join(dir, 'data'))
+    mkdirSync(dir, { recursive: true })
+    const allocator = bareAllocator(new MemoryKvStore())
     try {
       // 人类自建目录（未登记）。
       const humanDir = join(dir, 'human-stuff')
       mkdirSync(humanDir, { recursive: true })
       await assert.rejects(
-        () => th.allocator.cleanup({ path: humanDir }),
+        () => allocator.cleanup({ path: humanDir }),
         (err: unknown) => {
           assert.ok(err instanceof HelmxError)
           assert.equal(err.code, 'not_found')
@@ -194,7 +194,7 @@ describe('cleanup_worktree', { timeout: 60_000 }, () => {
 
       // 缺参数。
       await assert.rejects(
-        () => th.allocator.cleanup({}),
+        () => allocator.cleanup({}),
         (err: unknown) => {
           assert.ok(err instanceof HelmxError)
           assert.equal(err.code, 'validation_error')
@@ -202,7 +202,7 @@ describe('cleanup_worktree', { timeout: 60_000 }, () => {
         },
       )
     } finally {
-      await th.close()
+      rmSync(dir, { recursive: true, force: true })
     }
   })
 

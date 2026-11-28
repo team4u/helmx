@@ -13,7 +13,7 @@
  * 纪律：仅测试数据目录（tmpdir），不访问用户 ~/.helmx；不起固定端口（纯
  * kernel API / Web Standard handler）；不 kill 任何非本测试拥有的进程。
  */
-import { test } from 'node:test'
+import { after, before, test } from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -26,7 +26,7 @@ import { openHelmxDatabase } from '@helmx/kernel/testing'
 import { TOKEN_SPEED_DOC, TOKEN_SPEED_PLUGIN_ID, type TokenSpeedStatus } from '../src/token-speed/contracts.js'
 import { cleanupDir, makeFauxProvider, makeTempDir, type FauxProviderHandle } from './helpers/plugin-test-env.js'
 
-/** 480 字符 ≈ 120 tokens，tokensPerSecond=240 → 约 500ms 真实流式生成（跨越采样窗口）。 */
+/** 480 字符 ≈ 120 tokens，tokensPerSecond=360 → ~333ms 流式生成（跨越实时采样窗口，避免单帧零 decodeMs）。 */
 const STREAM_TEXT = 'x'.repeat(480)
 const STREAM_TOKENS = 120
 
@@ -39,7 +39,7 @@ interface Env {
 
 async function makeEnv(): Promise<Env> {
   const dataDir = await makeTempDir('helmx-token-speed-it-')
-  const faux = makeFauxProvider({ tokensPerSecond: 240 })
+  const faux = makeFauxProvider({ tokensPerSecond: 360 })
   const app = await createHelmx({
     buildProvider: createPluginBuildProvider(),
     dataDir,
@@ -57,6 +57,18 @@ async function makeEnv(): Promise<Env> {
     },
   }
 }
+
+let sharedEnv: Env
+let sharedClosed = false
+
+before(async () => {
+  sharedEnv = await makeEnv()
+}, { timeout: 60_000 })
+
+after(async () => {
+  if (!sharedClosed) await sharedEnv?.close()
+  else await cleanupDir(sharedEnv.dataDir)
+}, { timeout: 60_000 })
 
 function speedDocOf(env: Env, conversationId: number): TokenSpeedStatus | null {
   const doc = env.app.kernel.plugins.getPublicSessionDoc(TOKEN_SPEED_PLUGIN_ID, TOKEN_SPEED_DOC, conversationId)
@@ -86,157 +98,8 @@ async function pollSpeedDoc(
   }
 }
 
-test('token-speed 集成：默认启用 UI 就绪 → 全链路流式测量与零 SQLite 写入 → SSE/publicConfig → reset → 停用/重启用', { timeout: 60_000 }, async () => {
-  const env = await makeEnv()
-  let closedByTest = false
-  try {
-    // ---- 1. 默认启用：publicConfig 已按 configSchema 投影默认值 + COMPOSER_STATUS_SLOT 注册 + client 模块编译 ----
-    const summary = env.app.kernel.plugins.list().find((item) => item.id === TOKEN_SPEED_PLUGIN_ID)
-    assert.ok(summary, '组合根必须注册 builtin:token-speed')
-    assert.equal(summary.enabled, true, '默认启用')
-    assert.deepEqual(summary.publicConfig, { slidingWindowMs: 1_000 }, 'PluginSummary.publicConfig 必须投影非机密默认配置')
-    const slot = env.app.kernel.plugins
-      .listUi()
-      .find((item) => item.pluginId === TOKEN_SPEED_PLUGIN_ID && (item.spec as { target?: string }).target === COMPOSER_STATUS_SLOT)
-    assert.ok(slot, '默认启用即向 COMPOSER_STATUS_SLOT 注册徽标贡献')
-    const client = await env.app.kernel.plugins.getClientModule(TOKEN_SPEED_PLUGIN_ID, 'index.tsx')
-    assert.ok(client.code.length > 0, 'client 模块编译产出非空')
-    assert.match(client.code, /TokenSpeedStatusBadge/, '编译产物包含徽标组件')
-
-    // ---- 2/3. 真实流式回合：生成中非零实时 TPS，终态 provider 对账 ----------
-    env.faux.setResponses([fauxAssistantMessage(STREAM_TEXT)])
-    const conv = await env.app.kernel.conversations.createConversation({ title: 'token-speed 集成测速' })
-    await env.app.kernel.conversations.submitInput(conv.id, '请流式生成测速文本')
-    // 生成结束前必须观测到非零实时 TPS（waitForIdle 之前的 decoding 态）。
-    const live = await pollSpeedDoc(
-      env,
-      conv.id,
-      (status) => status !== null && status.phase === 'decoding' && typeof status.tps === 'number' && status.tps > 0,
-      '生成中非零实时 TPS',
-    )
-    assert.ok(live!.outputTokens > 0, '实时累计输出 tokens > 0')
-    assert.ok(live!.decodeMs >= 0)
-    await env.app.kernel.conversations.waitForIdle(conv.id)
-    // 终态：最终 usage.output 对账覆盖流式估算，source 翻转为 provider。
-    const settled = await pollSpeedDoc(
-      env,
-      conv.id,
-      (status) => status !== null && status.phase === 'settled',
-      '终态 settled',
-      5_000,
-    )
-    assert.equal(settled!.outputTokens, STREAM_TOKENS, '终态 tokens = 最终 usage.output（faux 按内容计 token）')
-    assert.equal(settled!.source, 'provider', '终态对账后口径为 provider')
-    assert.ok(settled!.tps! > 0, '终态对账速率 > 0')
-    assert.ok(settled!.decodeMs > 0, '真实流式时长在观测粒度内可测')
-
-    // ---- 4b. HTTP GET + 专用 SSE 通道可正常读取/订阅瞬态会话文档 ----------------
-    const handler = createHubHandler(env.app.kernel)
-    const { token } = await env.app.kernel.auth.setup('token-speed-integration-pass')
-    const docGet = await handler(
-      new Request(`http://127.0.0.1:3202/api/plugins/${encodeURIComponent(TOKEN_SPEED_PLUGIN_ID)}/docs/${TOKEN_SPEED_DOC}?conversationId=${conv.id}`, {
-        headers: { authorization: `Bearer ${token}` },
-      }),
-    )
-    assert.equal(docGet.status, 200)
-    const docPayload = (await docGet.json()) as { value: TokenSpeedStatus | null }
-    assert.equal(docPayload.value?.phase, 'settled')
-    assert.equal(docPayload.value?.outputTokens, STREAM_TOKENS)
-
-    const sseRes = await handler(
-      new Request(`http://127.0.0.1:3202/api/plugins/${encodeURIComponent(TOKEN_SPEED_PLUGIN_ID)}/docs/${TOKEN_SPEED_DOC}/events?conversationId=${conv.id}`, {
-        headers: { authorization: `Bearer ${token}` },
-      }),
-    )
-    assert.equal(sseRes.status, 200)
-    const reader = sseRes.body!.getReader()
-    try {
-      const firstChunk = await reader.read()
-      const sseText = new TextDecoder().decode(firstChunk.value)
-      assert.match(sseText, /event: snapshot/)
-      assert.match(sseText, /"phase":"settled"/)
-    } finally {
-      await reader.cancel()
-    }
-
-    // ---- 4c. setConfig 实时驱动 plugin.changed 的 publicConfig 更新 -------------
-    const changedEvents: PluginSummary[] = []
-    const unsubscribe = env.app.kernel.onEvent('plugin.changed', (payload) => {
-      const event = payload as { plugin?: PluginSummary }
-      if (event.plugin?.id === TOKEN_SPEED_PLUGIN_ID) {
-        changedEvents.push(event.plugin)
-      }
-    })
-    try {
-      await env.app.kernel.plugins.setConfig(TOKEN_SPEED_PLUGIN_ID, { slidingWindowMs: 2_500 })
-      assert.deepEqual(env.app.kernel.plugins.get(TOKEN_SPEED_PLUGIN_ID)?.publicConfig, { slidingWindowMs: 2_500 })
-      assert.deepEqual(changedEvents.at(-1)?.publicConfig, { slidingWindowMs: 2_500 })
-    } finally {
-      unsubscribe()
-    }
-
-    // ---- 5. reset：pi.reset marker 清空上一回合 settled 文档 ----------------
-    await env.app.kernel.conversations.resetConversation(conv.id, { handoff: 'token-speed 集成交接' })
-    assert.equal(speedDocOf(env, conv.id), null, 'reset 后不回退显示旧 TPS')
-    // reset 后新回合从零重建（证明清空是「宁空不假」而非永久损坏）。
-    env.faux.setResponses([fauxAssistantMessage('y'.repeat(160))])
-    await env.app.kernel.conversations.submitInput(conv.id, 'reset 后再测一轮')
-    await env.app.kernel.conversations.waitForIdle(conv.id)
-    const rebuilt = await pollSpeedDoc(
-      env,
-      conv.id,
-      (status) => status !== null && status.phase === 'settled',
-      'reset 后重建终态',
-      5_000,
-    )
-    assert.equal(rebuilt!.outputTokens, 40, '新回合测量从零累计')
-
-    // ---- 6. 停用：文档 404、UI 消失；重启用：瞬态内存已清空，无残留 ----------
-    await env.app.kernel.plugins.disable(TOKEN_SPEED_PLUGIN_ID)
-    assert.ok(
-      !env.app.kernel.plugins.listUi().some((item) => item.pluginId === TOKEN_SPEED_PLUGIN_ID),
-      '停用后 UI 贡献即时消失',
-    )
-    assert.throws(
-      () => env.app.kernel.plugins.getPublicSessionDoc(TOKEN_SPEED_PLUGIN_ID, TOKEN_SPEED_DOC, conv.id),
-      (error: unknown) => error instanceof HelmxError && error.status === 404,
-      '停用后公共会话文档读取 404',
-    )
-    await env.app.kernel.plugins.enable(TOKEN_SPEED_PLUGIN_ID)
-    assert.equal(
-      speedDocOf(env, conv.id),
-      null,
-      '重启用立即读不到上周期 settled 状态（瞬态内存已清空，绝不冒充当前实时）',
-    )
-    assert.ok(
-      env.app.kernel.plugins
-        .listUi()
-        .some((item) => item.pluginId === TOKEN_SPEED_PLUGIN_ID && (item.spec as { target?: string }).target === COMPOSER_STATUS_SLOT),
-      '重启用后 UI 插槽恢复',
-    )
-
-    // 关闭前刷新插件存储并检查 SQLite helmx_plugin_session_docs：必须严格零写入！
-    await env.app.close()
-    closedByTest = true
-    const db = await openHelmxDatabase(env.dataDir)
-    try {
-      const rows = await db.db.all<{ conversation_id: number }>(
-        'SELECT conversation_id FROM helmx_plugin_session_docs WHERE plugin_id = ? AND name = ?',
-        TOKEN_SPEED_PLUGIN_ID,
-        TOKEN_SPEED_DOC,
-      )
-      assert.equal(rows.length, 0, 'durable: false 全程零 SQLite helmx_plugin_session_docs 写入')
-    } finally {
-      await db.close()
-    }
-  } finally {
-    if (!closedByTest) await env.close()
-    else await cleanupDir(env.dataDir)
-  }
-})
-
 test('token-speed 集成：多工具轮——工具执行期保持有效 TPS 且不计入解码净耗时，终态正确对账', { timeout: 60_000 }, async () => {
-  const env = await makeEnv()
+  const env = sharedEnv
   let toolEnteredResolve!: () => void
   const toolEntered = new Promise<void>((resolve) => {
     toolEnteredResolve = resolve
@@ -277,8 +140,8 @@ test('token-speed 集成：多工具轮——工具执行期保持有效 TPS 且
     await env.app.kernel.conversations.submitInput(conv.id, '请执行工具后再回答')
 
     await toolEntered
-    // 真实阻塞约 150ms，并在 tools 阶段轮询 speed sessionDoc：必须始终保有非零 TPS
-    await sleep(150)
+    // 真实阻塞约 30ms，并在 tools 阶段轮询 speed sessionDoc：必须始终保有非零 TPS
+    await sleep(30)
     const duringTools = await pollSpeedDoc(
       env,
       conv.id,
@@ -304,97 +167,232 @@ test('token-speed 集成：多工具轮——工具执行期保持有效 TPS 且
     assert.ok(settled!.decodeMs > 0, '多工具轮净解码时长可测')
   } finally {
     releaseTool()
-    await env.close()
+    await env.app.kernel.plugins.disable('test:speed-tool-probe').catch(() => {})
   }
 })
 
 test('token-speed 集成：PluginSummary.publicConfig 剥离 secret 字段且 external client.tsx 可编译消费 usePluginConfig', { timeout: 60_000 }, async () => {
-  const env = await makeEnv()
-  try {
-    const clientRoot = join(env.dataDir, 'external-config-client')
-    await mkdir(clientRoot, { recursive: true })
-    await writeFile(
-      join(clientRoot, 'client.tsx'),
-      `import { usePluginConfig } from '@helmx/plugin-client'
+  const env = sharedEnv
+  const clientRoot = join(env.dataDir, 'external-config-client')
+  await mkdir(clientRoot, { recursive: true })
+  await writeFile(
+    join(clientRoot, 'client.tsx'),
+    `import { usePluginConfig } from '@helmx/plugin-client'
 
 export function ConfigPanel() {
   const config = usePluginConfig<{ slidingWindowMs?: number; apiKey?: string; label?: string }>()
   return \`\${String(config.label ?? 'default')}:\${String(config.slidingWindowMs ?? 0)}:\${String(config.apiKey ?? 'none')}\`
 }
 `,
-    )
-    await env.app.kernel.plugins.register(
-      {
-        id: 'test:public-config-client',
-        name: 'Public Config Client',
-        clientRoot,
-        definePlugin(ctx) {
-          ctx.configSchema({
-            slidingWindowMs: { type: 'number', default: 1_500 },
-            label: { type: 'string', default: 'alpha' },
-            apiKey: { type: 'string', secret: true, default: 'default-secret' },
-          })
-          ctx.ui.screen({
-            id: 'panel',
-            label: '配置面板',
-            client: { module: 'client.tsx', export: 'ConfigPanel' },
-          })
-        },
+  )
+  await env.app.kernel.plugins.register(
+    {
+      id: 'test:public-config-client',
+      name: 'Public Config Client',
+      clientRoot,
+      definePlugin(ctx) {
+        ctx.configSchema({
+          slidingWindowMs: { type: 'number', default: 1_500 },
+          label: { type: 'string', default: 'alpha' },
+          apiKey: { type: 'string', secret: true, default: 'default-secret' },
+        })
+        ctx.ui.screen({
+          id: 'panel',
+          label: '配置面板',
+          client: { module: 'client.tsx', export: 'ConfigPanel' },
+        })
       },
-      { enabled: true },
+    },
+    { enabled: true },
+  )
+  await env.app.kernel.plugins.setConfig('test:public-config-client', {
+    apiKey: 'sk-live-secret-token',
+    slidingWindowMs: 2_200,
+  })
+  const registered = env.app.kernel.plugins.get('test:public-config-client')!
+  assert.deepEqual(registered.publicConfig, { slidingWindowMs: 2_200, label: 'alpha' })
+  assert.equal('apiKey' in (registered.publicConfig ?? {}), false, 'publicConfig 严禁包含 secret 字段')
+
+  const compiled = await env.app.kernel.plugins.getClientModule('test:public-config-client', 'client.tsx')
+  assert.ok(compiled.code.length > 0, '使用 usePluginConfig 的外部 client.tsx 编译成功')
+  assert.match(compiled.code, /usePluginConfig/)
+
+  // 验证 setConfig 经 HTTP API 变更配置后，publicConfig 更新且 secret 依旧不可见
+  const handler = createHubHandler(env.app.kernel)
+  const procToken = env.app.kernel.auth.createProcessToken()
+  const changedEvents: PluginSummary[] = []
+  const off = env.app.kernel.onEvent('plugin.changed', (payload) => {
+    const event = payload as { plugin?: PluginSummary }
+    if (event.plugin?.id === 'test:public-config-client') {
+      changedEvents.push(event.plugin)
+    }
+  })
+  try {
+    const res = await handler(
+      new Request('http://127.0.0.1:3202/api/plugins/test%3Apublic-config-client/config', {
+        method: 'PUT',
+        headers: {
+          authorization: `Bearer ${procToken.token}`,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          values: { slidingWindowMs: 3_000, label: 'beta', apiKey: 'sk-updated-secret' },
+        }),
+      }),
     )
-    await env.app.kernel.plugins.setConfig('test:public-config-client', {
-      apiKey: 'sk-live-secret-token',
-      slidingWindowMs: 2_200,
-    })
-    const registered = env.app.kernel.plugins.get('test:public-config-client')!
-    assert.deepEqual(registered.publicConfig, { slidingWindowMs: 2_200, label: 'alpha' })
-    assert.equal('apiKey' in (registered.publicConfig ?? {}), false, 'publicConfig 严禁包含 secret 字段')
+    assert.equal(res.status, 200)
+    const listRes = await handler(
+      new Request('http://127.0.0.1:3202/api/plugins', {
+        headers: { authorization: `Bearer ${procToken.token}` },
+      }),
+    )
+    assert.equal(listRes.status, 200)
+    const listBody = (await listRes.json()) as PluginSummary[]
+    const listed = listBody.find((p) => p.id === 'test:public-config-client')
+    assert.deepEqual(listed?.publicConfig, { slidingWindowMs: 3_000, label: 'beta' })
+    assert.equal('apiKey' in (listed?.publicConfig ?? {}), false)
+    assert.deepEqual(changedEvents.at(-1)?.publicConfig, { slidingWindowMs: 3_000, label: 'beta' })
+    assert.equal('apiKey' in (changedEvents.at(-1)?.publicConfig ?? {}), false)
+  } finally {
+    off()
+    procToken.dispose()
+    await env.app.kernel.plugins.disable('test:public-config-client').catch(() => {})
+  }
+})
 
-    const compiled = await env.app.kernel.plugins.getClientModule('test:public-config-client', 'client.tsx')
-    assert.ok(compiled.code.length > 0, '使用 usePluginConfig 的外部 client.tsx 编译成功')
-    assert.match(compiled.code, /usePluginConfig/)
+test('token-speed 集成：默认启用 UI 就绪 → 全链路流式测量与零 SQLite 写入 → SSE/publicConfig → reset → 停用/重启用', { timeout: 60_000 }, async () => {
+  const env = sharedEnv
+  const summary = env.app.kernel.plugins.list().find((item) => item.id === TOKEN_SPEED_PLUGIN_ID)
+  assert.ok(summary, '组合根必须注册 builtin:token-speed')
+  assert.equal(summary.enabled, true, '默认启用')
+  assert.deepEqual(summary.publicConfig, { slidingWindowMs: 1_000 }, 'PluginSummary.publicConfig 必须投影非机密默认配置')
+  const slot = env.app.kernel.plugins
+    .listUi()
+    .find((item) => item.pluginId === TOKEN_SPEED_PLUGIN_ID && (item.spec as { target?: string }).target === COMPOSER_STATUS_SLOT)
+  assert.ok(slot, '默认启用即向 COMPOSER_STATUS_SLOT 注册徽标贡献')
+  const client = await env.app.kernel.plugins.getClientModule(TOKEN_SPEED_PLUGIN_ID, 'index.tsx')
+  assert.ok(client.code.length > 0, 'client 模块编译产出非空')
+  assert.match(client.code, /TokenSpeedStatusBadge/, '编译产物包含徽标组件')
 
-    // 验证 setConfig 经 HTTP API 变更配置后，publicConfig 更新且 secret 依旧不可见
-    const handler = createHubHandler(env.app.kernel)
-    const { token } = await env.app.kernel.auth.setup('public-config-pass-123')
-    const changedEvents: PluginSummary[] = []
-    const off = env.app.kernel.onEvent('plugin.changed', (payload) => {
-      const event = payload as { plugin?: PluginSummary }
-      if (event.plugin?.id === 'test:public-config-client') {
-        changedEvents.push(event.plugin)
-      }
-    })
+  env.faux.setResponses([fauxAssistantMessage(STREAM_TEXT)])
+  const conv = await env.app.kernel.conversations.createConversation({ title: 'token-speed 集成测速' })
+  await env.app.kernel.conversations.submitInput(conv.id, '请流式生成测速文本')
+  const live = await pollSpeedDoc(
+    env,
+    conv.id,
+    (status) => status !== null && status.phase === 'decoding' && typeof status.tps === 'number' && status.tps > 0,
+    '生成中非零实时 TPS',
+  )
+  assert.ok(live!.outputTokens > 0, '实时累计输出 tokens > 0')
+  assert.ok(live!.decodeMs >= 0)
+  await env.app.kernel.conversations.waitForIdle(conv.id)
+  const settled = await pollSpeedDoc(
+    env,
+    conv.id,
+    (status) => status !== null && status.phase === 'settled',
+    '终态 settled',
+    5_000,
+  )
+  assert.equal(settled!.outputTokens, STREAM_TOKENS, '终态 tokens = 最终 usage.output（faux 按内容计 token）')
+  assert.equal(settled!.source, 'provider', '终态对账后口径为 provider')
+  assert.ok(settled!.tps! > 0, '终态对账速率 > 0')
+  assert.ok(settled!.decodeMs > 0, '真实流式时长在观测粒度内可测')
+
+  const handler = createHubHandler(env.app.kernel)
+  const procToken = env.app.kernel.auth.createProcessToken()
+  try {
+    const docGet = await handler(
+      new Request(`http://127.0.0.1:3202/api/plugins/${encodeURIComponent(TOKEN_SPEED_PLUGIN_ID)}/docs/${TOKEN_SPEED_DOC}?conversationId=${conv.id}`, {
+        headers: { authorization: `Bearer ${procToken.token}` },
+      }),
+    )
+    assert.equal(docGet.status, 200)
+    const docPayload = (await docGet.json()) as { value: TokenSpeedStatus | null }
+    assert.equal(docPayload.value?.phase, 'settled')
+    assert.equal(docPayload.value?.outputTokens, STREAM_TOKENS)
+
+    const sseRes = await handler(
+      new Request(`http://127.0.0.1:3202/api/plugins/${encodeURIComponent(TOKEN_SPEED_PLUGIN_ID)}/docs/${TOKEN_SPEED_DOC}/events?conversationId=${conv.id}`, {
+        headers: { authorization: `Bearer ${procToken.token}` },
+      }),
+    )
+    assert.equal(sseRes.status, 200)
+    const reader = sseRes.body!.getReader()
     try {
-      const res = await handler(
-        new Request('http://127.0.0.1:3202/api/plugins/test%3Apublic-config-client/config', {
-          method: 'PUT',
-          headers: {
-            authorization: `Bearer ${token}`,
-            'content-type': 'application/json',
-          },
-          body: JSON.stringify({
-            values: { slidingWindowMs: 3_000, label: 'beta', apiKey: 'sk-updated-secret' },
-          }),
-        }),
-      )
-      assert.equal(res.status, 200)
-      const listRes = await handler(
-        new Request('http://127.0.0.1:3202/api/plugins', {
-          headers: { authorization: `Bearer ${token}` },
-        }),
-      )
-      assert.equal(listRes.status, 200)
-      const listBody = (await listRes.json()) as PluginSummary[]
-      const listed = listBody.find((p) => p.id === 'test:public-config-client')
-      assert.deepEqual(listed?.publicConfig, { slidingWindowMs: 3_000, label: 'beta' })
-      assert.equal('apiKey' in (listed?.publicConfig ?? {}), false)
-      assert.deepEqual(changedEvents.at(-1)?.publicConfig, { slidingWindowMs: 3_000, label: 'beta' })
-      assert.equal('apiKey' in (changedEvents.at(-1)?.publicConfig ?? {}), false)
+      const firstChunk = await reader.read()
+      const sseText = new TextDecoder().decode(firstChunk.value)
+      assert.match(sseText, /event: snapshot/)
+      assert.match(sseText, /"phase":"settled"/)
     } finally {
-      off()
+      await reader.cancel()
     }
   } finally {
-    await env.close()
+    procToken.dispose()
+  }
+
+  const changedEvents: PluginSummary[] = []
+  const unsubscribe = env.app.kernel.onEvent('plugin.changed', (payload) => {
+    const event = payload as { plugin?: PluginSummary }
+    if (event.plugin?.id === TOKEN_SPEED_PLUGIN_ID) {
+      changedEvents.push(event.plugin)
+    }
+  })
+  try {
+    await env.app.kernel.plugins.setConfig(TOKEN_SPEED_PLUGIN_ID, { slidingWindowMs: 2_500 })
+    assert.deepEqual(env.app.kernel.plugins.get(TOKEN_SPEED_PLUGIN_ID)?.publicConfig, { slidingWindowMs: 2_500 })
+    assert.deepEqual(changedEvents.at(-1)?.publicConfig, { slidingWindowMs: 2_500 })
+  } finally {
+    unsubscribe()
+  }
+
+  await env.app.kernel.conversations.resetConversation(conv.id, { handoff: 'token-speed 集成交接' })
+  assert.equal(speedDocOf(env, conv.id), null, 'reset 后不回退显示旧 TPS')
+  env.faux.setResponses([fauxAssistantMessage('y'.repeat(160))])
+  await env.app.kernel.conversations.submitInput(conv.id, 'reset 后再测一轮')
+  await env.app.kernel.conversations.waitForIdle(conv.id)
+  const rebuilt = await pollSpeedDoc(
+    env,
+    conv.id,
+    (status) => status !== null && status.phase === 'settled',
+    'reset 后重建终态',
+    5_000,
+  )
+  assert.equal(rebuilt!.outputTokens, 40, '新回合测量从零累计')
+
+  await env.app.kernel.plugins.disable(TOKEN_SPEED_PLUGIN_ID)
+  assert.ok(
+    !env.app.kernel.plugins.listUi().some((item) => item.pluginId === TOKEN_SPEED_PLUGIN_ID),
+    '停用后 UI 贡献即时消失',
+  )
+  assert.throws(
+    () => env.app.kernel.plugins.getPublicSessionDoc(TOKEN_SPEED_PLUGIN_ID, TOKEN_SPEED_DOC, conv.id),
+    (error: unknown) => error instanceof HelmxError && error.status === 404,
+    '停用后公共会话文档读取 404',
+  )
+  await env.app.kernel.plugins.enable(TOKEN_SPEED_PLUGIN_ID)
+  assert.equal(
+    speedDocOf(env, conv.id),
+    null,
+    '重启用立即读不到上周期 settled 状态（瞬态内存已清空，绝不冒充当前实时）',
+  )
+  assert.ok(
+    env.app.kernel.plugins
+      .listUi()
+      .some((item) => item.pluginId === TOKEN_SPEED_PLUGIN_ID && (item.spec as { target?: string }).target === COMPOSER_STATUS_SLOT),
+    '重启用后 UI 插槽恢复',
+  )
+
+  await env.app.close()
+  sharedClosed = true
+  const db = await openHelmxDatabase(env.dataDir)
+  try {
+    const rows = await db.db.all<{ conversation_id: number }>(
+      'SELECT conversation_id FROM helmx_plugin_session_docs WHERE plugin_id = ? AND name = ?',
+      TOKEN_SPEED_PLUGIN_ID,
+      TOKEN_SPEED_DOC,
+    )
+    assert.equal(rows.length, 0, 'durable: false 全程零 SQLite helmx_plugin_session_docs 写入')
+  } finally {
+    await db.close()
   }
 })

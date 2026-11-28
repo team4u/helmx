@@ -237,9 +237,9 @@ describe('shell-config: Windows Git Bash detection and WSL filtering', { timeout
       // runs `after` hooks FIFO and `useTempDir` registered its rmSync first, so a hook re-reading the
       // pid file always finds it gone and silently skips the kill, leaking the detached grandchild
       // (it left the probe's process group, so `killProcessTree` cannot reach it either).
-      let grandPid = 0
+      let grandPid: number | undefined
       t.after(() => {
-        if (Number.isInteger(grandPid) && grandPid > 0) {
+        if (grandPid !== undefined && Number.isInteger(grandPid) && grandPid > 0) {
           try {
             process.kill(grandPid, 'SIGKILL')
           } catch {
@@ -264,12 +264,14 @@ describe('shell-config: Windows Git Bash detection and WSL filtering', { timeout
       // killed before it spawned the grandchild, so there is nothing to reap.
       await waitFor(
         async () => {
-          grandPid = Number((await fsp.readFile(grandPidFile, 'utf8').catch(() => '')).trim())
-          return Number.isInteger(grandPid) && grandPid > 0
+          const parsed = Number((await fsp.readFile(grandPidFile, 'utf8').catch(() => '')).trim())
+          if (!Number.isInteger(parsed) || parsed <= 0) return false
+          grandPid = parsed
+          return true
         },
         { timeoutMs: 2_000 },
       ).catch(() => {
-        grandPid = 0
+        grandPid = undefined
       })
       assert.equal(timedOut.status, null)
       assert.equal(timedOut.stdout, '')

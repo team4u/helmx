@@ -29,10 +29,25 @@ import { KernelRuntime } from '../src/runtime/index.js'
 
 const require = createRequire(import.meta.url)
 const KERNEL_DIR = new URL('../', import.meta.url).pathname
+const REPO_ROOT = join(KERNEL_DIR, '..', '..')
+const SEEDER_USE_DIST =
+  existsSync(join(REPO_ROOT, 'packages/protocol/dist/index.js')) &&
+  existsSync(join(REPO_ROOT, 'packages/env-io/dist/index.js')) &&
+  existsSync(join(KERNEL_DIR, 'dist/index.js'))
 const PI_AI_DIR = join(KERNEL_DIR, 'node_modules/@earendil-works/pi-ai')
-const KERNEL_RUNTIME_SRC = pathToFileURL(join(KERNEL_DIR, 'src/runtime/index.ts')).href
+const KERNEL_RUNTIME_SRC = pathToFileURL(
+  join(KERNEL_DIR, SEEDER_USE_DIST ? 'dist/index.js' : 'src/runtime/index.ts'),
+).href
 const PI_AI_MODELS_URL = pathToFileURL(join(PI_AI_DIR, 'dist/models.js')).href
 const PI_AI_FAUX_URL = pathToFileURL(join(PI_AI_DIR, 'dist/providers/faux.js')).href
+
+let cachedTsxLoaderArgs: readonly string[] | undefined
+function tsxDirectArgs(): readonly string[] {
+  if (cachedTsxLoaderArgs === undefined) {
+    cachedTsxLoaderArgs = ['--require', require.resolve('tsx/preflight'), '--import', pathToFileURL(require.resolve('tsx')).href]
+  }
+  return cachedTsxLoaderArgs
+}
 
 function createFaux(opts?: Parameters<typeof fauxProvider>[0]) {
   const models = createModels()
@@ -72,12 +87,11 @@ async function runSeederUntilSigkill(
   script: string,
   waitForReady: (stdout: string) => boolean,
 ): Promise<void> {
-  const seederPath = join(seedDir, 'seeder.mts')
+  const seederPath = join(seedDir, SEEDER_USE_DIST ? 'seeder.mjs' : 'seeder.mts')
   writeFileSync(seederPath, script, 'utf8')
-  const tsxCli = require.resolve('tsx/cli')
-  const child = spawn(process.execPath, [tsxCli, seederPath], {
+  const spawnArgs = SEEDER_USE_DIST ? [seederPath] : [...tsxDirectArgs(), seederPath]
+  const child = spawn(process.execPath, spawnArgs, {
     cwd: KERNEL_DIR,
-    detached: true,
     env: {
       PATH: process.env.PATH ?? '',
       HOME: seedDir,
@@ -122,10 +136,9 @@ async function runSeederUntilSigkill(
   } finally {
     if (child.pid !== undefined) {
       try {
-        if (process.platform !== 'win32') process.kill(-child.pid, 'SIGKILL')
-        else child.kill('SIGKILL')
+        child.kill('SIGKILL')
       } catch {
-        // Process group already exited
+        // Process already exited
       }
     }
     child.stdout?.destroy()
@@ -953,7 +966,7 @@ test('spawnAgent(requestId + reattach.conversationId) resumes in-place across ru
   assert.equal(await countUserEntries(r4b, childId4), 1)
 })
 
-test('spawnAgent(requestId + reattach.conversationId) recovers in-place across SIGKILL (committed schema backfill, gate verification, zero duplicate messages)', { timeout: 60_000 }, async (t) => {
+test('spawnAgent(requestId + reattach.conversationId) recovers in-place across SIGKILL (both before-tool and after-tool backfill, gate verification, zero duplicate messages)', { timeout: 60_000 }, async (t) => {
   const dir = mkdtempSync(join(tmpdir(), 'helmx-reattach-sigkill-'))
   const seedDir = mkdtempSync(join(tmpdir(), 'helmx-reattach-sigkill-seed-'))
   t.after(() => {
@@ -961,7 +974,10 @@ test('spawnAgent(requestId + reattach.conversationId) recovers in-place across S
     rmSync(dir, { recursive: true, force: true })
   })
   const childWorkDir = join(dir, 'child-workspace')
+  const childWorkPost = join(dir, 'work-post')
   mkdirSync(childWorkDir, { recursive: true })
+  mkdirSync(childWorkPost, { recursive: true })
+  writeFileSync(join(childWorkPost, 'post-gate.txt'), 'ok\n', 'utf8')
   const schema = {
     type: 'object',
     properties: {
@@ -972,49 +988,82 @@ test('spawnAgent(requestId + reattach.conversationId) recovers in-place across S
     additionalProperties: false,
   } as Record<string, unknown>
 
+  // Single SIGKILL seeder drives both:
+  // A) committed register_structured_output backfill before crash
+  // B) bash interrupted before calling register_structured_output, called on recovery
   await runSeederUntilSigkill(
     seedDir,
     dir,
     `
-import { writeFileSync } from 'node:fs'
+import { existsSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { KernelRuntime } from ${JSON.stringify(KERNEL_RUNTIME_SRC)}
 import { createModels } from ${JSON.stringify(PI_AI_MODELS_URL)}
 import { fauxAssistantMessage, fauxProvider, fauxToolCall } from ${JSON.stringify(PI_AI_FAUX_URL)}
 const dataDir = process.env.HELMX_DATA_DIR
-const childDir = join(dataDir, 'child-workspace')
+const childBeforeDir = join(dataDir, 'child-workspace')
+const childPostDir = join(dataDir, 'work-post')
 const faux = fauxProvider()
 const models = createModels()
 models.setProvider(faux.provider)
-faux.setResponses([
-  fauxAssistantMessage(
-    [fauxToolCall('register_structured_output', { output: { ok: true, stage: 'before-sigkill' } })],
+faux.setResponses(Array.from({ length: 16 }, () => (ctx) => {
+  const promptText = JSON.stringify(ctx.messages.find((m) => m.role === 'user')?.content ?? '')
+  const toolResultCount = ctx.messages.filter((m) => m.role === 'toolResult').length
+  if (promptText.includes('submit structured result')) {
+    if (toolResultCount === 0) {
+      return fauxAssistantMessage(
+        [fauxToolCall('register_structured_output', { output: { ok: true, stage: 'before-sigkill' } })],
+        { stopReason: 'toolUse' },
+      )
+    }
+    return fauxAssistantMessage(
+      [fauxToolCall('bash', { command: 'touch gate_ready.txt; printf x >> bash_runs.txt; sleep 10' })],
+      { stopReason: 'toolUse' },
+    )
+  }
+  return fauxAssistantMessage(
+    [fauxToolCall('bash', { command: 'printf y >> step.txt; sleep 10' })],
     { stopReason: 'toolUse' },
-  ),
-  fauxAssistantMessage(
-    [fauxToolCall('bash', { command: 'touch gate_ready.txt; printf x >> bash_runs.txt; echo READY_SPAWN_KILL; sleep 60' })],
-    { stopReason: 'toolUse' },
-  ),
-])
+  )
+}))
 const runtime = await KernelRuntime.open({ dataDir, cwd: dataDir, model: 'faux/faux-1', models, autoResume: true })
+await runtime.start()
 void runtime.agentSpawn.spawnAgent({
   parentConversationId: 1,
   prompt: 'submit structured result then run command',
   requestId: 'req-sigkill-reattach',
-  cwd: childDir,
+  cwd: childBeforeDir,
   schema: ${JSON.stringify(schema)},
   gate: 'test -f gate_ready.txt',
   onResolved: (info) => {
-    writeFileSync(join(dataDir, 'child_id.txt'), String(info.conversationId ?? ''), 'utf8')
+    writeFileSync(join(dataDir, 'child_before_id.txt'), String(info.conversationId ?? ''), 'utf8')
   },
 }).catch(() => {})
-const { existsSync } = await import('node:fs')
+void runtime.agentSpawn.spawnAgent({
+  parentConversationId: 1,
+  prompt: 'inspect environment then submit structured output',
+  requestId: 'req-sigkill-post-tool',
+  cwd: childPostDir,
+  schema: ${JSON.stringify(schema)},
+  gate: 'test -f post-gate.txt',
+  onResolved: (info) => {
+    writeFileSync(join(dataDir, 'child_post_id.txt'), String(info.conversationId ?? ''), 'utf8')
+  },
+}).catch(() => {})
 const deadline = Date.now() + 15000
 while (
-  (!existsSync(join(dataDir, 'child_id.txt')) || !existsSync(join(childDir, 'bash_runs.txt'))) &&
+  (
+    !existsSync(join(dataDir, 'child_before_id.txt')) ||
+    !existsSync(join(dataDir, 'child_post_id.txt')) ||
+    !existsSync(join(childBeforeDir, 'bash_runs.txt')) ||
+    !existsSync(join(childPostDir, 'step.txt'))
+  ) &&
   Date.now() < deadline
 ) {
-  await new Promise((r) => setTimeout(r, 40))
+  await new Promise((r) => setTimeout(r, 25))
+}
+if (!existsSync(join(childBeforeDir, 'bash_runs.txt')) || !existsSync(join(childPostDir, 'step.txt'))) {
+  throw new Error('seeder timed out before both children reached bash execution')
 }
 process.stdout.write('READY_SPAWN_KILL\\n')
 await new Promise(() => {})
@@ -1022,19 +1071,35 @@ await new Promise(() => {})
     (stdout) => stdout.includes('READY_SPAWN_KILL'),
   )
 
-  const childId = Number(readFileSync(join(dir, 'child_id.txt'), 'utf8').trim())
+  const childId = Number(readFileSync(join(dir, 'child_before_id.txt'), 'utf8').trim())
+  const postChildId = Number(readFileSync(join(dir, 'child_post_id.txt'), 'utf8').trim())
   assert.ok(Number.isSafeInteger(childId) && childId > 1)
+  assert.ok(Number.isSafeInteger(postChildId) && postChildId > 1 && postChildId !== childId)
   assert.equal(readFileSync(join(childWorkDir, 'bash_runs.txt'), 'utf8'), 'x')
+  assert.equal(readFileSync(join(childWorkPost, 'step.txt'), 'utf8'), 'y')
 
   const { models: m2, faux: f2 } = createFaux()
   let seenInterruptedBash = false
-  f2.setResponses([
-    (ctx) => {
-      const results = collectToolResultTexts(ctx)
-      seenInterruptedBash = results.some((r) => r.isError && /interrupted/i.test(r.text))
-      return fauxAssistantMessage('finished wrapping up after SIGKILL')
-    },
-  ])
+  let f2BeforeCallCount = 0
+  f2.setResponses(Array.from({ length: 16 }, () => (ctx) => {
+      const promptText = JSON.stringify(ctx.messages.find((m) => m.role === 'user')?.content ?? '')
+      if (promptText.includes('submit structured result')) {
+        f2BeforeCallCount += 1
+        const results = collectToolResultTexts(ctx)
+        seenInterruptedBash = results.some((r) => r.isError && /interrupted/i.test(r.text))
+        return fauxAssistantMessage('finished wrapping up after SIGKILL')
+      }
+      const alreadyRegistered = ctx.messages.some(
+        (m) => m.role === 'assistant' && JSON.stringify(m.content).includes('after-sigkill'),
+      )
+      if (!alreadyRegistered) {
+        return fauxAssistantMessage(
+          [fauxToolCall('register_structured_output', { output: { ok: true, stage: 'after-sigkill' } })],
+          { stopReason: 'toolUse' },
+        )
+      }
+      return fauxAssistantMessage('completed structured tool call after SIGKILL')
+    }))
   const recovered = await KernelRuntime.open({
     dataDir: dir,
     cwd: dir,
@@ -1045,6 +1110,7 @@ await new Promise(() => {})
   try {
     let reattachedInfo: AgentExecutionInfo | undefined
     let gateInfo: AgentGateResult | undefined
+    let postGate: AgentGateResult | undefined
     const reattachPromise = recovered.agentSpawn.spawnAgent({
       parentConversationId: 1,
       prompt: 'submit structured result then run command',
@@ -1059,99 +1125,7 @@ await new Promise(() => {})
         gateInfo = gate
       },
     })
-    await recovered.start()
-    const outcome = await reattachPromise
-    assert.deepEqual(outcome, { ok: true, stage: 'before-sigkill' })
-    assert.equal(seenInterruptedBash, true, 'after SIGKILL, bash must surface as interrupted for model recovery')
-    assert.equal(readFileSync(join(childWorkDir, 'bash_runs.txt'), 'utf8'), 'x', 'unsafe bash must never replay')
-    assert.equal(reattachedInfo?.conversationId, childId)
-    assert.equal(reattachedInfo?.effectiveCwd, childWorkDir)
-    assert.equal(gateInfo?.ok, true)
-    assert.equal(f2.state.callCount, 1, 'pre-crash register_structured_output backfilled; must not re-prompt')
-    assert.equal(await countUserEntries(recovered, childId), 1, 'SIGKILL reattach must preserve zero duplicate user messages')
-    assert.equal(recovered.conversations.listConversations().length, 2)
-  } finally {
-    await recovered.close()
-  }
-
-  // ---- B) SIGKILL before calling register_structured_output; calls tool on first post-restart turn and passes schema + gate ----
-  const dirPost = mkdtempSync(join(tmpdir(), 'helmx-reattach-sigkill-post-'))
-  const seedDirPost = mkdtempSync(join(tmpdir(), 'helmx-reattach-sigkill-post-seed-'))
-  t.after(() => {
-    rmSync(seedDirPost, { recursive: true, force: true })
-    rmSync(dirPost, { recursive: true, force: true })
-  })
-  const childWorkPost = join(dirPost, 'work-post')
-  mkdirSync(childWorkPost, { recursive: true })
-  writeFileSync(join(childWorkPost, 'post-gate.txt'), 'ok\n', 'utf8')
-
-  await runSeederUntilSigkill(
-    seedDirPost,
-    dirPost,
-    `
-import { writeFileSync } from 'node:fs'
-import { join } from 'node:path'
-import { KernelRuntime } from ${JSON.stringify(KERNEL_RUNTIME_SRC)}
-import { createModels } from ${JSON.stringify(PI_AI_MODELS_URL)}
-import { fauxAssistantMessage, fauxProvider, fauxToolCall } from ${JSON.stringify(PI_AI_FAUX_URL)}
-const dataDir = process.env.HELMX_DATA_DIR
-const childDir = join(dataDir, 'work-post')
-const faux = fauxProvider()
-const models = createModels()
-models.setProvider(faux.provider)
-faux.setResponses([
-  fauxAssistantMessage(
-    [fauxToolCall('bash', { command: 'printf y >> step.txt; sleep 60' })],
-    { stopReason: 'toolUse' },
-  ),
-])
-const runtime = await KernelRuntime.open({ dataDir, cwd: dataDir, model: 'faux/faux-1', models, autoResume: true })
-void runtime.agentSpawn.spawnAgent({
-  parentConversationId: 1,
-  prompt: 'inspect environment then submit structured output',
-  requestId: 'req-sigkill-post-tool',
-  cwd: childDir,
-  schema: ${JSON.stringify(schema)},
-  gate: 'test -f post-gate.txt',
-  onResolved: (info) => {
-    writeFileSync(join(dataDir, 'child_id.txt'), String(info.conversationId ?? ''), 'utf8')
-  },
-}).catch(() => {})
-const { existsSync } = await import('node:fs')
-const deadline = Date.now() + 15000
-while (
-  (!existsSync(join(dataDir, 'child_id.txt')) || !existsSync(join(childDir, 'step.txt'))) &&
-  Date.now() < deadline
-) {
-  await new Promise((r) => setTimeout(r, 40))
-}
-process.stdout.write('READY_POST_KILL\\n')
-await new Promise(() => {})
-`,
-    (stdout) => stdout.includes('READY_POST_KILL'),
-  )
-
-  const postChildId = Number(readFileSync(join(dirPost, 'child_id.txt'), 'utf8').trim())
-  assert.ok(Number.isSafeInteger(postChildId) && postChildId > 1)
-
-  const { models: mPost, faux: fPost } = createFaux()
-  fPost.setResponses([
-    fauxAssistantMessage(
-      [fauxToolCall('register_structured_output', { output: { ok: true, stage: 'after-sigkill' } })],
-      { stopReason: 'toolUse' },
-    ),
-    fauxAssistantMessage('completed structured tool call after SIGKILL'),
-  ])
-  const recoveredPost = await KernelRuntime.open({
-    dataDir: dirPost,
-    cwd: dirPost,
-    model: 'faux/faux-1',
-    models: mPost,
-    autoResume: false,
-  })
-  try {
-    let postGate: AgentGateResult | undefined
-    const postPromise = recoveredPost.agentSpawn.spawnAgent({
+    const postPromise = recovered.agentSpawn.spawnAgent({
       parentConversationId: 1,
       prompt: 'inspect environment then submit structured output',
       requestId: 'req-sigkill-post-tool',
@@ -1162,13 +1136,22 @@ await new Promise(() => {})
         postGate = gate
       },
     })
-    await recoveredPost.start()
-    const postOutcome = await postPromise
+    await recovered.start()
+    const [outcome, postOutcome] = await Promise.all([reattachPromise, postPromise])
+    assert.deepEqual(outcome, { ok: true, stage: 'before-sigkill' })
+    assert.equal(seenInterruptedBash, true, 'after SIGKILL, bash must surface as interrupted for model recovery')
+    assert.equal(readFileSync(join(childWorkDir, 'bash_runs.txt'), 'utf8'), 'x', 'unsafe bash must never replay')
+    assert.equal(reattachedInfo?.conversationId, childId)
+    assert.equal(reattachedInfo?.effectiveCwd, childWorkDir)
+    assert.equal(gateInfo?.ok, true)
+    assert.equal(f2BeforeCallCount, 1, 'pre-crash register_structured_output backfilled; must not re-prompt')
+    assert.equal(await countUserEntries(recovered, childId), 1, 'SIGKILL reattach must preserve zero duplicate user messages')
+
     assert.deepEqual(postOutcome, { ok: true, stage: 'after-sigkill' })
     assert.equal(postGate?.ok, true)
-    assert.equal(await countUserEntries(recoveredPost, postChildId), 1)
-    assert.equal(recoveredPost.conversations.listConversations().length, 2)
+    assert.equal(await countUserEntries(recovered, postChildId), 1)
+    assert.equal(recovered.conversations.listConversations().length, 3)
   } finally {
-    await recoveredPost.close()
+    await recovered.close()
   }
 })

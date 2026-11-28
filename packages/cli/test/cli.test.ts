@@ -7,6 +7,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fsp from 'node:fs/promises'
+import { existsSync } from 'node:fs'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
 import { createRequire } from 'node:module'
@@ -1624,8 +1625,12 @@ test('cross-process concurrency: child CLI cli-token writes and Hub credentials.
   const release = deferred()
   let loginsInFlight = 0
   const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
-  const tsxCli = resolveTsxCli()
-  const cliEntry = path.join(repoRoot, 'packages', 'cli', 'src', 'index.ts')
+  const distCliEntry = path.join(repoRoot, 'packages', 'cli', 'dist', 'index.js')
+  const useDist =
+    existsSync(distCliEntry) && existsSync(path.join(repoRoot, 'packages', 'protocol', 'dist', 'index.js'))
+  const cliArgsPrefix = useDist
+    ? [distCliEntry]
+    : [resolveTsxCli(), path.join(repoRoot, 'packages', 'cli', 'src', 'index.ts')]
 
   // Synchronize real CLI processes at the point just before they persist cli-token.
   const hub = await startMockHub(
@@ -1640,7 +1645,7 @@ test('cross-process concurrency: child CLI cli-token writes and Hub credentials.
   )
   const runCliChild = (dataDir: string, password: string): Promise<{ code: number | null; err: string }> =>
     new Promise((resolve, reject) => {
-      const child = spawn(process.execPath, [tsxCli, cliEntry, 'login', '--password', password, '--json'], {
+      const child = spawn(process.execPath, [...cliArgsPrefix, 'login', '--password', password, '--json'], {
         env: { ...process.env, ...makeCliEnv(hub.url, dataDir, { HELMX_TOKEN: '' }) },
         stdio: ['ignore', 'ignore', 'pipe'],
       })

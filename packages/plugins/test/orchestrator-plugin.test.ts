@@ -1,4 +1,3 @@
-// @test-isolation: process
 /**
  * Unit tests for `builtin:orchestrator`:
  * - Pure contract validation (`assertOrchestratorId`, `normalizeOrchestratorName`, `normalizeOrchestratorModelRef`,
