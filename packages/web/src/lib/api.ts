@@ -4,8 +4,6 @@ import type {
   ActionManifest,
   ArtifactMetadata,
   AskAnswers,
-  AskListFilter,
-  AskSpec,
   AuthStatus,
   AuthToken,
   ConversationCompactResponse,
@@ -17,14 +15,12 @@ import type {
   ConversationInputResult,
   ConversationOwnership,
   ConversationPatch,
-  ConversationSearchOptions,
   ConversationStatus,
   ConversationSummary,
   CredentialSummary,
   HelmxLocale,
   InputOrigin,
   HostModelEntry,
-  HubAccessInfo,
   ModelCatalogEntry,
   ModelProviderSummary,
   ModelProvidersRefreshResult,
@@ -32,18 +28,12 @@ import type {
   NodeInfo,
   NodeIssuedToken,
   NodeUpgradeCheckResult,
-  NodeUpgradeInput,
-  NodeUpgradeResult,
   OmniboxSearchResponse,
   PluginConfigCatalogEntry,
   PluginConfigFieldSchema,
   PluginConfigFieldSource,
-  PluginDoctorReport,
   PluginInstallResult,
-  PluginManifestProjection,
-  PluginReloadResult,
   PluginRemoveResult,
-  PluginRescanResult,
   PluginSummary,
   PluginUpdateResult,
   Profile,
@@ -51,7 +41,6 @@ import type {
   PublicPluginDoc,
   PublicPluginSessionDoc,
   ScopedSkillCatalog,
-  SearchHit,
   SetModelFilterBody,
   SkillSummary,
   ConversationWithdrawRequest,
@@ -396,10 +385,6 @@ export const artifactsApi = {
     }
     return await res.blob()
   },
-  async fetchText(artifactId: string): Promise<string> {
-    const blob = await this.fetchBlob(artifactId, true)
-    return await blob.text()
-  },
   async downloadToBrowser(artifactId: string, filename: string): Promise<void> {
     const blob = await this.fetchBlob(artifactId, false)
     triggerBlobDownload(blob, filename)
@@ -412,8 +397,6 @@ export const artifactsApi = {
 
 export const nodesApi = {
   list: (opts?: { signal?: AbortSignal }) => apiRequest<NodeInfo[]>('GET', '/api/nodes', undefined, opts?.signal),
-  endpoints: (opts?: { signal?: AbortSignal }) =>
-    apiRequest<HubAccessInfo>('GET', '/api/nodes/endpoints', undefined, opts?.signal),
   issueToken: (nodeId: string, hubUrl?: string) =>
     apiRequest<NodeIssuedToken>(
       'POST',
@@ -426,12 +409,6 @@ export const nodesApi = {
     const qs = registryUrl ? `?registryUrl=${encodeURIComponent(registryUrl)}` : ''
     return apiRequest<NodeUpgradeCheckResult>('GET', `/api/nodes/${encodeURIComponent(nodeId)}/upgrade/check${qs}`)
   },
-  upgrade: (nodeId: string, input: NodeUpgradeInput = {}) =>
-    apiRequest<NodeUpgradeResult>(
-      'POST',
-      `/api/nodes/${encodeURIComponent(nodeId)}/upgrade`,
-      input,
-    ),
 }
 
 // ---------------------------------------------------------------------------
@@ -439,18 +416,6 @@ export const nodesApi = {
 // ---------------------------------------------------------------------------
 
 export const asksApi = {
-  list: (filter?: AskListFilter & { signal?: AbortSignal }, opts?: { signal?: AbortSignal }) => {
-    const params = new URLSearchParams()
-    if (filter?.conversationId !== undefined) params.set('conversationId', String(filter.conversationId))
-    if (filter?.status !== undefined) params.set('status', filter.status)
-    const qs = params.toString()
-    return apiRequest<AskSpec[]>(
-      'GET',
-      `/api/asks${qs ? `?${qs}` : ''}`,
-      undefined,
-      opts?.signal ?? filter?.signal,
-    )
-  },
   answer: (askId: string, answers: AskAnswers, expectedStateSeq?: number) =>
     apiRequest<{ ok: boolean }>('POST', `/api/asks/${encodeURIComponent(askId)}/answer`, {
       answers,
@@ -623,14 +588,6 @@ export const assetsApi = {
 
   listModels: async (opts?: { signal?: AbortSignal }) =>
     normalizeModelCatalogInfo(await apiRequest<unknown>('GET', '/api/models', undefined, opts?.signal)),
-  getDefaultModel: (opts?: { signal?: AbortSignal }) =>
-    apiRequest<{
-      defaultModel: string
-      defaultThinkingLevel: string
-      modelThinkingLevels: Record<string, string>
-      defaultCompactionModel?: string
-      defaultCompactionThinkingLevel?: string
-    }>('GET', '/api/models/default', undefined, opts?.signal),
   setDefaultModel: (
     model?: string,
     thinkingLevel?: string,
@@ -698,14 +655,6 @@ export interface PluginConfigResponse {
 
 export const pluginsApi = {
   list: (opts?: { signal?: AbortSignal }) => apiRequest<PluginSummary[]>('GET', '/api/plugins', undefined, opts?.signal),
-  /** 只读插件扩展契约投影（GET /api/plugins/:id/manifest）。 */
-  manifest: (id: string, opts?: { signal?: AbortSignal }) =>
-    apiRequest<PluginManifestProjection>(
-      'GET',
-      `/api/plugins/${encodeURIComponent(id)}/manifest`,
-      undefined,
-      opts?.signal,
-    ),
   enable: (id: string) =>
     apiRequest<PluginSummary[]>('POST', `/api/plugins/${encodeURIComponent(id)}/enable`),
   /** 停用插件；force: true 用于在知情前提下越过 409 plugin_in_use 占用拦截。 */
@@ -715,18 +664,10 @@ export const pluginsApi = {
       `/api/plugins/${encodeURIComponent(id)}/disable`,
       opts?.force === true ? { force: true } : undefined,
     ),
-  /** 受控热重载外部插件（先执行 doctor 预检；POST /api/plugins/:id/reload）。 */
-  reload: (id: string) =>
-    apiRequest<PluginReloadResult>('POST', `/api/plugins/${encodeURIComponent(id)}/reload`),
-  /** 增量重扫外部插件目录（POST /api/plugins/rescan）。 */
-  rescan: () => apiRequest<PluginRescanResult>('POST', '/api/plugins/rescan'),
   getConfig: (id: string, opts?: { signal?: AbortSignal }) =>
     apiRequest<PluginConfigResponse>('GET', `/api/plugins/${encodeURIComponent(id)}/config`, undefined, opts?.signal),
   setConfig: (id: string, values: Record<string, unknown>) =>
     apiRequest<{ ok: boolean }>('PUT', `/api/plugins/${encodeURIComponent(id)}/config`, { values }),
-  /** 外部插件源码静态自检（POST /api/plugins/doctor）；body 为 { id } 或 { path }。 */
-  doctor: (target: { id: string } | { path: string }) =>
-    apiRequest<PluginDoctorReport>('POST', '/api/plugins/doctor', target),
   /** 安装外部插件包（POST /api/plugins/install）。 */
   install: (source: string, enable?: boolean) =>
     apiRequest<PluginInstallResult>('POST', '/api/plugins/install', {
@@ -781,39 +722,6 @@ export const pluginsApi = {
         ...(conversationId !== undefined ? { conversationId } : {}),
       },
     ),
-}
-
-// ---------------------------------------------------------------------------
-// Search
-// ---------------------------------------------------------------------------
-
-export type SearchQueryOptions = Pick<
-  ConversationSearchOptions,
-  'profileId' | 'ownedBy' | 'topLevelOnly' | 'limit' | 'maxPerConversation'
-> & {
-  signal?: AbortSignal
-}
-
-export const searchApi = {
-  query: (q: string, opts?: SearchQueryOptions) => {
-    const params: string[] = [`q=${encodeURIComponent(q)}`]
-    if (opts?.profileId !== undefined && opts.profileId !== '') {
-      params.push(`profileId=${encodeURIComponent(opts.profileId)}`)
-    }
-    if (opts?.ownedBy !== undefined) {
-      params.push(`ownedBy=${encodeURIComponent(opts.ownedBy)}`)
-    }
-    if (opts?.topLevelOnly !== undefined) {
-      params.push(`topLevelOnly=${opts.topLevelOnly ? '1' : '0'}`)
-    }
-    if (opts?.limit !== undefined) {
-      params.push(`limit=${encodeURIComponent(String(opts.limit))}`)
-    }
-    if (opts?.maxPerConversation !== undefined) {
-      params.push(`maxPerConversation=${encodeURIComponent(String(opts.maxPerConversation))}`)
-    }
-    return apiRequest<SearchHit[]>('GET', `/api/search?${params.join('&')}`, undefined, opts?.signal)
-  },
 }
 
 export interface OmniboxSearchOptions {

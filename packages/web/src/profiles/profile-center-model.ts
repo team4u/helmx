@@ -125,20 +125,6 @@ export function buildProfileCategoryCounts(profiles: Profile[]): ProfileCategory
   }
 }
 
-/** Summarize profile counts. */
-export function summarizeProfiles(profiles: Profile[]): {
-  total: number
-  system: number
-  custom: number
-} {
-  const counts = buildProfileCategoryCounts(profiles)
-  return {
-    total: counts.all,
-    system: counts.system,
-    custom: counts.custom,
-  }
-}
-
 /** Validate a new profile ID (letters, digits and hyphens, 1-64 chars; 'new' is a reserved route segment). */
 export function profileIdValid(id: string): boolean {
   return id !== 'new' && /^[a-z0-9][a-z0-9-]{0,63}$/.test(id)
@@ -186,12 +172,6 @@ export function validateStarterDrafts(
 /** Profile.starters -> form drafts (undefined becomes an empty list: saving empty clears). */
 export function startersToDrafts(starters: ProfileStarterPrompt[] | undefined): StarterDraft[] {
   return (starters ?? []).map((s) => ({ label: s.label, prompt: s.prompt }))
-}
-
-/** Starters shown on empty conversations: empty array falls back to undefined (host default hint is handled by the UI layer). */
-export function visibleStarters(profile: Profile | undefined): ProfileStarterPrompt[] | undefined {
-  const starters = profile?.starters
-  return starters !== undefined && starters.length > 0 ? starters : undefined
 }
 
 /** Whether the starter cap is reached (no further additions). */

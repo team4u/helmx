@@ -25,16 +25,6 @@ export interface SkillFilterOptions {
   categoryTab: SkillCategoryTab
 }
 
-export interface SkillSummaryStats {
-  total: number
-  core: number
-  builtin: number
-  plugins: number
-  agents: number
-  node: number
-  workspace: number
-}
-
 /**
  * Whether the skill is a kernel-owned core skill:
  * - managedByPlugin is a valid `core:<domain>` owner (and not from a discovery source root)
@@ -170,20 +160,6 @@ export function buildSkillCategoryCounts(skills: SkillSummary[]): Record<SkillCa
     counts[skillCountCategory(skill)] += 1
   }
   return counts
-}
-
-/** Summarize skill metrics. */
-export function summarizeSkills(skills: SkillSummary[]): SkillSummaryStats {
-  const counts = buildSkillCategoryCounts(skills)
-  return {
-    total: counts.all,
-    core: counts.core,
-    builtin: counts.builtin,
-    plugins: counts.plugins,
-    agents: counts.agents,
-    node: counts.node,
-    workspace: counts.workspace,
-  }
 }
 
 /**

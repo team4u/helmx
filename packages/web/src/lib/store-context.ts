@@ -19,7 +19,6 @@ import type { ModelCatalogDefaults, ModelDescriptor } from './api.js'
 import { isPluginSummaryActive } from './live-state.js'
 import type {
   AuthSlice,
-  CatalogSlice,
   ConversationBackgroundSlice,
   HelmxExternalStore,
   HelmxStoreActions,
@@ -94,16 +93,6 @@ function readLoadErrorKey(store: HelmxExternalStore, key: string): string | unde
 
 function subscribePluginDocKey(store: HelmxExternalStore, docKey: string, listener: () => void): () => void {
   return store.subscribePluginDoc(docKey, listener)
-}
-function readPluginDocKey(store: HelmxExternalStore, docKey: string): unknown {
-  return store.getPluginDoc(docKey)
-}
-
-function subscribePluginById(store: HelmxExternalStore, pluginId: string, listener: () => void): () => void {
-  return store.subscribePlugin(pluginId, listener)
-}
-function readPluginById(store: HelmxExternalStore, pluginId: string): PluginSummary | undefined {
-  return store.getPluginSummary(pluginId)
 }
 
 function useDomainSlice<T>(
@@ -197,10 +186,6 @@ export function useOptionalProfiles(): Profile[] | undefined {
   return useDomainSlice('profiles', (s) => s.getProfilesSlice().profiles, () => undefined)
 }
 
-export function useCatalogAssets(): CatalogSlice {
-  return useDomainSlice('catalog', (s) => s.getCatalogSlice())
-}
-
 export function useModels(): ModelDescriptor[] {
   return useDomainSlice('models', (s) => s.getModels())
 }
@@ -284,14 +269,6 @@ export function useNodes(): NodeInfo[] {
 /** Nodes slice for surfaces that also render outside the store provider (SSR/plugin config form): undefined = catalog not provided. */
 export function useOptionalNodes(): NodeInfo[] | undefined {
   return useDomainSlice('nodes', (s) => s.getNodes(), () => undefined)
-}
-
-export function useLoadErrorsMap(): Record<string, string> {
-  return useDomainSlice('loadErrorsMap', (s) => s.getLoadErrorsMap())
-}
-
-export function usePluginDocsState(): Record<string, unknown> {
-  return useDomainSlice('pluginDocsMap', (s) => s.getPluginDocsMap())
 }
 
 const EMPTY_PLUGIN_DOCS_SUBSET: Readonly<Record<string, unknown>> = Object.freeze({})
@@ -406,10 +383,6 @@ export function useHighlightedEntry(): { conversationId: number; entryId: string
   return useDomainSlice('highlightedEntry', (s) => s.getHighlightedEntry())
 }
 
-export function useSearchFocusAnchor(): SearchFocusAnchor | null {
-  return useDomainSlice('searchFocusAnchor', (s) => s.getSearchFocusAnchor())
-}
-
 export function useOptionalSearchFocusAnchor(): SearchFocusAnchor | null {
   return useDomainSlice('searchFocusAnchor', (s) => s.getSearchFocusAnchor(), () => null)
 }
@@ -504,15 +477,6 @@ export function useHighlightedEntryForConversation(
 
 export function useLoadError(key: string | undefined): string | undefined {
   return useKeyedSlice(subscribeLoadErrorKey, readLoadErrorKey, key, undefined)
-}
-
-export function usePluginDoc(pluginId: string | undefined, docName: string | undefined): unknown {
-  const docKey = pluginId && docName ? `${pluginId}/${docName}` : undefined
-  return useKeyedSlice(subscribePluginDocKey, readPluginDocKey, docKey, undefined)
-}
-
-export function usePluginSummary(pluginId: string | undefined): PluginSummary | undefined {
-  return useKeyedSlice(subscribePluginById, readPluginById, pluginId, undefined)
 }
 
 /**
@@ -617,7 +581,6 @@ function cacheSame(prev: Record<string, unknown>, next: Record<string, unknown>)
 export type { SessionDocKey }
 export type {
   AuthSlice,
-  CatalogSlice,
   ConversationBackgroundSlice,
   HelmxExternalStore,
   HelmxStoreActions,

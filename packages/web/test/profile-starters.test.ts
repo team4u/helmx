@@ -1,7 +1,7 @@
 /**
  * Profile.starters web tests:
  * 1. Pure functions: draft validation (trim/code-point caps/whitespace-only),
- *    startersToDrafts, visibleStarters;
+ *    startersToDrafts;
  * 2. ProfileDetailDrawer SSR: starters editor rendering, zero emoji, error hints;
  * 3. ConversationTimeline SSR: empty conversations show starter buttons whose
  *    clicks only invoke the callback (never rendered as history edits); nothing
@@ -16,7 +16,6 @@ import {
   startersToDrafts,
   validateStarterDraft,
   validateStarterDrafts,
-  visibleStarters,
   startersAtLimit,
 } from '../src/profiles/profile-center-model.js'
 import { ProfileDetailDrawer } from '../src/profiles/ProfileDetailDrawer.js'
@@ -57,9 +56,6 @@ test('starters pure functions: validation edges and shape conversion', { timeout
 
   assert.deepEqual(startersToDrafts([{ label: 'L', prompt: 'P' }]), [{ label: 'L', prompt: 'P' }])
   assert.deepEqual(startersToDrafts(undefined), [])
-  assert.deepEqual(visibleStarters({ id: 'x', starters: [] }), undefined)
-  assert.deepEqual(visibleStarters({ id: 'x', starters: [{ label: 'L', prompt: 'P' }] }), [{ label: 'L', prompt: 'P' }])
-  assert.deepEqual(visibleStarters(undefined), undefined)
   assert.equal(startersAtLimit(Array.from({ length: 6 }, (_, i) => ({ label: `s${i}`, prompt: 'p' }))), true)
 })
 

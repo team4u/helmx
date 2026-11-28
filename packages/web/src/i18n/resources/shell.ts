@@ -292,10 +292,6 @@ export const shellMessages = {
     en: 'Toggle selection for this conversation tree',
     'zh-CN': '切换选择此会话树',
   },
-  'shell.overview.railTooltip': {
-    en: 'Conversation overview (full view)',
-    'zh-CN': '全屏会话总览',
-  },
   'shell.overview.drawerPeek': { en: 'Peek in drawer', 'zh-CN': '抽屉速览' },
   'shell.overview.batchProtected': {
     en: 'Managed or protected conversations are excluded from bulk management',
@@ -406,10 +402,7 @@ export const shellMessages = {
   'shell.unread.markFailed': { en: 'Failed to mark as read', 'zh-CN': '标记已读失败' },
 
   // Sidebar chrome, spaces, centers, language switcher, theme & quiet notify
-  'shell.sidebar.sectionLabel': { en: 'Sidebar section {id}', 'zh-CN': '侧栏分组 {id}' },
   'shell.sidebar.itemLabel': { en: 'Sidebar item {id}', 'zh-CN': '侧栏项 {id}' },
-  'shell.sidebar.collapseSection': { en: 'Collapse section', 'zh-CN': '收起分组' },
-  'shell.sidebar.expandSection': { en: 'Expand section', 'zh-CN': '展开分组' },
   'shell.sidebar.viewsHeader': { en: 'Views', 'zh-CN': '视图' },
   'shell.sidebar.openInRightSplit': { en: 'Open in right split', 'zh-CN': '在右侧分屏打开' },
   'shell.sidebar.mainNavigation': { en: 'Main navigation', 'zh-CN': '主导航' },
@@ -442,10 +435,6 @@ export const shellMessages = {
   'shell.theme.dark': { en: 'Dark mode', 'zh-CN': '暗色模式' },
   'shell.locale.label': { en: 'Interface language', 'zh-CN': '界面语言' },
   'shell.locale.auto': { en: 'Auto', 'zh-CN': '自动' },
-  'shell.quietNotify.toggleTooltip': {
-    en: 'Background notifications: click to toggle',
-    'zh-CN': '后台浏览器通知：点击切换开关',
-  },
   'shell.quietNotify.off': {
     en: 'Background notifications: off (alert when a conversation completes or awaits input while the page is in the background)',
     'zh-CN': '后台浏览器通知：已关闭（页面在后台时，会话完成或需要输入将提醒）',

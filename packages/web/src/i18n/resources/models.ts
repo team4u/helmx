@@ -187,14 +187,6 @@ export const modelsMessages = {
     en: 'Provider endpoint reachable and model catalog synced.',
     'zh-CN': '供应商端点连通正常，模型目录同步成功。',
   },
-  'models.test.noKey': {
-    en: 'No API key configured; enter the key before testing the connection.',
-    'zh-CN': '未配置 API 密钥，请先输入密钥后再测试连接。',
-  },
-  'models.test.validated': {
-    en: 'Endpoint and credential format validated.',
-    'zh-CN': '端点与凭证格式校验正常。',
-  },
   'models.test.failed': { en: 'Connection failed: {error}', 'zh-CN': '连接失败: {error}' },
   'models.test.latency': { en: '(latency {ms}ms)', 'zh-CN': '（延迟 {ms}ms）' },
   'models.credentials.delete': { en: 'Delete credentials', 'zh-CN': '删除凭证' },
@@ -329,17 +321,6 @@ export const modelsMessages = {
     en: 'Selectable models come from the catalogs of all configured and available providers.',
     'zh-CN': '可供选择的模型来自所有已配置且可用的供应商目录。',
   },
-  'models.defaults.levelLabel': { en: 'Default thinking level', 'zh-CN': '默认思考档位' },
-  'models.defaults.levelAria': {
-    en: 'Global default thinking level',
-    'zh-CN': '全局默认思考档位',
-  },
-  'models.defaults.levelUnsupported': {
-    en: 'The selected model does not support thinking levels.',
-    'zh-CN': '所选模型不支持思考档位。',
-  },
-  'models.defaults.levelFollowSdk': { en: 'Follow SDK default', 'zh-CN': '跟随 SDK 缺省' },
-  'models.defaults.levelCurrent': { en: '{level} (current)', 'zh-CN': '{level}（当前值）' },
   'models.defaults.compactionLabel': { en: 'Compaction model', 'zh-CN': '压缩模型' },
   'models.defaults.compactionAria': { en: 'Global compaction model', 'zh-CN': '全局压缩模型' },
   'models.defaults.compactionHint': {
@@ -385,15 +366,10 @@ export const modelsMessages = {
     'zh-CN': '已清除全局默认模型',
   },
 
-  // Default-model select options (buildDefaultModelOptions)
   'models.defaults.optionUnset': {
     en: 'Not set (inherits system baseline)',
     'zh-CN': '未设置（继承系统基线）',
   },
-  'models.defaults.optionDisabled': { en: '{model} (disabled)', 'zh-CN': '{model}（已禁用）' },
-  'models.defaults.optionCurrent': { en: '{model} (current)', 'zh-CN': '{model}（当前配置）' },
-  'models.defaults.metaDisabled': { en: 'Disabled', 'zh-CN': '已禁用' },
-  'models.defaults.metaNotInCatalog': { en: 'Not in catalog', 'zh-CN': '目录外' },
 
   // Merged-provider runtime copy (buildMergedProviders)
   'models.catalog.dynamicDescription': {
@@ -437,7 +413,6 @@ export const modelsMessages = {
   'models.tag.edgeFast': { en: 'Edge-fast', 'zh-CN': '端侧极速' },
   'models.tag.ultraLowLatency': { en: 'Ultra-low latency', 'zh-CN': '超低延迟' },
   'models.tag.fastInference': { en: 'Fast inference', 'zh-CN': '极速推理' },
-  'models.tag.customCompatible': { en: 'Custom compatible', 'zh-CN': '自定义兼容' },
 
   // Static preset provider metadata (buildDefaultProviders)
   'models.preset.anthropic.description': {
@@ -471,13 +446,5 @@ export const modelsMessages = {
   'models.preset.groq.description': {
     en: 'Ultra-high-throughput inference on proprietary LPU chips, hundreds of tokens per second at very low latency.',
     'zh-CN': '基于自研 LPU 芯片的超高吞吐推理加速平台，数百 Token/s 极低延迟响应。',
-  },
-  'models.preset.custom.description': {
-    en: 'Connect to self-hosted vLLM, SGLang, OneAPI or any third-party OpenAI-compatible endpoint.',
-    'zh-CN': '连接自建 vLLM、SGLang、OneAPI 或第三方兼容 OpenAI 协议的自定义端点。',
-  },
-  'models.preset.custom.name': {
-    en: 'Custom OpenAI-compatible endpoint',
-    'zh-CN': '自定义 OpenAI 兼容接口',
   },
 } satisfies MessageTable

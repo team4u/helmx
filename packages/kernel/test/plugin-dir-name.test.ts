@@ -12,7 +12,7 @@
 import test from 'node:test'
 import { strict as assert } from 'node:assert'
 
-import { isBuiltinPluginDataDirName, pluginDataDirName } from '../src/plugins/plugin-dir-name.js'
+import { pluginDataDirName } from '../src/plugins/plugin-dir-name.js'
 
 test('built-in plugin id directory name excludes Windows reserved characters', { timeout: 60_000 }, () => {
   assert.equal(pluginDataDirName('builtin:mentions'), 'builtin%3Amentions')
@@ -36,11 +36,4 @@ test('any ID containing a colon must never pass through unescaped (general Windo
   for (const id of ['test:probe', 'remote:stub-node', 'builtin:herdr']) {
     assert.doesNotMatch(pluginDataDirName(id), /:/, `${id} directory name still contains a colon`)
   }
-})
-
-test('built-in data dir detection matches both raw and percent-encoded forms', { timeout: 60_000 }, () => {
-  assert.equal(isBuiltinPluginDataDirName('builtin:memory'), true)
-  assert.equal(isBuiltinPluginDataDirName('builtin%3Amemory'), true)
-  assert.equal(isBuiltinPluginDataDirName('demo-external'), false)
-  assert.equal(isBuiltinPluginDataDirName('.hidden'), false)
 })

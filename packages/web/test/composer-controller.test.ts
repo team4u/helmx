@@ -34,6 +34,7 @@ import { seedPluginClientModule } from '../src/lib/plugin-client.js'
 import { usePluginContext } from '@helmx/plugin-client'
 import { groupUiContributions } from '../src/lib/types.js'
 import type { HelmxExternalStore } from '../src/lib/helmx-store.js'
+import { busyEnterMode } from '../src/conversation/composer-model.js'
 import {
   buildSlashMenuItems,
   commandActionPluginId,
@@ -814,4 +815,9 @@ test('direct plugin slash Enter on working conversation clears optimistically, s
     })
     assert.ok(app.host.querySelector('.composer-command-banner') === null)
   } finally { app.unmount(); restore() }
+})
+
+test('busyEnterMode: Enter steers by default, ⌘/Ctrl+Enter queues', { timeout: 60_000 }, () => {
+  assert.equal(busyEnterMode(false), 'steer')
+  assert.equal(busyEnterMode(true), 'followUp')
 })

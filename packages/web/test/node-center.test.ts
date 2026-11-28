@@ -19,7 +19,6 @@ import {
   getNodeDisplayName,
   isNodeLocal,
   isNodeOnline,
-  summarizeNodes,
   type NodeCategoryTab,
   type NodeInfo,
 } from '../src/nodes/node-center-model.js'
@@ -157,7 +156,7 @@ test('node-center-model: formatNodePlatformArch combines platform and architectu
   assert.equal(formatNodePlatformArch({ id: '4' }), '--')
 })
 
-test('node-center-model: buildNodeCategoryCounts and summarizeNodes count every category metric accurately', { timeout: 60_000 }, () => {
+test('node-center-model: buildNodeCategoryCounts counts every category metric accurately', { timeout: 60_000 }, () => {
   const nodes = mockNodes()
   const counts = buildNodeCategoryCounts(nodes)
 
@@ -166,12 +165,6 @@ test('node-center-model: buildNodeCategoryCounts and summarizeNodes count every 
   assert.equal(counts.remote, 2)
   assert.equal(counts.online, 2)
   assert.equal(counts.offline, 1)
-
-  const summary = summarizeNodes(nodes)
-  assert.equal(summary.total, 3)
-  assert.equal(summary.online, 2)
-  assert.equal(summary.local, 1)
-  assert.equal(summary.remote, 2)
 })
 
 test('node-center-model: filterNodes category tab filtering', { timeout: 60_000 }, () => {
@@ -1222,33 +1215,12 @@ test('NodeDetailDrawer: delete confirms via ConfirmDialog, surfaces failures cle
   }
 })
 
-test('nodesApi.endpoints and nodes-modal-model re-exports: GET /api/nodes/endpoints and protocol connect helpers', { timeout: 60_000 }, async () => {
+test('nodes-modal-model re-exports: protocol connect helpers', { timeout: 60_000 }, () => {
   assert.equal(isLoopbackHubUrl('http://127.0.0.1:3202'), true)
   assert.equal(
     formatHubListenSummary({ listenHost: '::', listenPort: 3202, wildcard: true, loopbackOnly: false, endpoints: [] }),
     '[::]:3202',
   )
-  const originalFetch = globalThis.fetch
-  const calls: Array<{ url: string; method?: string; body?: string }> = []
-  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-    calls.push({
-      url: String(input),
-      ...(init?.method !== undefined ? { method: init.method } : {}),
-      ...(typeof init?.body === 'string' ? { body: init.body } : {}),
-    })
-    return new Response(
-      JSON.stringify({ listenHost: '0.0.0.0', listenPort: 3202, wildcard: true, loopbackOnly: false, endpoints: [] }),
-      { status: 200, headers: { 'content-type': 'application/json' } },
-    )
-  }) as typeof fetch
-  try {
-    const info = await nodesApi.endpoints()
-    assert.equal(info.listenPort, 3202)
-    assert.equal(calls[0]?.url, '/api/nodes/endpoints')
-    assert.equal(calls[0]?.method, 'GET')
-  } finally {
-    globalThis.fetch = originalFetch
-  }
 })
 
 test('validateNodeIdInput: rejects reserved "new" and "local" route segments', { timeout: 60_000 }, async () => {

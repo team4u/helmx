@@ -126,11 +126,6 @@ export interface FilterProvidersOptions {
   statusTab?: ProviderFilterTab
 }
 
-export interface ProviderSummaryStats {
-  total: number
-  configured: number
-}
-
 /**
  * Built-in mainstream provider presets with display copy resolved through the
  * translator; brand names, model ids and numeric tokens (200K, LPU, ...) are
@@ -319,76 +314,6 @@ export function filterProviders(
 
     return false
   })
-}
-
-/**
- * Non-empty sentinel value for the "not set" default-model select option:
- * Radix Select treats an empty-string value as placeholder semantics (selecting
- * it never fires onValueChange), so the clear action rides on a sentinel value
- * and is mapped back to the empty string on submit.
- */
-export const UNSET_MODEL_VALUE = '__unset__'
-
-/**
- * Build the global default-model select options:
- * - the first entry is always the "not set" sentinel (explicit clear semantics);
- * - only models that are available in the catalog and not user-disabled are listed;
- * - a current value missing from the selectable list (broken credentials,
- *   external model, disabled) is kept and annotated as "not in catalog" or
- *   "disabled" instead of being dropped silently; annotated items are not duplicated.
- */
-export function buildDefaultModelOptions(
-  models: ModelDescriptor[],
-  currentValue: string | undefined,
-  t: WebMessageTranslator,
-  unsetLabel: string = t('models.defaults.optionUnset'),
-): Array<{ value: string; label: string; meta?: string }> {
-  const options: Array<{ value: string; label: string; meta?: string }> = [
-    { value: UNSET_MODEL_VALUE, label: unsetLabel },
-  ]
-
-  for (const m of models) {
-    if (!m.available || m.disabled === true) continue
-    options.push({
-      value: m.id,
-      label: m.label || m.modelId,
-      meta: m.provider,
-    })
-  }
-
-  // If the currently configured model is not selectable (historic config,
-  // deleted provider, missing credentials or disabled), keep it as a visible
-  // entry so it is not silently lost; disabled models get a dedicated
-  // annotation (distinct from out-of-catalog, hinting a re-enable is needed).
-  const trimmed = currentValue?.trim()
-  if (
-    trimmed &&
-    trimmed !== UNSET_MODEL_VALUE &&
-    !options.some((opt) => opt.value === trimmed)
-  ) {
-    const disabled = models.some((m) => m.id === trimmed && m.disabled === true)
-    options.push({
-      value: trimmed,
-      label: disabled
-        ? t('models.defaults.optionDisabled', { model: trimmed })
-        : t('models.defaults.optionCurrent', { model: trimmed }),
-      meta: disabled ? t('models.defaults.metaDisabled') : t('models.defaults.metaNotInCatalog'),
-    })
-  }
-
-  return options
-}
-
-/**
- * Summarize total and configured provider counts.
- */
-export function summarizeProviders(
-  providers: ProviderItem[],
-): ProviderSummaryStats {
-  return {
-    total: providers.length,
-    configured: providers.filter((p) => p.configured).length,
-  }
 }
 
 /**

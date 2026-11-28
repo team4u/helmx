@@ -15,7 +15,6 @@ import { Fragment } from 'react'
 import { renderToString } from 'react-dom/server'
 import { UI_SHARED_EXPORTS } from '@helmx/protocol'
 import * as HelmxUi from '../src/index.js'
-import * as HelmxUiPure from '../src/pure.js'
 import { Screen, ScreenSection, ScreenToolbar, DataTable, KvGrid } from '../src/primitives.js'
 import { ScreenHostContext } from '../src/screen-host.js'
 import { UiScope } from '../src/UiScope.js'
@@ -365,9 +364,6 @@ test('StatusLight: explicit tone mode, connection aliases, pure exports, and pro
   assert.equal(HelmxUi.STATUS_LIGHT_TONES, STATUS_LIGHT_TONES)
   assert.equal(HelmxUi.normalizeStatusLightTone, normalizeStatusLightTone)
   assert.equal(HelmxUi.isKnownStatusLightStatus, isKnownStatusLightStatus)
-  assert.equal(HelmxUiPure.STATUS_LIGHT_TONES, STATUS_LIGHT_TONES)
-  assert.equal(HelmxUiPure.normalizeStatusLightTone, normalizeStatusLightTone)
-  assert.equal(HelmxUiPure.isKnownStatusLightStatus, isKnownStatusLightStatus)
 
   assert.equal(normalizeStatusLightTone('connected'), 'done')
   assert.equal(normalizeStatusLightTone('disconnected'), 'idle')

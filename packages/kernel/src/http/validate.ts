@@ -271,15 +271,6 @@ export function parseConversationWithdrawBody(body: Record<string, unknown>): { 
   return { submissionId: parsed.submissionId }
 }
 
-/**
- * POST /api/conversations/bulk-delete: ids is a non-empty array (1..1000) of safe positive integers.
- * Order-preserving dedup happens in the service (first-seen wins), not here — validation stays mechanical.
- */
-export function parseConversationBulkDeleteBody(body: Record<string, unknown>): { ids: number[] } {
-  const parsed = parseBodyWithSchema(REQUEST_SCHEMAS.conversationBulkDelete, body, 'bulk-delete body')
-  return { ids: parsed.ids }
-}
-
 // ---------------------------------------------------------------------------
 // Profile body (TypeBox mechanical shape + cross-field / trim / code-point semantics)
 // ---------------------------------------------------------------------------
@@ -357,11 +348,6 @@ export function parseActionInvokeBody(body: Record<string, unknown>): {
     input: parsed.input,
     ...(parsed.conversationId !== undefined ? { conversationId: parsed.conversationId } : {}),
   }
-}
-
-export function parsePluginConfigBody(body: Record<string, unknown>): Record<string, unknown> {
-  const parsed = parseBodyWithSchema(REQUEST_SCHEMAS.pluginConfigPut, body, 'plugin config body')
-  return { ...(parsed.values as Record<string, unknown>) }
 }
 
 // ---------------------------------------------------------------------------

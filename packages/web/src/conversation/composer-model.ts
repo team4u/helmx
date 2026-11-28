@@ -62,12 +62,6 @@ export function parseCompactSlashCommand(payload: string): { instructions?: stri
   return null
 }
 
-/** In-conversation management commands: executed immediately for non-editing
- * input; inside edit mode they are just the edited message's text. */
-export function isSessionManageCommand(payload: string): boolean {
-  return payload === '/new' || payload === '/clear' || parseCompactSlashCommand(payload) !== null
-}
-
 /** Whether the editing state should be restored after a send failure: only
  * when the Composer is still in the expected post-optimistic-clear state (the
  * user typed no new text, picked no other edit target, changed no
@@ -302,12 +296,6 @@ export function envDraftError(draft: EnvDraft, t: WebMessageTranslator): string 
     return t('composer.env.errorAbsolute')
   }
   return null
-}
-
-/** Whether the draft matches the current conversation coordinates (matching
- * means nothing to submit); an absent nodeId counts as local. */
-export function envDraftUnchanged(draft: EnvDraft, nodeId: string | undefined, cwd: string): boolean {
-  return draft.nodeId === (nodeId || 'local') && draft.cwd === cwd
 }
 
 /** Track whether the viewport width is within the mobile threshold (default <= 680px). */

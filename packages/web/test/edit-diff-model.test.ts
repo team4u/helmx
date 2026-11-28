@@ -13,7 +13,6 @@ import {
   buildPendingEditDiff,
   checkEditToolResult,
   decorateAppliedDiffRows,
-  editInputTexts,
   PENDING_DIFF_MAX_INPUT_CHARS,
   PENDING_DIFF_MAX_EDIT_LENGTH,
   PENDING_DIFF_MAX_ROWS,
@@ -153,8 +152,6 @@ test('buildPendingEditDiff：缺失 oldText/newText 返回 undefined（不编造
   assert.equal(buildPendingEditDiff(undefined), undefined)
   assert.equal(buildPendingEditDiff({ path: '/a' }), undefined)
   assert.equal(buildPendingEditDiff({ oldText: 'x' }), undefined)
-  assert.equal(editInputTexts({ oldText: 1, newText: 'y' }).newText, 'y')
-  assert.equal(editInputTexts({ oldText: 1, newText: 'y' }).oldText, undefined)
 })
 
 test('buildPendingEditDiff：输入超字符预算显式 skipped，不硬算', { timeout: 60_000 }, () => {

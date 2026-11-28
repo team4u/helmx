@@ -834,7 +834,6 @@ const {
   composeSidebarBadgeLabel,
   resolveSidebarItemBadge,
   sidebarBadgeCountLabel,
-  sidebarBadgeToneClass,
 } = await import('../src/shell/sidebar-model.js')
 
 const TASK_BADGE_SPEC: SidebarItemBadgeSpec = {
@@ -908,12 +907,6 @@ test('resolveSidebarItemBadge: count badge, tone fallback, quiet dot, LocalizedT
   assert.equal(sidebarBadgeCountLabel(99), '99')
   assert.equal(sidebarBadgeCountLabel(100), '99+')
   assert.equal(sidebarBadgeCountLabel(1000), '99+')
-  // tone -> badge 语义类映射
-  assert.equal(sidebarBadgeToneClass('error'), 'badge-err')
-  assert.equal(sidebarBadgeToneClass('warn'), 'badge-warn')
-  assert.equal(sidebarBadgeToneClass('accent'), 'badge-accent')
-  assert.equal(sidebarBadgeToneClass('ok'), 'badge-ok')
-  assert.equal(sidebarBadgeToneClass('neutral'), 'badge-neutral')
   // label 与 summary 合成（summary 为空原样返回）
   assert.equal(composeSidebarBadgeLabel('App Center', { count: 2, tone: 'warn', dot: false, summary: '2 to review' }), 'App Center · 2 to review')
   assert.equal(composeSidebarBadgeLabel('App Center', null), 'App Center')

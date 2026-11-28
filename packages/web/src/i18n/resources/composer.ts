@@ -400,11 +400,6 @@ export const composerMessages = {
   'composer.ask.shortcutHint': { en: '↑↓ · 1–9 · Enter · Esc', 'zh-CN': '↑↓ · 1–9 · Enter · Esc' },
   'composer.ask.shortcutHintMulti': { en: '↑↓ · Space / 1–9 · Enter · Esc', 'zh-CN': '↑↓ · Space / 1–9 · Enter · Esc' },
   'composer.ask.shortcutHintStepper': { en: '↑↓ · ←→ step · Enter · Esc', 'zh-CN': '↑↓ · ←→ 切题 · Enter · Esc' },
-  'composer.ask.secretPlaceholder': { en: 'Secret values go to the in-memory SecretStash only', 'zh-CN': '机密值仅入内存 SecretStash' },
-  'composer.ask.secretHint': {
-    en: 'Secrets stay in the in-memory SecretStash, never stored in the database',
-    'zh-CN': '机密直入内存 SecretStash，不落数据库',
-  },
   'composer.ask.openChildTitle': { en: 'Open child conversation #{id} ({title})', 'zh-CN': '打开子会话 #{id}（{title}）' },
   'composer.ask.openChildDrawer': { en: 'Open child conversation #{id} drawer', 'zh-CN': '打开子会话 #{id}抽屉' },
   'composer.ask.fromSource': { en: 'From #{id}', 'zh-CN': '来自 #{id}' },

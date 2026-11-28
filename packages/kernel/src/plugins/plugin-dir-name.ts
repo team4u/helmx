@@ -29,8 +29,3 @@ export function externalPluginsDir(dataDir: string): string {
 export function pluginDataDirName(pluginId: string): string {
   return pluginId.replace(COLON, '%3A');
 }
-
-/** Returns whether a directory name belongs to a built-in plugin data directory (`builtin:` or escaped form). */
-export function isBuiltinPluginDataDirName(dirName: string): boolean {
-  return dirName.startsWith('builtin:') || dirName.startsWith('builtin%3A');
-}

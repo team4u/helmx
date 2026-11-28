@@ -15,8 +15,6 @@ const { PluginCard } = await import('../src/plugins/PluginCard.js')
 const {
   getPluginDescription,
   pluginErrorStageLabel,
-  resolvePluginIcon,
-  DEFAULT_PLUGIN_ICON,
 } = await import('../src/plugins/plugin-card-model.js')
 const { createWebTranslator } = await import('../src/i18n/catalog.js')
 const { HelmxExternalStoreContext, makeTestStore } = await import('./helpers/store.js')
@@ -488,24 +486,6 @@ test('PluginCard：enabled === true 且 status === failed（强停依赖故障�
     root.unmount()
   })
   container.remove()
-})
-
-test('resolvePluginIcon：纯属性驱动零硬编码推测——自声明 icon 优先，未提供统一回退默认占位（puzzle）', { timeout: 60_000 }, () => {
-  assert.equal(DEFAULT_PLUGIN_ICON, 'puzzle')
-
-  // 1. 显式提供自定义矢量图标名称（优先使用插件自己定义的 icon）
-  assert.equal(resolvePluginIcon({ icon: 'workflow' }), 'workflow')
-  assert.equal(resolvePluginIcon({ icon: 'zap' }), 'zap')
-  assert.equal(resolvePluginIcon({ icon: 'globe' }), 'globe')
-  assert.equal(resolvePluginIcon({ icon: ' sparkles ' }), 'sparkles')
-
-  // 2. 未声明 icon 时彻底杜绝任何 ID 字符串猜测，统一使用默认图标占位
-  assert.equal(resolvePluginIcon({}), 'puzzle')
-  assert.equal(resolvePluginIcon({ icon: undefined }), 'puzzle')
-  assert.equal(resolvePluginIcon({ icon: '' }), 'puzzle')
-  assert.equal(resolvePluginIcon({ icon: '   ' }), 'puzzle')
-  assert.equal(resolvePluginIcon(null), 'puzzle')
-  assert.equal(resolvePluginIcon(undefined), 'puzzle')
 })
 
 test('PluginCard：完全不渲染卡片图标容器，名称与 ID 靠左对齐', { timeout: 60_000 }, () => {

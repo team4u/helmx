@@ -11,7 +11,6 @@ import type { ModelDescriptor } from '../src/lib/api.js'
 import { ModelCard } from '../src/models/ModelCard.js'
 import { ModelCenter } from '../src/models/ModelCenter.js'
 import {
-  buildDefaultModelOptions,
   buildDefaultProviders,
   buildMergedProviders,
   buildProviderCategoryCounts,
@@ -21,8 +20,6 @@ import {
   parseCustomModelIds,
   sortProvidersConfiguredFirst,
   summarizeCardModels,
-  summarizeProviders,
-  UNSET_MODEL_VALUE,
   validateCustomGatewayInput,
   type ProviderItem,
 } from '../src/models/model-center-model.js'
@@ -155,16 +152,6 @@ test('filterProviders: fuzzy multi-dimensional search (name, ID, description, in
   // No match
   const r5 = filterProviders(testProviders, { query: 'not-found-xyz' })
   assert.equal(r5.length, 0)
-})
-
-test('summarizeProviders: counts total and configured providers', { timeout: 60_000 }, () => {
-  const testProviders: ProviderItem[] = [
-    { id: 'p1', name: 'C1', type: 'commercial', configured: true, modelsCount: 1 },
-    { id: 'p2', name: 'C2', type: 'commercial', configured: false, modelsCount: 1 },
-  ]
-  const summary = summarizeProviders(testProviders)
-  assert.equal(summary.total, 2)
-  assert.equal(summary.configured, 1)
 })
 
 test('buildMergedProviders: catalog-disabled models merge unchecked; enabled decouples from availability (credentials)', { timeout: 60_000 }, () => {
@@ -321,89 +308,7 @@ test('buildMergedProviders: known context windows produce an "N context" tag aft
   assert.equal(byId.get('plain-mini')?.tags, undefined)
 })
 
-test('buildDefaultModelOptions: unset sentinel entry, available-model filtering and out-of-catalog retention', { timeout: 60_000 }, () => {
-  const models: ModelDescriptor[] = [
-    {
-      id: 'anthropic/claude-3-7-sonnet',
-      provider: 'anthropic',
-      modelId: 'claude-3-7-sonnet',
-      available: true,
-      label: 'Claude 3.7 Sonnet',
-      thinkingLevels: ['off', 'low', 'high'],
-    },
-    {
-      id: 'openai/gpt-4o',
-      provider: 'openai',
-      modelId: 'gpt-4o',
-      available: false,
-      label: 'GPT-4o',
-      thinkingLevels: ['off'],
-    },
-  ]
-
-  // No current value: first entry is the non-empty sentinel (an empty string is
-  // placeholder semantics in Radix Select); only available models are listed
-  const options = buildDefaultModelOptions(models, '', enT)
-  const first = options[0]
-  const second = options[1]
-  assert.ok(first && second)
-  assert.equal(first.value, UNSET_MODEL_VALUE)
-  assert.equal(options.length, 2)
-  assert.equal(second.value, 'anthropic/claude-3-7-sonnet')
-
-  // Current value outside the available catalog: kept and annotated as out-of-catalog
-  const stale = buildDefaultModelOptions(models, 'zhipu/glm-4.6', enT)
-  const last = stale[stale.length - 1]
-  assert.ok(last)
-  assert.equal(last.value, 'zhipu/glm-4.6')
-  assert.equal(last.meta, 'Not in catalog')
-
-  // The sentinel value itself never triggers out-of-catalog retention
-  const sentinel = buildDefaultModelOptions(models, UNSET_MODEL_VALUE, enT)
-  const sentinelLast = sentinel[sentinel.length - 1]
-  assert.ok(sentinelLast)
-  assert.equal(sentinelLast.meta, 'anthropic')
-})
-
-test('buildDefaultModelOptions: disabled models are not regular options; a disabled current value is retained and annotated', { timeout: 60_000 }, () => {
-  const models: ModelDescriptor[] = [
-    {
-      id: 'faux/faux-1',
-      provider: 'faux',
-      modelId: 'faux-1',
-      available: true,
-      label: 'Faux 1',
-      thinkingLevels: ['off'],
-    },
-    {
-      id: 'faux/faux-2',
-      provider: 'faux',
-      modelId: 'faux-2',
-      available: true,
-      disabled: true,
-      label: 'Faux 2',
-      thinkingLevels: ['off'],
-    },
-  ]
-
-  // No current value: disabled models never appear as options.
-  const options = buildDefaultModelOptions(models, '', enT)
-  assert.equal(options.some((o) => o.value === 'faux/faux-2'), false)
-  assert.deepEqual(
-    options.map((o) => o.value),
-    [UNSET_MODEL_VALUE, 'faux/faux-1'],
-  )
-
-  // Current default is exactly a disabled model: kept as the current entry
-  // (never silently dropped), annotated as disabled, and not duplicated.
-  const withDisabled = buildDefaultModelOptions(models, 'faux/faux-2', enT)
-  const hits = withDisabled.filter((o) => o.value === 'faux/faux-2')
-  assert.equal(hits.length, 1, 'a disabled model must be retained exactly once (never duplicated across options and annotations)')
-  assert.equal(hits[0]?.label, 'faux/faux-2 (disabled)')
-  assert.equal(hits[0]?.meta, 'Disabled')
-})
-
-test('model-center-model zh-CN: preset builders resolve descriptions, tags and option annotations through the zh translator', { timeout: 60_000 }, () => {
+test('model-center-model zh-CN: preset builders resolve descriptions and tags through the zh translator', { timeout: 60_000 }, () => {
   const zh = createWebTranslator('zh-CN')
 
   // Preset provider descriptions and model tags
@@ -422,10 +327,6 @@ test('model-center-model zh-CN: preset builders resolve descriptions, tags and o
     buildProviderFilterTabs(enT).map((tab) => tab.label),
     ['All', 'Configured'],
   )
-
-  // Default-model options annotate out-of-catalog entries in zh
-  const stale = buildDefaultModelOptions([], 'zhipu/glm-4.6', zh)
-  assert.equal(stale[stale.length - 1]?.meta, '目录外')
 
   // Merged runtime tags interpolate the zh context copy after the thinking tag
   const catalogModels: ModelDescriptor[] = [

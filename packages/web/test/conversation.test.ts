@@ -6,7 +6,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import type { ConversationEntry, ConversationLive, ConversationSummary } from '@helmx/protocol'
 import { createTimelineToolCallsStore } from '@helmx/plugin-client'
-import { asksApi, assetsApi, conversationsApi, searchApi, ApiClientError } from '../src/lib/api.js'
+import { assetsApi, conversationsApi, ApiClientError } from '../src/lib/api.js'
 import { createWebTranslator } from '../src/i18n/catalog.js'
 import { collectSubtreeIds } from '../src/conversation/ancestry-model.js'
 
@@ -971,63 +971,40 @@ test('withdraw 与 submitInput(replaceFromEntryId)：请求体构造与非法 su
   assert.deepEqual(captured[3]!.body, { text: '普通', origin: 'human' })
 })
 
-test('Web API 契约平权：searchApi.query(maxPerConversation) / conversationsApi.list(ownedBy/all/parent) / assetsApi.refreshModels(force)', { timeout: 60_000 }, async (t) => {
+test('Web API 契约平权：conversationsApi.list(ownedBy/all/parent) / assetsApi.refreshModels(force)', { timeout: 60_000 }, async (t) => {
   const captured = stubFetchOnce(t, () => [])
-
-  // searchApi.query: 透传 maxPerConversation 与全部既有过滤项
-  await searchApi.query('hello world', {
-    profileId: 'worker',
-    ownedBy: 'helmx',
-    topLevelOnly: true,
-    limit: 10,
-    maxPerConversation: 4,
-  })
-  assert.equal(
-    captured[0]!.path,
-    '/api/search?q=hello%20world&profileId=worker&ownedBy=helmx&topLevelOnly=1&limit=10&maxPerConversation=4',
-  )
-  await searchApi.query('plain')
-  assert.equal(captured[1]!.path, '/api/search?q=plain')
 
   // conversationsApi.list: 透传 ownedBy / topLevelOnly / all / parent 与既有过滤项
   await conversationsApi.list({ profileId: 'assistant', status: 'working', ownedBy: 'helmx', all: true })
-  assert.equal(captured[2]!.path, '/api/conversations?profileId=assistant&status=working&ownedBy=helmx&all=1')
+  assert.equal(captured[0]!.path, '/api/conversations?profileId=assistant&status=working&ownedBy=helmx&all=1')
   await conversationsApi.list({ parent: 7, tag: 'review', ownedBy: 'human' })
-  assert.equal(captured[3]!.path, '/api/conversations?tag=review&ownedBy=human&parent=7')
+  assert.equal(captured[1]!.path, '/api/conversations?tag=review&ownedBy=human&parent=7')
   await conversationsApi.list({ all: false })
-  assert.equal(captured[4]!.path, '/api/conversations?all=0')
+  assert.equal(captured[2]!.path, '/api/conversations?all=0')
   await conversationsApi.list()
-  assert.equal(captured[5]!.path, '/api/conversations')
+  assert.equal(captured[3]!.path, '/api/conversations')
   await conversationsApi.list({ topLevelOnly: true })
-  assert.equal(captured[6]!.path, '/api/conversations?topLevelOnly=1')
+  assert.equal(captured[4]!.path, '/api/conversations?topLevelOnly=1')
   await conversationsApi.list({ topLevelOnly: false })
-  assert.equal(captured[7]!.path, '/api/conversations?topLevelOnly=0')
+  assert.equal(captured[5]!.path, '/api/conversations?topLevelOnly=0')
 
   // submitInput 透传 whenPendingAsk
   await conversationsApi.submitInput(7, { text: '询问策略', whenPendingAsk: 'reject' })
-  assert.equal(captured[8]!.path, '/api/conversations/7/input')
-  assert.deepEqual(captured[8]!.body, { text: '询问策略', whenPendingAsk: 'reject' })
-
-  // asksApi.list 支持 conversationId / status 过滤与无参兼容
-  await asksApi.list()
-  assert.equal(captured[9]!.path, '/api/asks')
-  await asksApi.list({ conversationId: 42, status: 'pending' })
-  assert.equal(captured[10]!.path, '/api/asks?conversationId=42&status=pending')
-  await asksApi.list({ status: 'answered' })
-  assert.equal(captured[11]!.path, '/api/asks?status=answered')
+  assert.equal(captured[6]!.path, '/api/conversations/7/input')
+  assert.deepEqual(captured[6]!.body, { text: '询问策略', whenPendingAsk: 'reject' })
 
   // assetsApi.refreshModels: 兼容无参/providers 数组，新增 opts.force
   await assetsApi.refreshModels()
-  assert.equal(captured[12]!.path, '/api/models/refresh')
-  assert.deepEqual(captured[12]!.body, {})
+  assert.equal(captured[7]!.path, '/api/models/refresh')
+  assert.deepEqual(captured[7]!.body, {})
   await assetsApi.refreshModels(['magpie'])
-  assert.deepEqual(captured[13]!.body, { providers: ['magpie'] })
+  assert.deepEqual(captured[8]!.body, { providers: ['magpie'] })
   await assetsApi.refreshModels(undefined, { force: true })
-  assert.deepEqual(captured[14]!.body, { force: true })
+  assert.deepEqual(captured[9]!.body, { force: true })
   await assetsApi.refreshModels(['magpie', 'openrouter'], { force: true })
-  assert.deepEqual(captured[15]!.body, { providers: ['magpie', 'openrouter'], force: true })
+  assert.deepEqual(captured[10]!.body, { providers: ['magpie', 'openrouter'], force: true })
   await assetsApi.refreshModels(['magpie'], { force: false })
-  assert.deepEqual(captured[16]!.body, { providers: ['magpie'], force: false })
+  assert.deepEqual(captured[11]!.body, { providers: ['magpie'], force: false })
 })
 
 test('collectToolCallsByName：单遍按 toolName 分片聚合轻量摘要（全局 index / 状态归一 / presentationMeta / 不复制 result）', { timeout: 60_000 }, () => {

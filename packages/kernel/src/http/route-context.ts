@@ -6,8 +6,7 @@
  * domain handler matches only segments at or below its own prefix: exact method + path segment matching,
  * exact segment count required, and extra segments always return domain-level 404 (never fall through).
  */
-import { HelmxError } from '@helmx/protocol'
-import { errorResponse, readBinaryBodyWithLimit, readBody, DEFAULT_MAX_BODY_BYTES, type JsonRedactor } from './http-utils.js'
+import { errorResponse, readBinaryBodyWithLimit, type JsonRedactor } from './http-utils.js'
 import { ValidationError } from './validate.js'
 
 export interface RouteContext {
@@ -29,17 +28,6 @@ export function parseOptionalBooleanFlag(url: URL, param: string): boolean | und
   if (raw === '1' || raw === 'true') return true
   if (raw === '0' || raw === 'false') return false
   throw new ValidationError(`${param} must be 1/0 or true/false`)
-}
-
-/** Read optional JSON body: empty body returns undefined (validly omitted); invalid JSON still returns 400. */
-export async function readOptionalJsonBody(request: Request): Promise<unknown> {
-  const raw = await readBody(request, DEFAULT_MAX_BODY_BYTES)
-  if (raw.length === 0) return undefined
-  try {
-    return JSON.parse(new TextDecoder('utf8', { fatal: true }).decode(raw))
-  } catch {
-    throw new HelmxError('invalid_input', 'request body is not valid JSON', 400)
-  }
 }
 
 /**
