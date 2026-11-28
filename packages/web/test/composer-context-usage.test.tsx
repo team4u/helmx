@@ -29,8 +29,8 @@ import { COMPOSER_MENU_SLOT, COMPOSER_STATUS_SLOT, COMPOSER_TOOLBAR_SLOT } from 
 import {
   getStandbyDraft,
   resetStandbyDrafts,
+  standbyDirtyDraftKeys,
   standbyDraftKey,
-  standbyDraftsDirty,
 } from '../src/conversation/standby-model.js'
 import { applySnapshot, emptyLiveState, mergeConversationDetail } from '../src/lib/live-state.js'
 import { resetHappyDom } from './helpers/dom-harness.js'
@@ -577,7 +577,7 @@ test('COMPOSER_TOOLBAR_SLOT mounts inside .composer-toolbar-left on both Compose
     assert.deepEqual(getStandbyDraft(standbyDraftKey({ panel: 'primary', profileId: 'assistant' })).inputMeta, {
       'builtin:plan': { mode: 'planning' },
     })
-    assert.equal(standbyDraftsDirty(), false, 'setDraftMeta must not mark empty standby draft dirty')
+    assert.deepEqual(standbyDirtyDraftKeys(), [], 'setDraftMeta must not mark empty standby draft dirty')
     assert.equal(btn.textContent, 'Armed')
   } finally {
     resetStandbyDrafts()
@@ -904,7 +904,7 @@ test('Unified composer + menu opens Upload / COMPOSER_MENU_SLOT (with plugin ded
       getStandbyDraft(standbyDraftKey({ panel: 'primary', profileId: 'assistant' })).inputMeta,
       { 'builtin:menu-probe': { armed: true } },
     )
-    assert.equal(standbyDraftsDirty(), false, 'standby menu slot setDraftMeta must not mark empty draft dirty')
+    assert.deepEqual(standbyDirtyDraftKeys(), [], 'standby menu slot setDraftMeta must not mark empty draft dirty')
   } finally {
     resetStandbyDrafts()
     resetPluginClientCache()

@@ -35,7 +35,6 @@ import {
 } from '../src/shell/version-watch-model.js'
 import {
   clearComposerDirty,
-  composerDirty,
   getComposerDirtySummary,
   isComposerDirtySnapshot,
   setComposerDirty,
@@ -46,7 +45,6 @@ import {
   resetStandbyDrafts,
   standbyDirtyDraftKeys,
   standbyDraftKey,
-  standbyDraftsDirty,
   subscribeStandbyDrafts,
   updateStandbyDraft,
 } from '../src/conversation/standby-model.js'
@@ -390,28 +388,26 @@ describe("version-watch-model", () => {
 
   test('standby-draft dirtiness: an empty draft is clean; any of text/localFiles/uploaded/sending makes it dirty', { timeout: 60_000 }, () => {
     const key = standbyDraftKey({ panel: 'primary', profileId: 'p1' })
-    assert.equal(standbyDraftsDirty(), false)
+    assert.deepEqual(standbyDirtyDraftKeys(), [])
 
     updateStandbyDraft(key, { text: '  ' })
-    assert.equal(standbyDraftsDirty(), false, 'a purely blank body is no unsubmitted content')
+    assert.deepEqual(standbyDirtyDraftKeys(), [], 'a purely blank body is no unsubmitted content')
 
     updateStandbyDraft(key, { text: 'hello' })
-    assert.equal(standbyDraftsDirty(), true)
     assert.deepEqual(standbyDirtyDraftKeys(), [key])
     updateStandbyDraft(key, { text: '' })
-    assert.equal(standbyDraftsDirty(), false)
     assert.deepEqual(standbyDirtyDraftKeys(), [])
 
     updateStandbyDraft(key, { sending: true })
-    assert.equal(standbyDraftsDirty(), true)
+    assert.deepEqual(standbyDirtyDraftKeys(), [key])
     updateStandbyDraft(key, { sending: false })
 
     updateStandbyDraft(key, { localFiles: [{ key: 'f', file: new File(['x'], 'a.txt'), name: 'a.txt', size: 1, mimeType: 'text/plain' }] })
-    assert.equal(standbyDraftsDirty(), true)
+    assert.deepEqual(standbyDirtyDraftKeys(), [key])
     updateStandbyDraft(key, { localFiles: [] })
 
     updateStandbyDraft(key, { uploaded: [{ artifactId: 'a1', name: 'a', size: 1, mimeType: 'text/plain' }] })
-    assert.equal(standbyDraftsDirty(), true)
+    assert.deepEqual(standbyDirtyDraftKeys(), [key])
   })
 
   test('standby-draft subscription: notified when the aggregate dirty flag flips', { timeout: 60_000 }, () => {
@@ -421,7 +417,7 @@ describe("version-watch-model", () => {
       notified += 1
     })
     updateStandbyDraft(key, { text: 'draft' })
-    assert.equal(standbyDraftsDirty(), true)
+    assert.deepEqual(standbyDirtyDraftKeys(), [key])
     assert.ok(notified >= 1)
     off()
   })
@@ -431,7 +427,7 @@ describe("version-watch-model", () => {
   // ---------------------------------------------------------------------------
 
   test('Composer dirty-state bridge: instance-key isolation, aggregation, unmount clearing and subscription', { timeout: 60_000 }, () => {
-    assert.equal(composerDirty(), false)
+    assert.equal(getComposerDirtySummary().anyDirty, false)
     assert.equal(isComposerDirtySnapshot(CLEAN_COMPOSER), false)
     assert.equal(isComposerDirtySnapshot({ ...CLEAN_COMPOSER, hasDraftText: true }), true)
     assert.equal(isComposerDirtySnapshot({ ...CLEAN_COMPOSER, editingEntry: true }), true)
@@ -446,10 +442,10 @@ describe("version-watch-model", () => {
     // the same conversation rendered on main and split screens simultaneously: two instance keys never overwrite each other
     reportComposerDirty('composer-primary', { ...CLEAN_COMPOSER, hasDraftText: true })
     reportComposerDirty('composer-split', CLEAN_COMPOSER)
-    assert.equal(composerDirty(), true, 'any dirty instance makes the aggregate dirty')
+    assert.equal(getComposerDirtySummary().anyDirty, true, 'any dirty instance makes the aggregate dirty')
 
     clearComposerDirty('composer-primary')
-    assert.equal(composerDirty(), false, 'after the dirty instance unmounts, the aggregate restores')
+    assert.equal(getComposerDirtySummary().anyDirty, false, 'after the dirty instance unmounts, the aggregate restores')
     assert.ok(notified >= 2, 'aggregate boolean flips trigger the subscription')
 
     // repeated clean-snapshot reports do not trigger the subscription (aggregate unchanged)
@@ -463,7 +459,6 @@ describe("version-watch-model", () => {
 
   test('Composer dirty-state bridge: busy (in-flight send/upload) also constitutes an unsubmitted scene', { timeout: 60_000 }, () => {
     reportComposerDirty('composer-busy', { ...CLEAN_COMPOSER, busy: true }, 42)
-    assert.equal(composerDirty(), true)
     assert.deepEqual(getComposerDirtySummary(), {
       anyDirty: true,
       conversationIds: [42],

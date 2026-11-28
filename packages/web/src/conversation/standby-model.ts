@@ -221,18 +221,6 @@ export function standbyDirtyDraftKeys(): ReadonlyArray<string> {
   return dirtyKeysCache
 }
 
-/**
- * Whether any standby draft at any coordinate carries unsubmitted local state
- * (non-empty text / staged or uploaded attachments / a first send in flight).
- * Consumed when the version auto-refresh treats unsubmitted browser-local
- * content as the pending condition; text and attachments stay un-persisted
- * until the first send succeeds, and a sending failure anchor (conversationId)
- * counts as local state too.
- */
-export function standbyDraftsDirty(): boolean {
-  return dirtyKeysCache.length > 0
-}
-
 /** Draft entry coordinate: panel + Profile + inherited environment. The same
  * Profile at different remote coordinates yields two independent drafts so an
  * environment inherited from an earlier navigation never leaks into the next

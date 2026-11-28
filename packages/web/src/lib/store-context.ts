@@ -279,6 +279,15 @@ interface KeyedSubsetCache<T> {
   map: Readonly<Record<string, T>>
 }
 
+function cacheSame(prev: Record<string, unknown>, next: Record<string, unknown>): boolean {
+  const prevKeys = Object.keys(prev)
+  if (prevKeys.length !== Object.keys(next).length) return false
+  for (const key of prevKeys) {
+    if (!Object.hasOwn(next, key) || prev[key] !== next[key]) return false
+  }
+  return true
+}
+
 /**
  * 按键集合订阅的通用子集 Hook：只注册给定 key 的监听（空集合零监听），
  * 快照按键读取并经 `cacheSame` 复用上一份引用，避免无关更新触发重渲染。
@@ -505,77 +514,6 @@ export function usePluginClientHash(
   const value = useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
   if (value !== UNSET) return value
   throw new Error('useHelmxStore must be called inside <HelmxStoreProvider>')
-}
-
-// ---------------------------------------------------------------------------
-// Batch conversation-scoped plugin document (sessionDoc) subscription hooks
-// (host-only): single-value / diagnostics subscriptions live in
-// @helmx/plugin-client as usePluginSessionDocValue / usePluginSessionDocDiagnostics
-// (port-driven; plugins and the host share one implementation).
-// Ref-counted dedicated SSE streams connect only while mounted refs exist;
-// see lib/session-docs.ts.
-// ---------------------------------------------------------------------------
-
-/**
- * Batch-subscribe multiple conversation-scoped docs of one plugin in one
- * conversation, returning `{ [docName]: value }`. A failing doc omits its key
- * and surfaces the error honestly on the snapshot (never a silent empty map).
- */
-export function usePluginSessionDocsMap(
-  pluginId: string | undefined,
-  docNames: string[] | undefined,
-  conversationId: number | undefined,
-): Record<string, unknown> {
-  const { subscribeSessionDoc, getSessionDocState } = useStoreActions()
-  const namesKey = JSON.stringify(docNames ?? [])
-  const subscribe = useCallback(
-    (listener: () => void) => {
-      if (!pluginId || conversationId === undefined) return () => {}
-      const unsubs = (JSON.parse(namesKey) as string[]).map((name) =>
-        subscribeSessionDoc({ pluginId, docName: name, conversationId }, listener))
-      return () => { for (const off of unsubs) off() }
-    },
-    [pluginId, namesKey, conversationId, subscribeSessionDoc],
-  )
-  const state = useSyncExternalStore(
-    subscribe,
-    () => {
-      if (!pluginId || conversationId === undefined) return EMPTY_SESSION_DOCS_MAP
-      const names = JSON.parse(namesKey) as string[]
-      if (names.length === 0) return EMPTY_SESSION_DOCS_MAP
-      const map: Record<string, unknown> = {}
-      let error: string | undefined
-      for (const name of names) {
-        const s = getSessionDocState({ pluginId, docName: name, conversationId })
-        if (s.error !== undefined) error = s.error
-        else if (s.hasValue) map[name] = s.value
-      }
-      const cached = snapshotCache.get(subscribe)
-      if (
-        cached !== undefined && cached.pluginId === pluginId && cached.conversationId === conversationId &&
-        cached.error === error && cacheSame(cached.map, map)
-      ) {
-        return cached.result
-      }
-      snapshotCache.set(subscribe, { pluginId, conversationId, map, error, result: map })
-      return map
-    },
-    () => EMPTY_SESSION_DOCS_MAP,
-  )
-  return state
-}
-
-const EMPTY_SESSION_DOCS_MAP: Record<string, unknown> = {}
-interface SessionDocsMapCache { pluginId?: string; conversationId?: number; map: Record<string, unknown>; error?: string; result: Record<string, unknown> }
-const snapshotCache = new WeakMap<(listener: () => void) => () => void, SessionDocsMapCache>()
-
-function cacheSame(prev: Record<string, unknown>, next: Record<string, unknown>): boolean {
-  const prevKeys = Object.keys(prev)
-  if (prevKeys.length !== Object.keys(next).length) return false
-  for (const key of prevKeys) {
-    if (!Object.hasOwn(next, key) || prev[key] !== next[key]) return false
-  }
-  return true
 }
 
 export type { SessionDocKey }

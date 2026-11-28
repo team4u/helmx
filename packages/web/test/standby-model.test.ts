@@ -29,8 +29,8 @@ import {
   resetStandbyDrafts,
   setStandbyDraftInputMeta,
   shouldAutoFocusStandbyTextarea,
+  standbyDirtyDraftKeys,
   standbyDraftKey,
-  standbyDraftsDirty,
   standbyEnvError,
   stepStandbyProfileIndex,
   subscribeStandbyDrafts,
@@ -443,7 +443,7 @@ describe("standby-model", () => {
     setStandbyDraftInputMeta(primaryKey, 'builtin:plan', { mode: 'planning' })
     assert.deepEqual(getStandbyDraft(primaryKey).inputMeta, { 'builtin:plan': { mode: 'planning' } })
     assert.equal(getStandbyDraft(splitKey).inputMeta, undefined, 'split pane must have isolated inputMeta')
-    assert.equal(standbyDraftsDirty(), false, 'inputMeta alone must not mark standby drafts dirty')
+    assert.deepEqual(standbyDirtyDraftKeys(), [], 'inputMeta alone must not mark standby drafts dirty')
 
     // Prototype / empty keys are ignored cleanly
     setStandbyDraftInputMeta(primaryKey, '', { mode: 'planning' })
@@ -459,7 +459,7 @@ describe("standby-model", () => {
     // Re-arm and send text -> forwards shallow-copied meta in first submit, then clears on success
     setStandbyDraftInputMeta(primaryKey, 'builtin:plan', { mode: 'planning' })
     updateStandbyDraft(primaryKey, { text: 'plan first turn' })
-    assert.equal(standbyDraftsDirty(), true)
+    assert.deepEqual(standbyDirtyDraftKeys(), [primaryKey])
 
     const log = makeLog()
     assert.equal(await run(primaryKey, 'assistant', makeDeps(log)), 'sent')
