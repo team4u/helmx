@@ -54,6 +54,7 @@ function validate(value: unknown): void {
 
 test('edit presentation contract accepts real line numbers, truncated diffs and no-op results', { timeout: 60_000 }, () => {
   validate(result())
+  validate({ ...result(), artifactId: 'art-edit-1' })
   const truncated = result()
   truncated.diff.rows = []
   truncated.diff.truncated = true
@@ -70,6 +71,9 @@ test('edit presentation boundary rejects missing fields, wrong row shapes and un
     { path: '/workspace/example.ts', nodeId: 'local', replaced: true },
     { ...result(), replaced: false },
     { ...result(), nodeId: '' },
+    { ...result(), artifactId: '' },
+    { ...result(), artifactId: 123 },
+    { ...result(), unexpected: true },
     ...[
       { kind: 'context', oldLine: 1, text: 'missing newLine' },
       { kind: 'remove', oldLine: 1, newLine: 1, text: 'unexpected newLine' },

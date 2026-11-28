@@ -44,7 +44,7 @@ export const SYSTEM_DEFAULT = [
   '',
   'You are a personal assistant running on the Helmx microkernel.',
   '',
-  'Use Markdown for normal replies. When generating files for users to view on Web, register artifacts via `write(..., artifact: true)` or `register_artifact({ path })`, and link them in your reply using `[filename](artifact:<id>)` or `![image](artifact:<id>)`.',
+  'Use Markdown for normal replies. When generating files for users to view on Web, register artifacts via `write/edit(..., artifact: true)` or `register_artifact({ path })`, and link them in your reply using `[filename](artifact:<id>)` or `![image](artifact:<id>)`.',
   '',
 ].join('\n')
 

@@ -21,6 +21,7 @@ import {
   prepareEditArguments,
 } from '../src/runtime/tools/edit-engine.js'
 import type { HelmxToolDeps } from '../src/runtime/tool-deps.js'
+import type { EnvFabric } from '../src/env/index.js'
 import { cleanupDir, makeTempDir } from './helpers.js'
 
 let rootDir: string
@@ -33,16 +34,27 @@ after(async () => {
   await cleanupDir(rootDir)
 }, { timeout: 60_000 })
 
-async function makeDeps(dir: string, stash = new SecretStash()): Promise<HelmxToolDeps> {
+async function makeDepsWithArtifacts(
+  dir: string,
+  stash = new SecretStash(),
+): Promise<{ deps: HelmxToolDeps; artifacts: ArtifactService }> {
   mkdirSync(dir, { recursive: true })
   await ensureDataDir(dir)
+  const artifacts = new ArtifactService(dir, new InMemoryArtifactRepository(), stash)
   return {
-    dataDir: dir,
-    defaultCwd: dir,
-    hubUrl: 'http://127.0.0.1:3202',
-    redact: (text) => stash.redact(text),
-    artifacts: new ArtifactService(dir, new InMemoryArtifactRepository(), stash),
+    deps: {
+      dataDir: dir,
+      defaultCwd: dir,
+      hubUrl: 'http://127.0.0.1:3202',
+      redact: (text) => stash.redact(text),
+      artifacts,
+    },
+    artifacts,
   }
+}
+
+async function makeDeps(dir: string, stash = new SecretStash()): Promise<HelmxToolDeps> {
+  return (await makeDepsWithArtifacts(dir, stash)).deps
 }
 
 function makeApi(cwd: string, conversationId = 1) {
@@ -287,5 +299,255 @@ describe('createEditTool: end-to-end atomic edits[], CRLF, and schema output', {
     assert.ok(!disk.replace(/\r\n/g, '').includes('\n'), 'all endings must stay CRLF')
     assert.ok(disk.includes('line-2b-new\r\n'))
     assert.ok(disk.includes('line-35-new\r\n'))
+  })
+})
+
+describe('createEditTool: artifact registration, error boundaries, remote node, and deletion', { timeout: 60_000 }, () => {
+  it('local edit with artifact: true preserves BOM/CRLF, registers artifact, and passes EDIT_TOOL_RESULT_SCHEMA', { timeout: 60_000 }, async () => {
+    const dir = join(rootDir, 'local-art-true')
+    const { deps, artifacts } = await makeDepsWithArtifacts(dir)
+    mkdirSync(join(dir, 'reports'), { recursive: true })
+    const file = join(dir, 'reports', 'summary.md')
+    writeFileSync(file, '\uFEFF# Title\r\nold line\r\nfooter\r\n', 'utf8')
+
+    const tool = createEditTool(deps)
+    const res = await tool.execute(
+      {
+        path: 'reports/summary.md',
+        oldText: 'old line',
+        newText: 'new line',
+        artifact: true,
+      },
+      makeApi(dir, 11),
+      BACKGROUND_CONTEXT,
+    )
+    assert.equal(!!res.isError, false)
+    const structured = res.structuredOutput as unknown as EditToolResult
+    validateOrThrow(EDIT_TOOL_RESULT_SCHEMA, structured, 'invalid edit result')
+    assert.deepEqual(res.details, structured)
+    assert.equal(structured.path, file)
+    assert.equal(structured.nodeId, 'local')
+    assert.ok(typeof structured.artifactId === 'string' && structured.artifactId.length > 0)
+
+    const outputText = (res.output as Array<{ text: string }>)[0]!.text
+    assert.equal(
+      outputText,
+      `edit_ok: ${file} (node local, replaced 1 occurrence)\n[Artifact] id=${structured.artifactId} name=summary.md`,
+    )
+
+    const disk = readFileSync(file, 'utf8')
+    assert.equal(disk, '\uFEFF# Title\r\nnew line\r\nfooter\r\n')
+    assert.ok(disk.startsWith('\uFEFF'))
+    assert.ok(!disk.replace(/\r\n/g, '').includes('\n'), 'all endings must stay CRLF')
+
+    const metas = await artifacts.list(11)
+    assert.equal(metas.length, 1)
+    assert.equal(metas[0]!.id, structured.artifactId)
+    assert.equal(metas[0]!.name, 'summary.md')
+    assert.equal(await artifacts.readContent(structured.artifactId!), disk)
+  })
+
+  it('local edit with artifact: false or omitted does not register artifact or emit artifactId', { timeout: 60_000 }, async () => {
+    const dir = join(rootDir, 'local-art-off')
+    const { deps, artifacts } = await makeDepsWithArtifacts(dir)
+    const file = join(dir, 'plain.txt')
+    writeFileSync(file, 'alpha\nbeta\ngamma\n', 'utf8')
+    const tool = createEditTool(deps)
+
+    const resOmitted = await tool.execute(
+      { path: 'plain.txt', oldText: 'alpha', newText: 'ALPHA' },
+      makeApi(dir, 12),
+      BACKGROUND_CONTEXT,
+    )
+    assert.equal(!!resOmitted.isError, false)
+    const outOmitted = (resOmitted.output as Array<{ text: string }>)[0]!.text
+    assert.doesNotMatch(outOmitted, /\[Artifact\]/)
+    const structOmitted = resOmitted.structuredOutput as unknown as EditToolResult
+    validateOrThrow(EDIT_TOOL_RESULT_SCHEMA, structOmitted, 'invalid edit result')
+    assert.equal(structOmitted.artifactId, undefined)
+    assert.equal(Object.hasOwn(structOmitted, 'artifactId'), false)
+    assert.deepEqual(resOmitted.details, structOmitted)
+
+    const resFalse = await tool.execute(
+      { path: 'plain.txt', oldText: 'beta', newText: 'BETA', artifact: false },
+      makeApi(dir, 12),
+      BACKGROUND_CONTEXT,
+    )
+    assert.equal(!!resFalse.isError, false)
+    const outFalse = (resFalse.output as Array<{ text: string }>)[0]!.text
+    assert.doesNotMatch(outFalse, /\[Artifact\]/)
+    const structFalse = resFalse.structuredOutput as unknown as EditToolResult
+    validateOrThrow(EDIT_TOOL_RESULT_SCHEMA, structFalse, 'invalid edit result')
+    assert.equal(structFalse.artifactId, undefined)
+    assert.equal(Object.hasOwn(structFalse, 'artifactId'), false)
+    assert.deepEqual(resFalse.details, structFalse)
+    assert.equal((await artifacts.list(12)).length, 0)
+  })
+
+  it('edit with artifact: true fails before IO when deps.artifacts.writeUploaded is undefined', { timeout: 60_000 }, async () => {
+    const dir = join(rootDir, 'no-write-uploaded')
+    mkdirSync(dir, { recursive: true })
+    await ensureDataDir(dir)
+    const stash = new SecretStash()
+    const file = join(dir, 'untouched.txt')
+    writeFileSync(file, 'keep-me\n', 'utf8')
+    const deps: HelmxToolDeps = {
+      dataDir: dir,
+      defaultCwd: dir,
+      hubUrl: 'http://127.0.0.1:3202',
+      redact: (t) => stash.redact(t),
+      artifacts: {
+        spill: async () => ({ text: '' }),
+        get: async () => {
+          throw new Error('not implemented')
+        },
+        readContent: async () => '',
+        readBuffer: async () => Buffer.alloc(0),
+        writeUploaded: undefined,
+      },
+    }
+    const tool = createEditTool(deps)
+    const res = await tool.execute(
+      { path: 'untouched.txt', oldText: 'keep-me', newText: 'changed', artifact: true },
+      makeApi(dir, 13),
+      BACKGROUND_CONTEXT,
+    )
+    assert.equal(res.isError, true)
+    assert.equal(
+      (res.output as Array<{ text: string }>)[0]!.text,
+      'edit_failed: artifact service does not support writeUploaded; cannot register conversation artifact',
+    )
+    assert.equal(readFileSync(file, 'utf8'), 'keep-me\n')
+  })
+
+  it('edit with artifact: true redacts secret and reports disk update when writeUploaded throws', { timeout: 60_000 }, async () => {
+    const dir = join(rootDir, 'art-throw')
+    const stash = new SecretStash()
+    const secret = 'sk-edit-art-err-secret-777'
+    stash.addRedaction(secret)
+    const baseDeps = await makeDeps(dir, stash)
+    const file = join(dir, 'partial.txt')
+    writeFileSync(file, 'before\n', 'utf8')
+    const deps: HelmxToolDeps = {
+      ...baseDeps,
+      artifacts: {
+        ...baseDeps.artifacts,
+        writeUploaded: async () => {
+          throw new Error(`artifact store failure: ${secret}`)
+        },
+      },
+    }
+    const tool = createEditTool(deps)
+    const res = await tool.execute(
+      { path: 'partial.txt', oldText: 'before', newText: 'after', artifact: true },
+      makeApi(dir, 14),
+      BACKGROUND_CONTEXT,
+    )
+    assert.equal(res.isError, true)
+    const outputText = (res.output as Array<{ text: string }>)[0]!.text
+    assert.ok(outputText.includes(`edit_failed: file was updated at ${file}, but artifact registration failed:`))
+    assert.ok(outputText.includes('[REDACTED]'))
+    assert.ok(!outputText.includes(secret), 'thrown error must be redacted')
+    assert.equal(readFileSync(file, 'utf8'), 'after\n')
+  })
+
+  it('remote node edit with artifact: true updates remote file and registers conversation artifact', { timeout: 60_000 }, async () => {
+    const dir = join(rootDir, 'remote-art-true')
+    const stash = new SecretStash()
+    const { deps: baseDeps, artifacts } = await makeDepsWithArtifacts(dir, stash)
+    const remoteAbs = '/remote/workspace/sub/remote.txt'
+    const remoteFiles = new Map<string, string>([[remoteAbs, 'remote-old\n']])
+    const stubEnv = {
+      id: 'remote:worker-node-1',
+      async absolutePath(p: string) {
+        return { ok: true as const, value: p }
+      },
+      async joinPath(parts: string[]) {
+        return { ok: true as const, value: parts.join('/') }
+      },
+      async canonicalPath(p: string) {
+        return { ok: true as const, value: p }
+      },
+      async readTextFile(p: string) {
+        const content = remoteFiles.get(p)
+        if (content === undefined) {
+          return { ok: false as const, error: { code: 'not_found', message: `missing: ${p}` } }
+        }
+        return { ok: true as const, value: content }
+      },
+      async writeFile(p: string, content: string) {
+        remoteFiles.set(p, content)
+        return { ok: true as const, value: void 0 }
+      },
+    }
+    const stubFabric: EnvFabric = {
+      registry: {} as never,
+      envFor: () => stubEnv as never,
+      envForTarget: () => {
+        throw new Error('not used')
+      },
+      isOnline: () => true,
+      waitForOnline: () => Promise.resolve(true),
+      getNodeHubUrl: () => 'http://10.0.0.5:3202',
+      evictConversation: () => undefined,
+      debugBaseCount: () => 0,
+      debugBases: () => [],
+      dispose: () => Promise.resolve(),
+    } as never
+
+    const deps: HelmxToolDeps = {
+      ...baseDeps,
+      defaultCwd: '/remote/workspace',
+      envFabric: stubFabric,
+      nodeIdOf: () => 'worker-node-1',
+    }
+    const tool = createEditTool(deps)
+    const res = await tool.execute(
+      { path: 'sub/remote.txt', oldText: 'remote-old', newText: 'remote-new', artifact: true },
+      makeApi('/remote/workspace', 15),
+      BACKGROUND_CONTEXT,
+    )
+    assert.equal(!!res.isError, false)
+    assert.equal(remoteFiles.get(remoteAbs), 'remote-new\n')
+
+    const structured = res.structuredOutput as unknown as EditToolResult
+    validateOrThrow(EDIT_TOOL_RESULT_SCHEMA, structured, 'invalid remote edit result')
+    assert.deepEqual(res.details, structured)
+    assert.equal(structured.path, remoteAbs)
+    assert.equal(structured.nodeId, 'worker-node-1')
+    assert.ok(typeof structured.artifactId === 'string' && structured.artifactId.length > 0)
+
+    const outputText = (res.output as Array<{ text: string }>)[0]!.text
+    assert.equal(
+      outputText,
+      `edit_ok: ${remoteAbs} (node worker-node-1, replaced 1 occurrence)\n[Artifact] id=${structured.artifactId} name=remote.txt`,
+    )
+    const metas = await artifacts.list(15)
+    assert.equal(metas.length, 1)
+    assert.equal(metas[0]!.id, structured.artifactId)
+    assert.equal(metas[0]!.name, 'remote.txt')
+    assert.equal(await artifacts.readContent(structured.artifactId!), 'remote-new\n')
+  })
+
+  it('deletes matched text cleanly when newText is empty string and produces schema-valid diff', { timeout: 60_000 }, async () => {
+    const dir = join(rootDir, 'delete-empty-new')
+    const deps = await makeDeps(dir)
+    const file = join(dir, 'delete.txt')
+    writeFileSync(file, 'keep-top\nremove-this\nkeep-bottom\n', 'utf8')
+
+    const tool = createEditTool(deps)
+    const res = await tool.execute(
+      { path: 'delete.txt', oldText: 'remove-this\n', newText: '' },
+      makeApi(dir, 16),
+      BACKGROUND_CONTEXT,
+    )
+    assert.equal(!!res.isError, false)
+    assert.equal(readFileSync(file, 'utf8'), 'keep-top\nkeep-bottom\n')
+    const structured = res.structuredOutput as unknown as EditToolResult
+    validateOrThrow(EDIT_TOOL_RESULT_SCHEMA, structured, 'invalid deletion edit result')
+    assert.deepEqual(res.details, structured)
+    assert.equal(structured.diff.removedLines, 1)
+    assert.equal(structured.diff.addedLines, 0)
+    assert.ok(structured.diff.rows.some((r) => r.kind === 'remove' && r.text === 'remove-this'))
   })
 })

@@ -206,6 +206,45 @@ test('edit pending → success：完成且元数据合法后切换为内核真�
   }
 })
 
+test('edit completed with artifactId: renders applied diff cleanly alongside open-artifact button', { timeout: 60_000 }, async () => {
+  const m = createMount()
+  try {
+    modalCalls.length = 0
+    await m.render(
+      bodyUi(
+        trace({
+          toolName: 'edit',
+          status: 'done',
+          input: { path: '/a.ts', oldText: 'const a = 1', newText: 'const a = 2', artifact: true },
+          presentationMeta: {
+            ...validEditMeta([
+              { kind: 'context', oldLine: 9, newLine: 9, text: 'function f() {' },
+              { kind: 'remove', oldLine: 10, text: '  const a = 1' },
+              { kind: 'add', newLine: 10, text: '  const a = 2' },
+            ]),
+            artifactId: 'art-edit-1',
+          },
+          artifactRef: 'art-edit-1',
+        }),
+      ),
+    )
+    assert.match(m.host.textContent ?? '', /Applied diff/)
+    assert.ok(m.host.querySelector('.callout-error') === null, 'valid artifactId meta must not show invalidMeta alert')
+    assert.ok(m.host.querySelector('.trace-diff-row-add') !== null, 'applied diff rows render cleanly')
+    const artifactBtn = [...m.host.querySelectorAll('button')].find((b) =>
+      b.textContent?.includes('art-edit-1'),
+    ) as HTMLButtonElement | undefined
+    assert.ok(artifactBtn !== undefined, 'open-artifact button renders alongside applied diff')
+    await act(async () => {
+      artifactBtn.click()
+    })
+    assert.equal(modalCalls[0]?.kind, 'artifact-preview')
+    assert.equal(modalCalls[0]?.artifactId, 'art-edit-1')
+  } finally {
+    m.unmount()
+  }
+})
+
 test('edit failure：错误与请求的变更片段（执行失败不判定文件已变），绝不显示已应用差异', { timeout: 60_000 }, async () => {
   const m = createMount()
   try {
