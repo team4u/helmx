@@ -7,7 +7,7 @@ import { useEffect, useRef } from 'react'
 import type * as React from 'react'
 import type { Profile } from '@helmx/protocol/browser'
 import { Button, HelmxIcon } from '@helmx/ui'
-import { ModelPickerControl, useHostModels } from '@helmx/plugin-client'
+import { ModelPickerControl, resolveEffectiveThinkingLevel, useHostModels } from '@helmx/plugin-client'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import type { ModelCatalogDefaults } from '../lib/api.js'
 import { useModels, useNodes } from '../lib/store-context.js'
@@ -73,26 +73,91 @@ export function StandbyModelPicker({
   const showThinkingBadge = supportsThinking && effectiveThinkingLevel !== '' && effectiveThinkingLevel !== 'off'
   const thinkingSuffix = showThinkingBadge ? t('composer.model.thinkingSuffix', { level: effectiveThinkingLevel }) : ''
 
+  const resolveLevelsFor = (modelId: string | undefined): ReadonlyArray<string> => {
+    if (modelId === undefined || modelId === '') return ['off']
+    const concrete = models.find((model) => model.id === modelId)
+    if (concrete !== undefined) return concrete.thinkingLevels ?? ['off']
+    if (modelId.startsWith('tier/')) {
+      const tier = hostModels?.modelTiers?.find((item) => `tier/${item.id}` === modelId)
+      if (tier !== undefined) return tier.thinkingLevels ?? ['off']
+    }
+    return ['off']
+  }
+
+  const stagedNextTurnModel =
+    draft.nextTurnModel !== undefined && draft.nextTurnModel !== '' ? draft.nextTurnModel : undefined
+  const stagedNextTurnThinking =
+    draft.nextTurnThinkingLevel !== undefined && draft.nextTurnThinkingLevel !== ''
+      ? draft.nextTurnThinkingLevel
+      : undefined
+  const hasStagedNextTurn = stagedNextTurnModel !== undefined || stagedNextTurnThinking !== undefined
+
+  let buttonTitle: string
+  if (disabled) {
+    buttonTitle = lockedNote
+  } else if (hasStagedNextTurn) {
+    const stagedTargetModel = stagedNextTurnModel ?? effectiveModel
+    const stagedLevels = resolveLevelsFor(stagedTargetModel)
+    const stagedSupportsThinking = stagedLevels.some((level) => level !== 'off')
+    const stagedThinkingInput =
+      stagedNextTurnThinking ?? (stagedNextTurnModel !== undefined ? '' : effectiveThinkingLevel)
+    const stagedEffectiveLevel = resolveEffectiveThinkingLevel(stagedLevels, stagedThinkingInput)
+    const stagedShowLevel =
+      stagedSupportsThinking && stagedEffectiveLevel !== '' && stagedEffectiveLevel !== 'off'
+    const stagedThinkingSuffix = stagedShowLevel
+      ? t('composer.model.thinkingSuffix', { level: stagedEffectiveLevel })
+      : ''
+    const baselineLabel =
+      effectiveModel !== undefined && effectiveModel !== ''
+        ? effectiveModel
+        : t('composer.model.baselineDefault')
+    buttonTitle = t('composer.model.nextTurnTitle', {
+      model: stagedTargetModel ?? baselineLabel,
+      thinking: stagedThinkingSuffix,
+      baseline: baselineLabel,
+      shortcut: COMPOSER_SHORTCUTS.toggleModelPicker,
+    })
+  } else {
+    buttonTitle =
+      effectiveModel !== undefined && effectiveModel !== ''
+        ? t('composer.model.currentTitle', {
+            model: effectiveModel,
+            thinking: thinkingSuffix,
+            shortcut: COMPOSER_SHORTCUTS.toggleModelPicker,
+          })
+        : t('composer.model.followsDefaultTitle', {
+            thinking: thinkingSuffix,
+            shortcut: COMPOSER_SHORTCUTS.toggleModelPicker,
+          })
+  }
+
   return (
     <ModelPickerControl
       effectiveModel={effectiveModel}
       activeThinkingLevel={effectiveThinkingLevel}
       fallbackPanel={isSplit ? 'split' : 'primary'}
-      enableRegisteredModes={true}
-      allowOrchestratorTiers={true}
+      nextTurnMode={{
+        model: draft.nextTurnModel,
+        thinkingLevel: draft.nextTurnThinkingLevel,
+        disabled,
+        busy: draft.sending,
+        onChange: (override) => {
+          const nextModel = override?.model?.trim()
+          const nextThinking = override?.thinkingLevel?.trim()
+          updateStandbyDraft(draftKey, {
+            nextTurnModel: nextModel !== undefined && nextModel !== '' ? nextModel : undefined,
+            nextTurnThinkingLevel:
+              nextThinking !== undefined && nextThinking !== '' ? nextThinking : undefined,
+          })
+        },
+      }}
       resetLabel={
         profile.model !== undefined && profile.model !== ''
           ? t('composer.model.followProfileDefaultModel', { model: profile.model })
           : t('composer.model.followProfileDefault')
       }
       resetTitle={t('composer.model.standbyResetTitle')}
-      buttonTitle={
-        disabled
-          ? lockedNote
-          : effectiveModel !== undefined && effectiveModel !== ''
-            ? t('composer.model.currentTitle', { model: effectiveModel, thinking: thinkingSuffix, shortcut: COMPOSER_SHORTCUTS.toggleModelPicker })
-            : t('composer.model.followsDefaultTitle', { thinking: thinkingSuffix, shortcut: COMPOSER_SHORTCUTS.toggleModelPicker })
-      }
+      buttonTitle={buttonTitle}
       disabled={disabled}
       copy={copy}
       onNotice={onNotice}

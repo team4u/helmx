@@ -207,7 +207,6 @@ export function GlobalDefaultsPanel({
               resetLabel={t('models.defaults.optionUnset')}
               resetTitle={t('models.defaults.optionUnset')}
               enableShortcut={false}
-              allowOrchestratorTiers={true}
               disabled={saving}
               copy={copy}
               onNotice={onNotice}

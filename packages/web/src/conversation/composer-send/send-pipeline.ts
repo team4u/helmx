@@ -3,7 +3,7 @@
  * command dispatch, optimistic clear with rollback by live draft version, whenBusy policy),
  * explicit text submission, and the queued-input withdraw re-edit.
  */
-import { useCallback } from 'react'
+import { useCallback, useRef } from 'react'
 import type { QueuedConversationInput, WhenBusy } from '@helmx/protocol/browser'
 import type { WebMessageTranslator } from '../../i18n/catalog.js'
 import { conversationsApi } from '../../lib/api.js'
@@ -11,7 +11,9 @@ import { matchExactPluginSlash } from '../../lib/commands-model.js'
 import type { HelmxStoreActions } from '../../lib/store/types.js'
 import {
   draftVersionOf,
+  normalizeNextTurnOverride,
   shouldRestoreEditOnFailure,
+  type NextTurnModelOverride,
 } from '../composer-model.js'
 import type { EditRequestTarget } from '../timeline-model.js'
 import type { ComposerSendCore } from './core.js'
@@ -48,6 +50,14 @@ export function useComposerSendPipeline(
   },
 ): ComposerSendPipeline {
   const { conversation, onSendingChange, slashPluginCommands, working } = input
+  const nextTurnOverrideRef = useRef<NextTurnModelOverride | null | undefined>(input.nextTurnOverride)
+  nextTurnOverrideRef.current = input.nextTurnOverride
+  const onConsumeNextTurnOverrideRef = useRef(input.onConsumeNextTurnOverride)
+  onConsumeNextTurnOverrideRef.current = input.onConsumeNextTurnOverride
+  const pendingAskCountRef = useRef(conversation.pendingAskCount)
+  pendingAskCountRef.current = conversation.pendingAskCount
+  const ownedByRef = useRef(conversation.ownedBy)
+  ownedByRef.current = conversation.ownedBy
   const { t, pushNotice } = ctx
   const { notifyErrorFor } = ctx.notices
   const { envBlocker } = ctx.env
@@ -173,6 +183,12 @@ export function useComposerSendPipeline(
     }
     const targetEntryId = editingEntryId
     const sentAttachments = new Set(attachments.map((attachment) => attachment.artifactId))
+    const canApplyOneTurn =
+      !working &&
+      pendingAskCountRef.current === 0 &&
+      targetEntryId === null &&
+      (ownedByRef.current ?? 'human') === 'human'
+    const stagedOneTurn = canApplyOneTurn ? normalizeNextTurnOverride(nextTurnOverrideRef.current) : undefined
     // Freeze the draft at the send instant: on failure the rollback only
     // applies while the Composer is still in the expected post-optimistic-clear
     // state (no new input, no other target, no attachment change) — an old
@@ -209,9 +225,14 @@ export function useComposerSendPipeline(
         text: payload,
         origin: 'human',
         ...(targetEntryId !== null ? { replaceFromEntryId: targetEntryId } : working ? { whenBusy: busyMode } : {}),
+        ...(stagedOneTurn?.model !== undefined ? { model: stagedOneTurn.model } : {}),
+        ...(stagedOneTurn?.thinkingLevel !== undefined ? { thinkingLevel: stagedOneTurn.thinkingLevel } : {}),
         ...(attachments.length > 0 ? { attachments: attachments.map((a) => a.artifactId) } : {}),
       })
       if (isActiveConversation(targetConversationId)) {
+        if (stagedOneTurn !== undefined) {
+          onConsumeNextTurnOverrideRef.current?.(stagedOneTurn)
+        }
         liveDraftRef.current = {
           ...liveDraftRef.current,
           attachments: liveDraftRef.current.attachments.filter((artifactId) => !sentAttachments.has(artifactId)),

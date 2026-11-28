@@ -148,6 +148,36 @@ export const composerMessages = {
   'composer.model.levelSuffix': { en: ' · {level}', 'zh-CN': ' · {level}' },
   'composer.model.defaultLabel': { en: 'Default model', 'zh-CN': '默认模型' },
   'composer.model.defaultModeLabel': { en: 'Switch model', 'zh-CN': '切换模型' },
+  'composer.model.nextTurnModeLabel': { en: 'Next turn only', 'zh-CN': '仅本轮' },
+  'composer.model.nextTurnModeHint': {
+    en: 'Applies to the next message only (restores baseline after turn ends)',
+    'zh-CN': '仅对下一条消息生效（回合结束后恢复原模型）',
+  },
+  'composer.model.nextTurnBadge': { en: 'Next turn', 'zh-CN': '仅本轮' },
+  'composer.model.clearNextTurnLabel': { en: 'Clear one-turn override', 'zh-CN': '清除单轮换模' },
+  'composer.model.nextTurnTitle': {
+    en: 'Next turn only: {model}{thinking} (baseline: {baseline}) ({shortcut})',
+    'zh-CN': '仅下轮生效：{model}{thinking}（基线：{baseline}）({shortcut})',
+  },
+  'composer.model.baselineDefault': { en: 'default', 'zh-CN': '默认' },
+  'composer.model.runtimeOverrideBadge': { en: 'Temp override', 'zh-CN': '临时换模' },
+  'composer.model.runtimeOverrideBaseline': { en: '(baseline: {baseline})', 'zh-CN': '（基线：{baseline}）' },
+  'composer.model.runtimeOverrideTitle': {
+    en: 'Temporary runtime override active: {model}{thinking} (baseline: {baseline}) ({shortcut})',
+    'zh-CN': '临时换模生效中：{model}{thinking}（基线：{baseline}）({shortcut})',
+  },
+  'composer.model.runtimeOverrideDefaultTitle': {
+    en: 'Temporary runtime override active: {model}{thinking} (baseline: profile/global default) ({shortcut})',
+    'zh-CN': '临时换模生效中：{model}{thinking}（基线：角色/全局默认）({shortcut})',
+  },
+  'composer.model.runtimeOverrideAria': {
+    en: 'Temporary runtime override active: {model}{level} (baseline: {baseline})',
+    'zh-CN': '临时换模生效中：{model}{level}（基线：{baseline}）',
+  },
+  'composer.model.runtimeOverrideDefaultAria': {
+    en: 'Temporary runtime override active: {model}{level} (baseline: profile/global default)',
+    'zh-CN': '临时换模生效中：{model}{level}（基线：角色/全局默认）',
+  },
   'composer.model.modeBarAria': { en: 'Model selection mode', 'zh-CN': '模型选择模式' },
   'composer.model.catalogUnavailable': { en: 'Model catalog unavailable', 'zh-CN': '模型目录不可用' },
   'composer.model.searchAria': { en: 'Search models', 'zh-CN': '搜索模型' },

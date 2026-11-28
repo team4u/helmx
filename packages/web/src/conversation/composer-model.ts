@@ -128,6 +128,37 @@ export function busyEnterMode(modifier: boolean): 'steer' | 'followUp' {
   return modifier ? 'followUp' : BUSY_ENTER_DEFAULT
 }
 
+/** Staged one-turn model/thinking override for the next idle submission (`POST /api/conversations/:id/input`). */
+export interface NextTurnModelOverride {
+  model?: string
+  thinkingLevel?: string
+}
+
+/** Normalize a staged one-turn override; returns undefined when neither model nor thinkingLevel is set. */
+export function normalizeNextTurnOverride(
+  override: NextTurnModelOverride | null | undefined,
+): NextTurnModelOverride | undefined {
+  if (override === null || override === undefined) return undefined
+  const model = override.model?.trim()
+  const thinkingLevel = override.thinkingLevel?.trim()
+  const hasModel = model !== undefined && model !== ''
+  const hasThinking = thinkingLevel !== undefined && thinkingLevel !== ''
+  if (!hasModel && !hasThinking) return undefined
+  return {
+    ...(hasModel ? { model } : {}),
+    ...(hasThinking ? { thinkingLevel } : {}),
+  }
+}
+
+export function sameNextTurnOverride(
+  a: NextTurnModelOverride | null | undefined,
+  b: NextTurnModelOverride | null | undefined,
+): boolean {
+  const na = normalizeNextTurnOverride(a)
+  const nb = normalizeNextTurnOverride(b)
+  return na?.model === nb?.model && na?.thinkingLevel === nb?.thinkingLevel
+}
+
 /** Substantive conversational entry kinds that count as "the chat has
  * started" (any of them locks the starting environment).
  * Real SDK kinds use hyphens (pi.tool-result, see the pi-durable README);

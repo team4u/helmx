@@ -259,6 +259,19 @@ function queueOnlyLive(live: ConversationLive): ConversationLive {
   return { conversationId: live.conversationId, text: '', tools: [], ...(live.queuedInputs !== undefined ? { queuedInputs: live.queuedInputs } : {}), updatedAt: live.updatedAt }
 }
 
+function withAuthoritativeRuntimeOverride(
+  detail: ConversationDetail,
+  summary: Pick<ConversationSummary, 'runtimeModelOverride'>,
+): ConversationDetail {
+  if (summary.runtimeModelOverride === true) {
+    return detail.runtimeModelOverride === true ? detail : { ...detail, runtimeModelOverride: true }
+  }
+  if (!Object.hasOwn(detail, 'runtimeModelOverride')) return detail
+  const next = { ...detail }
+  delete next.runtimeModelOverride
+  return next
+}
+
 /**
  * 应用全量快照并做 SWR 保活：保留仍存在于 snapshot.conversations 中的
  * previous.conversationDetails（合并最新摘要字段），仅清理已删除会话的详情缓存。
@@ -278,7 +291,7 @@ export function applySnapshot(previous: LiveState, snapshot: HelmxSnapshot): Liv
   for (const conv of snapshot.conversations) {
     const prevDetail = previous.conversationDetails[conv.id]
     if (prevDetail !== undefined) {
-      conversationDetails[conv.id] = {
+      conversationDetails[conv.id] = withAuthoritativeRuntimeOverride({
         ...prevDetail,
         ...conv,
         // 保留 prevDetail 已实际同步的条目水位，避免后台静默刷新失败后误以为详情已追平。
@@ -287,7 +300,7 @@ export function applySnapshot(previous: LiveState, snapshot: HelmxSnapshot): Liv
         ...(conv.contextUsage === undefined && prevDetail.contextUsage !== undefined
           ? { contextUsage: prevDetail.contextUsage }
           : {}),
-      }
+      }, conv)
     }
   }
   // 过滤快照中明确处于非 active（disabled / failed）插件的文档与 UI 贡献，防止异常快照残留失效视图。
@@ -340,7 +353,7 @@ export function mergeConversationDetail(state: LiveState, detail: ConversationDe
     pendingEntries: omit(state.pendingEntries, String(detail.id)),
     conversationDetails: {
       ...state.conversationDetails,
-      [detail.id]: {
+      [detail.id]: withAuthoritativeRuntimeOverride({
         ...detail,
         ...(summary ?? {}),
         stateChangeSeq: olderPage && current ? current.stateChangeSeq : detail.stateChangeSeq,
@@ -348,7 +361,7 @@ export function mergeConversationDetail(state: LiveState, detail: ConversationDe
         ...(usage !== undefined ? { contextUsage: usage } : {}),
         entries: sorted,
         nextCursor: olderPage || !current ? detail.nextCursor : current.nextCursor,
-      },
+      }, summary ?? detail),
     },
   }
 }
@@ -517,12 +530,12 @@ export function applyEventFrame(state: LiveState, frame: HelmxEventFrame, opts?:
           const existingDetail = state.conversationDetails[conv.id]!
           next.conversationDetails = {
             ...state.conversationDetails,
-            [conv.id]: {
+            [conv.id]: withAuthoritativeRuntimeOverride({
               ...existingDetail,
               ...conv,
               stateChangeSeq: existingDetail.stateChangeSeq,
               lastEntryId: existingDetail.lastEntryId,
-            },
+            }, conv),
           }
         }
         if (conv.status !== 'working' && conv.status !== 'blocked') {

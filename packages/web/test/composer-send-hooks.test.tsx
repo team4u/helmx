@@ -24,6 +24,7 @@ import { conversationsApi, pluginsApi } from '../src/lib/api.js'
 import type { QualifiedCommand } from '../src/lib/commands-model.js'
 import type { HelmxExternalStore } from '../src/lib/helmx-store.js'
 import type { ToastNotice } from '../src/lib/types.js'
+import type { NextTurnModelOverride } from '../src/conversation/composer-model.js'
 import {
   useComposerSend,
   type ComposerPrefill,
@@ -47,6 +48,8 @@ interface HostProps {
   working?: boolean
   envConfigurable?: boolean
   slashPluginCommands?: ReadonlyArray<QualifiedCommand>
+  nextTurnOverride?: NextTurnModelOverride | null
+  onConsumeNextTurnOverride?: (consumed: NextTurnModelOverride) => void
   onSendingChange?: (sending: boolean) => void
   onNewThread?: () => void
 }
@@ -79,6 +82,10 @@ function mount(props: HostProps): Harness {
       slashPluginCommands: current.slashPluginCommands ?? [],
       envConfigurable: current.envConfigurable ?? false,
       working: current.working ?? false,
+      ...(current.nextTurnOverride !== undefined ? { nextTurnOverride: current.nextTurnOverride } : {}),
+      ...(current.onConsumeNextTurnOverride !== undefined
+        ? { onConsumeNextTurnOverride: current.onConsumeNextTurnOverride }
+        : {}),
       ...(current.onSendingChange !== undefined ? { onSendingChange: current.onSendingChange } : {}),
       ...(current.onNewThread !== undefined ? { onNewThread: current.onNewThread } : {}),
     })
@@ -347,6 +354,63 @@ test('withdrawQueuedInput：撤回成功且草稿干净时整体替换为排队�
     assert.equal(h.api().editingEntryId, 42)
   } finally {
     conversationsApi.withdraw = originalWithdraw
+    h.unmount()
+  }
+})
+
+test('nextTurnOverride：idle 发送透传 model/thinkingLevel 且仅在成功后消费；失败保留，busy/编辑/Ask/helmx 忽略且不消费', { timeout: 60_000 }, async () => {
+  const opts: { submitError?: Error } = {}
+  const api = stubApi(opts)
+  const consumed: NextTurnModelOverride[] = []
+  const staged: NextTurnModelOverride = { model: 'anthropic/claude-opus-4-6', thinkingLevel: 'high' }
+  const h = mount({
+    conversation: conv(1),
+    prefill: null,
+    nextTurnOverride: staged,
+    onConsumeNextTurnOverride: (item) => consumed.push(item),
+  })
+  try {
+    // 1. 失败时不消费 staged
+    opts.submitError = new Error('transient failure')
+    act(() => h.api().setDraftState('首次失败'))
+    await act(async () => { await h.api().send() })
+    assert.equal(api.submits.length, 1)
+    assert.equal(api.submits[0]!.payload.model, 'anthropic/claude-opus-4-6')
+    assert.equal(api.submits[0]!.payload.thinkingLevel, 'high')
+    assert.equal(consumed.length, 0, '提交失败时不得消费单轮覆盖')
+
+    // 2. 重试成功后才触发消费回调
+    opts.submitError = undefined
+    await act(async () => { await h.api().send() })
+    assert.equal(api.submits.length, 2)
+    assert.deepEqual(consumed, [staged])
+
+    // 3. working / editing / pendingAskCount > 0 / ownedBy=helmx 时不附加且不消费
+    h.rerender({ working: true, nextTurnOverride: staged })
+    act(() => h.api().setDraftState('忙时插话'))
+    await act(async () => { await h.api().send('steer') })
+    assert.equal(api.submits[2]!.payload.model, undefined)
+    assert.equal(api.submits[2]!.payload.thinkingLevel, undefined)
+    assert.equal(consumed.length, 1)
+
+    h.rerender({ working: false, conversation: { ...conv(1), pendingAskCount: 1 }, nextTurnOverride: staged })
+    act(() => h.api().setDraftState('等待审批'))
+    await act(async () => { await h.api().send() })
+    assert.equal(api.submits[3]!.payload.model, undefined)
+
+    h.rerender({ conversation: { ...conv(1), ownedBy: 'helmx' }, nextTurnOverride: staged })
+    act(() => h.api().setDraftState('托管会话'))
+    await act(async () => { await h.api().send() })
+    assert.equal(api.submits[4]!.payload.model, undefined)
+
+    h.rerender({ conversation: conv(1), nextTurnOverride: staged })
+    act(() => h.api().applyHistoryEdit({ text: '编辑消息', entryId: 12 }))
+    await act(async () => { await h.api().send() })
+    assert.equal(api.submits[5]!.payload.replaceFromEntryId, 12)
+    assert.equal(api.submits[5]!.payload.model, undefined)
+    assert.equal(consumed.length, 1)
+  } finally {
+    api.restore()
     h.unmount()
   }
 })
