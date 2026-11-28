@@ -9,6 +9,7 @@ import {
   isCoreNamespace,
   stripBuiltinNamespace,
   type ActionManifest,
+  type PluginConfigCatalogEntry,
   type PluginDoctorReport,
   type PluginReloadResult,
   type PluginRescanResult,
@@ -93,6 +94,19 @@ export function pluginsCommands(): CommandSpec[] {
           { label: 'name', value: (p) => resolveDisplayString(p.name) },
           { label: 'description', value: (p) => (p.description !== undefined ? resolveDisplayString(p.description) : '') },
           { label: 'error', value: (p) => (p.error ? `${p.error.code} (${p.error.stage}): ${p.error.message}` : '') },
+        ])
+      },
+      'plugins.config_catalog': (ctx, result) => {
+        if (!Array.isArray(result)) {
+          printResult(ctx, result)
+          return
+        }
+        const list = result as PluginConfigCatalogEntry[]
+        printTableColumns(ctx.io, list, [
+          { label: 'pluginId', value: (entry) => entry.pluginId },
+          { label: 'name', value: (entry) => resolveDisplayString(entry.pluginName) },
+          { label: 'enabled', value: (entry) => (entry.enabled ? 'enabled' : 'disabled') },
+          { label: 'fields', value: (entry) => entry.fields.map((f) => f.key).join(', ') },
         ])
       },
       'plugins.reload': (ctx, result) => {

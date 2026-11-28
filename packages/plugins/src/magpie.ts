@@ -565,6 +565,11 @@ function registerMagpieActionsAndUi(ctx: HelmxPluginContext, runtime: MagpieRunt
   ctx.ui.settingsPanel({
     id: 'magpie-panel',
     label: { en: 'Magpie Gateway', 'zh-CN': 'Magpie 网关' },
+    description: {
+      en: 'Check Magpie gateway reachability, synced model catalog, and live provider quotas.',
+      'zh-CN': '查看 Magpie 网关连通状态、已同步模型目录与各提供方实时配额。',
+    },
+    keywords: ['magpie', 'gateway', 'quota', 'quotas', 'models', '网关', '额度', '配额'],
     order: 25,
     client: { module: 'settings.tsx', export: 'MagpieSettingsPanel' },
   })
@@ -573,7 +578,7 @@ function registerMagpieActionsAndUi(ctx: HelmxPluginContext, runtime: MagpieRunt
     title: { en: 'Refresh the Magpie model catalog', 'zh-CN': '刷新 Magpie 模型目录' },
     actionId: 'refresh',
     input: {},
-    keywords: ['magpie', 'models', 'refresh'],
+    keywords: ['magpie', 'gateway', 'quota', 'models', 'refresh', '网关', '额度', '刷新'],
   })
 }
 

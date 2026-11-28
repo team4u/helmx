@@ -40,6 +40,7 @@ import {
   type ModelRoutesTarget,
 } from './model-routes.js'
 import { handleNodeDomain, handleEnvExecDomain, type NodeRoutesTarget } from './node-routes.js'
+import { handleOmniboxDomain, type OmniboxRoutesTarget } from './omnibox-routes.js'
 import { handlePluginsDomain, handleActionsDomain, type PluginRoutesTarget } from './plugin-routes.js'
 import { handleArtifactsDomain, handleSkillsDomain, type AssetRoutesTarget } from './asset-routes.js'
 import { handleSessionDocsDomain, type SessionDocRoutesTarget } from './session-doc-routes.js'
@@ -52,6 +53,7 @@ export type CoreRoutesTarget = AuthRoutesTarget &
   ProfileRoutesTarget &
   ModelRoutesTarget &
   NodeRoutesTarget &
+  OmniboxRoutesTarget &
   PluginRoutesTarget &
   SessionDocRoutesTarget & {
     readonly events: HttpEventHub
@@ -91,6 +93,7 @@ const DOMAIN_HANDLERS: Readonly<
   conversations: handleConversationsDomain,
   asks: handleAsksDomain,
   search: handleSearchDomain,
+  omnibox: handleOmniboxDomain,
   profiles: handleProfilesDomain,
   models: handleModelsDomain,
   providers: handleProvidersDomain,

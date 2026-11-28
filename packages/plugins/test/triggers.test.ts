@@ -760,7 +760,7 @@ test('triggers12: UI 贡献——管理视图与设置面板为 client 单轨', 
   try {
     const ui = env.app.kernel.plugins.listUi().filter((u) => u.pluginId === TRIGGERS)
     const surfaces = ui.map((u) => u.surface).sort()
-    assert.deepEqual(surfaces, ['screen', 'settings.panel', 'sidebar.item'], '三个 UI 贡献面')
+    assert.deepEqual(surfaces, ['commandPalette', 'screen', 'settings.panel', 'sidebar.item'], '四个 UI 贡献面')
     const expectedClientRefs: Record<string, { module: string; export: string }> = {
       screen: { module: 'manager.tsx', export: 'TriggersManagerScreen' },
       'settings.panel': { module: 'settings.tsx', export: 'TriggersSettingsPanel' },

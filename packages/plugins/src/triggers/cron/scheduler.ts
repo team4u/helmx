@@ -128,5 +128,6 @@ export function createCronScheduler(ctx: HelmxPluginContext, deps: CronDeps, clo
       await store.drainWrites()
     },
     getJob: (id: string) => store.findJob(id),
+    listJobs: () => store.readDoc().jobs,
   }
 }

@@ -9,14 +9,21 @@
  *   `ctx.host.deleteConversationGuarded` (never touching active, blocked, errored, or human conversations);
  * - Provide the client.tsx management UI (`TriggersManagerScreen` + `TriggersSettingsPanel`).
  */
-import type { PluginDefinition } from '@helmx/protocol'
+import {
+  HELMX_SEARCH_CAPABILITY_ID,
+  type PluginDefinition,
+  type PluginSearchItem,
+  type PluginSearchProvider,
+} from '@helmx/protocol'
 import { loadManagedSkillAsset, resolvePluginClientAssets } from './asset-paths.js'
+import { compactOneLine, rankSearchCandidates } from './search-utils.js'
 import {
   DEFAULT_TRIGGER_KEEP_LAST,
   TRIGGERS_PLUGIN_ID,
   TRIGGERS_SKILL_ID,
   TRIGGER_TAG,
   parseTriggerSourceTag,
+  type WebhookMeta,
 } from './triggers/contracts.js'
 import {
   createDeliveryDispatch,
@@ -24,7 +31,7 @@ import {
   pruneIsolatedRuns,
 } from './triggers/delivery.js'
 import { registerWebhook } from './triggers/webhook.js'
-import { registerCron } from './triggers/cron.js'
+import { registerCron, type CronJob } from './triggers/cron.js'
 
 const TRIGGERS_SCREEN_ID = 'manager'
 export { TRIGGERS_PLUGIN_ID, TRIGGERS_SKILL_ID }
@@ -103,6 +110,108 @@ export function createTriggersPlugin(): PluginDefinition {
         async stop() {},
       })
 
+      // ---- Dynamic Omnibox search (`helmx.search`; metadata only, zero secrets) ----
+      type TriggerSearchCandidate =
+        | { kind: 'cron'; job: CronJob; description?: string; text?: string }
+        | { kind: 'webhook'; hook: WebhookMeta; description?: string; endpointPath: string }
+
+      ctx.provide<PluginSearchProvider>(HELMX_SEARCH_CAPABILITY_ID, {
+        search(input, signal) {
+          if (signal.aborted) return []
+          const candidates: TriggerSearchCandidate[] = []
+          for (const job of crons.listJobs()) {
+            if (signal.aborted) return []
+            const description =
+              job.description !== undefined ? compactOneLine(ctx.host.redact(job.description)) : undefined
+            const text = compactOneLine(ctx.host.redact(job.text))
+            candidates.push({ kind: 'cron', job, description, text })
+          }
+          for (const hook of webhooks.listWebhooks().webhooks) {
+            if (signal.aborted) return []
+            const description =
+              hook.description !== undefined ? compactOneLine(ctx.host.redact(hook.description)) : undefined
+            candidates.push({
+              kind: 'webhook',
+              hook,
+              description,
+              endpointPath: `/webhook/${hook.id}`,
+            })
+          }
+          return rankSearchCandidates<TriggerSearchCandidate, PluginSearchItem>({
+            query: input.query,
+            limit: input.limit,
+            signal,
+            items: candidates,
+            fields: (entry) =>
+              entry.kind === 'cron'
+                ? {
+                    primary: [entry.job.id],
+                    secondary: [
+                      entry.description,
+                      entry.job.schedule,
+                      entry.job.timezone,
+                      entry.job.profileId,
+                      entry.text,
+                    ],
+                    keywords: ['cron', 'schedule', 'timer', 'trigger', '定时', '触发器'],
+                  }
+                : {
+                    primary: [entry.hook.id],
+                    secondary: [
+                      entry.description,
+                      entry.endpointPath,
+                      entry.hook.profileId,
+                      entry.hook.mode,
+                    ],
+                    keywords: ['webhook', 'webhooks', 'hook', 'trigger', 'inbound', '触发器', '端点'],
+                  },
+            tieBreaker: (entry) => `${entry.kind}:${entry.kind === 'cron' ? entry.job.id : entry.hook.id}`,
+            toResult: (entry, score) => {
+              if (entry.kind === 'cron') {
+                const { job, description, text } = entry
+                const summary = description ?? text
+                const subtitle = summary !== undefined ? compactOneLine(`${job.schedule} · ${summary}`) : job.schedule
+                return {
+                  id: `cron:${job.id}`,
+                  kind: 'resource',
+                  title: job.id,
+                  ...(subtitle !== undefined ? { subtitle } : {}),
+                  breadcrumb: [
+                    { en: 'Trigger Manager', 'zh-CN': '触发器管理' },
+                    { en: 'Cron jobs', 'zh-CN': 'Cron 定时任务' },
+                  ],
+                  icon: 'clock',
+                  badge: job.enabled
+                    ? { en: 'Enabled', 'zh-CN': '启用' }
+                    : { en: 'Disabled', 'zh-CN': '停用' },
+                  target: `screen:${TRIGGERS_PLUGIN_ID}/${TRIGGERS_SCREEN_ID}?tab=cron&trigger=${encodeURIComponent(`cron:${job.id}`)}`,
+                  score,
+                }
+              }
+              const { hook, description, endpointPath } = entry
+              const subtitle =
+                description !== undefined
+                  ? compactOneLine(`${description} · ${endpointPath}`)
+                  : `POST ${endpointPath}`
+              return {
+                id: `webhook:${hook.id}`,
+                kind: 'resource',
+                title: hook.id,
+                ...(subtitle !== undefined ? { subtitle } : {}),
+                breadcrumb: [
+                  { en: 'Trigger Manager', 'zh-CN': '触发器管理' },
+                  { en: 'Webhook endpoints', 'zh-CN': 'Webhook 端点' },
+                ],
+                icon: 'webhook',
+                badge: { en: 'Webhook', 'zh-CN': 'Webhook' },
+                target: `screen:${TRIGGERS_PLUGIN_ID}/${TRIGGERS_SCREEN_ID}?tab=webhook&trigger=${encodeURIComponent(`webhook:${hook.id}`)}`,
+                score,
+              }
+            },
+          })
+        },
+      })
+
       // ---- Management UI (client.tsx React track; no Emoji) ----
       ctx.ui.sidebarItem({
         id: 'triggers-manager',
@@ -114,14 +223,35 @@ export function createTriggersPlugin(): PluginDefinition {
       ctx.ui.screen({
         id: TRIGGERS_SCREEN_ID,
         label: { en: 'Trigger Manager', 'zh-CN': '触发器管理' },
+        description: {
+          en: 'Inspect and manage cron schedules, inbound webhooks, and recent automated runs.',
+          'zh-CN': '查看与管理 Cron 定时任务、入站 Webhook 端点与近期自动化运行记录。',
+        },
+        keywords: ['trigger', 'triggers', 'cron', 'schedule', 'timer', 'webhook', 'hook', '定时', '触发器', '计划任务'],
         icon: 'clock',
         client: { module: 'manager.tsx', export: 'TriggersManagerScreen' },
       })
       ctx.ui.settingsPanel({
         id: 'triggers-settings',
         label: { en: 'Triggers', 'zh-CN': '触发器' },
+        description: {
+          en: 'Overview of configured cron jobs and webhook endpoints with quick entry to the manager.',
+          'zh-CN': '查看已配置的定时任务与 Webhook 端点概览，并快速进入触发器管理页。',
+        },
+        keywords: ['trigger', 'triggers', 'cron', 'schedule', 'webhook', '定时', '触发器'],
         order: 40,
         client: { module: 'settings.tsx', export: 'TriggersSettingsPanel' },
+      })
+      ctx.ui.command({
+        id: 'triggers-open-webhooks',
+        title: { en: 'Open Webhook Endpoints', 'zh-CN': '打开 Webhook 端点管理' },
+        description: {
+          en: 'Jump directly to the Webhook endpoints tab in Trigger Manager.',
+          'zh-CN': '直接跳转到触发器管理页面的 Webhook 端点标签页。',
+        },
+        icon: 'webhook',
+        target: `screen:${TRIGGERS_PLUGIN_ID}/${TRIGGERS_SCREEN_ID}?tab=webhook`,
+        keywords: ['webhook', 'webhooks', 'hook', 'trigger', 'inbound', '触发器', '入站', '端点'],
       })
     },
   }

@@ -15,6 +15,8 @@ export function registerPluginCoreActions(
   registerCoreActionsFromOperations(registrar, PLUGIN_CORE_OPERATIONS, {
     'plugins.list': () => pluginHost.list(),
 
+    'plugins.config_catalog': () => pluginHost.listConfigCatalog(),
+
     'plugins.manifest': (input) =>
       input.id !== undefined ? pluginHost.getManifest(input.id as string) : pluginHost.listManifests(),
 

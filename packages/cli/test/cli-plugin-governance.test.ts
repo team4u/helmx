@@ -254,3 +254,92 @@ test('plugins manifest: GET /api/plugins/:id/manifest with URI encoding, --json 
   const extra = await runCliCaptured(['plugins', 'manifest', 'builtin:triggers', 'extra', '--json'], env)
   assert.notEqual(extra.code, 0)
 })
+
+test('plugins config-catalog: GET /api/plugins/config-catalog with --json passthrough and human table formatting', { timeout: 60_000 }, async (t) => {
+  const dir = useTempDir(t, 'helmx-cli-gov-')
+  const catalog = [
+    {
+      pluginId: 'builtin:triggers',
+      pluginName: { en: 'Triggers', 'zh-CN': '触发器' },
+      pluginIcon: 'clock',
+      enabled: true,
+      fields: [
+        { key: 'defaultTimezone', type: 'string', secret: false, required: false, default: 'UTC' },
+        { key: 'signingSecret', type: 'string', secret: true, required: false },
+      ],
+    },
+  ]
+  const hub = await startMockHub(
+    {
+      'GET /api/plugins/config-catalog': () => ({ body: catalog }),
+    },
+    { autoRegisterCleanup: t },
+  )
+  const env = makeCliEnv(hub.url, dir)
+
+  const rj = await runCliCaptured(['plugins', 'config-catalog', '--json'], env)
+  assert.equal(rj.code, 0, rj.err)
+  assert.deepEqual(JSON.parse(rj.out), catalog)
+  assert.equal(hub.hits[0]!.path, '/api/plugins/config-catalog')
+
+  const rh = await runCliCaptured(['plugins', 'config-catalog'], env)
+  assert.equal(rh.code, 0, rh.err)
+  assert.ok(rh.out.includes('builtin:triggers'), rh.out)
+  assert.ok(rh.out.includes('Triggers'), rh.out)
+  assert.ok(rh.out.includes('defaultTimezone, signingSecret'), rh.out)
+  assert.ok(!rh.out.includes('"zh-CN"'), `raw localized map must not leak into human output:\n${rh.out}`)
+})
+
+test('omnibox search: GET /api/omnibox/search supports --limit/--locale/--conversation/--current/--json and surfaces degraded warnings', { timeout: 60_000 }, async (t) => {
+  const dir = useTempDir(t, 'helmx-cli-gov-')
+  const response = {
+    query: 'nebula deploy',
+    messages: [{ conversationId: 4, title: 'Nebula Ops', snippet: 'nebula deploy finished' }],
+    pluginItems: [
+      {
+        pluginId: 'builtin:workflow',
+        itemId: 'nebula',
+        id: 'builtin:workflow/nebula',
+        kind: 'resource',
+        title: { en: 'Nebula Workflow', 'zh-CN': '星云工作流' },
+        target: 'screen:builtin:workflow/library?wf=nebula',
+        score: 90,
+      },
+    ],
+    messagesUnavailable: true,
+    failedPlugins: ['ext:slow'],
+  }
+  const hub = await startMockHub(
+    {
+      'GET /api/omnibox/search?q=nebula%20deploy&limit=6&locale=zh-CN&conversationId=9': () => ({ body: response }),
+      'GET /api/omnibox/search?q=nebula%20deploy&conversationId=12': () => ({ body: response }),
+    },
+    { autoRegisterCleanup: t },
+  )
+  const env = makeCliEnv(hub.url, dir)
+
+  const rj = await runCliCaptured(
+    ['omnibox', 'search', 'nebula', 'deploy', '--limit', '6', '--locale', 'zh-CN', '--conversation', '9', '--json'],
+    env,
+  )
+  assert.equal(rj.code, 0, rj.err)
+  assert.deepEqual(JSON.parse(rj.out), response)
+
+  const rc = await runCliCaptured(
+    ['omnibox', 'search', 'nebula', 'deploy', '--current'],
+    { ...env, HELMX_CONVERSATION_ID: '12' },
+  )
+  assert.equal(rc.code, 0, rc.err)
+  assert.ok(rc.out.includes('Nebula Workflow'), rc.out)
+  assert.ok(rc.out.includes('builtin:workflow'), rc.out)
+  assert.ok(rc.err.includes('unavailable'), rc.err)
+  assert.ok(rc.err.includes('ext:slow'), rc.err)
+
+  // Mutually exclusive --conversation and --current rejected cleanly
+  const bad = await runCliCaptured(
+    ['omnibox', 'search', 'nebula', '--conversation', '9', '--current'],
+    { ...env, HELMX_CONVERSATION_ID: '12' },
+  )
+  assert.notEqual(bad.code, 0)
+  assert.ok(bad.err.includes('mutually exclusive'), bad.err)
+})

@@ -18,6 +18,7 @@ import {
   type PluginActionSpec,
   type PluginBuildProvider,
   type PluginClientBundle,
+  type PluginConfigCatalogEntry,
   type PluginConfigFieldSchema,
   type PluginConfigFieldSource,
   type PluginDefinition,
@@ -33,7 +34,7 @@ import {
 } from '@helmx/protocol';
 import { createKeyedMutex } from '../shared/keyed-mutex.js';
 import { HOOK_ALLOWED_ACTIONS, HookPipeline } from './hooks.js';
-import { buildPluginManifestProjection } from './manifest-projection.js';
+import { buildPluginConfigCatalogEntry, buildPluginManifestProjection } from './manifest-projection.js';
 import { PluginTaskTracker } from './tracking.js';
 import { PluginDocRegistry } from './doc-registry.js';
 import { PluginKvRegistry } from './kv-registry.js';
@@ -315,6 +316,18 @@ export class PluginHostCore {
     return [...this.plugins.values()]
       .map((s) => this.manifestOf(s))
       .sort((a, b) => compareCodeUnit(a.id, b.id));
+  }
+
+  /** Stably sorted, secret-stripped static config schema catalog for all loaded plugins declaring configSchema. */
+  listConfigCatalog(): PluginConfigCatalogEntry[] {
+    this.assertNotDisposed();
+    const redact = (text: string) => this.redactProjectionText(text);
+    const out: PluginConfigCatalogEntry[] = [];
+    for (const state of this.plugins.values()) {
+      const entry = buildPluginConfigCatalogEntry(state, redact);
+      if (entry !== undefined) out.push(entry);
+    }
+    return out.sort((a, b) => compareCodeUnit(a.pluginId, b.pluginId));
   }
 
   assertProviderAvailable(pluginId: string): void {

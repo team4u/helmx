@@ -465,6 +465,7 @@ test('helmx-cli skill assets stay synchronized with UI extensions and runtime ca
     'core:nodes.forward_inspect',
     'core:nodes.forward_stop',
     'core:plugins.list',
+    'core:plugins.config_catalog',
     'core:plugins.manifest',
     'core:plugins.doc',
     'core:plugins.config_get',

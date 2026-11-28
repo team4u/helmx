@@ -5,11 +5,15 @@
  */
 import { randomUUID } from 'node:crypto'
 import {
+  HELMX_SEARCH_CAPABILITY_ID,
   HelmxError,
   NODE_DETAIL_SECTION_SLOT,
   type PluginDefinition,
+  type PluginSearchItem,
+  type PluginSearchProvider,
 } from '@helmx/protocol'
 import { resolvePluginClientAssets } from './asset-paths.js'
+import { compactOneLine, rankSearchCandidates } from './search-utils.js'
 import {
   DELETE_OUTPUT_SCHEMA,
   LIST_OUTPUT_SCHEMA,
@@ -567,6 +571,64 @@ export function createPortForwardPlugin(): PluginDefinition {
         handler: () => manager.pauseAllRuntime(),
       })
 
+      const formatEndpoint = (host: string, port: number): string =>
+        host.includes(':') && !host.startsWith('[') ? `[${host}]:${port}` : `${host}:${port}`
+
+      ctx.provide<PluginSearchProvider>(HELMX_SEARCH_CAPABILITY_ID, {
+        search(input, signal) {
+          if (signal.aborted) return []
+          const rules = readRules()
+          return rankSearchCandidates<PortForwardRule, PluginSearchItem>({
+            query: input.query,
+            limit: input.limit,
+            signal,
+            items: rules,
+            fields: (rule) => {
+              const listenAddr = formatEndpoint(rule.listenHost, rule.listenPort)
+              const targetAddr = formatEndpoint(rule.targetHost, rule.targetPort)
+              const redactedName = compactOneLine(ctx.host.redact(rule.name))
+              return {
+                primary: [redactedName, rule.id],
+                secondary: [
+                  rule.nodeId,
+                  String(rule.listenPort),
+                  String(rule.targetPort),
+                  rule.listenHost,
+                  rule.targetHost,
+                  listenAddr,
+                  targetAddr,
+                ],
+                keywords: ['port', 'forward', 'forwarding', 'tunnel', 'tcp', 'proxy', 'mapping', '端口转发', '端口映射', '隧道'],
+              }
+            },
+            tieBreaker: (rule) => `${rule.name}:${rule.id}`,
+            toResult: (rule, score) => {
+              const listenAddr = formatEndpoint(rule.listenHost, rule.listenPort)
+              const targetAddr = formatEndpoint(rule.targetHost, rule.targetPort)
+              const runtime = manager.getRuntimeEntry(rule.id)
+              const badge =
+                runtime.listenerState === 'listening'
+                  ? { en: 'Listening', 'zh-CN': '监听中' }
+                  : runtime.listenerState === 'error'
+                    ? { en: 'Error', 'zh-CN': '异常' }
+                    : { en: 'Stopped', 'zh-CN': '已停止' }
+              const title = compactOneLine(ctx.host.redact(rule.name)) ?? listenAddr
+              return {
+                id: `rule:${rule.id}`,
+                kind: 'resource',
+                title,
+                subtitle: `${listenAddr} -> ${rule.nodeId} (${targetAddr})`,
+                breadcrumb: [{ en: 'Port Forwarding', 'zh-CN': '端口映射' }],
+                icon: 'network',
+                badge,
+                target: `screen:${PORT_FORWARD_PLUGIN_ID}/${PORT_FORWARD_SCREEN_ID}?edit=${encodeURIComponent(rule.id)}`,
+                score,
+              }
+            },
+          })
+        },
+      })
+
       const label = { en: 'Port Forwarding', 'zh-CN': '端口映射' }
       ctx.ui.sidebarItem({
         id: 'port-forward-manager',
@@ -578,14 +640,35 @@ export function createPortForwardPlugin(): PluginDefinition {
       ctx.ui.screen({
         id: PORT_FORWARD_SCREEN_ID,
         label,
+        description: {
+          en: 'Manage persistent Hub-to-node TCP port-forward rules, live listeners, and active tunnels.',
+          'zh-CN': '管理持久化 Hub 到计算节点的 TCP 端口映射规则、监听状态与活跃隧道。',
+        },
+        keywords: ['port', 'forward', 'forwarding', 'tunnel', 'tcp', 'proxy', 'mapping', '端口转发', '端口映射', '隧道'],
         icon: 'network',
         client: { module: 'manager.tsx', export: 'PortForwardManagerScreen' },
       })
       ctx.ui.settingsPanel({
         id: 'port-forward-settings',
         label,
+        description: {
+          en: 'Summary of port-forward rules, active listeners, and connection counts.',
+          'zh-CN': '查看端口映射规则总数、监听状态与活跃连接数概览。',
+        },
+        keywords: ['port', 'forward', 'tunnel', 'tcp', 'proxy', '端口转发', '端口映射', '隧道'],
         order: 45,
         client: { module: 'settings.tsx', export: 'PortForwardSettingsPanel' },
+      })
+      ctx.ui.command({
+        id: 'port-forward-create',
+        title: { en: 'Create Port-Forward Rule', 'zh-CN': '新建端口映射' },
+        description: {
+          en: 'Open the drawer to forward a Hub port to a compute node service.',
+          'zh-CN': '打开抽屉新建 Hub 到计算节点的 TCP 端口映射规则。',
+        },
+        icon: 'network',
+        target: `screen:${PORT_FORWARD_PLUGIN_ID}/${PORT_FORWARD_SCREEN_ID}?create=1`,
+        keywords: ['port', 'forward', 'tunnel', 'tcp', 'proxy', 'create', 'new', '端口转发', '新建映射', '隧道'],
       })
       ctx.ui.slot({
         id: 'node-port-forwards',

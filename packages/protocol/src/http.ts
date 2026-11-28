@@ -173,6 +173,7 @@ export const CORE_CLI_COMMAND_PATHS = [
   'nodes forward-stop',
   'env exec',
   'plugins list',
+  'plugins config-catalog',
   'plugins manifest',
   'plugins enable',
   'plugins disable',
@@ -200,6 +201,7 @@ export const CORE_CLI_COMMAND_PATHS = [
   'models refresh',
   'models filter',
   'search',
+  'omnibox search',
   'api',
 ] as const
 

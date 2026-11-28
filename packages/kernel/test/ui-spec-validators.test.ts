@@ -68,6 +68,128 @@ test('commandPalette: slash+actionId+shortcut pass; reserved words, duplicate sl
   }
 });
 
+test('commandPalette: target / keywords / description validation and triggerability (actionId | client | target)', { timeout: 60_000 }, () => {
+  const ctx = makeCtx('commandPalette');
+  // Valid declarative navigation target alone (no actionId or client required)
+  validateUiSpecEarly(
+    'commandPalette',
+    {
+      id: 'nav-tiers',
+      target: 'screen:builtin:tiers/manager?create=1',
+      description: { en: 'Create a model tier', 'zh-CN': '新建模型档位' },
+      keywords: ['tier', 'model routing', '模型档位'],
+    },
+    'nav-tiers',
+    ctx,
+  );
+  // Boundary length 512 target passes
+  validateUiSpecEarly(
+    'commandPalette',
+    { id: 'max-target', target: 'a'.repeat(512), keywords: [] },
+    'max-target',
+    ctx,
+  );
+  // Client alone still passes
+  validateUiSpecEarly(
+    'commandPalette',
+    { id: 'client-only', client: { module: 'index.tsx', export: 'Cmd' } },
+    'client-only',
+    ctx,
+  );
+
+  // Missing all three (actionId, client, target) rejects
+  expectThrow(
+    () => validateUiSpecEarly('commandPalette', { id: 'untriggerable', title: 'Nothing' }, 'untriggerable', ctx),
+    'invalid_ui_spec',
+    'must provide at least one of actionId, client, or target',
+  );
+
+  // Declaring slash still requires actionId even when target is provided
+  expectThrow(
+    () =>
+      validateUiSpecEarly(
+        'commandPalette',
+        { id: 'slash-target', slash: 'open', target: 'screen:p1/main' },
+        'slash-target',
+        ctx,
+      ),
+    'invalid_ui_spec',
+    'must bind actionId when declaring slash',
+  );
+
+  // Invalid target values reject
+  for (const badTarget of ['', '   ', ' screen:p1/main', 'screen:p1/main ', 'screen:p1/main\nx', 'screen:p1/main\tx', 'a'.repeat(513), 42]) {
+    expectThrow(
+      () => validateUiSpecEarly('commandPalette', { id: 'bad-t', target: badTarget }, 'bad-t', ctx),
+      'invalid_ui_spec',
+      'target must be a trimmed non-empty string',
+    );
+  }
+
+  // Invalid keywords reject
+  for (const badKeywords of ['not-array', [''], ['   '], [' leading'], ['trailing '], ['a\nb'], [123]]) {
+    expectThrow(
+      () =>
+        validateUiSpecEarly(
+          'commandPalette',
+          { id: 'bad-kw', target: 'screen:p1/main', keywords: badKeywords },
+          'bad-kw',
+          ctx,
+        ),
+      'invalid_ui_spec',
+      'keywords must be an array of non-empty trimmed strings',
+    );
+  }
+
+  // Invalid description rejects
+  for (const badDesc of ['', '   ', { fr: 'bonjour' }, { en: 'ok', 'zh-CN': '  ' }, 42]) {
+    expectThrow(
+      () =>
+        validateUiSpecEarly(
+          'commandPalette',
+          { id: 'bad-desc', target: 'screen:p1/main', description: badDesc },
+          'bad-desc',
+          ctx,
+        ),
+      'invalid_ui_spec',
+      'description must be display copy',
+    );
+  }
+});
+
+test('screen and settings.panel: optional description and keywords validate cleanly', { timeout: 60_000 }, () => {
+  for (const surface of ['screen', 'settings.panel'] as const) {
+    const ctx = makeCtx(surface);
+    validateUiSpecLate(
+      surface,
+      {
+        id: 'ok1',
+        label: { en: 'Manager', 'zh-CN': '管理' },
+        description: { en: 'Manage rules', 'zh-CN': '管理规则' },
+        keywords: ['cron', 'webhook', '定时'],
+      },
+      'ok1',
+      ctx,
+    );
+    validateUiSpecLate(surface, { id: 'ok2', label: 'Simple', description: 'Plain description', keywords: [] }, 'ok2', ctx);
+
+    for (const badDesc of ['', '  ', { de: 'Hallo' }, { en: '' }, 99]) {
+      expectThrow(
+        () => validateUiSpecLate(surface, { id: 'bad-d', label: 'X', description: badDesc }, 'bad-d', ctx),
+        'invalid_ui_spec',
+        'description must be display copy',
+      );
+    }
+    for (const badKeywords of ['cron', [''], ['  '], [' padded'], ['padded '], ['a\tb'], [null]]) {
+      expectThrow(
+        () => validateUiSpecLate(surface, { id: 'bad-k', label: 'X', keywords: badKeywords }, 'bad-k', ctx),
+        'invalid_ui_spec',
+        'keywords must be an array of non-empty trimmed strings',
+      );
+    }
+  }
+});
+
 test('plugin.slot: valid target+client passes; missing client, extra slashes, and invalid segment identifiers reject', { timeout: 60_000 }, () => {
   const validClient = { module: 'a.tsx', export: 'X' };
   validateUiSpecEarly('plugin.slot', { id: 's1', target: 'owner/panel', client: validClient }, 's1', makeCtx('plugin.slot'));

@@ -107,6 +107,8 @@ test('@helmx/protocol/browser: export declarations aligned with the root entry\'
     'formatHubListenSummary',
     'resolveDefaultHubUrl',
     'buildNodeConnectGuide',
+    'HELMX_SEARCH_CAPABILITY_ID',
+    'PLUGIN_SEARCH_ITEM_KINDS',
   ] as const
 
   /** Server-only contract validators and TypeBox UI/request schemas that must NOT bloat `@helmx/protocol/browser`. */
@@ -130,6 +132,7 @@ test('@helmx/protocol/browser: export declarations aligned with the root entry\'
     'AUTH_CORE_OPERATIONS',
     'PLUGIN_CORE_OPERATIONS',
     'SKILL_CORE_OPERATIONS',
+    'OMNIBOX_CORE_OPERATIONS',
     'CORE_OPERATIONS',
   ] as const
 
@@ -217,6 +220,34 @@ test('parsePluginUiContribution: covers every known surface and rejects invalid 
     assert.ok(stripped !== undefined && stripped.surface === 'commandPalette')
     assert.equal(stripped.spec.shortcut, undefined)
     assert.equal(Object.hasOwn(stripped.spec, 'shortcut'), false)
+  }
+
+  // Command target parsing: trims non-empty single-line strings <= 512 chars, strips invalid values
+  const targetClean = parsePluginUiContribution({
+    pluginId: 'demo:plugin',
+    surface: 'commandPalette',
+    spec: { id: 'c5', title: 'Open', target: '  screen:demo:plugin/main?create=1  ' },
+  })
+  assert.ok(targetClean !== undefined && targetClean.surface === 'commandPalette')
+  assert.equal(targetClean.spec.target, 'screen:demo:plugin/main?create=1')
+
+  const targetBoundary = parsePluginUiContribution({
+    pluginId: 'demo:plugin',
+    surface: 'commandPalette',
+    spec: { id: 'c6', title: 'Open', target: 'a'.repeat(512) },
+  })
+  assert.ok(targetBoundary !== undefined && targetBoundary.surface === 'commandPalette')
+  assert.equal(targetBoundary.spec.target, 'a'.repeat(512))
+
+  for (const badTarget of ['', '   ', 'a\nb', 'a'.repeat(513), 42, null, undefined]) {
+    const stripped = parsePluginUiContribution({
+      pluginId: 'demo:plugin',
+      surface: 'commandPalette',
+      spec: { id: 'c7', title: 'Open', target: badTarget },
+    })
+    assert.ok(stripped !== undefined && stripped.surface === 'commandPalette')
+    assert.equal(stripped.spec.target, undefined)
+    assert.equal(Object.hasOwn(stripped.spec, 'target'), false)
   }
 
   // Legacy 'command' alias is retired and rejected as unknown surface
@@ -324,7 +355,7 @@ test('core-ops/plugins & skills: declarative specs stay structurally valid and s
     assertSchemaCompilable,
   } = rootExports
 
-  assert.equal(PLUGIN_CORE_OPERATIONS.length, 13)
+  assert.equal(PLUGIN_CORE_OPERATIONS.length, 14)
   assert.equal(SKILL_CORE_OPERATIONS.length, 2)
   assert.ok(CORE_OPERATIONS.length >= PLUGIN_CORE_OPERATIONS.length + SKILL_CORE_OPERATIONS.length)
 

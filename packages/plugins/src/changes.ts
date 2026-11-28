@@ -45,6 +45,11 @@ export function createChangesPlugin(): PluginDefinition {
       ctx.ui.screen({
         id: CHANGES_SCREEN_ID,
         label,
+        description: {
+          en: 'Inspect uncommitted changes, unpushed commits, commit history, and file diffs across workspaces and worktrees.',
+          'zh-CN': '检视会话工作区与受管工作树的未提交改动、未推送提交、提交历史与单文件差异。',
+        },
+        keywords: ['diff', 'git', 'changes', 'worktree', 'commit', 'patch', 'review', '变更', '改动', '代码差异'],
         icon: 'file-diff',
         client: { module: 'screen.tsx', export: 'ChangesInspectorScreen' },
       })

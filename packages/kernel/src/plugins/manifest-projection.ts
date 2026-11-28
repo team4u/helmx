@@ -7,6 +7,8 @@
 import {
   PLUGIN_HOOK_NAMES,
   compareCodeUnit,
+  type PluginConfigCatalogEntry,
+  type PluginConfigFieldSchema,
   type PluginDiagnosticError,
   type PluginManifestAction,
   type PluginManifestClientModule,
@@ -71,6 +73,56 @@ function normalizeDiagnosticError(error: PluginDiagnosticError): PluginDiagnosti
       ? { details: cloneDiagnosticValue(error.details) as Record<string, unknown> }
       : {}),
   };
+}
+
+/**
+ * Projects a plugin's `configSchema` into stably sorted, secret-stripped `PluginManifestConfigField[]`.
+ * Never projects runtime values or `default` for `secret: true` fields.
+ */
+export function projectPluginConfigFields(
+  configSchema: Record<string, PluginConfigFieldSchema> | null | undefined,
+): PluginManifestConfigField[] {
+  return Object.entries(configSchema ?? {})
+    .sort(([a], [b]) => compareCodeUnit(a, b))
+    .map(([key, field]): PluginManifestConfigField => {
+      const secret = field.secret === true;
+      return {
+        key,
+        type: field.type,
+        secret,
+        required: field.required === true,
+        ...(field.enum !== undefined ? { enum: jsonClone(field.enum) } : {}),
+        ...(field.format !== undefined ? { format: field.format } : {}),
+        ...(field.label !== undefined ? { label: jsonClone(field.label) } : {}),
+        ...(field.description !== undefined ? { description: jsonClone(field.description) } : {}),
+        // Never project `default` for secret fields (prevents hardcoded default secret leaks).
+        ...(!secret && field.default !== undefined ? { default: jsonClone(field.default) } : {}),
+        ...(field.minimum !== undefined ? { minimum: field.minimum } : {}),
+        ...(field.maximum !== undefined ? { maximum: field.maximum } : {}),
+        ...(field.integer !== undefined ? { integer: field.integer } : {}),
+      };
+    });
+}
+
+/**
+ * Projects a single plugin's static config catalog entry for `GET /api/plugins/config-catalog`.
+ * Returns `undefined` when the plugin declares no `configSchema` fields.
+ */
+export function buildPluginConfigCatalogEntry(
+  state: PluginState,
+  redactText?: (text: string) => string,
+): PluginConfigCatalogEntry | undefined {
+  const fields = projectPluginConfigFields(state.configSchema);
+  if (fields.length === 0) return undefined;
+  const pluginId = state.definition.id;
+  const raw: PluginConfigCatalogEntry = {
+    pluginId,
+    pluginName: jsonClone(state.definition.name ?? pluginId),
+    ...(state.definition.icon ? { pluginIcon: state.definition.icon } : {}),
+    enabled: state.enabled,
+    fields,
+  };
+  return (redactText !== undefined ? redactJsonValue(raw, redactText) : raw) as PluginConfigCatalogEntry;
 }
 
 /**
@@ -156,26 +208,7 @@ export function buildPluginManifestProjection(
 
   const docs = includeRegistrations ? docRegistry.listPublicDocDescriptors(pluginId) : [];
 
-  const configFields: PluginManifestConfigField[] = Object.entries(state.configSchema ?? {})
-    .sort(([a], [b]) => compareCodeUnit(a, b))
-    .map(([key, field]): PluginManifestConfigField => {
-      const secret = field.secret === true;
-      return {
-        key,
-        type: field.type,
-        secret,
-        required: field.required === true,
-        ...(field.enum !== undefined ? { enum: jsonClone(field.enum) } : {}),
-        ...(field.format !== undefined ? { format: field.format } : {}),
-        ...(field.label !== undefined ? { label: jsonClone(field.label) } : {}),
-        ...(field.description !== undefined ? { description: jsonClone(field.description) } : {}),
-        // Never project `default` for secret fields (prevents hardcoded default secret leaks).
-        ...(!secret && field.default !== undefined ? { default: jsonClone(field.default) } : {}),
-        ...(field.minimum !== undefined ? { minimum: field.minimum } : {}),
-        ...(field.maximum !== undefined ? { maximum: field.maximum } : {}),
-        ...(field.integer !== undefined ? { integer: field.integer } : {}),
-      };
-    });
+  const configFields: PluginManifestConfigField[] = projectPluginConfigFields(state.configSchema);
 
   // Read-only provider metadata only; never read `auth` or invoke `getModels` / `stream` / `streamSimple`.
   const providers: PluginManifestProvider[] = includeRegistrations

@@ -9,6 +9,7 @@ import {
   CREDENTIAL_CORE_OPERATIONS,
   MODEL_CORE_OPERATIONS,
   NODE_CORE_OPERATIONS,
+  OMNIBOX_CORE_OPERATIONS,
   PLUGIN_CORE_OPERATIONS,
   PROFILE_CORE_OPERATIONS,
   PROVIDER_CORE_OPERATIONS,
@@ -51,6 +52,7 @@ test('CORE_OPERATIONS aggregates all 7 core domains with unique keys, valid sche
     ...AUTH_CORE_OPERATIONS,
     ...PLUGIN_CORE_OPERATIONS,
     ...SKILL_CORE_OPERATIONS,
+    ...OMNIBOX_CORE_OPERATIONS,
   ]
   assert.deepEqual(CORE_OPERATIONS, expectedMerged)
 
@@ -61,6 +63,7 @@ test('CORE_OPERATIONS aggregates all 7 core domains with unique keys, valid sche
     'credentials',
     'models',
     'nodes',
+    'omnibox',
     'plugins',
     'profiles',
     'providers',
@@ -225,6 +228,7 @@ test('CORE_OPERATIONS enforces exact action exclusion and governance scope secur
     'plugins.install',
     'plugins.update',
     'plugins.remove',
+    'omnibox.search',
   ])
 
   const actualNonActionKeys = new Set<string>()

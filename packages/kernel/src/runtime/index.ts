@@ -60,3 +60,11 @@ export { ConversationDetailService } from './conversation-detail.js'
 export { ConversationProfileService } from './conversation-profile.js'
 export { ConversationInputPipeline, submitDurableInput, type DurableInputTracker } from './conversation-input.js'
 export { createRunActionTool, type KernelToolHost } from './kernel-tools.js'
+export {
+  runOmniboxSearch,
+  OMNIBOX_DEFAULT_LIMIT,
+  OMNIBOX_MAX_ITEMS_PER_PLUGIN,
+  OMNIBOX_DEFAULT_PROVIDER_TIMEOUT_MS,
+  type OmniboxSearchDeps,
+  type OmniboxSearchOptions,
+} from './omnibox-search.js'

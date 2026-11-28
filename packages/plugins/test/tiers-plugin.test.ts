@@ -963,10 +963,13 @@ test('integration: builtin:tiers registers no /model command or menu slot, leave
   const env = await openHelmxEnv({ defaultModel: 'faux/workhorse' })
   try {
     const { kernel } = env.app
-    // Confirm zero tiers are configured & no command/menu slot registered
+    // Confirm zero tiers are configured & no /model slash command or menu slot registered
     assert.equal((await kernel.models.listModels()).modelTiers, undefined)
     const tiersUi = kernel.plugins.listUi().filter((u) => u.pluginId === TIERS_PLUGIN_ID)
-    assert.equal(tiersUi.some((u) => u.surface === 'commandPalette'), false)
+    assert.equal(
+      tiersUi.some((u) => u.surface === 'commandPalette' && (u.spec as { slash?: string }).slash !== undefined),
+      false,
+    )
     assert.equal(
       tiersUi.some(
         (u) =>
