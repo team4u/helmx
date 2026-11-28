@@ -1,5 +1,5 @@
 /**
- * Contracts, schemas, and validation helpers for `builtin:duo` Dual-Phase Recipes.
+ * Contracts, schemas, and validation helpers for `builtin:duo` Orchestrator.
  */
 import {
   HelmxError,
@@ -240,13 +240,13 @@ export function isCoordinatorSuppressed(conv: Pick<ConversationSummary, 'tags'>)
 
 export function assertDuoRecipeId(raw: unknown): string {
   if (typeof raw !== 'string') {
-    throw new HelmxError('validation_error', 'Recipe id must be a string', 400, { id: raw })
+    throw new HelmxError('validation_error', 'Orchestrator id must be a string', 400, { id: raw })
   }
   const id = raw.trim()
   if (!isValidModelTierId(id)) {
     throw new HelmxError(
       'validation_error',
-      `Recipe id '${id}' must match /^[a-z0-9][a-z0-9_-]{0,63}$/`,
+      `Orchestrator id '${id}' must match /^[a-z0-9][a-z0-9_-]{0,63}$/`,
       400,
       { id: raw },
     )
@@ -256,13 +256,13 @@ export function assertDuoRecipeId(raw: unknown): string {
 
 export function normalizeDuoRecipeName(raw: unknown): string {
   if (typeof raw !== 'string') {
-    throw new HelmxError('validation_error', 'Recipe name must be a non-empty string', 400, { name: raw })
+    throw new HelmxError('validation_error', 'Orchestrator name must be a non-empty string', 400, { name: raw })
   }
   const name = raw.trim()
   if (!name || name.length > DUO_RECIPE_NAME_MAX_LENGTH) {
     throw new HelmxError(
       'validation_error',
-      `Recipe name must be 1..${DUO_RECIPE_NAME_MAX_LENGTH} characters`,
+      `Orchestrator name must be 1..${DUO_RECIPE_NAME_MAX_LENGTH} characters`,
       400,
       { name: raw },
     )
@@ -273,14 +273,14 @@ export function normalizeDuoRecipeName(raw: unknown): string {
 export function normalizeDuoDescription(raw: unknown): string | undefined {
   if (raw === undefined || raw === null) return undefined
   if (typeof raw !== 'string') {
-    throw new HelmxError('validation_error', 'Recipe description must be a string', 400, { description: raw })
+    throw new HelmxError('validation_error', 'Orchestrator description must be a string', 400, { description: raw })
   }
   const trimmed = raw.trim()
   if (!trimmed) return undefined
   if (trimmed.length > MODEL_TIER_DESCRIPTION_MAX_LENGTH) {
     throw new HelmxError(
       'validation_error',
-      `Recipe description exceeds max length (${MODEL_TIER_DESCRIPTION_MAX_LENGTH})`,
+      `Orchestrator description exceeds max length (${MODEL_TIER_DESCRIPTION_MAX_LENGTH})`,
       400,
       { descriptionLength: trimmed.length },
     )

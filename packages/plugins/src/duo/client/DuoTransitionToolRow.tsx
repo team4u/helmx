@@ -1,53 +1,105 @@
+/**
+ * Timeline 26px `.trace-row` renderer (`toolView` with `replaceRow: true`) for
+ * `exit_plan_mode` and `hand_back_to_planner`.
+ * Strictly consumes `props.presentationMeta` (never `JSON.parse(props.result)`).
+ * Exports only React components (Fast Refresh compliant).
+ */
 import type { ReactNode } from 'react'
-import { Badge, HelmxIcon } from '@helmx/ui'
-import { usePluginLocale, usePluginTranslator } from '@helmx/plugin-client'
 import type { ToolViewProps } from '@helmx/protocol/browser'
+import {
+  Badge,
+  HelmxIcon,
+  StatusLight,
+  formatDurationMs,
+  type StatusLightTone,
+} from '@helmx/ui'
+import { formatModelShortName, usePluginLocale, usePluginTranslator, useToolActivity } from '@helmx/plugin-client'
 import { DUO_COPY, formatDuoTransitionSummary } from './copy.ts'
 import { DUO_EXIT_PLAN_MODE_TOOL, extractFirstLine, parseDuoTransitionMeta } from './models.ts'
 import './styles.css'
 
-export function DuoTransitionToolRow({
-  toolName,
-  status,
-  input,
-  result,
-  isError,
-  presentationMeta,
-}: ToolViewProps): ReactNode {
+export function DuoTransitionToolRow(props: ToolViewProps): ReactNode {
   const locale = usePluginLocale()
   const t = usePluginTranslator()
-  const meta = parseDuoTransitionMeta(presentationMeta)
 
-  const iconName =
-    status === 'error' || isError
-      ? 'alert-circle'
-      : status === 'running'
-        ? 'loader-2'
-        : toolName === DUO_EXIT_PLAN_MODE_TOOL
-          ? 'play'
-          : 'rotate-ccw'
+  const isRunning = props.status === 'running'
+  useToolActivity(props.callId, isRunning)
 
-  const heading =
-    toolName === DUO_EXIT_PLAN_MODE_TOOL ? t(DUO_COPY.toolToExecution) : t(DUO_COPY.toolToPlanning)
+  const meta = parseDuoTransitionMeta(props.presentationMeta)
+  const isError = props.status === 'error' || props.isError === true
+  const errorLine = isError ? extractFirstLine(props.result) : undefined
+  const isExitPlan = (meta?.tool ?? props.toolName) === DUO_EXIT_PLAN_MODE_TOOL
+  const toolTitle = isExitPlan ? t(DUO_COPY.toolExitPlanTitle) : t(DUO_COPY.toolHandBackTitle)
 
-  let summaryText = heading
-  if (meta) {
-    summaryText = formatDuoTransitionSummary(meta.tool, meta.fromModel, meta.toModel, locale)
-  } else if (status === 'error' || isError) {
-    summaryText = extractFirstLine(result) ?? heading
-  } else if (status === 'running') {
-    const reasonPreview =
-      input && typeof input === 'object' && typeof (input as Record<string, unknown>)['reason'] === 'string'
-        ? String((input as Record<string, unknown>)['reason']).trim()
-        : ''
-    summaryText = reasonPreview ? `${heading} · ${reasonPreview}` : heading
+  let summary = ''
+  if (meta !== undefined && !isError) {
+    const toShort = formatModelShortName(meta.toModel) || meta.toModel
+    summary = formatDuoTransitionSummary(meta.tool, toShort, meta.reason, locale)
+  } else if (isError) {
+    summary = errorLine ?? t(DUO_COPY.toolStatusError)
+  } else if (isRunning && props.input && typeof props.input === 'object') {
+    const rawReason = (props.input as Record<string, unknown>)['reason']
+    if (typeof rawReason === 'string' && rawReason.trim() !== '') {
+      summary = rawReason.trim()
+    }
   }
 
+  let lightTone: StatusLightTone
+  let lightLabel: string
+  if (isRunning) {
+    lightTone = 'working'
+    lightLabel = t(DUO_COPY.toolStatusRunning)
+  } else if (isError) {
+    lightTone = 'failed'
+    lightLabel = t(DUO_COPY.toolStatusError)
+  } else {
+    lightTone = 'done'
+    lightLabel = t(isExitPlan ? DUO_COPY.toolPhaseExec : DUO_COPY.toolPhasePlan)
+  }
+
+  const durationText =
+    !isRunning && props.durationMs !== undefined ? formatDurationMs(props.durationMs) : ''
+
   return (
-    <div className="duo-transition-row" data-status={status}>
-      <HelmxIcon name={iconName} size={13} />
-      <span className="duo-transition-summary">{summaryText}</span>
-      {meta?.reason && <Badge tone="neutral">{meta.reason}</Badge>}
+    <div className="trace-entry">
+      <div
+        className={`trace-row duo-trace-row${isError ? ' trace-row-error' : ''}`}
+        data-duo-tool={meta?.tool ?? props.toolName}
+        data-duo-to-phase={meta?.toPhase}
+      >
+        <span className="trace-row-left">
+          <HelmxIcon
+            name={isRunning ? 'loader' : 'workflow'}
+            size={12}
+            className={isRunning ? 'spin-slow' : undefined}
+          />
+          <span className="trace-tool-name duo-trace-name" title={toolTitle}>
+            {toolTitle}
+          </span>
+          {summary !== '' ? (
+            <span
+              className={`trace-tool-summary${isError ? ' duo-trace-error' : ''}`}
+              title={meta !== undefined ? `${meta.fromModel} -> ${meta.toModel}` : summary}
+            >
+              {summary}
+            </span>
+          ) : null}
+        </span>
+        <span className="trace-row-right duo-trace-right">
+          {!isRunning && !isError && meta !== undefined ? (
+            <Badge
+              tone={meta.toPhase === 'execution' ? 'accent' : 'neutral'}
+              className="duo-trace-badge"
+            >
+              {t(meta.toPhase === 'execution' ? DUO_COPY.toolPhaseExec : DUO_COPY.toolPhasePlan)}
+            </Badge>
+          ) : null}
+          <StatusLight tone={lightTone} label={lightLabel} />
+          {durationText !== '' ? (
+            <span className="trace-duration tabular-nums">{durationText}</span>
+          ) : null}
+        </span>
+      </div>
     </div>
   )
 }

@@ -1,15 +1,19 @@
 /**
- * builtin:duo Dual-Phase Recipe UI interactive DOM tests (compiled TSX via @helmx/plugin-build):
+ * builtin:duo Orchestrator UI interactive DOM tests (compiled TSX via @helmx/plugin-build):
  * - Modular Fast Refresh exports (`index.tsx`, `manager.tsx`, `settings.tsx`), zero Emoji, CSS hygiene;
- * - Unified ModelPicker: Dual-phase recipes grouped under "Dual-phase recipes", filtered out
+ * - Unified ModelPicker: Orchestrators grouped under "Orchestrator", trigger shows custom displayLabel
+ *   only (no concrete model, no thinking level, no Temp override badge during execution), filtered out
  *   of "Next turn only" (`singleTurnEligible: false`) and when `allowPreserveRefTiers={false}`;
- * - `DuoManagerScreen` + `DuoDetailDrawer`: empty starter preset cards, create drawer + `set`,
- *   search filter, edit drawer, `remove` + `409` force-delete double-confirm;
- * - `DuoSettingsPanel`: recipe summary + `openScreen` trigger;
- * - `DuoToolbarPill` (active & standby): phase pill + step counter, popover Planner/Executor,
- *   interactive Executor `ModelPickerControl` calling `override_executor`, `Reset override` calling
- *   `clear_override`, coordinator posture, ineligible sub-conversation guard, live disable cleanup;
- * - `DuoTransitionToolRow`: `exit_plan_mode`, `hand_back_to_planner`, running & raw error fallback.
+ * - `DuoManagerScreen` + `DuoDetailDrawer`: loading state, empty starter `<List>`/`<ListRow>`,
+ *   status pills filter + `SearchBox`, `.duo-orchestrator-fields` + `<MonoId>` + `Cmd/Ctrl+Enter` save,
+ *   `remove` + `409` force-delete double-confirm;
+ * - `DuoSettingsPanel`: loading state, KPIs + `<List density="compact">` + `openScreen` triggers;
+ * - `DuoToolbarPill` in `COMPOSER_STATUS_SLOT`: standby returns `null` (zero sessionDoc subscription),
+ *   minimal `Plan · <planner>` / `Exec · <executor>` / `Coord · <planner>` status pill, popover with
+ *   `<MonoId>`, Planner/Executor thinking levels, interactive Executor `ModelPickerControl` calling
+ *   `override_executor`, `Reset override` calling `clear_override`, step counter, edit pencil,
+ *   ineligible sub-conversation guard, and live disable cleanup;
+ * - `DuoTransitionToolRow`: `trace-row` for `exit_plan_mode`, `hand_back_to_planner`, running & error.
  */
 import './helpers/register-happy-dom.js'
 import assert from 'node:assert/strict'
@@ -21,7 +25,7 @@ import type {
   PluginClientContext as PluginClientContextType,
   PluginSummary,
 } from '@helmx/protocol'
-import { COMPOSER_TOOLBAR_SLOT } from '@helmx/protocol'
+import { COMPOSER_STATUS_SLOT } from '@helmx/protocol'
 import type {
   PluginClientHostPort,
   PluginSessionDocKey,
@@ -129,7 +133,7 @@ describe('duo-client-interactions', () => {
       available: true,
       thinkingLevels: ['off', 'high', 'xhigh'],
       displayGroup: 'duo',
-      displayLabel: 'Architect -> Coder',
+      displayLabel: 'Orchestrator (Flagship)',
       displayDetail: 'flagship → workhorse',
       preserveRef: true,
       singleTurnEligible: false,
@@ -319,7 +323,7 @@ describe('duo-client-interactions', () => {
     const hooks: HookName[] = ['input', 'before_turn', 'agent_spawn', 'turn_settled']
     return {
       id: DUO_PLUGIN_ID,
-      name: 'Dual-Phase Orchestration',
+      name: { en: 'Orchestrator', 'zh-CN': '编排器' },
       version: '0.2.0',
       locked: false,
       enabled: true,
@@ -342,7 +346,7 @@ describe('duo-client-interactions', () => {
         surface: 'plugin.slot' as const,
         spec: {
           id: 'duo-toolbar-pill',
-          target: COMPOSER_TOOLBAR_SLOT,
+          target: COMPOSER_STATUS_SLOT,
           order: 40,
           client: { module: 'index.tsx', export: 'DuoToolbarPill' },
         },
@@ -355,6 +359,7 @@ describe('duo-client-interactions', () => {
     assert.equal(DUO_STATE_DOC, 'state')
     assert.equal(DUO_SESSION_DOC, 'duo')
     assert.equal(DUO_DEFAULT_MAX_STEPS, 30)
+    void DuoToolbarPill
 
     const indexExports = Object.keys(rawIndexModule).filter((k) => k !== '__helmxClientCss').sort()
     assert.deepEqual(indexExports, ['DuoToolbarPill', 'DuoTransitionToolRow'])
@@ -366,14 +371,16 @@ describe('duo-client-interactions', () => {
     assert.deepEqual(settingsExports, ['DuoSettingsPanel'])
 
     const cssText = String(rawIndexModule['__helmxClientCss'] ?? '')
-    assert.match(cssText, /\.duo-pill/)
+    assert.match(cssText, /\.duo-status-trigger/)
+    assert.match(cssText, /\.duo-orchestrator-fields/)
+    assert.match(cssText, /\.duo-trace-row/)
     assert.match(cssText, /@media\s*\(hover:\s*hover\)/)
 
     const parsed = parseDuoStateDoc({
       recipes: {
         arch_coder: {
           id: 'arch_coder',
-          name: 'Architect -> Coder',
+          name: 'Orchestrator (Flagship)',
           plannerModel: 'tier/architect',
           executorModel: 'tier/coder',
           maxExecutionSteps: 30,
@@ -396,19 +403,29 @@ describe('duo-client-interactions', () => {
       modelTiers: TEST_TIERS,
       modelThinkingLevels: {},
     })
+    assert.equal(starters[0]!.name, 'Orchestrator (flagship)')
     assert.equal(starters[0]!.plannerModel, 'tier/architect')
     assert.equal(starters[0]!.executorModel, 'tier/coder')
     assert.equal(EMOJI_RE.test(JSON.stringify(starters)), false)
+    const zhStarters = getStarterDuoPresets('zh-CN', {
+      models: TEST_MODELS,
+      modelTiers: TEST_TIERS,
+      modelThinkingLevels: {},
+    })
+    assert.equal(zhStarters[0]!.name, '编排器（flagship）')
+    assert.equal(JSON.stringify(zhStarters).includes('配方'), false)
   })
 
-  test('Unified ModelPicker renders Duo recipes under Dual-phase recipes, hides on Next-turn tab and allowPreserveRefTiers=false', { timeout: 60_000 }, async () => {
+  test('Unified ModelPicker renders Orchestrator group, keeps trigger minimal without level/override badge, and hides on Next-turn tab', { timeout: 60_000 }, async () => {
     const pickerMount = await mountWithHost(
       e(ModelPicker, {
         conversation: makeConversation({
           id: 1,
-          model: 'faux/flagship',
+          model: 'faux/workhorse',
+          thinkingLevel: 'high',
           modelOverride: 'tier/arch_coder',
           effectiveModelRef: 'tier/arch_coder',
+          runtimeModelOverride: true,
         }),
         nextTurnMode: { onChange: () => {} },
       }),
@@ -416,30 +433,45 @@ describe('duo-client-interactions', () => {
     try {
       const trigger = pickerMount.host.querySelector<HTMLButtonElement>('button.composer-model-button')
       assert.ok(trigger !== null)
+      assert.equal(trigger.querySelector('.composer-model-label')?.textContent?.trim(), 'Orchestrator (Flagship)')
+      assert.ok(trigger.querySelector('.composer-model-level') === null, 'Orchestrator trigger omits thinking level')
+      assert.ok(pickerMount.host.querySelector('.composer-model-runtime-wrap') === null, 'Orchestrator execution omits Temp override badge')
+
       await act(async () => {
         trigger.click()
       })
       const popover = document.body.querySelector<HTMLElement>('.composer-model-popover')
       assert.ok(popover !== null)
-      assert.match(popover.textContent ?? '', /Dual-phase recipes/)
-      assert.match(popover.textContent ?? '', /Architect -> Coder/)
+      assert.match(popover.textContent ?? '', /Orchestrator/)
+      assert.match(popover.textContent ?? '', /Orchestrator \(Flagship\)/)
       assert.match(popover.textContent ?? '', /flagship → workhorse/)
 
-      // Switching to "Next turn only" hides singleTurnEligible=false Duo recipes
+      // Switching to "Next turn only" hides singleTurnEligible=false Orchestrators
       const nextTurnTab = findButton(popover, 'Next turn only')
       await act(async () => {
         nextTurnTab.click()
       })
-      assert.equal((popover.textContent ?? '').includes('Architect -> Coder'), false)
+      assert.equal((popover.textContent ?? '').includes('Orchestrator (Flagship)'), false)
     } finally {
       await pickerMount.unmount()
     }
   })
 
-  test('DuoManagerScreen + DuoDetailDrawer: starter preset creation, card list/search, edit save, and 409 force-delete', { timeout: 60_000 }, async () => {
+  test('DuoManagerScreen + DuoDetailDrawer: loading, starter ListRow creation, filter/search List, Cmd+Enter edit save, and 409 force-delete', { timeout: 60_000 }, async () => {
     const ctx = makeSpyCtx()
 
-    // 1. Empty state -> starter cards -> click "Use template" opens drawer prefilled -> Create invokes 'set'
+    // 0. Loading state when doc is undefined
+    setBuiltinClientStub({ docs: {} })
+    const loadingMount = await mountWithHost(
+      e(PluginClientContext.Provider, { value: ctx }, e(DuoManagerScreen, { inlineDrawer: true })),
+    )
+    try {
+      assert.match(loadingMount.host.textContent ?? '', /Loading orchestrators/)
+    } finally {
+      await loadingMount.unmount()
+    }
+
+    // 1. Empty state -> starter ListRow -> click "Bind" opens create drawer (no MonoId/Badge) -> Create invokes 'set'
     setBuiltinClientStub({ docs: { state: { recipes: {} } } })
     const emptyMount = await mountWithHost(
       e(
@@ -450,25 +482,28 @@ describe('duo-client-interactions', () => {
     )
     try {
       const text = emptyMount.host.textContent ?? ''
-      assert.match(text, /No Duo recipes yet/)
-      assert.match(text, /Starter recipes/)
-      assert.match(text, /Architect -> Coder/)
+      assert.match(text, /No orchestrators yet/)
+      assert.match(text, /Starter orchestrators/)
+      assert.match(text, /Orchestrator \(flagship\)/)
+      assert.ok(emptyMount.host.querySelector('[data-starter-duo="duo_architect"]') !== null)
 
       await act(async () => {
-        findButton(emptyMount.host, 'Use template').click()
+        findButton(emptyMount.host, 'Bind').click()
       })
+      assert.ok(emptyMount.host.querySelector('.helmx-mono-id') === null, 'Create drawer omits MonoId meta')
+      assert.ok(emptyMount.host.querySelector('.duo-orchestrator-fields') !== null, 'Grouped orchestrator fields render')
       const idInput = emptyMount.host.querySelector<HTMLInputElement>('#duo-recipe-id')
       assert.ok(idInput !== null)
       assert.equal(idInput.value, 'duo_architect')
 
       await act(async () => {
-        findButton(emptyMount.host, 'Create recipe').click()
+        findButton(emptyMount.host, 'Create').click()
       })
       const setCall = ctx.actionCalls.find((c) => c.actionId === 'set')
       assert.ok(setCall !== undefined)
       assert.deepEqual(setCall.input, {
         id: 'duo_architect',
-        name: 'Architect -> Coder',
+        name: 'Orchestrator (flagship)',
         plannerModel: 'tier/architect',
         executorModel: 'tier/coder',
         maxExecutionSteps: 30,
@@ -480,14 +515,14 @@ describe('duo-client-interactions', () => {
       await emptyMount.unmount()
     }
 
-    // 2. Populated state: pairing cards, search, edit drawer save, delete -> 409 -> Force delete
+    // 2. Populated state: List + ListRow, status pills + search, edit drawer MonoId + Cmd+Enter save, delete -> 409 -> Force delete
     setBuiltinClientStub({
       docs: {
         state: {
           recipes: {
             arch_coder: {
               id: 'arch_coder',
-              name: 'Architect -> Coder',
+              name: 'Orchestrator (Flagship)',
               description: 'Main dual-phase pairing',
               plannerModel: 'tier/architect',
               executorModel: 'tier/coder',
@@ -496,7 +531,7 @@ describe('duo-client-interactions', () => {
             },
             broken_pair: {
               id: 'broken_pair',
-              name: 'Broken Pair',
+              name: 'Broken Orchestrator',
               plannerModel: 'tier/missing_ext',
               executorModel: 'faux/fast',
               maxExecutionSteps: 10,
@@ -509,7 +544,7 @@ describe('duo-client-interactions', () => {
     const populatedCtx = makeSpyCtx({
       onAction: async (actionId, input) => {
         if (actionId === 'remove' && !(input as { force?: boolean }).force) {
-          throw Object.assign(new Error('Recipe tier/arch_coder is in use by Profile assistant'), {
+          throw Object.assign(new Error("Orchestrator 'tier/arch_coder' is in use by Profile assistant"), {
             status: 409,
             code: 'model_tier_in_use',
           })
@@ -526,57 +561,78 @@ describe('duo-client-interactions', () => {
     )
     try {
       const fullText = fullMount.host.textContent ?? ''
-      assert.match(fullText, /Architect -> Coder/)
+      assert.match(fullText, /Orchestrator \(Flagship\)/)
       assert.match(fullText, /tier\/arch_coder/)
       assert.match(fullText, /tier\/missing_ext/)
 
-      // Filter via SearchBox
-      const searchInput = fullMount.host.querySelector<HTMLInputElement>('input[aria-label="Search Duo recipes"]')
-      assert.ok(searchInput !== null)
+      // Status pill filter (Attention -> 1 item, Ready -> 1 item, All -> 2 items)
+      const attentionTab = Array.from(fullMount.host.querySelectorAll<HTMLButtonElement>('[role="tab"]'))
+        .find((el) => (el.textContent ?? '').includes('Attention'))
+      assert.ok(attentionTab !== undefined)
       await act(async () => {
-        setInputValue(searchInput, 'Broken')
+        attentionTab.click()
       })
       assert.equal(fullMount.host.querySelectorAll('[data-duo-recipe-id]').length, 1)
+      const allTab = Array.from(fullMount.host.querySelectorAll<HTMLButtonElement>('[role="tab"]'))
+        .find((el) => (el.textContent ?? '').includes('All'))!
       await act(async () => {
-        setInputValue(searchInput, '')
+        allTab.click()
       })
       assert.equal(fullMount.host.querySelectorAll('[data-duo-recipe-id]').length, 2)
 
-      // Open edit drawer on arch_coder card -> change name -> Save changes
-      const cardTrigger = fullMount.host.querySelector<HTMLButtonElement>(
-        '[data-duo-recipe-id="arch_coder"] button.helmx-select-card-trigger',
-      )
-      assert.ok(cardTrigger !== null)
+      // Filter via SearchBox + Reset filters
+      const searchInput = fullMount.host.querySelector<HTMLInputElement>('input[aria-label="Search orchestrators"]')
+      assert.ok(searchInput !== null)
       await act(async () => {
-        cardTrigger.click()
+        setInputValue(searchInput, 'no_such_item')
       })
+      assert.match(fullMount.host.textContent ?? '', /No matching orchestrators/)
+      await act(async () => {
+        findButton(fullMount.host, 'Reset filters').click()
+      })
+      assert.equal(fullMount.host.querySelectorAll('[data-duo-recipe-id]').length, 2)
+
+      // Open edit drawer on arch_coder ListRow -> verify MonoId + change name -> Cmd+Enter submits
+      const rowTrigger = fullMount.host.querySelector<HTMLButtonElement>(
+        '[data-duo-recipe-id="arch_coder"] button.helmx-list-row-trigger',
+      )
+      assert.ok(rowTrigger !== null)
+      await act(async () => {
+        rowTrigger.click()
+      })
+      assert.equal(
+        fullMount.host.querySelector('.primary-drawer-id .helmx-mono-id-code')?.textContent?.trim(),
+        'tier/arch_coder',
+      )
       const nameInput = fullMount.host.querySelector<HTMLInputElement>('#duo-recipe-name')
       const idField = fullMount.host.querySelector<HTMLInputElement>('#duo-recipe-id')
       assert.ok(nameInput !== null && idField !== null)
-      assert.equal(idField.disabled, true, 'recipe id is locked during edit')
+      assert.equal(idField.disabled, true, 'orchestrator id is locked during edit')
       await act(async () => {
-        setInputValue(nameInput, 'Arch -> Coder v2')
+        setInputValue(nameInput, 'Orchestrator (Opus v2)')
       })
       await act(async () => {
-        findButton(fullMount.host, 'Save changes').click()
+        nameInput.dispatchEvent(
+          new KeyboardEvent('keydown', { key: 'Enter', metaKey: true, bubbles: true, cancelable: true }),
+        )
       })
       const updateCall = populatedCtx.actionCalls.find((c) => c.actionId === 'set')
-      assert.equal((updateCall?.input as { name?: string })?.name, 'Arch -> Coder v2')
+      assert.equal((updateCall?.input as { name?: string })?.name, 'Orchestrator (Opus v2)')
 
       // Delete triggers 409 -> Force delete confirm dialog
       const deleteBtn = fullMount.host.querySelector<HTMLButtonElement>(
-        '[data-duo-recipe-id="arch_coder"] .duo-card-footer-actions button:last-child',
+        '[data-duo-recipe-id="arch_coder"] button.duo-row-delete-btn',
       )
       assert.ok(deleteBtn !== null)
       await act(async () => {
         deleteBtn.click()
       })
-      const firstAlert = document.body.querySelector('[role="alertdialog"]')
+      const firstAlert = fullMount.host.querySelector('[role="alertdialog"]') ?? document.body.querySelector('[role="alertdialog"]')
       assert.ok(firstAlert !== null, 'first ConfirmDialog should open')
       await act(async () => {
         findButton(firstAlert, 'Delete').click()
       })
-      const secondAlert = document.body.querySelector('[role="alertdialog"]')
+      const secondAlert = fullMount.host.querySelector('[role="alertdialog"]') ?? document.body.querySelector('[role="alertdialog"]')
       assert.ok(secondAlert !== null, 'second force-delete ConfirmDialog should open after 409')
       await act(async () => {
         findButton(secondAlert, 'Force delete').click()
@@ -589,7 +645,7 @@ describe('duo-client-interactions', () => {
     }
   })
 
-  test('DuoSettingsPanel: shows recipe KPIs and opens Duo Recipes screen', { timeout: 60_000 }, async () => {
+  test('DuoSettingsPanel: shows orchestrator KPIs, compact ListRow, and opens Orchestrator screen', { timeout: 60_000 }, async () => {
     const ctx = makeSpyCtx()
     setBuiltinClientStub({
       docs: {
@@ -597,7 +653,7 @@ describe('duo-client-interactions', () => {
           recipes: {
             arch_coder: {
               id: 'arch_coder',
-              name: 'Architect -> Coder',
+              name: 'Orchestrator (Flagship)',
               plannerModel: 'tier/architect',
               executorModel: 'tier/coder',
               maxExecutionSteps: 30,
@@ -613,18 +669,27 @@ describe('duo-client-interactions', () => {
     )
     try {
       const text = mounted.host.textContent ?? ''
-      assert.match(text, /Architect -> Coder/)
+      assert.match(text, /Orchestrator \(Flagship\)/)
       assert.match(text, /tier\/arch_coder/)
+      assert.ok(mounted.host.querySelector('.helmx-list-compact') !== null)
+      const rowBtn = mounted.host.querySelector<HTMLButtonElement>('button.helmx-list-row-trigger')
+      assert.ok(rowBtn !== null)
       await act(async () => {
-        findButton(mounted.host, 'Manage Duo Recipes').click()
+        rowBtn.click()
       })
-      assert.deepEqual(ctx.openedScreens, [`screen:${DUO_PLUGIN_ID}/${DUO_SCREEN_ID}`])
+      await act(async () => {
+        findButton(mounted.host, 'Open Orchestrator').click()
+      })
+      assert.deepEqual(ctx.openedScreens, [
+        `screen:${DUO_PLUGIN_ID}/${DUO_SCREEN_ID}?edit=arch_coder`,
+        `screen:${DUO_PLUGIN_ID}/${DUO_SCREEN_ID}`,
+      ])
     } finally {
       await mounted.unmount()
     }
   })
 
-  test('Composer + AgentStandbyPane + DuoToolbarPill: standby pill, active overrides, reset & live disable cleanup', { timeout: 60_000 }, async () => {
+  test('Composer + AgentStandbyPane + DuoToolbarPill (COMPOSER_STATUS_SLOT): standby returns null, active status pill, overrides, coordinator & live disable', { timeout: 60_000 }, async () => {
     mountSharedPluginNamespaces({ realHooks: true })
     resetPluginClientCache()
     seedPluginClientModule(DUO_PLUGIN_ID, 'index.tsx', rawIndexModule)
@@ -633,7 +698,7 @@ describe('duo-client-interactions', () => {
       recipes: {
         arch_coder: {
           id: 'arch_coder',
-          name: 'Architect -> Coder',
+          name: 'Orchestrator (Flagship)',
           plannerModel: 'tier/architect',
           executorModel: 'tier/coder',
           maxExecutionSteps: 12,
@@ -651,9 +716,10 @@ describe('duo-client-interactions', () => {
         harness.setDuoDoc(inp.conversationId, {
           enabled: true,
           recipeId: 'arch_coder',
-          recipeName: 'Architect -> Coder',
+          recipeName: 'Orchestrator (Flagship)',
           phase: 'planning',
           plannerModel: 'faux/flagship',
+          plannerThinkingLevel: 'xhigh',
           executorModel: inp.executorModel === 'tier/coder' ? 'faux/workhorse' : inp.executorModel,
           maxExecutionSteps: 12,
           executionStepCount: 0,
@@ -666,10 +732,12 @@ describe('duo-client-interactions', () => {
         harness.setDuoDoc(inp.conversationId, {
           enabled: true,
           recipeId: 'arch_coder',
-          recipeName: 'Architect -> Coder',
+          recipeName: 'Orchestrator (Flagship)',
           phase: 'planning',
           plannerModel: 'faux/flagship',
+          plannerThinkingLevel: 'xhigh',
           executorModel: 'faux/workhorse',
+          executorThinkingLevel: 'high',
           maxExecutionSteps: 12,
           executionStepCount: 0,
           stepLimitPaused: false,
@@ -679,7 +747,7 @@ describe('duo-client-interactions', () => {
       return {}
     }
 
-    // 1. Standby pill when standby draft selects tier/arch_coder (zero dirty draft state)
+    // 1. Standby draft selects tier/arch_coder -> status slot returns null (zero duplication, zero sessionDoc sub)
     const standbyMount = await mountWithHost(
       e(
         WithHostOverrides,
@@ -697,21 +765,8 @@ describe('duo-client-interactions', () => {
       },
     )
     try {
-      const pill = standbyMount.host.querySelector<HTMLButtonElement>('.composer-toolbar-left button.duo-pill')
-      assert.ok(pill !== null, 'standby DuoToolbarPill renders for Duo recipe')
-      assert.match(pill.textContent ?? '', /Planning → workhorse/)
-      await act(async () => {
-        pill.click()
-      })
-      const popover = document.body.querySelector<HTMLElement>('.duo-popover')
-      assert.ok(popover !== null)
-      assert.match(popover.textContent ?? '', /Architect -> Coder/)
-      assert.match(popover.textContent ?? '', /tier\/arch_coder/)
-      assert.match(popover.textContent ?? '', /Send a message to start the session/)
-      await act(async () => {
-        findButton(popover, 'Edit recipe').click()
-      })
-      assert.equal(openedTargets.at(-1), `screen:${DUO_PLUGIN_ID}/${DUO_SCREEN_ID}?edit=arch_coder`)
+      assert.ok(standbyMount.host.querySelector('button.duo-status-trigger') === null)
+      assert.equal(harness.subscribedKeys.size, 0)
     } finally {
       await standbyMount.unmount()
     }
@@ -737,27 +792,32 @@ describe('duo-client-interactions', () => {
       },
     )
     try {
-      assert.ok(childMount.host.querySelector('button.duo-pill') === null)
+      assert.ok(childMount.host.querySelector('button.duo-status-trigger') === null)
       assert.equal(harness.subscribedKeys.has(`${DUO_PLUGIN_ID}/${DUO_SESSION_DOC}/41`), false)
     } finally {
       await childMount.unmount()
     }
 
-    // 3. Active top-level conversation: planning -> execution counter -> override_executor -> clear_override -> disable cleanup
+    // 3. Active top-level conversation in execution: status row shows minimal "Exec · workhorse",
+    //    main ModelPicker stays on "Orchestrator (Flagship)" without Temp override badge
     const parentConv = makeConversation({
       id: 40,
-      title: 'Duo Active',
-      model: 'faux/flagship',
+      title: 'Orchestrator Active',
+      model: 'faux/workhorse',
+      thinkingLevel: 'high',
       modelOverride: 'tier/arch_coder',
       effectiveModelRef: 'tier/arch_coder',
+      runtimeModelOverride: true,
     })
     harness.setDuoDoc(40, {
       enabled: true,
       recipeId: 'arch_coder',
-      recipeName: 'Architect -> Coder',
+      recipeName: 'Orchestrator (Flagship)',
       phase: 'execution',
       plannerModel: 'faux/flagship',
+      plannerThinkingLevel: 'xhigh',
       executorModel: 'faux/workhorse',
+      executorThinkingLevel: 'high',
       maxExecutionSteps: 12,
       executionStepCount: 3,
       stepLimitPaused: false,
@@ -767,7 +827,11 @@ describe('duo-client-interactions', () => {
     const activeMount = await mountWithHost(
       e(
         WithHostOverrides,
-        { harness, onInvokeAction },
+        {
+          harness,
+          onInvokeAction,
+          onOpenTarget: (target) => openedTargets.push(target),
+        },
         e(Composer, { conversation: parentConv, prefill: null }),
       ),
       {
@@ -777,38 +841,81 @@ describe('duo-client-interactions', () => {
       },
     )
     try {
-      const pill = activeMount.host.querySelector<HTMLButtonElement>('.composer-toolbar-left button.duo-pill')
+      // Main ModelPicker stays stable on Orchestrator displayLabel without Temp override badge
+      assert.equal(
+        activeMount.host.querySelector('.composer-toolbar-left .composer-model-label')?.textContent?.trim(),
+        'Orchestrator (Flagship)',
+      )
+      assert.ok(activeMount.host.querySelector('.composer-model-runtime-badge') === null)
+
+      // Status-row pill renders inside .composer-status-row with minimal "Exec · workhorse"
+      const pill = activeMount.host.querySelector<HTMLButtonElement>('.composer-status-row button.duo-status-trigger')
       assert.ok(pill !== null)
-      assert.match(pill.textContent ?? '', /Executing → workhorse/)
-      assert.match(pill.textContent ?? '', /3\/12/)
+      assert.equal(pill.textContent?.replace(/\s+/g, ' ').trim(), 'Exec·workhorse')
+      assert.ok(pill.title.includes('3/12'))
 
       await act(async () => {
         pill.click()
       })
       const popover = document.body.querySelector<HTMLElement>('.duo-popover')
       assert.ok(popover !== null)
+      assert.match(popover.textContent ?? '', /Orchestrator \(Flagship\)/)
+      assert.match(popover.textContent ?? '', /tier\/arch_coder/)
+      assert.match(popover.textContent ?? '', /3 \/ 12/)
+      assert.match(popover.textContent ?? '', /xhigh/)
 
-      // Open Executor ModelPickerControl inside popover: Duo recipes (arch_coder) must NOT appear (allowPreserveRefTiers=false)
-      const pickerTrigger = popover.querySelector<HTMLButtonElement>('button.composer-model-button')
+      // Edit pencil opens manager drawer
+      const editBtn = popover.querySelector<HTMLButtonElement>('button[aria-label="Edit orchestrator"]')
+      assert.ok(editBtn !== null)
+      await act(async () => {
+        editBtn.click()
+      })
+      assert.equal(openedTargets.at(-1), `screen:${DUO_PLUGIN_ID}/${DUO_SCREEN_ID}?edit=arch_coder`)
+
+      // Re-open popover and test interactive Executor ModelPickerControl (excludes Orchestrator group)
+      await act(async () => {
+        pill.click()
+      })
+      const reopenedPopover = document.body.querySelector<HTMLElement>('.duo-popover')!
+      const pickerTrigger = reopenedPopover.querySelector<HTMLButtonElement>('button.composer-model-button')
       assert.ok(pickerTrigger !== null)
       await act(async () => {
         pickerTrigger.click()
       })
       const modelMenu = document.body.querySelector<HTMLElement>('.composer-model-popover')
       assert.ok(modelMenu !== null)
-      assert.equal((modelMenu.textContent ?? '').includes('Dual-phase recipes'), false)
+      assert.equal((modelMenu.textContent ?? '').includes('Orchestrator (Flagship)'), false)
       await act(async () => {
         findButton(modelMenu, 'fast').click()
       })
       const overrideCall = actionCalls.find((c) => c.actionId === 'override_executor')
       assert.ok(overrideCall !== undefined)
       assert.equal((overrideCall.input as { executorModel?: string }).executorModel, 'faux/fast')
-      assert.match(popover.textContent ?? '', /Override/)
+      assert.equal(pill.textContent?.replace(/\s+/g, ' ').trim(), 'Plan·flagship')
+      assert.match(reopenedPopover.textContent ?? '', /Override/)
 
       await act(async () => {
-        findButton(popover, 'Reset override').click()
+        findButton(reopenedPopover, 'Reset override').click()
       })
       assert.ok(actionCalls.some((c) => c.actionId === 'clear_override'))
+
+      // Coordinator suppression + stepLimitPaused warn tone
+      await act(async () => {
+        harness.setDuoDoc(40, {
+          enabled: true,
+          recipeId: 'arch_coder',
+          recipeName: 'Orchestrator (Flagship)',
+          phase: 'planning',
+          plannerModel: 'faux/flagship',
+          executorModel: 'faux/workhorse',
+          maxExecutionSteps: 12,
+          executionStepCount: 0,
+          stepLimitPaused: false,
+          suppressedByCoordinator: true,
+          hasExecutorOverride: false,
+        })
+      })
+      assert.equal(pill.textContent?.replace(/\s+/g, ' ').trim(), 'Coord·flagship')
 
       // Live disable removes DuoToolbarPill
       await act(async () => {
@@ -818,13 +925,13 @@ describe('duo-client-interactions', () => {
           uiContributions: [],
         }))
       })
-      assert.ok(activeMount.host.querySelector('button.duo-pill') === null)
+      assert.ok(activeMount.host.querySelector('button.duo-status-trigger') === null)
     } finally {
       await activeMount.unmount()
     }
   })
 
-  test('DuoTransitionToolRow: renders exit_plan_mode, hand_back_to_planner, running and error states cleanly', { timeout: 60_000 }, async () => {
+  test('DuoTransitionToolRow: renders 26px trace-row for exit_plan_mode, hand_back_to_planner, running and error states', { timeout: 60_000 }, async () => {
     const ctx = makeSpyCtx()
     const mountRow = async (props: Record<string, unknown>) =>
       mountWithHost(e(PluginClientContext.Provider, { value: ctx }, e(DuoTransitionToolRow, props)))
@@ -834,6 +941,7 @@ describe('duo-client-interactions', () => {
       callId: 'c1',
       toolName: DUO_EXIT_PLAN_MODE_TOOL,
       status: 'done',
+      durationMs: 420,
       result: 'Entered execution phase on faux/workhorse.',
       presentationMeta: {
         tool: DUO_EXIT_PLAN_MODE_TOOL,
@@ -844,7 +952,10 @@ describe('duo-client-interactions', () => {
       },
     })
     try {
-      assert.match(exitMount.host.textContent ?? '', /Plan ready -> workhorse/)
+      assert.ok(exitMount.host.querySelector('.trace-entry > .trace-row.duo-trace-row') !== null)
+      assert.match(exitMount.host.textContent ?? '', /Enter execution phase/)
+      assert.match(exitMount.host.textContent ?? '', /Switched to executor workhorse/)
+      assert.match(exitMount.host.textContent ?? '', /Executor/)
       assert.equal(EMOJI_RE.test(exitMount.host.textContent ?? ''), false)
     } finally {
       await exitMount.unmount()
@@ -866,8 +977,9 @@ describe('duo-client-interactions', () => {
       },
     })
     try {
-      assert.match(handBackMount.host.textContent ?? '', /Handed back workhorse -> flagship/)
-      assert.match(handBackMount.host.textContent ?? '', /step_budget_reached/)
+      assert.match(handBackMount.host.textContent ?? '', /Hand back to planner/)
+      assert.match(handBackMount.host.textContent ?? '', /Returned to planner flagship · step_budget_reached/)
+      assert.match(handBackMount.host.textContent ?? '', /Planner/)
     } finally {
       await handBackMount.unmount()
     }
@@ -880,7 +992,8 @@ describe('duo-client-interactions', () => {
       input: { reason: 'replan_needed' },
     })
     try {
-      assert.match(runningMount.host.textContent ?? '', /Returned to Planner · replan_needed/)
+      assert.match(runningMount.host.textContent ?? '', /Hand back to planner/)
+      assert.match(runningMount.host.textContent ?? '', /replan_needed/)
     } finally {
       await runningMount.unmount()
     }
@@ -894,6 +1007,7 @@ describe('duo-client-interactions', () => {
       result: 'Failed to switch to executor\nSecond line detail',
     })
     try {
+      assert.ok(errorMount.host.querySelector('.trace-row-error') !== null)
       assert.match(errorMount.host.textContent ?? '', /Failed to switch to executor/)
     } finally {
       await errorMount.unmount()

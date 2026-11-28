@@ -1,4 +1,5 @@
 import {
+  formatModelShortName,
   resolveDefaultChainThinkingLevel,
   type HelmxLocale,
   type HostModelsSlice,
@@ -18,6 +19,7 @@ export const DUO_ID_REGEX = /^[a-z0-9][a-z0-9_-]{0,63}$/
 
 export type DuoPhase = 'planning' | 'execution'
 export type DuoRecipeAvailability = 'available' | 'disabled' | 'unavailable'
+export type DuoStatusFilter = 'all' | 'ready' | 'attention'
 
 export interface DuoRecipe {
   id: string
@@ -113,6 +115,13 @@ function asRecord(raw: unknown): Record<string, unknown> | null {
 
 function normalizeOptionalString(raw: unknown): string | undefined {
   return typeof raw === 'string' && raw.trim() !== '' ? raw.trim() : undefined
+}
+
+export function isDuoEligibleConversation(
+  conversation: { parentConversationId?: number; ownedBy?: string } | undefined,
+): boolean {
+  if (!conversation) return false
+  return conversation.parentConversationId === undefined && (conversation.ownedBy ?? 'human') === 'human'
 }
 
 export function parseTierRefId(ref: string | undefined): string | undefined {
@@ -314,7 +323,7 @@ export function resolveEndpointDisplay(
       hostModels ?? undefined,
       ref,
       explicitThinking,
-      'compaction',
+      'tier',
     ),
     status: 'available',
   }
@@ -350,13 +359,30 @@ export function synthesizeDuoRecipeItems(
     })
 }
 
+export function countDuoRecipeItemsByStatus(
+  items: ReadonlyArray<DuoRecipeViewItem>,
+): { all: number; ready: number; attention: number } {
+  let ready = 0
+  for (const item of items) {
+    if (item.status === 'available') ready += 1
+  }
+  return {
+    all: items.length,
+    ready,
+    attention: items.length - ready,
+  }
+}
+
 export function filterDuoRecipeItems(
   items: ReadonlyArray<DuoRecipeViewItem>,
   search: string,
+  statusFilter: DuoStatusFilter = 'all',
 ): DuoRecipeViewItem[] {
   const q = search.trim().toLowerCase()
-  if (!q) return [...items]
-  return items.filter(({ recipe, resolvedPlannerModel, resolvedExecutorModel }) => {
+  return items.filter(({ recipe, resolvedPlannerModel, resolvedExecutorModel, status }) => {
+    if (statusFilter === 'ready' && status !== 'available') return false
+    if (statusFilter === 'attention' && status === 'available') return false
+    if (!q) return true
     const fields = [
       recipe.id,
       `tier/${recipe.id}`,
@@ -380,6 +406,19 @@ export function matchDuoRecipeFromModelRef(
   return Object.hasOwn(recipes, tierId) ? recipes[tierId] : undefined
 }
 
+function resolvePresetEndpointShort(
+  ref: string,
+  externalTiers: ReadonlyArray<{ id: string; model: string }>,
+): string {
+  if (!ref) return ''
+  const tierId = parseTierRefId(ref)
+  if (tierId !== undefined) {
+    const found = externalTiers.find((t) => t.id === tierId)
+    return formatModelShortName(found?.model ?? tierId)
+  }
+  return formatModelShortName(ref)
+}
+
 export function getStarterDuoPresets(
   locale: HelmxLocale,
   hostModels: HostModelsSlice | null | undefined,
@@ -398,11 +437,17 @@ export function getStarterDuoPresets(
   const coderRef = hasTier('coder') ? 'tier/coder' : hasTier('workhorse') ? 'tier/workhorse' : fallbackSecond
   const fastRef = hasTier('scout') ? 'tier/scout' : hasTier('fast') ? 'tier/fast' : fallbackSecond
 
+  const plannerShort =
+    resolvePresetEndpointShort(architectRef, externalTiers) || (locale === 'zh-CN' ? '主力' : 'Primary')
+  const fastShort =
+    resolvePresetEndpointShort(fastRef, externalTiers) || (locale === 'zh-CN' ? '快写' : 'Fast')
+  const secondLabel = fastShort !== plannerShort ? `${plannerShort} · ${fastShort}` : (locale === 'zh-CN' ? `${plannerShort} · 快写` : `${plannerShort} · Fast`)
+
   if (locale === 'zh-CN') {
     return [
       {
         id: 'duo_architect',
-        name: '架构规划 -> 工程实现',
+        name: `编排器（${plannerShort}）`,
         description: '高阶推理只读探索并撰写执行方案，交由主力工程模型落地修改与校验。',
         plannerModel: architectRef,
         executorModel: coderRef,
@@ -410,7 +455,7 @@ export function getStarterDuoPresets(
       },
       {
         id: 'duo_fast',
-        name: '深度规划 -> 轻量快写',
+        name: `编排器（${secondLabel}）`,
         description: '规划端聚焦约束与方案，高频局部改动由轻量高并发模型快速完成。',
         plannerModel: architectRef,
         executorModel: fastRef,
@@ -421,7 +466,7 @@ export function getStarterDuoPresets(
   return [
     {
       id: 'duo_architect',
-      name: 'Architect -> Coder',
+      name: `Orchestrator (${plannerShort})`,
       description: 'Explore read-only with a flagship planner, then hand execution edits and checks to your coder.',
       plannerModel: architectRef,
       executorModel: coderRef,
@@ -429,7 +474,7 @@ export function getStarterDuoPresets(
     },
     {
       id: 'duo_fast',
-      name: 'Planner -> Fast Worker',
+      name: `Orchestrator (${secondLabel})`,
       description: 'Reserve reasoning capacity for design and reviews while a fast executor applies targeted edits.',
       plannerModel: architectRef,
       executorModel: fastRef,

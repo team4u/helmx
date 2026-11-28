@@ -1,5 +1,19 @@
+/** Dedicated lightweight settings-panel entrypoint for builtin:duo (`DuoSettingsPanel`). */
 import { useMemo, type ReactNode } from 'react'
-import { Badge, Button, Callout, HelperText, KvGrid, Stack, StatusLight, type StatusLightTone } from '@helmx/ui'
+import {
+  Button,
+  Callout,
+  HelmxIcon,
+  HelperText,
+  KvGrid,
+  List,
+  ListRow,
+  LoadingState,
+  Stack,
+  StatusLight,
+  type LocalizedText,
+  type StatusLightTone,
+} from '@helmx/ui'
 import {
   formatModelShortName,
   useHostModels,
@@ -19,10 +33,10 @@ import {
 } from './models.ts'
 import './styles.css'
 
-const STATUS_TONE: Readonly<Record<DuoRecipeAvailability, StatusLightTone>> = {
-  available: 'done',
-  disabled: 'blocked',
-  unavailable: 'aborted',
+const STATUS_META: Readonly<Record<DuoRecipeAvailability, { tone: StatusLightTone; copy: LocalizedText }>> = {
+  available: { tone: 'done', copy: DUO_COPY.statusAvailable },
+  disabled: { tone: 'blocked', copy: DUO_COPY.statusDisabled },
+  unavailable: { tone: 'aborted', copy: DUO_COPY.statusUnavailable },
 }
 
 export function DuoSettingsPanel(): ReactNode {
@@ -46,34 +60,55 @@ export function DuoSettingsPanel(): ReactNode {
     [items],
   )
 
+  if (rawDoc === undefined) {
+    return <LoadingState label={t(DUO_COPY.loading)} />
+  }
+
   return (
-    <Stack gap="sm">
+    <Stack gap="md">
       {!enabled && <Callout tone="warn">{t(DUO_COPY.settingsDisabledAlert)}</Callout>}
       <HelperText>{t(DUO_COPY.settingsSummary)}</HelperText>
       <KvGrid
         items={[
-          { key: t(DUO_COPY.settingsKvRecipes), value: String(items.length) },
+          { key: t(DUO_COPY.settingsKvTotal), value: String(items.length) },
           { key: t(DUO_COPY.settingsKvReady), value: String(readyCount) },
         ]}
       />
       {items.length > 0 && (
-        <div className="duo-settings-list">
-          {items.slice(0, 6).map((item) => (
-            <div key={item.recipe.id} className="duo-settings-row">
-              <div className="duo-settings-row-main">
-                <StatusLight tone={STATUS_TONE[item.status]} label={item.recipe.name} />
-                <span>{item.recipe.name}</span>
-                <Badge tone="neutral" mono>
-                  tier/{item.recipe.id}
-                </Badge>
-              </div>
-              <span className="duo-settings-row-pair">
-                {formatModelShortName(item.resolvedPlannerModel ?? item.recipe.plannerModel)} →{' '}
-                {formatModelShortName(item.resolvedExecutorModel ?? item.recipe.executorModel)}
-              </span>
-            </div>
-          ))}
-        </div>
+        <List density="compact" label={t(DUO_COPY.screenTitle)}>
+          {items.slice(0, 6).map((item) => {
+            const statusMeta = STATUS_META[item.status]
+            const plannerShort = formatModelShortName(item.resolvedPlannerModel ?? item.recipe.plannerModel)
+            const executorShort = formatModelShortName(item.resolvedExecutorModel ?? item.recipe.executorModel)
+            return (
+              <ListRow
+                key={item.recipe.id}
+                leading={<StatusLight tone={statusMeta.tone} label={t(statusMeta.copy)} />}
+                title={<span>{item.recipe.name}</span>}
+                meta={
+                  <>
+                    <code className="mono duo-id-code">
+                      <span className="duo-prefix">tier/</span>
+                      {item.recipe.id}
+                    </code>
+                    <span className="duo-model-endpoint">
+                      <code className="duo-model-name">{plannerShort}</code>
+                    </span>
+                    <HelmxIcon name="arrow-right" size={11} className="duo-model-arrow" />
+                    <span className="duo-model-endpoint">
+                      <code className="duo-model-name">{executorShort}</code>
+                    </span>
+                  </>
+                }
+                onSelect={() =>
+                  ctx.openScreen(
+                    `screen:${DUO_PLUGIN_ID}/${DUO_SCREEN_ID}?edit=${encodeURIComponent(item.recipe.id)}`,
+                  )
+                }
+              />
+            )
+          })}
+        </List>
       )}
       <div>
         <Button

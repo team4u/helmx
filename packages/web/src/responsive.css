@@ -49,7 +49,6 @@ button, a, input, select, textarea { touch-action: manipulation; }
   .composer-textarea { max-height: 120px; }
   .composer-toolbar .composer-picker-root { max-width: 100%; }
   .composer-toolbar .composer-model-button { max-width: 100%; }
-  .composer-model-runtime-baseline { display: none; }
   .composer-status-row { margin-bottom: 0; }
   .ask-dock { padding: 10px; }
   .ask-dock-shortcut-hint { display: none; }

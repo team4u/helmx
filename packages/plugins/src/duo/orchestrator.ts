@@ -1,5 +1,5 @@
 /**
- * Core orchestration manager for `builtin:duo` Dual-Phase Recipes.
+ * Core orchestration manager for `builtin:duo` Orchestrator.
  */
 import {
   HelmxError,
@@ -160,7 +160,7 @@ function buildDuoPlanningSection(resolved: DuoResolvedConfig): string {
     : `\`${resolved.executorModel}\``
   return [
     '<duo_planning_mode>',
-    `You are currently in the READ-ONLY **Planning Phase** of Dual-Phase Orchestration (\`builtin:duo\`, recipe \`tier/${resolved.recipeId}\`). Your Executor counterpart (${executorLine}) is standing by.`,
+    `You are currently in the READ-ONLY **Planning Phase** of Orchestrator (\`builtin:duo\`, \`tier/${resolved.recipeId}\`). Your Executor counterpart (${executorLine}) is standing by.`,
     READ_ONLY_PLANNING_INSCTION_RULE_SAFE,
     `2. Decide whether to handle in place or delegate: if active delegation tools (\`subagent\`, \`SubagentWorkflow\`, \`swarm_dispatch_worker\`, etc.) are present and the task benefits from parallel/isolated execution or verification, stay in Planning Phase and delegate directly. If the task is ready for single-stream file edits, builds/fixes, or final integration in this workspace, call \`${DUO_EXIT_PLAN_MODE_TOOL}({ plan })\` ALONE (never in parallel with other tools) to hand execution to ${executorLine}.`,
     '3. Keep plans actionable and compact: include exact target files, concrete step-by-step edits, verification criteria, and a concise `Re-plan if:` list so the Executor knows when to call `hand_back_to_planner`. Do not invoke `exit_plan_mode` for pure Q&A turns.',
@@ -985,7 +985,7 @@ export function createDuoManager(deps: DuoManagerDeps): DuoManager {
       const id = assertDuoRecipeId(rawId)
       const recipe = recipeCache.get(id)
       if (!recipe) {
-        throw new HelmxError('duo_recipe_not_found', `Duo recipe '${id}' does not exist`, 404, { id })
+        throw new HelmxError('duo_recipe_not_found', `Orchestrator '${id}' does not exist`, 404, { id })
       }
       const catalog = await ctx.host.listModels()
       return buildRecipeView(recipe, catalog, getExternalTiers())
@@ -996,7 +996,7 @@ export function createDuoManager(deps: DuoManagerDeps): DuoManager {
       if (!recipeCache.has(id) && recipeCache.size >= MAX_DUO_RECIPES_COUNT) {
         throw new HelmxError(
           'validation_error',
-          `Maximum number of Duo recipes (${MAX_DUO_RECIPES_COUNT}) reached`,
+          `Maximum number of Orchestrators (${MAX_DUO_RECIPES_COUNT}) reached`,
           400,
           { count: recipeCache.size },
         )
@@ -1024,7 +1024,7 @@ export function createDuoManager(deps: DuoManagerDeps): DuoManager {
         if (tierId !== undefined && (tierId === id || recipeCache.has(tierId))) {
           throw new HelmxError(
             'validation_error',
-            `${roleField} cannot reference Duo recipe "tier/${tierId}"`,
+            `${roleField} cannot reference Orchestrator "tier/${tierId}"`,
             400,
             { field: roleField, model: ref },
           )
@@ -1079,7 +1079,7 @@ export function createDuoManager(deps: DuoManagerDeps): DuoManager {
       if (refs.length > 0 && input.force !== true) {
         throw new HelmxError(
           'model_tier_in_use',
-          `Duo recipe 'tier/${id}' is in use by ${refs.map((r) => r.label).join('; ')} (pass force: true to remove anyway)`,
+          `Orchestrator 'tier/${id}' is in use by ${refs.map((r) => r.label).join('; ')} (pass force: true to remove anyway)`,
           409,
           { id, references: refs },
         )
@@ -1119,7 +1119,7 @@ export function createDuoManager(deps: DuoManagerDeps): DuoManager {
       if (!recipe) {
         throw new HelmxError(
           'validation_error',
-          'Conversation must select a Duo recipe (tier/<id>) before overriding its Executor',
+          'Conversation must select an Orchestrator (tier/<id>) before overriding its Executor',
           400,
         )
       }
@@ -1129,7 +1129,7 @@ export function createDuoManager(deps: DuoManagerDeps): DuoManager {
       if (tierId !== undefined && recipeCache.has(tierId)) {
         throw new HelmxError(
           'validation_error',
-          `executorModel cannot reference Duo recipe "tier/${tierId}"`,
+          `executorModel cannot reference Orchestrator "tier/${tierId}"`,
           400,
         )
       }
@@ -1230,7 +1230,7 @@ export function createDuoManager(deps: DuoManagerDeps): DuoManager {
             entry.plannerResolved,
             entry.executorResolved,
           ],
-          keywords: ['duo', 'recipe', 'recipes', 'pair', 'planner', 'executor', 'dual-phase', '双相', '配方', '协同'],
+          keywords: ['orchestrator', '编排器', 'duo', 'planner', 'executor', 'dual-phase', 'pair', '双相', '协同'],
         }),
         tieBreaker: (entry) => entry.recipe.id,
         toResult: (entry, score) => {
@@ -1246,7 +1246,7 @@ export function createDuoManager(deps: DuoManagerDeps): DuoManager {
             kind: 'resource',
             title: entry.recipe.name,
             subtitle,
-            breadcrumb: [{ en: 'Duo Recipes', 'zh-CN': '双相配方' }],
+            breadcrumb: [{ en: 'Orchestrator', 'zh-CN': '编排器' }],
             icon: 'git-pull-request',
             ...(!entry.available ? { badge: { en: 'Unavailable', 'zh-CN': '不可用' } } : {}),
             target: `screen:${DUO_PLUGIN_ID}/${DUO_SCREEN_ID}?edit=${encodeURIComponent(entry.recipe.id)}`,
@@ -1520,7 +1520,7 @@ export function createDuoManager(deps: DuoManagerDeps): DuoManager {
       const recipe = getRecipeForConversation(conv)
       const prevRecipeId = activeRecipeByConvId.get(conv.id)
 
-      // Clean up temporary overrides / execution runtime when switching away from or changing Duo recipe.
+      // Clean up temporary overrides / execution runtime when switching away from or changing Orchestrator.
       if (
         (recipe === undefined && (convOverrideCache.has(conv.id) || runtimeCache.has(conv.id))) ||
         (recipe !== undefined && prevRecipeId !== undefined && prevRecipeId !== recipe.id) ||
@@ -1622,7 +1622,7 @@ export function createDuoManager(deps: DuoManagerDeps): DuoManager {
           )
         }
         if (resolved === undefined) {
-          return toolError('exit_plan_mode requires a Duo recipe (tier/<id>) on this conversation or Profile.')
+          return toolError('exit_plan_mode requires an Orchestrator (tier/<id>) on this conversation or Profile.')
         }
         const current = runtimeCache.get(conv.id)
         if (current?.phase === 'execution') {

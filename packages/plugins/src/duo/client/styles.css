@@ -1,301 +1,326 @@
-/* builtin:duo Quiet Surface styles (scoped under PluginScope, touch-safe :hover discipline) */
-
-.duo-screen .duo-card-pair {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 6px;
-  padding: 8px 10px;
-  border-radius: var(--radius-xs);
-  background: var(--bg-subtle);
-  border: 1px solid var(--border);
+/* builtin:duo domain-specific styles (.duo-* prefix; shared layout & primitives come from @helmx/ui). */
+.duo-empty {
+  padding: 28px 16px;
+  min-height: 120px;
 }
 
-.duo-screen .duo-endpoint-chip {
+/* ---- Orchestrator row domain micro-visuals inside SDK <ListRow> ---- */
+.duo-id-code {
+  font-size: 11.5px;
+  color: var(--fg-secondary);
+}
+
+.duo-prefix {
+  color: var(--fg-muted);
+  font-weight: 400;
+}
+
+.duo-model-endpoint {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: 4px;
   min-width: 0;
   max-width: 100%;
+}
+
+.duo-model-name {
+  font-family: var(--font-mono);
   font-size: 12px;
-  line-height: 1.3;
-}
-
-.duo-screen .duo-endpoint-role {
-  color: var(--fg-subtle);
-  font-size: 11px;
-  font-weight: 500;
-  flex-shrink: 0;
-}
-
-.duo-screen .duo-endpoint-model {
+  color: var(--fg);
   font-weight: 500;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.duo-screen .duo-endpoint-effort {
+.duo-model-level {
+  font-family: var(--font-mono);
   font-size: 11px;
-  color: var(--fg-subtle);
-}
-
-.duo-screen .duo-pair-arrow {
-  color: var(--fg-subtle);
-  flex-shrink: 0;
-}
-
-.duo-screen .duo-card-meta-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  width: 100%;
-  font-size: 12px;
   color: var(--fg-muted);
-}
-
-.duo-screen .duo-card-footer-actions {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
+  white-space: nowrap;
   flex-shrink: 0;
 }
 
-.duo-screen .duo-card-warning {
-  margin-top: 6px;
+.duo-model-arrow {
+  color: var(--fg-subtle);
+  flex-shrink: 0;
 }
 
-.duo-screen .duo-starters-section {
-  margin-top: 16px;
+@media (hover: hover) {
+  .duo-row-delete-btn:hover:not(:disabled) {
+    color: var(--err);
+  }
 }
 
-.duo-screen .duo-starter-card {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
+.duo-starter-icon {
+  color: var(--accent);
+  flex-shrink: 0;
 }
 
-.duo-screen .duo-starter-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.duo-screen .duo-starter-title {
+.duo-starter-cta {
+  color: var(--accent);
   font-weight: 500;
-  font-size: 13px;
 }
 
-.duo-screen .duo-starter-desc {
-  font-size: 12px;
+/* ---- Detail drawer domain layout (starter chips, grouped orchestrator box & description field) ---- */
+.duo-drawer-form {
+  min-width: 0;
+}
+
+.duo-starter-chips {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.duo-starter-chips-label {
+  font-size: 11.5px;
   color: var(--fg-muted);
-  margin: 0;
+  white-space: nowrap;
 }
 
-.duo-drawer {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-}
-
-.duo-drawer-presets {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.duo-drawer-preset-row {
+.duo-starter-chips-list {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 4px;
 }
 
-.duo-drawer-flow {
+.duo-orchestrator-fields {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  background: var(--bg-subtle);
+}
+
+.duo-orch-connector {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 14px;
+  color: var(--fg-subtle);
+}
+
+.duo-steps-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding-top: var(--space-2);
+  margin-top: var(--space-1);
+  border-top: 1px solid var(--line-2);
+}
+
+.duo-steps-label-col {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.duo-steps-hint {
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+
+.duo-steps-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.duo-steps-input {
+  width: 68px;
+  text-align: right;
+}
+
+.duo-steps-unit {
+  font-size: 12px;
+  color: var(--fg-muted);
+  white-space: nowrap;
+}
+
+.duo-desc-field .helmx-field-label {
+  flex: 1;
 }
 
 .duo-desc-label-row {
-  display: inline-flex;
+  display: flex;
   align-items: center;
-  gap: 8px;
+  justify-content: space-between;
+  gap: var(--space-2);
+  width: 100%;
 }
 
 .duo-char-count {
   font-size: 11px;
-  color: var(--fg-subtle);
   font-weight: 400;
-}
-
-.duo-drawer-footer-split {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  width: 100%;
-}
-
-.duo-drawer-footer-right {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  margin-left: auto;
-}
-
-/* Settings overview panel */
-.duo-settings-list {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.duo-settings-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  font-size: 12px;
-  padding: 6px 8px;
-  border-radius: var(--radius-xs);
-  border: 1px solid var(--border);
-}
-
-.duo-settings-row-main {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-}
-
-.duo-settings-row-pair {
   color: var(--fg-muted);
-  font-size: 11px;
-  white-space: nowrap;
 }
 
-/* Composer toolbar pill & popover */
-.helmx-toolbar-pill.duo-pill {
+.duo-desc-textarea {
+  min-height: 54px;
+}
+
+/* ---- Timeline 26px phase transition trace row ---- */
+.duo-trace-row {
+  width: 100%;
+  min-width: 0;
+  cursor: default;
+}
+
+.duo-trace-name {
+  color: var(--fg-secondary);
+}
+
+.duo-trace-right {
   display: inline-flex;
   align-items: center;
   gap: 6px;
+  flex: 0 0 auto;
 }
 
-.duo-pill-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 999px;
-  background: var(--fg-subtle);
+.duo-trace-badge {
+  height: 18px;
+  line-height: 16px;
+  padding: 0 5px;
+  font-size: 10.5px;
   flex-shrink: 0;
 }
 
-.duo-pill-active .duo-pill-dot {
-  background: var(--accent);
+.duo-trace-error {
+  color: var(--err);
 }
 
-.duo-pill-executing .duo-pill-dot {
-  background: var(--ok);
+/* ---- Composer orchestrator status pill (22px geometry, neutral surface, hover & open states inherited from .helmx-toolbar-pill) ---- */
+.duo-status-trigger {
+  position: relative;
+  max-width: 100%;
 }
 
-.duo-pill-standby .duo-pill-dot {
-  background: var(--accent);
-  opacity: 0.75;
+.duo-status-phase,
+.duo-status-sep {
+  flex-shrink: 0;
 }
 
-.duo-pill-suppressed .duo-pill-dot {
-  background: var(--warn);
+.duo-status-sep {
+  opacity: 0.45;
 }
 
-.duo-pill-steps {
-  font-size: 11px;
-  color: var(--fg-subtle);
+.duo-status-model {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .duo-popover {
-  width: 340px;
-  max-width: calc(100vw - 24px);
-}
-
-.duo-popover-body {
+  width: min(328px, calc(100vw - 24px));
+  max-height: min(400px, 65dvh);
+  overflow-y: auto;
+  padding: 10px 12px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  padding-top: 8px;
-}
-
-.duo-popover-status-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
   gap: 8px;
-  font-size: 12px;
+  color: var(--fg);
+  font-size: 12.5px;
 }
 
-.duo-popover-status-left {
+.duo-popover-header {
+  padding: 0 0 8px;
+}
+
+.duo-popover-title-wrap {
   display: inline-flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 6px;
-  font-weight: 500;
+  min-width: 0;
 }
 
-.duo-popover-role {
+.duo-popover-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--fg);
+  overflow-wrap: anywhere;
+}
+
+.duo-popover-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.duo-popover-row {
   display: flex;
   flex-direction: column;
   gap: 4px;
-}
-
-.duo-popover-role-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 6px;
-  font-size: 11px;
-  color: var(--fg-subtle);
-}
-
-.duo-popover-role-readonly {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 6px;
-  min-height: 28px;
-  padding: 0 8px;
+  padding: 5px 7px;
   border-radius: var(--radius-xs);
-  border: 1px solid var(--border);
+}
+
+.duo-popover-row[data-active='true'] {
   background: var(--bg-subtle);
-  font-size: 12px;
 }
 
-.duo-popover-hint {
-  font-size: 11px;
-  color: var(--fg-subtle);
+.duo-popover-row--inline {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
 }
 
-.duo-popover-actions {
+.duo-popover-row-head {
   display: flex;
   align-items: center;
-  justify-content: flex-end;
+  justify-content: space-between;
   gap: 6px;
 }
 
-/* Timeline transition row */
-.duo-transition-row {
+.duo-popover-badges {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  font-size: 12px;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.duo-popover-label {
+  font-size: 11.5px;
   color: var(--fg-muted);
 }
 
-.duo-transition-summary {
+.duo-popover-model {
+  font-size: 12px;
   color: var(--fg);
-  font-weight: 500;
+  overflow-wrap: anywhere;
 }
 
-@media (hover: hover) {
-  .duo-screen .duo-starter-card:hover {
-    border-color: var(--border-strong);
+.duo-popover-steps {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--fg);
+}
+
+.duo-popover-override-actions {
+  display: flex;
+  justify-content: flex-end;
+  padding-top: 2px;
+}
+
+@media (max-width: 680px) {
+  .duo-popover {
+    width: calc(100vw - 24px);
+  }
+}
+
+@media (pointer: coarse) {
+  .duo-status-trigger::after {
+    content: '';
+    position: absolute;
+    inset: -5px -2px;
   }
 }

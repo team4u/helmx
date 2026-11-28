@@ -42,10 +42,19 @@ export function ModelPicker({ conversation, nextTurnMode, onReturnFocus }: Model
       : conversation.modelOverride !== undefined && conversation.modelOverride !== ''
         ? conversation.modelOverride
         : undefined
+  const baselineTier =
+    configuredBaseline !== undefined && configuredBaseline.startsWith('tier/')
+      ? hostModels?.modelTiers?.find((item) => `tier/${item.id}` === configuredBaseline)
+      : undefined
+  const isPreserveRefBaseline = baselineTier?.preserveRef === true
   const displayEffectiveModel =
-    conversation.runtimeModelOverride === true
+    conversation.runtimeModelOverride === true && !isPreserveRefBaseline
       ? conversation.model
       : (configuredBaseline ?? conversation.model)
+  const displayThinkingLevel =
+    isPreserveRefBaseline && conversation.runtimeModelOverride === true
+      ? (baselineTier?.thinkingLevel ?? '')
+      : conversation.thinkingLevel
   const allowPreserveRefTiers =
     conversation.parentConversationId === undefined && (conversation.ownedBy ?? 'human') === 'human'
 
@@ -58,7 +67,8 @@ export function ModelPicker({ conversation, nextTurnMode, onReturnFocus }: Model
   const hasStagedNextTurn =
     nextTurnMode !== undefined &&
     (stagedNextTurnModel !== undefined || stagedNextTurnThinking !== undefined)
-  const isRuntimeOverride = conversation.runtimeModelOverride === true && !hasStagedNextTurn
+  const isRuntimeOverride =
+    conversation.runtimeModelOverride === true && !hasStagedNextTurn && !isPreserveRefBaseline
 
   const apply = async (model: string, level: string | null): Promise<void> => {
     // Same model + null level only clears the thinking override (back to the
@@ -115,9 +125,13 @@ export function ModelPicker({ conversation, nextTurnMode, onReturnFocus }: Model
     return ['off']
   }
 
-  const currentLevels = resolveLevelsFor(conversation.model || displayEffectiveModel)
+  const currentLevels = resolveLevelsFor(
+    isPreserveRefBaseline && conversation.runtimeModelOverride === true
+      ? displayEffectiveModel
+      : (conversation.model || displayEffectiveModel),
+  )
   const supportsThinking = currentLevels.some((level) => level !== 'off')
-  const effectiveLevel = resolveEffectiveThinkingLevel(currentLevels, conversation.thinkingLevel)
+  const effectiveLevel = resolveEffectiveThinkingLevel(currentLevels, displayThinkingLevel)
   const showLevel = supportsThinking && effectiveLevel !== '' && effectiveLevel !== 'off'
   const thinkingSuffix = showLevel ? t('composer.model.thinkingSuffix', { level: effectiveLevel }) : ''
   const titleModel =
@@ -191,7 +205,7 @@ export function ModelPicker({ conversation, nextTurnMode, onReturnFocus }: Model
   const picker = (
     <ModelPickerControl
       effectiveModel={displayEffectiveModel}
-      activeThinkingLevel={conversation.thinkingLevel}
+      activeThinkingLevel={displayThinkingLevel}
       nextTurnMode={nextTurnMode}
       allowPreserveRefTiers={allowPreserveRefTiers}
       resetLabel={t('composer.model.clearOverride')}
@@ -215,13 +229,6 @@ export function ModelPicker({ conversation, nextTurnMode, onReturnFocus }: Model
       <Badge tone="accent" className="composer-model-runtime-badge">
         {t('composer.model.runtimeOverrideBadge')}
       </Badge>
-      {configuredBaseline !== undefined ? (
-        <span className="composer-model-runtime-baseline" title={configuredBaseline}>
-          {t('composer.model.runtimeOverrideBaseline', {
-            baseline: formatModelShortName(configuredBaseline),
-          })}
-        </span>
-      ) : null}
     </span>
   )
 }

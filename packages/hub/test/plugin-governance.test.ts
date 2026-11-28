@@ -485,8 +485,9 @@ test('createHelmx 全部 17 个内置插件的只读契约投影完整暴露 pre
     assert.ok(duoManifest.ui.some((u) => u.surface === 'screen' && u.spec.id === 'main'))
     assert.ok(duoManifest.ui.some((u) => u.surface === 'settings.panel' && u.spec.id === 'duo-settings'))
     assert.ok(duoManifest.ui.some((u) => u.surface === 'commandPalette' && u.spec.id === 'duo-create'))
-    assert.ok(duoManifest.ui.some((u) => u.surface === 'plugin.slot' && u.spec.target === 'builtin:composer/toolbar'))
-    assert.ok(duoManifest.ui.some((u) => u.surface === 'tool.view' && u.spec.id === 'duo-transition-row'))
+    assert.ok(duoManifest.ui.some((u) => u.surface === 'plugin.slot' && u.spec.target === 'builtin:composer/status'))
+    assert.equal(duoManifest.ui.some((u) => u.surface === 'plugin.slot' && u.spec.target === 'builtin:composer/toolbar'), false)
+    assert.ok(duoManifest.ui.some((u) => u.surface === 'tool.view' && u.spec.id === 'duo-transition-row' && u.spec.replaceRow === true))
     assert.equal(duoManifest.ui.some((u) => u.surface === 'plugin.slot' && u.spec.target === 'builtin:profile/detail-section'), false)
     assert.equal(duoManifest.ui.some((u) => u.surface === 'plugin.slot' && u.spec.target === 'builtin:composer/menu'), false)
 

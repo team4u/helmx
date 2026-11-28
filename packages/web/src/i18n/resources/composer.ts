@@ -161,7 +161,6 @@ export const composerMessages = {
   },
   'composer.model.baselineDefault': { en: 'default', 'zh-CN': '默认' },
   'composer.model.runtimeOverrideBadge': { en: 'Temp override', 'zh-CN': '临时换模' },
-  'composer.model.runtimeOverrideBaseline': { en: '(baseline: {baseline})', 'zh-CN': '（基线：{baseline}）' },
   'composer.model.runtimeOverrideTitle': {
     en: 'Temporary runtime override active: {model}{thinking} (baseline: {baseline}) ({shortcut})',
     'zh-CN': '临时换模生效中：{model}{thinking}（基线：{baseline}）({shortcut})',
@@ -184,7 +183,7 @@ export const composerMessages = {
   'composer.model.searchPlaceholder': { en: 'Search models…', 'zh-CN': '搜索模型…' },
   'composer.model.refreshCatalog': { en: 'Refresh dynamic model catalog', 'zh-CN': '刷新动态模型目录' },
   'composer.model.tiersHeader': { en: 'Model tiers', 'zh-CN': '模型档位' },
-  'composer.model.duoGroupHeader': { en: 'Dual-phase recipes', 'zh-CN': '双相配方' },
+  'composer.model.duoGroupHeader': { en: 'Orchestrator', 'zh-CN': '编排器' },
   'composer.model.tierRowTitle': { en: 'Use {tier} ({model})', 'zh-CN': '使用 {tier}（{model}）' },
   'composer.model.listHeader': { en: 'Model list', 'zh-CN': '模型列表' },
   'composer.model.emptyCatalog': {

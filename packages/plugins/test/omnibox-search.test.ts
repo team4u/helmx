@@ -286,7 +286,8 @@ test('enriched UI specs: screens, settingsPanels, and navigation commands pass P
     const duoScreen = findUi(DUO_PLUGIN_ID, 'screen', DUO_SCREEN_ID)
     assert.ok(duoScreen, 'builtin:duo screen should register')
     assertBilingualMetadata('duo screen.description', duoScreen['description'])
-    assert.ok(Array.isArray(duoScreen['keywords']) && (duoScreen['keywords'] as string[]).includes('recipe'))
+    assert.ok(Array.isArray(duoScreen['keywords']) && (duoScreen['keywords'] as string[]).includes('orchestrator'))
+    assert.equal((duoScreen['keywords'] as string[]).includes('recipe'), false)
     assertNoEmoji('duo screen.keywords', duoScreen['keywords'])
 
     const duoSettings = findUi(DUO_PLUGIN_ID, 'settings.panel', 'duo-settings')
@@ -618,7 +619,7 @@ test('builtin:port-forward helmx.search: searches rules by name/node/ports with 
   }
 })
 
-test('builtin:duo helmx.search: searches Duo recipes with valid ?edit= targets, respects limit/signal, and releases on disable', TIMEOUT, async () => {
+test('builtin:duo helmx.search: searches Orchestrators with valid ?edit= targets, respects limit/signal, and releases on disable', TIMEOUT, async () => {
   const env = await openTestApp()
   try {
     await env.app.kernel.plugins.invokeAction(DUO_PLUGIN_ID, 'set', {
@@ -644,11 +645,15 @@ test('builtin:duo helmx.search: searches Duo recipes with valid ?edit= targets, 
     assert.equal(hit.id, 'recipe:arch_pair')
     assert.equal(hit.kind, 'resource')
     assert.equal(hit.title, 'Architect & Coder')
+    assert.deepEqual(hit.breadcrumb, [{ en: 'Orchestrator', 'zh-CN': '编排器' }])
     assert.equal(hit.icon, 'git-pull-request')
     assert.equal(hit.badge, undefined)
     const params = parseTargetQuery(hit.target, `screen:${DUO_PLUGIN_ID}/${DUO_SCREEN_ID}`)
     assert.equal(params.get('edit'), 'arch_pair')
     assertNoEmoji('duo search hit', hit)
+
+    const byKeyword = await provider.search({ query: '编排器', limit: 8 }, new AbortController().signal)
+    assert.equal(byKeyword.length, 2)
 
     const byTierRef = await provider.search({ query: 'tier/arch_pair', limit: 8 }, new AbortController().signal)
     assert.equal(byTierRef.length, 1)

@@ -12,7 +12,7 @@
 import './helpers/register-happy-dom.js'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { deferred } from '@helmx/test-kit'
+import { deferred, waitFor } from '@helmx/test-kit'
 import * as React from 'react'
 import { act } from 'react'
 import { ensureHappyDom } from './helpers/dom-harness.js'
@@ -698,18 +698,21 @@ test('GlobalDefaultsPanel: defaultModel includes preserveRef tiers while compact
     const defaultTrigger = panel.container.querySelector('#model-defaults-model') as HTMLButtonElement
     assert.ok(defaultTrigger, 'default model trigger must exist')
     assert.equal(defaultTrigger.querySelector('.composer-model-label')?.textContent?.trim(), 'Claude Duo')
+    assert.ok(defaultTrigger.querySelector('.composer-model-level') === null)
     await click(defaultTrigger)
     const defaultPop = document.body.querySelector<HTMLElement>('.composer-model-popover')!
+    assert.match(defaultPop.textContent ?? '', /Orchestrator/)
     assert.match(defaultPop.textContent ?? '', /Claude Duo/)
     assert.match(defaultPop.textContent ?? '', /tier\/fast/)
 
-    // Select tier/fast row to commit & close default popover cleanly, then open compaction picker -> preserveRef tier hidden
+    // Select tier/fast row to commit & close default popover cleanly, wait for in-flight save to settle, then open compaction picker -> preserveRef tier hidden
     const fastRow = Array.from(defaultPop.querySelectorAll<HTMLButtonElement>('.composer-model-row-main'))
       .find((btn) => (btn.textContent ?? '').includes('tier/fast'))!
     await click(fastRow)
     assert.ok(document.body.querySelector('.composer-model-popover') === null)
     const compactionTrigger = panel.container.querySelector('#model-defaults-compaction-model') as HTMLButtonElement
     assert.ok(compactionTrigger, 'compaction model trigger must exist')
+    await waitFor(() => !compactionTrigger.disabled)
     await click(compactionTrigger)
     const compactionPop = document.body.querySelector<HTMLElement>('.composer-model-popover')
     assert.ok(compactionPop !== null, 'compaction picker popover must open')

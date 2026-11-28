@@ -206,8 +206,12 @@ function openDuoUnitHost(options: {
   })
 }
 
-test('pure contracts, client recipe helpers, and bilingual zero-Emoji copy validate strictly', TIMEOUT, () => {
-  assert.equal(EMOJI_RE.test(JSON.stringify(DUO_COPY)), false, 'DUO_COPY must contain zero Emoji')
+test('pure contracts, client orchestrator helpers, and bilingual zero-Emoji copy validate strictly', TIMEOUT, () => {
+  const serializedCopy = JSON.stringify(DUO_COPY)
+  assert.equal(EMOJI_RE.test(serializedCopy), false, 'DUO_COPY must contain zero Emoji')
+  assert.equal(serializedCopy.includes('配方'), false, 'DUO_COPY must align to Orchestrator / 编排器')
+  assert.equal(DUO_COPY.screenTitle.en, 'Orchestrator')
+  assert.equal(DUO_COPY.screenTitle['zh-CN'], '编排器')
 
   assert.equal(assertDuoRecipeId('architect_coder'), 'architect_coder')
   assert.throws(() => assertDuoRecipeId('BadId'), HelmxError)

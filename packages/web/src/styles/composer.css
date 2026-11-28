@@ -760,14 +760,6 @@ button.attachment-chip:disabled {
   max-width: 100%;
   flex: 0 1 auto;
 }
-.composer-model-runtime-baseline {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 11px;
-  color: var(--fg-muted);
-}
 .composer-plus-trigger[data-state='open'] {
   background: var(--bg-muted);
   color: var(--fg);

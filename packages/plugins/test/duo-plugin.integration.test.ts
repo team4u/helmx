@@ -1,15 +1,15 @@
 // @test-isolation: process
 /**
- * Integration tests for `builtin:duo` Dual-Phase Recipes on full Helmx Kernel (`createHelmx`):
+ * Integration tests for `builtin:duo` Orchestrator on full Helmx Kernel (`createHelmx`):
  * - Default enabled, managed `duo` skill, modular client bundles, `singleTurnEligible: false` filtering;
- * - Recipe CRUD (`set`/`list`/`get`/`remove`) mounted as `tier/<id>` in `ModelCatalog.modelTiers`;
- * - Top-level conversation choosing `tier/<recipeId>` directly or via Profile:
+ * - Orchestrator CRUD (`set`/`list`/`get`/`remove`) mounted as `tier/<id>` in `ModelCatalog.modelTiers`;
+ * - Top-level conversation choosing `tier/<id>` directly or via Profile:
  *   Planning Phase (read-only + `exit_plan_mode`) -> Execution Phase (budget `step 1 of 2` -> pause) ->
  *   `hand_back_to_planner` & `turn_settled` Planner restore;
- * - `builtin:tiers` template lockstep update propagates to active Duo recipes + sessionDocs;
- * - Temporary per-conversation `override_executor` / `clear_override` + cleanup on recipe switch;
+ * - `builtin:tiers` template lockstep update propagates to active Orchestrators + sessionDocs;
+ * - Temporary per-conversation `override_executor` / `clear_override` + cleanup on orchestrator switch;
  * - `/plan` interop & `plan.approved` (`approve_handoff` without & with `executionModel`);
- * - Subagent / Swarm inheritance (`agentType` Profile with Duo recipe + parent tree) & `swarm-coordinator` suppression;
+ * - Subagent / Swarm inheritance (`agentType` Profile with Orchestrator + parent tree) & `swarm-coordinator` suppression;
  * - Reference protection (`remove` & `disable` 409 unless `force: true`), runtime cleanup, delete cleanup.
  */
 import assert from 'node:assert/strict'
@@ -156,7 +156,7 @@ test('registration, modular client bundles, catalog filtering, and recipe-driven
 
     const catalog = await kernel.models.listModels()
     const duoEntry = catalog.modelTiers?.find((t) => t.id === 'arch_coder')
-    assert.ok(duoEntry, 'Duo recipe must be mounted in ModelCatalog.modelTiers')
+    assert.ok(duoEntry, 'Orchestrator must be mounted in ModelCatalog.modelTiers')
     assert.equal(duoEntry.displayGroup, 'duo')
     assert.equal(duoEntry.displayLabel, 'Arch -> Coder')
     assert.equal(duoEntry.displayDetail, 'flagship → coder')
@@ -315,7 +315,7 @@ test('Profile binding, builtin:tiers preset cascade, override_executor & stale o
     await kernel.conversations.updateConversation(conv.id, { model: 'faux/fast' })
     await waitFor(
       () => kernel.plugins.getPublicSessionDoc(DUO_PLUGIN_ID, DUO_SESSION_DOC, conv.id).value === null,
-      { message: 'sessionDoc cleared after leaving Duo recipe' },
+      { message: 'sessionDoc cleared after leaving Orchestrator' },
     )
 
     await kernel.conversations.updateConversation(conv.id, { model: '' })

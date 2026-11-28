@@ -1,8 +1,8 @@
 /**
- * Built-in `builtin:duo` plugin — Dual-Phase Orchestration Recipes mounted as first-class model tiers (`tier/<id>`).
+ * Built-in `builtin:duo` plugin — Dual-Phase Orchestrator mounted as first-class model tiers (`tier/<id>`).
  */
 import {
-  COMPOSER_TOOLBAR_SLOT,
+  COMPOSER_STATUS_SLOT,
   HELMX_SEARCH_CAPABILITY_ID,
   HelmxError,
   MODEL_TIER_DESCRIPTION_MAX_LENGTH,
@@ -84,10 +84,10 @@ const CONVERSATION_ID_PROP = { type: 'integer', minimum: 1 } as const
 export function createDuoPlugin(): PluginDefinition {
   return {
     id: DUO_PLUGIN_ID,
-    name: 'Dual-Phase Orchestration',
+    name: { en: 'Orchestrator', 'zh-CN': '编排器' },
     description: {
-      en: 'Define Planner + Executor collaboration recipes (tier/<id>) that alternate top-level conversations seamlessly between read-only Planning and Execution.',
-      'zh-CN': '创建“规划模型 + 执行模型”双相协同配方（tier/<id>），让顶层会话在只读规划与工作区执行间自动切换。',
+      en: 'Pair Planner and Executor models into Orchestrator tiers (tier/<id>) that alternate top-level conversations seamlessly between read-only Planning and Execution.',
+      'zh-CN': '将规划模型与执行模型配对为编排器档位（tier/<id>），让顶层会话在只读规划与工作区执行间自动切换。',
     },
     icon: 'git-pull-request',
     version: '0.2.0',
@@ -229,7 +229,7 @@ export function createDuoPlugin(): PluginDefinition {
 
       ctx.action<Record<string, never>, { recipes: DuoRecipeView[] }>({
         id: 'list',
-        description: 'List all configured Duo Recipes and their resolved Planner/Executor availability',
+        description: 'List all configured Orchestrators and their resolved Planner/Executor availability',
         exposeToPrompt: false,
         idempotent: true,
         cli: { command: ['duo', 'list'] },
@@ -245,7 +245,7 @@ export function createDuoPlugin(): PluginDefinition {
 
       ctx.action<{ id: string }, DuoRecipeView>({
         id: 'get',
-        description: 'Inspect one Duo Recipe by id with resolved concrete Planner/Executor status',
+        description: 'Inspect one Orchestrator by id with resolved concrete Planner/Executor status',
         exposeToPrompt: false,
         idempotent: true,
         cli: { command: ['duo', 'get'] },
@@ -262,7 +262,7 @@ export function createDuoPlugin(): PluginDefinition {
       ctx.action<SetDuoRecipeInput, DuoRecipeView>({
         id: 'set',
         description:
-          'Create or update a Duo Recipe (mounted as tier/<id> with Planner and Executor models or external tier/<id> refs)',
+          'Create or update an Orchestrator (mounted as tier/<id> with Planner and Executor models or external tier/<id> refs)',
         exposeToPrompt: false,
         cli: { command: ['duo', 'set'] },
         inputSchema: {
@@ -287,7 +287,7 @@ export function createDuoPlugin(): PluginDefinition {
       ctx.action<RemoveDuoRecipeInput, { removed: boolean }>({
         id: 'remove',
         description:
-          'Remove a Duo Recipe by id (rejects with 409 model_tier_in_use if referenced unless force: true)',
+          'Remove an Orchestrator by id (rejects with 409 model_tier_in_use if referenced unless force: true)',
         exposeToPrompt: false,
         cli: { command: ['duo', 'remove'] },
         inputSchema: {
@@ -310,7 +310,7 @@ export function createDuoPlugin(): PluginDefinition {
 
       ctx.action<{ conversationId?: number }, DuoSessionView | null>({
         id: 'status',
-        description: 'Inspect current Dual-Phase Orchestration state for a conversation',
+        description: 'Inspect current Orchestrator state for a conversation',
         exposeToPrompt: false,
         idempotent: true,
         cli: { command: ['duo', 'status'] },
@@ -334,7 +334,7 @@ export function createDuoPlugin(): PluginDefinition {
       >({
         id: 'override_executor',
         description:
-          'Temporarily override Executor model/thinking/maxSteps for an active Duo conversation without mutating its recipe',
+          'Temporarily override Executor model/thinking/maxSteps for an active Orchestrator conversation without mutating its configuration',
         exposeToPrompt: false,
         cli: { command: ['duo', 'override-executor'] },
         inputSchema: {
@@ -364,7 +364,7 @@ export function createDuoPlugin(): PluginDefinition {
 
       ctx.action<{ conversationId?: number }, DuoSessionView | null>({
         id: 'clear_override',
-        description: 'Clear temporary Executor override on a conversation so it uses the Duo Recipe default again',
+        description: 'Clear temporary Executor override on a conversation so it uses the Orchestrator default again',
         exposeToPrompt: false,
         cli: { command: ['duo', 'clear-override'] },
         inputSchema: {
@@ -398,7 +398,7 @@ export function createDuoPlugin(): PluginDefinition {
         },
       })
 
-      const label = { en: 'Duo Recipes', 'zh-CN': '双相配方' }
+      const label = { en: 'Orchestrator', 'zh-CN': '编排器' }
       ctx.ui.sidebarItem({
         id: 'duo-manager',
         label,
@@ -410,10 +410,10 @@ export function createDuoPlugin(): PluginDefinition {
         id: DUO_SCREEN_ID,
         label,
         description: {
-          en: 'Pair Planner and Executor models into Dual-Phase collaboration recipes (tier/<id>).',
-          'zh-CN': '将规划与执行模型配对为双相协同配方（tier/<id>）。',
+          en: 'Pair Planner and Executor models into selectable Orchestrator tiers (tier/<id>).',
+          'zh-CN': '将规划模型与执行模型配对为可直接选用的编排器档位（tier/<id>）。',
         },
-        keywords: ['duo', 'planner', 'executor', 'recipe', 'recipes', 'dual-phase', 'pair', '双相', '协同', '配方', '规划执行'],
+        keywords: ['orchestrator', '编排器', 'duo', 'planner', 'executor', 'dual-phase', 'pair', '双相', '协同', '规划执行'],
         icon: 'git-pull-request',
         client: { module: 'manager.tsx', export: 'DuoManagerScreen' },
       })
@@ -421,33 +421,34 @@ export function createDuoPlugin(): PluginDefinition {
         id: 'duo-settings',
         label,
         description: {
-          en: 'Overview of active Duo Planner-Executor pairing recipes with quick access to Duo Recipes.',
-          'zh-CN': '查看当前双相协同配方概览，并快速进入双相配方管理页。',
+          en: 'Overview of configured Planner-Executor orchestrators with quick access to Orchestrator.',
+          'zh-CN': '查看当前编排器概览，并快速进入编排器管理页。',
         },
-        keywords: ['duo', 'planner', 'executor', 'recipe', '双相', '配方', '协同'],
+        keywords: ['orchestrator', '编排器', 'duo', 'planner', 'executor', '双相', '协同'],
         order: 27,
         client: { module: 'settings.tsx', export: 'DuoSettingsPanel' },
       })
       ctx.ui.command({
         id: 'duo-create',
-        title: { en: 'Create Duo Recipe', 'zh-CN': '新建双相配方' },
+        title: { en: 'New Orchestrator', 'zh-CN': '新建编排器' },
         description: {
-          en: 'Open the drawer to pair a Planner model with an Executor model into a Duo recipe.',
-          'zh-CN': '打开抽屉新建规划与执行模型双相协同配方。',
+          en: 'Open the drawer to pair a Planner model with an Executor model into an Orchestrator.',
+          'zh-CN': '打开抽屉新建规划与执行模型编排器。',
         },
         icon: 'git-pull-request',
         target: `screen:${DUO_PLUGIN_ID}/${DUO_SCREEN_ID}?create=1`,
-        keywords: ['duo', 'recipe', 'create', 'new', 'pair', 'planner', 'executor', '双相', '配方', '新建'],
+        keywords: ['orchestrator', '编排器', 'duo', 'create', 'new', 'pair', 'planner', 'executor', '双相', '新建'],
       })
       ctx.ui.slot({
         id: 'duo-toolbar-pill',
-        target: COMPOSER_TOOLBAR_SLOT,
+        target: COMPOSER_STATUS_SLOT,
         order: 40,
         client: { module: 'index.tsx', export: 'DuoToolbarPill' },
       })
       ctx.ui.toolView({
         id: 'duo-transition-row',
         toolNames: [DUO_EXIT_PLAN_MODE_TOOL, DUO_HAND_BACK_TOOL],
+        replaceRow: true,
         client: { module: 'index.tsx', export: 'DuoTransitionToolRow' },
       })
     },

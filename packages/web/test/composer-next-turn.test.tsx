@@ -334,7 +334,7 @@ describe('Composer one-turn override & runtimeModelOverride', () => {
       const wrap = h.host.querySelector('.composer-model-runtime-wrap[data-runtime-override="true"]')
       assert.ok(wrap !== null, 'runtime override indicator wrapper renders')
       assert.equal(h.host.querySelector('.composer-model-runtime-badge')?.textContent?.trim(), 'Temp override')
-      assert.equal(h.host.querySelector('.composer-model-runtime-baseline')?.textContent?.trim(), '(baseline: glm-4.6)')
+      assert.ok(h.host.querySelector('.composer-model-runtime-baseline') === null, 'inline baseline text omitted for mobile cleanliness')
       assert.equal(h.host.querySelector('.composer-model-label')?.textContent?.trim(), 'claude-opus-4-6')
       assert.equal(h.host.querySelector('.composer-model-level')?.textContent?.trim(), '· max')
 
@@ -402,10 +402,25 @@ describe('Composer one-turn override & runtimeModelOverride', () => {
     try {
       assert.equal(h.host.querySelector('.composer-model-label')?.textContent?.trim(), 'Claude 精修')
       assert.ok(h.host.querySelector('.composer-model-tier-trigger-icon') !== null)
+      assert.ok(h.host.querySelector('.composer-model-level') === null)
+
+      // During Orchestrator execution (runtimeModelOverride: true), trigger stays stable on displayLabel without Temp override badge
+      h.rerender(
+        makeConv(1, {
+          model: 'anthropic/claude-3-7-sonnet',
+          effectiveModelRef: 'tier/claude-duo',
+          runtimeModelOverride: true,
+          thinkingLevel: 'high',
+        }),
+      )
+      assert.equal(h.host.querySelector('.composer-model-label')?.textContent?.trim(), 'Claude 精修')
+      assert.ok(h.host.querySelector('.composer-model-level') === null)
+      assert.ok(h.host.querySelector('.composer-model-runtime-wrap') === null)
+      assert.ok(h.host.querySelector('.composer-model-runtime-badge') === null)
 
       const pop = openModelPopover(h.host)
       const headers = Array.from(pop.querySelectorAll('.popover-header')).map((el) => el.textContent?.trim())
-      assert.deepEqual(headers, ['Dual-phase recipes', 'Model tiers', 'Model list'])
+      assert.deepEqual(headers, ['Orchestrator', 'Model tiers', 'Model list'])
       assert.match(pop.textContent ?? '', /Claude 精修/)
       assert.match(pop.textContent ?? '', /opus → sonnet/)
 

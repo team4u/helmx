@@ -915,13 +915,14 @@ test('ModelPickerControl grouped tiers, displayLabel/displayDetail & preserveRef
     }
   }
 
-  // 1. Trigger shows displayLabel + duo icon, popover renders grouped tiers BEFORE ungrouped tiers BEFORE models, and keyboard navigation matches
-  const run1 = await mountPicker({})
+  // 1. Trigger shows displayLabel + duo icon (without thinking level suffix), popover renders grouped tiers BEFORE ungrouped tiers BEFORE models, and keyboard navigation matches
+  const run1 = await mountPicker({ activeThinkingLevel: 'high' })
   try {
     const trigger = run1.container.querySelector<HTMLButtonElement>('button.composer-model-button')
     assert.ok(trigger !== null)
     assert.equal(trigger.querySelector('.composer-model-label')?.textContent?.trim(), 'Claude 精修')
     assert.ok(trigger.querySelector('.composer-model-tier-trigger-icon') !== null)
+    assert.ok(trigger.querySelector('.composer-model-level') === null, 'preserveRef Orchestrator tier hides thinking level on trigger')
 
     await act(async () => {
       trigger.click()
@@ -929,7 +930,7 @@ test('ModelPickerControl grouped tiers, displayLabel/displayDetail & preserveRef
     const popover = document.body.querySelector<HTMLElement>('.composer-model-popover')
     assert.ok(popover !== null)
     const headers = Array.from(popover.querySelectorAll('.popover-header')).map((el) => el.textContent?.trim())
-    assert.deepEqual(headers, ['Dual-phase recipes', 'Model tiers', 'Model list'])
+    assert.deepEqual(headers, ['Orchestrator', 'Model tiers', 'Model list'])
 
     const rows = Array.from(popover.querySelectorAll<HTMLButtonElement>('.composer-model-row-main'))
     assert.match(rows[0]!.textContent ?? '', /Claude 精修/)
@@ -962,7 +963,7 @@ test('ModelPickerControl grouped tiers, displayLabel/displayDetail & preserveRef
     const popover = document.body.querySelector<HTMLElement>('.composer-model-popover')!
     const text = popover.textContent ?? ''
     assert.doesNotMatch(text, /Claude 精修/)
-    assert.doesNotMatch(text, /Dual-phase recipes/)
+    assert.doesNotMatch(text, /Orchestrator/)
     assert.match(text, /tier\/fast/)
   } finally {
     await run2.cleanup()

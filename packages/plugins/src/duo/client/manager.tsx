@@ -1,27 +1,32 @@
+/** Dedicated full-screen management entrypoint for builtin:duo (`DuoManagerScreen`). */
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import type { ScreenProps } from '@helmx/protocol/browser'
 import {
   Badge,
   Button,
   Callout,
-  Card,
-  CardGrid,
   ConfirmDialog,
   EmptyState,
-  ErrorText,
   HelmxIcon,
-  HelperText,
+  IconButton,
+  List,
+  ListRow,
+  LoadingState,
   Screen,
   ScreenSection,
   ScreenToolbar,
   SearchBox,
-  SelectCard,
   StatusLight,
+  TabCount,
+  Tabs,
+  TabsList,
+  TabsTrigger,
   type LocalizedText,
   type StatusLightTone,
 } from '@helmx/ui'
-import type { ScreenProps } from '@helmx/protocol/browser'
 import {
   formatModelShortName,
+  resolveDefaultChainThinkingLevel,
   useHostModels,
   usePluginAction,
   usePluginContext,
@@ -33,9 +38,9 @@ import {
 import {
   DUO_COPY,
   buildDuoPickerCopy,
-  formatDuoRecipeRemovedNotice,
-  formatDuoRecipeSavedNotice,
-  formatDuoStepBudgetLabel,
+  formatDuoRemovedNotice,
+  formatDuoSavedNotice,
+  formatDuoStepsBadge,
   getDuoValidationMessage,
 } from './copy.ts'
 import { DuoDetailDrawer } from './DuoDetailDrawer.tsx'
@@ -43,6 +48,7 @@ import {
   DUO_DEFAULT_MAX_STEPS,
   DUO_STATE_DOC,
   collectExternalTierIds,
+  countDuoRecipeItemsByStatus,
   createEmptyDuoDraft,
   filterDuoRecipeItems,
   getStarterDuoPresets,
@@ -54,6 +60,7 @@ import {
   type DuoRecipeAvailability,
   type DuoRecipeDraft,
   type DuoRecipeViewItem,
+  type DuoStatusFilter,
   type StarterDuoPreset,
 } from './models.ts'
 import './styles.css'
@@ -89,6 +96,7 @@ export function DuoManagerScreen(
   const drawer = useScreenDrawer({ param: 'edit', createParam: 'create', scope: props })
 
   const [search, setSearch] = useState('')
+  const [statusFilter, setStatusFilter] = useState<DuoStatusFilter>('all')
   const [draft, setDraft] = useState<DuoRecipeDraft>(() => createEmptyDuoDraft())
   const [baseline, setBaseline] = useState<DuoRecipeDraft>(() => createEmptyDuoDraft())
   const [drawerError, setDrawerError] = useState<string | null>(null)
@@ -101,7 +109,11 @@ export function DuoManagerScreen(
     () => synthesizeDuoRecipeItems(stateDoc.recipes, hostModels),
     [stateDoc.recipes, hostModels],
   )
-  const visibleItems = useMemo(() => filterDuoRecipeItems(allItems, search), [allItems, search])
+  const statusCounts = useMemo(() => countDuoRecipeItemsByStatus(allItems), [allItems])
+  const visibleItems = useMemo(
+    () => filterDuoRecipeItems(allItems, search, statusFilter),
+    [allItems, search, statusFilter],
+  )
   const existingRecipeIds = useMemo(() => new Set(Object.keys(stateDoc.recipes)), [stateDoc.recipes])
   const externalTierIds = useMemo(() => collectExternalTierIds(hostModels), [hostModels])
   const starterPresets = useMemo(() => getStarterDuoPresets(locale, hostModels), [locale, hostModels])
@@ -152,6 +164,11 @@ export function DuoManagerScreen(
     setDrawerError(null)
   }, [])
 
+  const resetFilters = useCallback(() => {
+    setSearch('')
+    setStatusFilter('all')
+  }, [])
+
   const handleSave = useCallback(() => {
     const mode = drawer.mode === 'edit' ? 'edit' : 'create'
     const validationErr = validateDuoDraft(draft, {
@@ -182,7 +199,7 @@ export function DuoManagerScreen(
     void actions.run('set', payload, {
       key: `set:${id}`,
       onSuccess: () => {
-        ctx.notify(formatDuoRecipeSavedNotice(id, locale), 'info')
+        ctx.notify(formatDuoSavedNotice(id, locale), 'info')
         const saved = recipeToDraft({
           id,
           name: payload.name,
@@ -219,7 +236,7 @@ export function DuoManagerScreen(
             if (drawer.itemId === item.recipe.id) {
               drawer.close()
             }
-            ctx.notify(formatDuoRecipeRemovedNotice(item.recipe.id, locale), 'info')
+            ctx.notify(formatDuoRemovedNotice(item.recipe.id, locale), 'info')
           },
           onError: (msg, err) => {
             if (!force && isInUseConflictError(err, msg)) {
@@ -246,198 +263,239 @@ export function DuoManagerScreen(
   const deleting = actions.pending && actions.pendingKey?.startsWith('remove:') === true
   const busy = actions.pending
 
+  if (rawDoc === undefined) {
+    return (
+      <Screen layout="contained" title={t(DUO_COPY.screenTitle)}>
+        <LoadingState label={t(DUO_COPY.loading)} />
+      </Screen>
+    )
+  }
+
   return (
     <Screen
+      layout="contained"
       className="duo-screen"
       title={t(DUO_COPY.screenTitle)}
-      subtitle={t(DUO_COPY.screenSubtitle)}
-      icon="git-pull-request"
-      toolbar={
-        <ScreenToolbar
-          label={t(DUO_COPY.screenTitle)}
-          actions={
-            <Button
-              variant="primary"
-              size="sm"
-              icon="plus"
-              onClick={() => openCreateWithPreset()}
-            >
-              {t(DUO_COPY.createRecipe)}
-            </Button>
-          }
+      actions={
+        <Button
+          variant="primary"
+          size="sm"
+          icon="plus"
+          aria-label={t(DUO_COPY.createItem)}
+          title={t(DUO_COPY.createItem)}
+          disabled={busy}
+          onClick={() => openCreateWithPreset()}
         >
-          {allItems.length > 0 && (
-            <SearchBox
-              variant="toolbar"
-              size="md"
-              value={search}
-              onChange={setSearch}
-              placeholder={t(DUO_COPY.searchPlaceholder)}
-              ariaLabel={t(DUO_COPY.searchLabel)}
-            />
-          )}
-        </ScreenToolbar>
+          <span className="pane-action-label">{t(DUO_COPY.createItem)}</span>
+        </Button>
+      }
+      toolbar={
+        allItems.length > 0 ? (
+          <ScreenToolbar
+            label={t(DUO_COPY.screenTitle)}
+            actions={
+              <SearchBox
+                variant="toolbar"
+                size="sm"
+                value={search}
+                onChange={setSearch}
+                placeholder={t(DUO_COPY.searchPlaceholder)}
+                ariaLabel={t(DUO_COPY.searchLabel)}
+              />
+            }
+          >
+            <Tabs
+              value={statusFilter}
+              onValueChange={(nextValue) => setStatusFilter(nextValue as DuoStatusFilter)}
+              variant="pills"
+              size="sm"
+            >
+              <TabsList aria-label={t(DUO_COPY.filterAria)}>
+                <TabsTrigger value="all">
+                  <span>{t(DUO_COPY.filterAll)}</span>
+                  <TabCount>{statusCounts.all}</TabCount>
+                </TabsTrigger>
+                <TabsTrigger value="ready">
+                  <span>{t(DUO_COPY.filterReady)}</span>
+                  <TabCount>{statusCounts.ready}</TabCount>
+                </TabsTrigger>
+                <TabsTrigger value="attention">
+                  <span>{t(DUO_COPY.filterAttention)}</span>
+                  <TabCount>{statusCounts.attention}</TabCount>
+                </TabsTrigger>
+              </TabsList>
+            </Tabs>
+          </ScreenToolbar>
+        ) : undefined
       }
     >
-      {stageError && <Callout tone="err">{stageError}</Callout>}
+      {stageError !== null && !drawer.open && (
+        <Callout tone="err">
+          <span>{stageError}</span>
+        </Callout>
+      )}
 
       {allItems.length === 0 ? (
-        <ScreenSection>
+        <>
           <EmptyState
-            prominent
+            className="duo-empty"
             icon="git-pull-request"
             title={t(DUO_COPY.emptyTitle)}
             hint={t(DUO_COPY.emptyHint)}
+            hintSubtle
             action={
-              <Button variant="primary" size="md" icon="plus" onClick={() => openCreateWithPreset()}>
-                {t(DUO_COPY.createRecipe)}
+              <Button
+                variant="primary"
+                size="sm"
+                icon="plus"
+                disabled={busy}
+                onClick={() => openCreateWithPreset()}
+              >
+                {t(DUO_COPY.createItem)}
               </Button>
             }
           />
           {starterPresets.length > 0 && (
-            <ScreenSection
-              className="duo-starters-section"
-              title={t(DUO_COPY.startersHeading)}
-            >
-              <HelperText>{t(DUO_COPY.startersHint)}</HelperText>
-              <CardGrid minWidth="md" gap="md">
+            <ScreenSection title={t(DUO_COPY.startersHeading)}>
+              <List label={t(DUO_COPY.startersHeading)}>
                 {starterPresets.map((preset) => (
-                  <Card key={preset.id} className="duo-starter-card">
-                    <div className="duo-starter-header">
-                      <span className="duo-starter-title">{preset.name}</span>
-                      <Badge tone="neutral" mono>
-                        tier/{preset.id}
-                      </Badge>
-                    </div>
-                    <p className="duo-starter-desc">{preset.description}</p>
-                    <div className="duo-card-pair">
-                      <span className="duo-endpoint-chip">
-                        <span className="duo-endpoint-role">{t(DUO_COPY.plannerLabel)}</span>
-                        <span className="duo-endpoint-model">
-                          {preset.plannerModel ? formatModelShortName(preset.plannerModel) : '—'}
-                        </span>
-                      </span>
-                      <HelmxIcon name="arrow-right" size={12} className="duo-pair-arrow" />
-                      <span className="duo-endpoint-chip">
-                        <span className="duo-endpoint-role">{t(DUO_COPY.executorLabel)}</span>
-                        <span className="duo-endpoint-model">
-                          {preset.executorModel ? formatModelShortName(preset.executorModel) : '—'}
-                        </span>
-                      </span>
-                    </div>
-                    <div>
+                  <ListRow
+                    key={preset.id}
+                    data-starter-duo={preset.id}
+                    selected={drawer.creating && draft.id === preset.id}
+                    leading={<HelmxIcon name="sparkles" size={12} className="duo-starter-icon" />}
+                    title={<span>{preset.name}</span>}
+                    meta={
+                      <>
+                        <code className="mono duo-id-code">
+                          <span className="duo-prefix">tier/</span>
+                          {preset.id}
+                        </code>
+                        {preset.plannerModel ? (
+                          <span className="duo-model-endpoint" title={preset.plannerModel}>
+                            <code className="duo-model-name">
+                              {formatModelShortName(preset.plannerModel)}
+                            </code>
+                          </span>
+                        ) : null}
+                        {preset.plannerModel && preset.executorModel ? (
+                          <HelmxIcon name="arrow-right" size={11} className="duo-model-arrow" />
+                        ) : null}
+                        {preset.executorModel ? (
+                          <span className="duo-model-endpoint" title={preset.executorModel}>
+                            <code className="duo-model-name">
+                              {formatModelShortName(preset.executorModel)}
+                            </code>
+                          </span>
+                        ) : null}
+                      </>
+                    }
+                    description={preset.description}
+                    trailing={
                       <Button
-                        variant="secondary"
-                        size="sm"
-                        icon="plus"
+                        variant="inline"
+                        size="xs"
+                        className="duo-starter-cta"
                         onClick={() => openCreateWithPreset(preset)}
                       >
-                        {t(DUO_COPY.useStarter)}
+                        <span>{t(DUO_COPY.useStarter)}</span>
+                        <HelmxIcon name="arrow-right" size={12} />
                       </Button>
-                    </div>
-                  </Card>
+                    }
+                    onSelect={() => openCreateWithPreset(preset)}
+                  />
                 ))}
-              </CardGrid>
+              </List>
             </ScreenSection>
           )}
-        </ScreenSection>
+        </>
       ) : visibleItems.length === 0 ? (
-        <ScreenSection>
-          <EmptyState
-            compact
-            icon="search"
-            title={t(DUO_COPY.noMatchTitle)}
-            action={
-              <Button variant="ghost" size="sm" onClick={() => setSearch('')}>
-                {t(DUO_COPY.clearSearch)}
-              </Button>
-            }
-          />
-        </ScreenSection>
+        <EmptyState
+          className="duo-empty"
+          icon="search"
+          title={t(DUO_COPY.noMatchTitle)}
+          action={
+            <Button variant="secondary" size="sm" icon="rotate-ccw" onClick={resetFilters}>
+              {t(DUO_COPY.resetFilters)}
+            </Button>
+          }
+        />
       ) : (
-        <ScreenSection>
-          <CardGrid minWidth="md" gap="md">
-            {visibleItems.map((item) => {
-              const { recipe } = item
-              const statusMeta = STATUS_META[item.status]
-              const plannerDisplay = formatModelShortName(item.resolvedPlannerModel ?? recipe.plannerModel)
-              const executorDisplay = formatModelShortName(item.resolvedExecutorModel ?? recipe.executorModel)
-
-              return (
-                <SelectCard
-                  key={recipe.id}
-                  data-duo-recipe-id={recipe.id}
-                  icon="git-pull-request"
-                  title={recipe.name}
-                  selected={drawer.mode === 'edit' && drawer.itemId === recipe.id}
-                  tone={item.status !== 'available' ? 'warn' : 'default'}
-                  badges={
-                    <>
-                      <StatusLight tone={statusMeta.tone} label={t(statusMeta.copy)} />
-                      <Badge tone="neutral" mono>
-                        tier/{recipe.id}
-                      </Badge>
-                    </>
-                  }
-                  description={recipe.description}
-                  onSelect={() => drawer.openItem(recipe.id)}
-                  footer={
-                    <div className="duo-card-meta-row">
-                      <span>{formatDuoStepBudgetLabel(recipe.maxExecutionSteps, locale)}</span>
-                      <div className="duo-card-footer-actions">
-                        <Button
-                          variant="inline"
-                          size="xs"
-                          icon="pencil"
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            drawer.openItem(recipe.id)
-                          }}
-                        >
-                          {t(DUO_COPY.editRecipe)}
-                        </Button>
-                        <Button
-                          variant="inline"
-                          size="xs"
-                          icon="trash-2"
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            setDeleteTarget(item)
-                          }}
-                        >
-                          {t(DUO_COPY.deleteRecipe)}
-                        </Button>
-                      </div>
-                    </div>
-                  }
-                >
-                  <div className="duo-card-pair">
-                    <span className="duo-endpoint-chip">
-                      <span className="duo-endpoint-role">{t(DUO_COPY.plannerLabel)}</span>
-                      <span className="duo-endpoint-model">{plannerDisplay}</span>
-                      {item.resolvedPlannerThinkingLevel && (
-                        <span className="duo-endpoint-effort">({item.resolvedPlannerThinkingLevel})</span>
-                      )}
-                    </span>
-                    <HelmxIcon name="arrow-right" size={12} className="duo-pair-arrow" />
-                    <span className="duo-endpoint-chip">
-                      <span className="duo-endpoint-role">{t(DUO_COPY.executorLabel)}</span>
-                      <span className="duo-endpoint-model">{executorDisplay}</span>
-                      {item.resolvedExecutorThinkingLevel && (
-                        <span className="duo-endpoint-effort">({item.resolvedExecutorThinkingLevel})</span>
-                      )}
-                    </span>
-                  </div>
-                  {item.unavailableReason && (
-                    <div className="duo-card-warning">
-                      <ErrorText>{item.unavailableReason}</ErrorText>
-                    </div>
-                  )}
-                </SelectCard>
+        <List label={t(DUO_COPY.screenTitle)}>
+          {visibleItems.map((item) => {
+            const statusMeta = STATUS_META[item.status]
+            const statusLabel = t(statusMeta.copy)
+            const plannerRef = item.recipe.plannerModel
+            const executorRef = item.recipe.executorModel
+            const plannerShort = formatModelShortName(item.resolvedPlannerModel ?? plannerRef)
+            const executorShort = formatModelShortName(item.resolvedExecutorModel ?? executorRef)
+            const plannerLevel =
+              item.resolvedPlannerThinkingLevel ??
+              resolveDefaultChainThinkingLevel(
+                hostModels ?? undefined,
+                plannerRef,
+                item.recipe.plannerThinkingLevel,
+                'tier',
               )
-            })}
-          </CardGrid>
-        </ScreenSection>
+            const execLevel =
+              item.resolvedExecutorThinkingLevel ??
+              resolveDefaultChainThinkingLevel(
+                hostModels ?? undefined,
+                executorRef,
+                item.recipe.executorThinkingLevel,
+                'tier',
+              )
+            const showPlannerLevel = plannerLevel !== '' && plannerLevel !== 'off'
+            const showExecLevel = execLevel !== '' && execLevel !== 'off'
+            const stepsBadge = formatDuoStepsBadge(item.recipe.maxExecutionSteps, locale)
+
+            return (
+              <ListRow
+                key={item.recipe.id}
+                data-duo-recipe-id={item.recipe.id}
+                selected={drawer.mode === 'edit' && drawer.itemId === item.recipe.id}
+                tone={item.status !== 'available' ? 'warn' : 'default'}
+                leading={<StatusLight tone={statusMeta.tone} label={statusLabel} />}
+                title={<span>{item.recipe.name}</span>}
+                meta={
+                  <>
+                    <code className="mono duo-id-code">
+                      <span className="duo-prefix">tier/</span>
+                      {item.recipe.id}
+                    </code>
+                    <span className="duo-model-endpoint" title={plannerRef}>
+                      <code className="duo-model-name">{plannerShort}</code>
+                      {showPlannerLevel && <span className="duo-model-level">· {plannerLevel}</span>}
+                    </span>
+                    <HelmxIcon name="arrow-right" size={11} className="duo-model-arrow" />
+                    <span className="duo-model-endpoint" title={executorRef}>
+                      <code className="duo-model-name">{executorShort}</code>
+                      {showExecLevel && <span className="duo-model-level">· {execLevel}</span>}
+                    </span>
+                    <Badge tone="accent" className="tabular-nums">
+                      {stepsBadge}
+                    </Badge>
+                    {item.status !== 'available' && <Badge tone="warn">{statusLabel}</Badge>}
+                  </>
+                }
+                description={item.unavailableReason || item.recipe.description || undefined}
+                actions={
+                  <IconButton
+                    icon="trash-2"
+                    size="xs"
+                    variant="ghost"
+                    className="duo-row-delete-btn"
+                    label={`${t(DUO_COPY.deleteItem)} ${item.recipe.name}`}
+                    disabled={busy}
+                    pending={actions.pendingKey === `remove:${item.recipe.id}`}
+                    onClick={() => setDeleteTarget(item)}
+                  />
+                }
+                onSelect={() => drawer.openItem(item.recipe.id)}
+              />
+            )
+          })}
+        </List>
       )}
 
       <DuoDetailDrawer
@@ -457,7 +515,10 @@ export function DuoManagerScreen(
         locale={locale}
         translate={t}
         onNotice={(msg, tone) => ctx.notify(msg, tone)}
-        onChange={(patch) => setDraft((prev) => ({ ...prev, ...patch }))}
+        onChange={(patch) => {
+          setDrawerError(null)
+          setDraft((prev) => ({ ...prev, ...patch }))
+        }}
         onApplyPreset={handleApplyPreset}
         onSave={handleSave}
         onRequestDelete={(item) => setDeleteTarget(item)}
@@ -473,15 +534,17 @@ export function DuoManagerScreen(
         description={
           deleteTarget
             ? `${deleteTarget.recipe.name} (tier/${deleteTarget.recipe.id}) · ${t(DUO_COPY.deleteConfirmDescription)}`
-            : undefined
+            : ''
         }
         danger
+        inline={props.inlineDrawer}
         pending={deleting}
-        confirmText={t(DUO_COPY.deleteRecipe)}
+        confirmText={t(DUO_COPY.deleteItem)}
         cancelText={t(DUO_COPY.cancel)}
         onConfirm={() => {
           if (deleteTarget) executeDelete(deleteTarget, false)
         }}
+        onCancel={() => setDeleteTarget(null)}
       />
 
       <ConfirmDialog
@@ -490,14 +553,16 @@ export function DuoManagerScreen(
           if (!nextOpen) setForceDeleteTarget(null)
         }}
         title={t(DUO_COPY.forceDeleteConfirmTitle)}
-        description={forceDeleteTarget?.message}
+        description={forceDeleteTarget?.message ?? ''}
         danger
+        inline={props.inlineDrawer}
         pending={deleting}
         confirmText={t(DUO_COPY.forceDeleteConfirmAction)}
         cancelText={t(DUO_COPY.cancel)}
         onConfirm={() => {
           if (forceDeleteTarget) executeDelete(forceDeleteTarget.item, true)
         }}
+        onCancel={() => setForceDeleteTarget(null)}
       />
     </Screen>
   )

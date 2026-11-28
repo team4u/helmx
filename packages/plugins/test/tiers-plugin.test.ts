@@ -97,7 +97,7 @@ test('validation: rejects malformed IDs, recursive tier targets, invalid thinkin
     {
       id: 'architect_duo',
       model: 'faux/workhorse',
-      description: 'Dual-phase recipe should never leak to subagent tiers',
+      description: 'Orchestrator should never leak to subagent tiers',
       available: true,
       singleTurnEligible: false,
     },

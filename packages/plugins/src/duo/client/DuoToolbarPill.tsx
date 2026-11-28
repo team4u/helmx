@@ -1,16 +1,28 @@
-import { useCallback, useMemo, useState, type ReactNode } from 'react'
+/**
+ * Composer status-row indicator & detail popover for builtin:duo Orchestrator
+ * (`COMPOSER_STATUS_SLOT`).
+ * - Returns `null` before opening any `sessionDoc` subscription on standby
+ *   drafts (`props.conversation === undefined`) or non-eligible conversations
+ *   (subagent / `helmx`-owned).
+ * - Clicking the compact `22px` trigger opens a Radix Popover displaying the
+ *   Orchestrator name, `tier/<id>`, active phase, Planner & interactive
+ *   Executor models, and execution steps.
+ * Exports only React components (Fast Refresh compliant).
+ */
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
+import type { ComposerStatusSlotProps, ConversationSummary } from '@helmx/protocol/browser'
 import {
   Badge,
   Button,
   Callout,
-  HelmxIcon,
   IconButton,
+  MonoId,
   Popover,
+  PopoverClose,
   PopoverContent,
   PopoverHeader,
   PopoverTrigger,
-  StatusLight,
-  type StatusLightTone,
+  Stack,
 } from '@helmx/ui'
 import {
   ModelPickerControl,
@@ -24,21 +36,20 @@ import {
   usePluginSessionDocValue,
   usePluginTranslator,
 } from '@helmx/plugin-client'
-import type { ComposerToolbarSlotProps } from '@helmx/protocol/browser'
 import {
   DUO_COPY,
   buildDuoPickerCopy,
   formatDuoOverrideClearedNotice,
   formatDuoOverrideUpdatedNotice,
-  formatDuoPhaseLabel,
-  formatDuoStepBudgetLabel,
-  formatDuoStepCounter,
+  formatDuoPopoverStepsValue,
+  formatDuoStatusTitle,
 } from './copy.ts'
 import {
   DUO_PLUGIN_ID,
   DUO_SCREEN_ID,
   DUO_SESSION_DOC,
   DUO_STATE_DOC,
+  isDuoEligibleConversation,
   matchDuoRecipeFromModelRef,
   parseDuoSessionDoc,
   parseDuoStateDoc,
@@ -46,24 +57,18 @@ import {
 } from './models.ts'
 import './styles.css'
 
-/**
- * Guard outer wrapper so ineligible conversations (sub-conversations or `helmx`-owned
- * sessions) return `null` before mounting hooks that subscribe to `duo` sessionDoc.
- */
-export function DuoToolbarPill(props: ComposerToolbarSlotProps): ReactNode {
-  const { conversation } = props
-  const isTopLevelHuman =
-    conversation === undefined ||
-    (conversation.parentConversationId === undefined && (conversation.ownedBy ?? 'human') === 'human')
-  if (!isTopLevelHuman) return null
-  return <EligibleDuoToolbarPill {...props} />
+export function DuoToolbarPill(props: ComposerStatusSlotProps): ReactNode {
+  if (props.conversation === undefined || !isDuoEligibleConversation(props.conversation)) {
+    return null
+  }
+  return <EligibleDuoStatusPill conversation={props.conversation} />
 }
 
-function EligibleDuoToolbarPill({
+function EligibleDuoStatusPill({
   conversation,
-  effectiveModel,
-  disabled,
-}: ComposerToolbarSlotProps): ReactNode {
+}: {
+  conversation: ConversationSummary
+}): ReactNode {
   const ctx = usePluginContext()
   const locale = usePluginLocale()
   const t = usePluginTranslator()
@@ -71,7 +76,7 @@ function EligibleDuoToolbarPill({
   const rawState = usePluginDocValue(DUO_PLUGIN_ID, DUO_STATE_DOC)
   const stateDoc = useMemo(() => parseDuoStateDoc(rawState), [rawState])
   const rawSession = usePluginSessionDocValue(DUO_SESSION_DOC, {
-    conversationId: conversation?.id,
+    conversationId: conversation.id,
     pluginId: DUO_PLUGIN_ID,
   })
   const session = useMemo(() => parseDuoSessionDoc(rawSession), [rawSession])
@@ -84,32 +89,21 @@ function EligibleDuoToolbarPill({
   const [error, setError] = useState<string | null>(null)
   const pickerCopy = useMemo(() => buildDuoPickerCopy(locale), [locale])
 
-  const standbyRecipe = useMemo(() => {
-    if (conversation !== undefined) return undefined
-    return matchDuoRecipeFromModelRef(effectiveModel, stateDoc.recipes)
-  }, [conversation, effectiveModel, stateDoc.recipes])
+  useEffect(() => {
+    setOpen(false)
+    setError(null)
+  }, [conversation.id])
 
-  const activeRecipe = useMemo(() => {
-    if (session?.enabled) return stateDoc.recipes[session.recipeId]
-    return standbyRecipe
-  }, [session, standbyRecipe, stateDoc.recipes])
+  const fallbackRecipe = useMemo(
+    () =>
+      matchDuoRecipeFromModelRef(
+        conversation.effectiveModelRef ?? conversation.modelOverride,
+        stateDoc.recipes,
+      ),
+    [conversation.effectiveModelRef, conversation.modelOverride, stateDoc.recipes],
+  )
 
-  const standbyResolved = useMemo(() => {
-    if (!standbyRecipe) return undefined
-    const planner = resolveEndpointDisplay(
-      standbyRecipe.plannerModel,
-      standbyRecipe.plannerThinkingLevel,
-      hostModels,
-    )
-    const executor = resolveEndpointDisplay(
-      standbyRecipe.executorModel,
-      standbyRecipe.executorThinkingLevel,
-      hostModels,
-    )
-    return { planner, executor }
-  }, [standbyRecipe, hostModels])
-
-  const handleOpenRecipeEditor = useCallback(
+  const handleOpenEditor = useCallback(
     (recipeId: string) => {
       setOpen(false)
       ctx.openScreen(`screen:${DUO_PLUGIN_ID}/${DUO_SCREEN_ID}?edit=${encodeURIComponent(recipeId)}`)
@@ -119,7 +113,6 @@ function EligibleDuoToolbarPill({
 
   const handleOverrideExecutor = useCallback(
     (model: string, level: string | null) => {
-      if (conversation === undefined) return
       setError(null)
       void actions.run(
         'override_executor',
@@ -139,11 +132,10 @@ function EligibleDuoToolbarPill({
         },
       )
     },
-    [conversation, actions, ctx, locale],
+    [conversation.id, actions, ctx, locale],
   )
 
   const handleClearOverride = useCallback(() => {
-    if (conversation === undefined) return
     setError(null)
     void actions.run(
       'clear_override',
@@ -158,55 +150,87 @@ function EligibleDuoToolbarPill({
         },
       },
     )
-  }, [conversation, actions, ctx, locale])
+  }, [conversation.id, actions, ctx, locale])
 
-  const activeMode = session !== null && session.enabled
-  if (!activeMode && standbyRecipe === undefined) return null
+  const hasSession = session !== null && session.enabled
+  if (!hasSession && fallbackRecipe === undefined) {
+    return null
+  }
 
-  const recipeId = activeMode ? session.recipeId : standbyRecipe!.id
-  const recipeName = activeMode ? session.recipeName : standbyRecipe!.name
-  const suppressed = activeMode && session.suppressedByCoordinator === true
-  const phase = activeMode ? session.phase : 'planning'
+  const recipeId = hasSession ? session.recipeId : fallbackRecipe!.id
+  const recipeName = hasSession ? session.recipeName : fallbackRecipe!.name
+  const activeRecipe = stateDoc.recipes[recipeId] ?? fallbackRecipe
+  const suppressed = hasSession
+    ? session.suppressedByCoordinator === true
+    : Array.isArray(conversation.tags) && conversation.tags.includes('swarm-coordinator')
+  const phase = suppressed ? 'planning' : hasSession ? session.phase : 'planning'
+  const stepLimitPaused = hasSession && session.stepLimitPaused && !suppressed
+  const hasOverride = hasSession && session.hasExecutorOverride
+  const stepCount = hasSession ? session.executionStepCount : 0
+  const maxSteps = hasSession ? session.maxExecutionSteps : fallbackRecipe!.maxExecutionSteps
 
-  const plannerConcrete = activeMode
+  const fallbackPlanner = !hasSession
+    ? resolveEndpointDisplay(fallbackRecipe!.plannerModel, fallbackRecipe!.plannerThinkingLevel, hostModels)
+    : undefined
+  const fallbackExecutor = !hasSession
+    ? resolveEndpointDisplay(fallbackRecipe!.executorModel, fallbackRecipe!.executorThinkingLevel, hostModels)
+    : undefined
+
+  const plannerConcrete = hasSession
     ? session.plannerModel
-    : standbyResolved?.planner.concreteModel ?? standbyRecipe!.plannerModel
-  const plannerThinking = activeMode
-    ? session.plannerThinkingLevel
-    : standbyResolved?.planner.thinkingLevel
-  const executorConcrete = activeMode
+    : (fallbackPlanner?.concreteModel ?? fallbackRecipe!.plannerModel)
+  const plannerThinking = hasSession ? session.plannerThinkingLevel : fallbackPlanner?.thinkingLevel
+  const executorConcrete = hasSession
     ? session.executorModel
-    : standbyResolved?.executor.concreteModel ?? standbyRecipe!.executorModel
-  const executorThinking = activeMode
-    ? session.executorThinkingLevel
-    : standbyResolved?.executor.thinkingLevel
+    : (fallbackExecutor?.concreteModel ?? fallbackRecipe!.executorModel)
+  const executorThinking = hasSession ? session.executorThinkingLevel : fallbackExecutor?.thinkingLevel
 
-  const maxSteps = activeMode ? session.maxExecutionSteps : standbyRecipe!.maxExecutionSteps
-  const executionStepCount = activeMode ? session.executionStepCount : 0
-  const hasOverride = activeMode && session.hasExecutorOverride
+  const activeModelShort =
+    phase === 'execution' && !suppressed
+      ? formatModelShortName(executorConcrete)
+      : formatModelShortName(plannerConcrete)
 
-  const plannerShort = plannerConcrete ? formatModelShortName(plannerConcrete) : '—'
-  const executorShort = executorConcrete ? formatModelShortName(executorConcrete) : '—'
-
-  const pillText = suppressed
-    ? t(DUO_COPY.pillSuppressed)
-    : `${formatDuoPhaseLabel(phase, locale)} → ${executorShort}`
-
-  const pillClassName = [
-    'helmx-toolbar-pill',
-    'duo-pill',
-    activeMode ? 'duo-pill-active' : 'duo-pill-standby',
-    phase === 'execution' && !suppressed ? 'duo-pill-executing' : '',
-    suppressed ? 'duo-pill-suppressed' : '',
-  ]
-    .filter(Boolean)
-    .join(' ')
-
-  const statusTone: StatusLightTone = suppressed
-    ? 'blocked'
+  const phaseLabel = suppressed
+    ? t(DUO_COPY.statusCoord)
     : phase === 'execution'
-      ? 'working'
-      : 'done'
+      ? t(DUO_COPY.statusExec)
+      : t(DUO_COPY.statusPlan)
+
+  const phaseBadgeLabel = suppressed
+    ? t(DUO_COPY.phaseCoordinator)
+    : phase === 'execution'
+      ? t(DUO_COPY.phaseExecution)
+      : t(DUO_COPY.phasePlanning)
+
+  const statusTitle = formatDuoStatusTitle(
+    recipeName,
+    recipeId,
+    phase,
+    suppressed,
+    plannerConcrete || '—',
+    executorConcrete || '—',
+    stepCount,
+    maxSteps,
+    locale,
+  )
+
+  const plannerDisplayLevel = resolveDefaultChainThinkingLevel(
+    hostModels ?? undefined,
+    activeRecipe?.plannerModel ?? plannerConcrete,
+    plannerThinking,
+    'tier',
+  )
+  const plannerBaseDisplay =
+    activeRecipe &&
+    activeRecipe.plannerModel.startsWith('tier/') &&
+    plannerConcrete &&
+    plannerConcrete !== activeRecipe.plannerModel
+      ? `${activeRecipe.plannerModel} (${formatModelShortName(plannerConcrete)})`
+      : (plannerConcrete || activeRecipe?.plannerModel || '—')
+  const plannerFullDisplay =
+    plannerDisplayLevel !== '' && plannerDisplayLevel !== 'off'
+      ? `${plannerBaseDisplay} · ${plannerDisplayLevel}`
+      : plannerBaseDisplay
 
   const executorPickerDisplayModel =
     activeRecipe && !hasOverride ? activeRecipe.executorModel : executorConcrete
@@ -214,11 +238,19 @@ function EligibleDuoToolbarPill({
     hostModels ?? undefined,
     executorPickerDisplayModel,
     executorThinking,
-    'compaction',
+    'tier',
   )
+  const executorButtonTitle = executorPickerDisplayModel
+    ? executorPickerThinking !== '' && executorPickerThinking !== 'off'
+      ? `${executorPickerDisplayModel} · ${executorPickerThinking}`
+      : executorPickerDisplayModel
+    : t(DUO_COPY.pickModelPlaceholder)
+
   const overriding = actions.pending && actions.pendingKey === 'override_executor'
   const clearing = actions.pending && actions.pendingKey === 'clear_override'
-  const busy = Boolean(disabled) || overriding || clearing
+  const busy = overriding || clearing
+
+  const pillClassName = `helmx-toolbar-pill duo-status-trigger${stepLimitPaused ? ' helmx-toolbar-pill--warn' : ''}`
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -226,134 +258,127 @@ function EligibleDuoToolbarPill({
         <button
           type="button"
           className={pillClassName}
-          disabled={disabled}
-          aria-label={`${recipeName} · ${pillText}`}
-          title={`${recipeName} (tier/${recipeId})`}
+          data-duo-phase={phase}
+          data-duo-suppressed={suppressed ? 'true' : undefined}
+          aria-label={statusTitle}
+          title={statusTitle}
         >
-          <span className="duo-pill-dot" aria-hidden="true" />
-          <HelmxIcon name="git-pull-request" size={12} />
-          <span>{pillText}</span>
-          {activeMode && phase === 'execution' && (
-            <span className="duo-pill-steps mono">
-              {formatDuoStepCounter(executionStepCount, maxSteps, locale)}
-            </span>
-          )}
+          <span className="duo-status-phase">{phaseLabel}</span>
+          {activeModelShort !== '' ? (
+            <>
+              <span className="duo-status-sep" aria-hidden="true">·</span>
+              <span className="duo-status-model mono">{activeModelShort}</span>
+            </>
+          ) : null}
         </button>
       </PopoverTrigger>
-      <PopoverContent className="duo-popover" align="start" sideOffset={8}>
+      <PopoverContent
+        portalled
+        side="top"
+        align="start"
+        sideOffset={8}
+        collisionPadding={12}
+        className="duo-popover"
+      >
         <PopoverHeader
           divider
-          title={recipeName}
-          subtitle={
-            <Badge tone="neutral" mono>
-              tier/{recipeId}
-            </Badge>
+          className="duo-popover-header"
+          title={
+            <span className="duo-popover-title-wrap">
+              <span className="duo-popover-title">{recipeName}</span>
+              <MonoId value={`tier/${recipeId}`} copyable={false} />
+              <Badge tone={stepLimitPaused ? 'warn' : 'neutral'}>{phaseBadgeLabel}</Badge>
+            </span>
           }
           trailing={
-            recipeId ? (
-              <IconButton
-                icon="pencil"
-                variant="ghost"
-                size="sm"
-                label={t(DUO_COPY.pillEditRecipe)}
-                title={t(DUO_COPY.pillEditRecipe)}
-                onClick={() => handleOpenRecipeEditor(recipeId)}
-              />
-            ) : undefined
+            <Stack direction="horizontal" gap="xs">
+              {recipeId ? (
+                <IconButton
+                  variant="ghost"
+                  size="xs"
+                  icon="pencil"
+                  label={t(DUO_COPY.pillEdit)}
+                  title={t(DUO_COPY.pillEdit)}
+                  onClick={() => handleOpenEditor(recipeId)}
+                />
+              ) : null}
+              <PopoverClose asChild>
+                <IconButton variant="ghost" size="xs" icon="x" label={t(DUO_COPY.close)} />
+              </PopoverClose>
+            </Stack>
           }
         />
-        <div className="duo-popover-body">
-          {error && <Callout tone="err">{error}</Callout>}
+        <div className="duo-popover-rows">
+          {error !== null ? <Callout tone="err">{error}</Callout> : null}
+          {stepLimitPaused ? <Callout tone="warn">{t(DUO_COPY.pillStepLimitPaused)}</Callout> : null}
+          {suppressed ? <Callout tone="warn">{t(DUO_COPY.pillCoordinatorHint)}</Callout> : null}
 
-          <div className="duo-popover-status-row">
-            <span className="duo-popover-status-left">
-              <StatusLight tone={statusTone} label={formatDuoPhaseLabel(phase, locale)} />
-              <span>{suppressed ? t(DUO_COPY.pillSuppressed) : formatDuoPhaseLabel(phase, locale)}</span>
-            </span>
-            <span className="duo-pill-steps mono">
-              {activeMode && phase === 'execution'
-                ? formatDuoStepCounter(executionStepCount, maxSteps, locale)
-                : formatDuoStepBudgetLabel(maxSteps, locale)}
-            </span>
+          <div
+            className="duo-popover-row"
+            data-active={phase === 'planning' && !suppressed ? 'true' : undefined}
+          >
+            <div className="duo-popover-row-head">
+              <span className="duo-popover-label">{t(DUO_COPY.plannerLabel)}</span>
+              {phase === 'planning' && !suppressed ? (
+                <Badge tone="neutral">{t(DUO_COPY.activeBadge)}</Badge>
+              ) : null}
+            </div>
+            <span className="duo-popover-model mono">{plannerFullDisplay}</span>
           </div>
 
-          {activeMode && session.stepLimitPaused && (
-            <Callout tone="warn">{t(DUO_COPY.pillStepLimitPaused)}</Callout>
-          )}
-          {suppressed && <Callout tone="warn">{t(DUO_COPY.pillCoordinatorHint)}</Callout>}
-
-          <div className="duo-popover-role">
-            <div className="duo-popover-role-head">
-              <span>{t(DUO_COPY.plannerLabel)}</span>
-              {activeRecipe && activeRecipe.plannerModel.startsWith('tier/') && (
-                <Badge tone="neutral" mono>
-                  {activeRecipe.plannerModel}
-                </Badge>
-              )}
+          <div
+            className="duo-popover-row"
+            data-active={phase === 'execution' && !suppressed ? 'true' : undefined}
+          >
+            <div className="duo-popover-row-head">
+              <span className="duo-popover-label">{t(DUO_COPY.executorLabel)}</span>
+              <span className="duo-popover-badges">
+                {hasOverride ? <Badge tone="accent">{t(DUO_COPY.overrideBadge)}</Badge> : null}
+                {phase === 'execution' && !suppressed ? (
+                  <Badge tone="neutral">{t(DUO_COPY.activeBadge)}</Badge>
+                ) : null}
+              </span>
             </div>
-            <div className="duo-popover-role-readonly">
-              <span>{plannerShort}</span>
-              {plannerThinking && <Badge tone="neutral">{plannerThinking}</Badge>}
-            </div>
-          </div>
-
-          <div className="duo-popover-role">
-            <div className="duo-popover-role-head">
-              <span>{t(DUO_COPY.executorLabel)}</span>
-              {hasOverride && <Badge tone="accent">{t(DUO_COPY.overrideBadge)}</Badge>}
-            </div>
-            {activeMode ? (
-              <ModelPickerControl
-                variant="field"
-                size="sm"
-                buttonAriaLabel={t(DUO_COPY.fieldExecutor)}
-                effectiveModel={executorPickerDisplayModel}
-                activeThinkingLevel={executorPickerThinking}
-                placeholderLabel={t(DUO_COPY.pickModelPlaceholder)}
-                resetLabel={t(DUO_COPY.pillClearOverride)}
-                resetTitle={t(DUO_COPY.pillClearOverride)}
-                enableShortcut={false}
-                allowTiers
-                allowPreserveRefTiers={false}
-                disabled={busy}
-                copy={pickerCopy}
-                onNotice={(msg, tone) => ctx.notify(msg, tone)}
-                onApply={handleOverrideExecutor}
-                onResetDefault={hasOverride ? handleClearOverride : undefined}
-              />
-            ) : (
-              <div className="duo-popover-role-readonly">
-                <span>{executorShort}</span>
-                {executorThinking && <Badge tone="neutral">{executorThinking}</Badge>}
+            <ModelPickerControl
+              variant="field"
+              size="sm"
+              buttonAriaLabel={t(DUO_COPY.fieldExecutor)}
+              effectiveModel={executorPickerDisplayModel || undefined}
+              activeThinkingLevel={executorPickerThinking}
+              placeholderLabel={t(DUO_COPY.pickModelPlaceholder)}
+              buttonTitle={executorButtonTitle}
+              resetLabel={t(DUO_COPY.pillClearOverride)}
+              resetTitle={t(DUO_COPY.pillClearOverride)}
+              enableShortcut={false}
+              allowTiers
+              allowPreserveRefTiers={false}
+              disabled={busy}
+              copy={pickerCopy}
+              onNotice={(msg, tone) => ctx.notify(msg, tone)}
+              onApply={handleOverrideExecutor}
+              onResetDefault={hasOverride ? handleClearOverride : undefined}
+            />
+            {hasOverride ? (
+              <div className="duo-popover-override-actions">
+                <Button
+                  variant="ghost"
+                  size="xs"
+                  icon="rotate-ccw"
+                  pending={clearing}
+                  disabled={busy}
+                  onClick={handleClearOverride}
+                >
+                  {t(DUO_COPY.pillClearOverride)}
+                </Button>
               </div>
-            )}
+            ) : null}
           </div>
 
-          {!activeMode && <span className="duo-popover-hint">{t(DUO_COPY.pillStandbyHint)}</span>}
-
-          <div className="duo-popover-actions">
-            {hasOverride && (
-              <Button
-                variant="ghost"
-                size="sm"
-                icon="rotate-ccw"
-                pending={clearing}
-                disabled={busy}
-                onClick={handleClearOverride}
-              >
-                {t(DUO_COPY.pillClearOverride)}
-              </Button>
-            )}
-            {recipeId && (
-              <Button
-                variant="secondary"
-                size="sm"
-                icon="pencil"
-                onClick={() => handleOpenRecipeEditor(recipeId)}
-              >
-                {t(DUO_COPY.pillEditRecipe)}
-              </Button>
-            )}
+          <div className="duo-popover-row duo-popover-row--inline">
+            <span className="duo-popover-label">{t(DUO_COPY.stepsLabel)}</span>
+            <span className="duo-popover-steps mono tabular-nums">
+              {formatDuoPopoverStepsValue(stepCount, maxSteps, locale)}
+            </span>
           </div>
         </div>
       </PopoverContent>

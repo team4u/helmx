@@ -844,7 +844,9 @@ export function ModelPickerControl({
   // that level is empty, converged the way the kernel clamps.
   const displayLevelInput = triggerThinkingInput !== '' ? triggerThinkingInput : (currentTier?.thinkingLevel ?? '')
   const effectiveLevel = resolveEffectiveThinkingLevel(currentLevels, displayLevelInput)
-  const showLevel = supportsThinking && effectiveLevel !== '' && effectiveLevel !== 'off'
+  const suppressTriggerLevel = !hasStagedNextTurn && currentTier?.preserveRef === true
+  const showLevel =
+    !suppressTriggerLevel && supportsThinking && effectiveLevel !== '' && effectiveLevel !== 'off'
   const canRefresh = host.refreshModels !== undefined
   const customTrigger = renderTrigger !== undefined ? renderTrigger({ open, disabled, pending }) : undefined
   const hasCustomTrigger =
