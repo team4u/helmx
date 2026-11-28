@@ -4,7 +4,7 @@
 
 ## 当前状态与可恢复状态的边界
 
-全站位置由唯一模型管理，可定位界面必须支持复制链接直达、刷新恢复与浏览器前进/后退。不是所有组件状态都要进 URL：输入草稿、未保存表单、展开/悬停状态、命令面板和短暂消息高亮不属于位置；**密钥、令牌及表单内容严禁写入 URL**。
+全站位置由唯一模型管理，可定位界面必须支持复制链接直达、刷新恢复与浏览器前进/后退。不是所有组件状态都要进 URL：输入草稿、未保存表单、展开/悬停状态、全局搜索面板（Omnibox）与短暂落地聚焦高亮（`searchFocusAnchor` / 消息高亮）不属于位置；**密钥、令牌及表单内容严禁写入 URL**。
 
 ## 唯一导航机制
 
@@ -32,7 +32,7 @@
 | `#/settings/nodes[/<nodeId>]` | 节点中心 |
 | `#/settings/plugins[/<pluginId> \| /core[/<coreOwner>[/<coreAction>]]]` | 插件中心（`core` 保留段 = 内核能力透视 Tab，支持只读抽屉深链与技能双向导航） |
 
-侧栏空间（`conversations | views | settings`）由主屏目标唯一推导，不是独立 URL/Store 状态（`#/overview` 归属 `conversations` 空间，侧栏顶栏不设常驻总览按钮，按需由对话工作集底部的「查看全部」「已归档会话 `sp.bucket=archived`」「搜索查看匹配」或全局命令面板进入；全局会话态势收敛为无数字染色状态圆点 `.attention-status-dot`，在跨空间浏览或桌面侧栏折叠时挂于 Activity Rail 对话空间图标、移动端挂于左上角汉堡按钮，明细计数由 Tooltip / `aria-label` 承载）：Rail 点击经 `store.openSpace` 导航到该空间最近记忆的主屏目标（无记忆取空间缺省），经 push 入栈；已在当前空间 no-op 不产生历史项；记忆指向已失效目标时安全清理并回退缺省，绝不伪造不存在目标。浏览器前进/后退（hashchange/popstate）以 URL 为唯一事实来源。路径段内斜杠必须编码、冒号保留可读；非法段（含全部旧路径形态）静默回退默认主屏 `#/settings/profiles`。**首页落地**：空 Hash 进入不是导航意图——认证与资产就绪后主屏统一以 replace 落到对话空间缺省目标（存在未归档人类根会话时落到最新根会话所属角色的待命页 `#/a/<profileId>`，无会话时落到首个可用角色待命页，无可用角色时保持解析缺省 `#/settings/profiles`），不入历史栈。
+侧栏空间（`conversations | views | settings`）由主屏目标唯一推导，不是独立 URL/Store 状态（`#/overview` 归属 `conversations` 空间，侧栏顶栏不设常驻总览按钮，按需由对话工作集底部的「查看全部」「已归档会话 `sp.bucket=archived`」「搜索查看匹配」或全局搜索面板 Omnibox 进入；全局会话态势收敛为无数字染色状态圆点 `.attention-status-dot`，在跨空间浏览或桌面侧栏折叠时挂于 Activity Rail 对话空间图标、移动端挂于左上角汉堡按钮，明细计数由 Tooltip / `aria-label` 承载）：Rail 点击经 `store.openSpace` 导航到该空间最近记忆的主屏目标（无记忆取空间缺省），经 push 入栈；已在当前空间 no-op 不产生历史项；记忆指向已失效目标时安全清理并回退缺省，绝不伪造不存在目标。浏览器前进/后退（hashchange/popstate）以 URL 为唯一事实来源。路径段内斜杠必须编码、冒号保留可读；非法段（含全部旧路径形态）静默回退默认主屏 `#/settings/profiles`。**首页落地**：空 Hash 进入不是导航意图——认证与资产就绪后主屏统一以 replace 落到对话空间缺省目标（存在未归档人类根会话时落到最新根会话所属角色的待命页 `#/a/<profileId>`，无会话时落到首个可用角色待命页，无可用角色时保持解析缺省 `#/settings/profiles`），不入历史栈。
 
 ### 智能体待命目标与「首次发送才落库」
 
@@ -62,7 +62,7 @@
 
 目标可携带字符串参数（`ResolvedTarget.params`），当前承载方为插件 `screen` 目标与宿主 `overview` 目标（总览筛选与分组状态），三类入口：
 
-1. 声明式目标字符串 `screen:<pluginId>/<screenId>?k1=v1`（`sidebarItem.target` / `helmx:open` / `ctx.openScreen`）；
+1. 声明式目标字符串 `screen:<pluginId>/<screenId>?k1=v1` 或 `overview` / `overview?k1=v1`（由 `resolveTargetString` 统一解析，供 `sidebarItem.target` / `command.target` / Omnibox `helmx.search` 命中 / `helmx:open` / `ctx.openScreen` 复用）；
 2. 地址栏命名空间参数：主屏 `sp.<k>=<v>`，分屏 `ssp.<k>=<v>`——两套命名空间互不冲突，同一 screen 双开时参数各自独立；
 3. 组件内 `setParams(patch, { push? })`——经 `store.setScreenParams` 消费，值为 `undefined` 时删除键。
 

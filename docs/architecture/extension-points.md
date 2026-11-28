@@ -65,14 +65,14 @@ export type HookName =
 | 方法 | surface | 说明 |
 | :--- | :--- | :--- |
 | `sidebarItem(spec)` | `sidebar.item` | 左栏导航项；`target` 如 `'conversation:1'`、`'screen:builtin:triggers/triggers'`；`quickEntry: true` 且目标为 screen 时，宿主在折叠 Rail / 移动抽屉常驻一键入口（目标 screen 必须实际存在，插件停用后随贡献即时消失） |
-| `screen(spec)` | `screen` | 全屏自定义视图，支持左右 Split View 并排展示 |
+| `screen(spec)` | `screen` | 全屏自定义视图，支持左右 Split View 并排展示；可选 `description` / `keywords` 参与 Omnibox 索引 |
 | `timelineRenderer(spec)` | `timeline.renderer` | 按 `kinds`（entry kind 列表）与 `matchMeta`（`data.renderer` 匹配，AND 组合）接管时间线条目 |
 | `markdownCodeBlock(spec)` | `markdown.codeBlock` | 按围栏语言（`languages` 精确匹配小写化）接管 Markdown 代码块渲染 |
 | `toolView(spec)` | `tool.view` | 按 `toolNames` 接管工具调用卡片；`replaceRow: true` 时完全替换外层默认工具行 |
 | `composerCompleter(spec)` | `composer.completer` | `@ / # / :` 触发的候选数据源（纯数据，无 client） |
 | `workbenchPanel(spec)` | `workbench.panel` | 会话右侧抽屉面板；`badge` 声明 doc 驱动的动态角标 |
-| `command(spec)` | `commandPalette` | 全局命令（⌘K）；`slash` 同时派生输入框 `/xxx` 菜单 |
-| `settingsPanel(spec)` | `settings.panel` | 设置面板（同一插件可声明多个） |
+| `command(spec)` | `commandPalette` | 全局搜索与命令（Omnibox，⌘K），支持 `actionId` / `client` / 声明式导航 `target`（至少声明其一）；`slash` 仍须绑定 `actionId` 并派生输入框 `/xxx` 菜单 |
+| `settingsPanel(spec)` | `settings.panel` | 设置面板（同一插件可声明多个）；可选 `description` / `keywords` 参与 Omnibox 索引 |
 | `slot(spec)` | `plugin.slot` | 向 `<ownerPluginId>/<slotName>` 子插槽注入组件 |
 
 ### priority 裁决与公共约束
@@ -177,7 +177,8 @@ pnpm helmx plugins doc builtin:workflow runs --current --watch --json
 - **典型内置契约**：
   - `helmx.dispatch-tools`：`builtin:workflow`（`['subagent', 'SubagentWorkflow']`）与 `builtin:swarm`（`['swarm_dispatch_worker']`）声明各自派工工具，`builtin:profile` 动态消费以决定协作目录注入与 `@` 补全（零硬编码工具名，任意第三方派工插件自动生效）；
   - `helmx.conversation-depth`：`builtin:swarm` 等派工插件提供 `depthOf(conversationId)` 上报 `{ depth, leaf? }`，由 `builtin:workflow` 在单一 `maxSubagentDepth` 策略（默认 `1`）下统一消费，执行 `before_turn` 剥离与 `subagent_depth_exceeded` 守卫；
-  - `helmx.model-tiers`：`builtin:tiers` 提供 `{ getTiers, onChanged }`，内核 `ModelRegistry` 直接从 `PluginHost` 消费并在启停与变更时自动广播 `models.changed` 并对齐继承会话。
+  - `helmx.model-tiers`：`builtin:tiers` 提供 `{ getTiers, onChanged }`，内核 `ModelRegistry` 直接从 `PluginHost` 消费并在启停与变更时自动广播 `models.changed` 并对齐继承会话；
+  - `helmx.search`：`PluginSearchProvider`（`search(input, signal)`），内置 `workflow` / `triggers` / `tiers` / `port-forward` 等插件按需提供动态资源检索，由组合层 `GET /api/omnibox/search` 与 FTS5 会话检索并行聚合（单插件 200ms 隔离超时、每插件最多 8 条、运行时结构校验、`SecretStash` 脱敏，并经 `failedPlugins` / `messagesUnavailable` 如实回报局部异常；插件停用即时释放）。静态插件配置项检索另走独立端点 `GET /api/plugins/config-catalog`（脱敏且不膨胀 SSE `PluginSummary`）。
 
 ### 轻量按键持久存储（`ctx.kv`）
 

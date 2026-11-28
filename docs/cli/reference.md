@@ -38,6 +38,8 @@
 
 **`helmx search <query> [--profile <id>] [--owned-by human|helmx] [--top-level] [--limit <n>] [--max-per-conversation <1..20>]`** — 会话条目全库全文检索（`GET /api/search?q=`，FTS5）。
 
+**`helmx omnibox search <query> [--limit <n>] [--locale en|zh-CN] [--conversation <id> | --current]`** — 全局 Omnibox 联合搜索（`GET /api/omnibox/search?q=`）：并行聚合 FTS5 会话消息检索与活跃 `helmx.search` 插件动态搜索（单插件 200ms 隔离超时、每插件最多 8 条、`SecretStash` 脱敏；局部失败经 `messagesUnavailable` / `failedPlugins` 如实回报）。
+
 **`helmx api <method> <path> [--input <json>] [--field <k=v>]`** — 原始 HTTP 逃生舱。method 为 `GET|POST|PUT|PATCH|DELETE`（大小写不敏感）；path 自动补齐前导 `/`；`--field` 可重复且值按 JSON boolean/number 解析，与 `--input` 混用时仅对象基底可合并；GET 不接受请求体。
 
 ### 本机 Hub 生命周期（npm 制品）
@@ -173,6 +175,8 @@ PUT 为整体替换契约：update 走语义化标志时 CLI 先 GET 完整 Prof
 ### 插件系统
 
 **`helmx plugins list`** — 插件清单（`status: active|disabled|failed`，失败携带结构化 `error`：阶段 `scan|load|define|enable`）。
+
+**`helmx plugins config-catalog`** — 全部声明 `configSchema` 的已加载插件静态配置目录（`GET /api/plugins/config-catalog`，复用 `manifest` 的 secret 剥离投影，绝不暴露密钥值与密钥默认值）。
 
 **`helmx plugins manifest <id>`** — 单个已注册插件的只读扩展契约投影（`GET /api/plugins/:id/manifest`）：稳定排序汇总 `hooks / actions / tools / ui / routes / docs（仅公开描述符）/ configFields（隐藏 secret 默认值与运行期值）/ providers（仅 id/name）/ services / clientModules`。
 
