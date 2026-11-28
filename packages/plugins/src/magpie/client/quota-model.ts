@@ -551,16 +551,41 @@ export function shouldShowInlineWindowLabel(label: string): boolean {
   return trimmed.length > 0 && !INLINE_OMIT_WINDOW_LABEL_RE.test(trimmed)
 }
 
+const MAX_INLINE_WINDOWS = 2
+
 /** Build the compact single-account window items shown inline in the composer status row. */
 export function inlineSummaryWindows(account: ModelQuotaAccount): {
   visible: FormattedQuotaWindow[]
   hiddenCount: number
 } {
-  if (account.windows.length <= 3) {
+  if (account.windows.length <= MAX_INLINE_WINDOWS) {
     return { visible: account.windows, hiddenCount: 0 }
   }
+  const hasTotalCredit = account.windows.some((win) => TOTAL_CREDIT_WINDOW_RE.test(win.label))
+  const hasExhaustedBaseCredit = account.windows.some(
+    (win) => BASE_CREDIT_WINDOW_RE.test(win.label) && isWindowExhausted(win),
+  )
+  if (!account.exhausted && hasTotalCredit && hasExhaustedBaseCredit) {
+    const standard: FormattedQuotaWindow[] = []
+    const totalCredits: FormattedQuotaWindow[] = []
+    const extraCredits: FormattedQuotaWindow[] = []
+    for (const win of account.windows) {
+      if (TOTAL_CREDIT_WINDOW_RE.test(win.label)) {
+        totalCredits.push(win)
+      } else if (EXTRA_CREDIT_WINDOW_RE.test(win.label)) {
+        extraCredits.push(win)
+      } else if (!BASE_CREDIT_WINDOW_RE.test(win.label)) {
+        standard.push(win)
+      }
+    }
+    const visible = [...standard, ...totalCredits, ...extraCredits].slice(0, MAX_INLINE_WINDOWS)
+    return {
+      visible,
+      hiddenCount: account.windows.length - visible.length,
+    }
+  }
   return {
-    visible: account.windows.slice(0, 2),
-    hiddenCount: account.windows.length - 2,
+    visible: account.windows.slice(0, MAX_INLINE_WINDOWS),
+    hiddenCount: account.windows.length - MAX_INLINE_WINDOWS,
   }
 }

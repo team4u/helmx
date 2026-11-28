@@ -790,15 +790,36 @@ button.attachment-chip:disabled {
 .composer-status-row {
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
-  gap: 2px 12px;
+  flex-wrap: nowrap;
+  gap: 10px;
   min-width: 0;
-  padding: 0 14px;
-  margin-bottom: -4px;
+  padding: 2px 14px;
+  margin-top: -2px;
+  margin-bottom: -6px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  overscroll-behavior-x: contain;
+  -webkit-overflow-scrolling: touch;
   color: var(--fg-muted);
   font-size: 11.5px;
   line-height: 1.4;
   user-select: none;
+}
+.composer-status-row::-webkit-scrollbar {
+  display: none;
+}
+.composer-status-row[data-overflow-left='true']:not([data-overflow-right='true']) {
+  -webkit-mask-image: linear-gradient(to right, transparent 0, #000 18px, #000 100%);
+  mask-image: linear-gradient(to right, transparent 0, #000 18px, #000 100%);
+}
+.composer-status-row[data-overflow-right='true']:not([data-overflow-left='true']) {
+  -webkit-mask-image: linear-gradient(to right, #000 0, #000 calc(100% - 18px), transparent 100%);
+  mask-image: linear-gradient(to right, #000 0, #000 calc(100% - 18px), transparent 100%);
+}
+.composer-status-row[data-overflow-left='true'][data-overflow-right='true'] {
+  -webkit-mask-image: linear-gradient(to right, transparent 0, #000 18px, #000 calc(100% - 18px), transparent 100%);
+  mask-image: linear-gradient(to right, transparent 0, #000 18px, #000 calc(100% - 18px), transparent 100%);
 }
 .composer-status-row:not(:has(.composer-context-status)):not(:has(.composer-duration-status)):not(:has(.composer-status-slot:not(:empty))),
 .composer-status-row:not(:has(.composer-context-status)):not(:has(.composer-duration-status)):has([data-plugin-id]):not(:has([data-plugin-id]:not(:empty))) {
@@ -809,10 +830,7 @@ button.attachment-chip:disabled {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  min-width: 0;
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  flex-shrink: 0;
   white-space: nowrap;
   color: var(--fg-muted);
   font-size: 11.5px;
@@ -828,8 +846,7 @@ button.attachment-chip:disabled {
 }
 .composer-status-row .composer-status-slot > *,
 .composer-status-row .composer-status-slot > [data-plugin-id] > * {
-  min-width: 0;
-  max-width: 100%;
+  flex-shrink: 0;
 }
 .composer-status-row .composer-status-slot:empty,
 .composer-status-row .composer-status-slot:has([data-plugin-id]):not(:has([data-plugin-id]:not(:empty))) {

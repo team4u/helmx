@@ -347,7 +347,7 @@ describe('duo-client-interactions', () => {
         spec: {
           id: 'duo-toolbar-pill',
           target: COMPOSER_STATUS_SLOT,
-          order: 5,
+          order: 15,
           client: { module: 'index.tsx', export: 'DuoToolbarPill' },
         },
       },

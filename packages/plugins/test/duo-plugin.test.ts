@@ -339,7 +339,7 @@ test('PluginHost unit: recipe capability mounting, external tier delta cascade w
     assert.ok(duoStatusSlot, 'duo-toolbar-pill must be registered on PluginHost')
     const duoStatusSpec = duoStatusSlot.spec as { target?: string; order?: number }
     assert.equal(duoStatusSpec.target, COMPOSER_STATUS_SLOT)
-    assert.equal(duoStatusSpec.order, 5, 'duo-toolbar-pill must register with order 5 (< token-speed 10, magpie 20)')
+    assert.equal(duoStatusSpec.order, 15, 'duo-toolbar-pill must register with order 15 (> token-speed 10, < magpie 20)')
 
     let externalTiers: Record<string, ModelTierSpec> = {
       coder: { model: 'faux/coder', thinkingLevel: 'low' },

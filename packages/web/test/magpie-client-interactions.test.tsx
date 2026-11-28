@@ -22,6 +22,7 @@ const { resolveLocalizedText } = await import('@helmx/ui')
 const { PluginClientContext } = await import('@helmx/plugin-client')
 const { importBuiltinClientModule, mountSharedPluginNamespaces, setBuiltinClientStub } = await import('./helpers/builtin-clients.js')
 const {
+  inlineSummaryWindows,
   isAccountExhausted,
   selectModelQuotas,
   resolveEffectiveMagpieModel,
@@ -820,5 +821,114 @@ describe("magpie-client-interactions", () => {
       ]),
       false,
     )
+  })
+
+  test('inlineSummaryWindows 与状态栏紧凑摘要：上限 2 窗、加法积分池优先总额度、Popover 仍保留完整窗口', { timeout: 60_000 }, async () => {
+    // 1) 2 个窗口全部展示，hiddenCount === 0
+    const twoWinSummary = inlineSummaryWindows({
+      key: 'codex\0dev',
+      provider: 'codex',
+      account: 'dev',
+      last: true,
+      exhausted: false,
+      tone: 'ok',
+      windows: [
+        { label: '5h', valueText: '88%', tone: 'ok', remainingPercent: 88, unlimited: false, sortRank: 300 },
+        { label: '7d', valueText: '92%', tone: 'ok', remainingPercent: 92, unlimited: false, sortRank: 10_080 },
+      ],
+    })
+    assert.deepEqual(
+      twoWinSummary.visible.map((w) => w.label),
+      ['5h', '7d'],
+    )
+    assert.equal(twoWinSummary.hiddenCount, 0)
+
+    // 2) 3 个窗口收紧为前 2 窗 + hiddenCount=1，Popover 内仍保留第 3 窗
+    const threeWinModel = resolveEffectiveMagpieModel('magpie/codex/gpt-5.2')
+    assert.ok(threeWinModel !== null)
+    const threeWinDoc = {
+      ...MULTI_ACCOUNT_DOC,
+      modelOwners: { 'codex/gpt-5.2': 'codex' },
+      quotas: [
+        { provider: 'codex', account: 'dev', windowLabel: '5 hours', remainingPercent: 88, resetText: '1h' },
+        { provider: 'codex', account: 'dev', windowLabel: '7 days', remainingPercent: 92, resetText: '4d' },
+        { provider: 'codex', account: 'dev', windowLabel: '30 days', remainingPercent: 96, resetText: '12d' },
+      ],
+    }
+    const threeWinAccount = selectModelQuotas(threeWinModel, parseStatus(threeWinDoc)).primary
+    assert.ok(threeWinAccount !== null)
+    const threeWinSummary = inlineSummaryWindows(threeWinAccount)
+    assert.deepEqual(
+      threeWinSummary.visible.map((w) => w.label),
+      ['5h', '7d'],
+    )
+    assert.equal(threeWinSummary.hiddenCount, 1)
+
+    // 3) 加法积分池（Credits 0% + Extra credits 100% + Total credits 94%，账号未耗尽）：
+    //    状态栏优先显示 Total credits 与 Extra credits（+1），不误露出 Credits 0%
+    const wbModel = resolveEffectiveMagpieModel('magpie/workbuddy/wb-1')
+    assert.ok(wbModel !== null)
+    const wbDoc = {
+      ...MULTI_ACCOUNT_DOC,
+      modelOwners: { 'workbuddy/wb-1': 'workbuddy' },
+      quotas: [
+        { provider: 'workbuddy', account: 'jay', windowLabel: 'Credits', remainingPercent: 0 },
+        { provider: 'workbuddy', account: 'jay', windowLabel: 'Extra credits', remainingPercent: 100, displayText: '0 / 7966' },
+        { provider: 'workbuddy', account: 'jay', windowLabel: 'Total credits', remainingPercent: 94 },
+      ],
+    }
+    const wbAccount = selectModelQuotas(wbModel, parseStatus(wbDoc)).primary
+    assert.ok(wbAccount !== null)
+    assert.equal(wbAccount.exhausted, false)
+    const wbInline = inlineSummaryWindows(wbAccount)
+    assert.deepEqual(
+      wbInline.visible.map((w) => w.label),
+      ['Total credits', 'Extra credits'],
+    )
+    assert.equal(wbInline.hiddenCount, 1)
+
+    setBuiltinClientStub({ docs: { status: threeWinDoc }, config: { refreshIntervalSec: 0 } })
+    try {
+      const spy = makeSpyCtx('zh-CN')
+      const threeMount = await mountComposerQuota(spy, {
+        conversation: makeConversation('magpie/codex/gpt-5.2'),
+      })
+      try {
+        const trigger = threeMount.host.querySelector<HTMLButtonElement>('button.magpie-quota-trigger')
+        assert.ok(trigger !== null)
+        const triggerText = trigger.textContent ?? ''
+        assert.match(triggerText, /5h\s*88%/)
+        assert.match(triggerText, /7d\s*92%/)
+        assert.doesNotMatch(triggerText, /30d/, '3 窗时外层收起第 3 窗')
+        assert.match(triggerText, /\+1/, '3 窗时外层显示 +1 隐藏计数')
+
+        await act(async () => {
+          trigger.click()
+        })
+        const popover = document.body.querySelector<HTMLElement>('.magpie-quota-popover')
+        assert.ok(popover !== null)
+        assert.match(popover.textContent ?? '', /30d/, 'Popover 详情仍完整展示全部 3 个窗口')
+      } finally {
+        threeMount.unmount()
+      }
+
+      setBuiltinClientStub({ docs: { status: wbDoc }, config: { refreshIntervalSec: 0 } })
+      const wbMount = await mountComposerQuota(spy, {
+        conversation: makeConversation('magpie/workbuddy/wb-1'),
+      })
+      try {
+        const trigger = wbMount.host.querySelector<HTMLButtonElement>('button.magpie-quota-trigger')
+        assert.ok(trigger !== null)
+        const triggerText = trigger.textContent ?? ''
+        assert.match(triggerText, /Total credits\s*94%/)
+        assert.match(triggerText, /Extra credits\s*100%/)
+        assert.doesNotMatch(triggerText, /(?:^|[^a-z])Credits\s*0%/i, '状态栏不误露出已归零的基础 Credits 0%')
+        assert.match(triggerText, /\+1/)
+      } finally {
+        wbMount.unmount()
+      }
+    } finally {
+      setBuiltinClientStub({ docs: { status: STATUS_DOC } })
+    }
   })
 })

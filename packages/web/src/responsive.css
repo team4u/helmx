@@ -49,7 +49,7 @@ button, a, input, select, textarea { touch-action: manipulation; }
   .composer-textarea { max-height: 120px; }
   .composer-toolbar .composer-picker-root { max-width: 100%; }
   .composer-toolbar .composer-model-button { max-width: 100%; }
-  .composer-status-row { margin-bottom: 0; }
+  .composer-status-row { margin-bottom: -2px; }
   .ask-dock { padding: 10px; }
   .ask-dock-shortcut-hint { display: none; }
   .ask-dock-choice-btn { padding: 7px 9px; gap: 7px; }
@@ -106,7 +106,7 @@ button, a, input, select, textarea { touch-action: manipulation; }
   }
   .composer-status-row {
     line-height: 1.25;
-    margin-bottom: 0;
+    margin-bottom: -2px;
   }
   .toast-overlay {
     top: max(8px, env(safe-area-inset-top));

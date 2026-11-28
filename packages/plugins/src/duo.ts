@@ -442,7 +442,7 @@ export function createDuoPlugin(): PluginDefinition {
       ctx.ui.slot({
         id: 'duo-toolbar-pill',
         target: COMPOSER_STATUS_SLOT,
-        order: 5,
+        order: 15,
         client: { module: 'index.tsx', export: 'DuoToolbarPill' },
       })
       ctx.ui.toolView({

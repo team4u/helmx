@@ -1242,3 +1242,154 @@ test('ComposerInputShell + menu: Escape returns focus to .composer-plus-trigger;
     host.remove()
   }
 })
+
+test('composer/status single-line layout CSS: nowrap, overflow-x auto, non-shrinking telemetry, display:contents slot & empty collapse', { timeout: 60_000 }, async () => {
+  const css = readFileSync(new URL('../src/styles/composer.css', import.meta.url), 'utf8')
+  const style = document.createElement('style')
+  style.textContent = css
+  document.head.appendChild(style)
+
+  const populated = conv({ tokens: 75_000, contextWindow: 200_000 })
+  const empty = conv(undefined)
+  const host = document.createElement('div')
+  document.body.appendChild(host)
+  const root = createRoot(host)
+  try {
+    function DemoStatusProbe() {
+      return e('span', { className: 'demo-status-probe' }, '120 t/s')
+    }
+    seedPluginClientModule('builtin:demo-scroll', 'index.tsx', { DemoStatusProbe })
+    const store = makeTestStore({
+      conversations: [populated, empty],
+      plugins: [
+        {
+          id: 'builtin:demo-scroll',
+          name: 'demo-scroll',
+          version: '1.0.0',
+          locked: false,
+          enabled: true,
+          status: 'active',
+          hooks: [],
+          actions: [],
+          tools: [],
+          clientHashes: { 'index.tsx': 'seeded' },
+        },
+      ],
+      uiContributions: [
+        {
+          pluginId: 'builtin:demo-scroll',
+          surface: 'plugin.slot',
+          spec: {
+            id: 'demo-scroll',
+            target: COMPOSER_STATUS_SLOT,
+            client: { module: 'index.tsx', export: 'DemoStatusProbe' },
+          },
+        },
+      ],
+    })
+
+    await act(async () => {
+      root.render(e(HostStoreProviders, { value: store }, e(Composer, { conversation: populated, prefill: null })))
+    })
+    const row = host.querySelector<HTMLElement>('.composer-status-row')
+    const contextEl = host.querySelector<HTMLElement>('.composer-context-status')
+    const slotEl = host.querySelector<HTMLElement>('.composer-status-slot')
+    assert.ok(row !== null && contextEl !== null && slotEl !== null)
+    const rowStyle = getComputedStyle(row)
+    assert.equal(rowStyle.flexWrap, 'nowrap')
+    assert.equal(rowStyle.overflowX, 'auto')
+    assert.equal(getComputedStyle(contextEl).flexShrink, '0')
+    assert.equal(getComputedStyle(slotEl).display, 'contents')
+
+    const emptyStore = makeTestStore({ conversations: [empty] })
+    await act(async () => {
+      root.render(e(HostStoreProviders, { value: emptyStore }, e(Composer, { conversation: empty, prefill: null })))
+    })
+    const emptyRow = host.querySelector<HTMLElement>('.composer-status-row')
+    assert.ok(emptyRow !== null)
+    assert.equal(getComputedStyle(emptyRow).display, 'none')
+  } finally {
+    resetPluginClientCache()
+    act(() => root.unmount())
+    host.remove()
+    style.remove()
+  }
+})
+
+test('composer/status horizontal overflow fade masks & vertical-wheel horizontal scrolling', { timeout: 60_000 }, async () => {
+  const { host, unmount } = await mountComposer(conv({ tokens: 75_000, contextWindow: 200_000 }))
+  try {
+    const row = host.querySelector<HTMLElement>('.composer-status-row')
+    assert.ok(row !== null)
+
+    let mockClientWidth = 200
+    let mockScrollWidth = 420
+    let mockScrollLeft = 0
+    Object.defineProperty(row, 'clientWidth', {
+      configurable: true,
+      get: () => mockClientWidth,
+    })
+    Object.defineProperty(row, 'scrollWidth', {
+      configurable: true,
+      get: () => mockScrollWidth,
+    })
+    Object.defineProperty(row, 'scrollLeft', {
+      configurable: true,
+      get: () => mockScrollLeft,
+      set: (val: number) => {
+        const max = Math.max(0, mockScrollWidth - mockClientWidth)
+        mockScrollLeft = Math.max(0, Math.min(max, Number(val) || 0))
+      },
+    })
+
+    await act(async () => {
+      window.dispatchEvent(new Event('resize'))
+    })
+    assert.equal(row.getAttribute('data-overflow-left'), null)
+    assert.equal(row.getAttribute('data-overflow-right'), 'true')
+
+    const verticalEv = new window.WheelEvent('wheel', { deltaY: 60, bubbles: true, cancelable: true })
+    await act(async () => {
+      row.dispatchEvent(verticalEv)
+    })
+    assert.equal(mockScrollLeft, 60)
+    assert.equal(verticalEv.defaultPrevented, true)
+
+    await act(async () => {
+      row.dispatchEvent(new Event('scroll'))
+    })
+    assert.equal(row.getAttribute('data-overflow-left'), 'true')
+    assert.equal(row.getAttribute('data-overflow-right'), 'true')
+
+    row.scrollLeft = 220
+    await act(async () => {
+      row.dispatchEvent(new Event('scroll'))
+    })
+    assert.equal(row.getAttribute('data-overflow-left'), 'true')
+    assert.equal(row.getAttribute('data-overflow-right'), null)
+
+    const horizontalEv = new window.WheelEvent('wheel', { deltaX: 40, deltaY: 10, bubbles: true, cancelable: true })
+    await act(async () => {
+      row.dispatchEvent(horizontalEv)
+    })
+    assert.equal(horizontalEv.defaultPrevented, false)
+    assert.equal(mockScrollLeft, 220)
+
+    mockScrollWidth = 200
+    mockScrollLeft = 0
+    await act(async () => {
+      window.dispatchEvent(new Event('resize'))
+    })
+    assert.equal(row.getAttribute('data-overflow-left'), null)
+    assert.equal(row.getAttribute('data-overflow-right'), null)
+
+    const noOverflowEv = new window.WheelEvent('wheel', { deltaY: 60, bubbles: true, cancelable: true })
+    await act(async () => {
+      row.dispatchEvent(noOverflowEv)
+    })
+    assert.equal(noOverflowEv.defaultPrevented, false)
+    assert.equal(mockScrollLeft, 0)
+  } finally {
+    unmount()
+  }
+})

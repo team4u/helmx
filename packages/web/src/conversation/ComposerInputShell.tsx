@@ -117,6 +117,85 @@ export interface ComposerInputShellProps {
   shortcuts?: ComposerShortcutScopeProps
 }
 
+function ComposerStatusRow({ children }: { children: React.ReactNode }): React.JSX.Element {
+  const rowRef = useRef<HTMLDivElement | null>(null)
+  const [overflow, setOverflow] = useState<{ left: boolean; right: boolean }>({ left: false, right: false })
+
+  useEffect(() => {
+    const el = rowRef.current
+    if (el === null) return
+
+    const syncOverflow = (): void => {
+      const left = el.scrollLeft > 2
+      const right = el.scrollLeft + el.clientWidth < el.scrollWidth - 2
+      setOverflow((prev) => (prev.left === left && prev.right === right ? prev : { left, right }))
+    }
+
+    let rafId: number | null = null
+    const scheduleSync = (): void => {
+      if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
+        if (rafId !== null) return
+        rafId = window.requestAnimationFrame(() => {
+          rafId = null
+          syncOverflow()
+        })
+        return
+      }
+      syncOverflow()
+    }
+
+    const onWheel = (e: WheelEvent): void => {
+      if (el.scrollWidth <= el.clientWidth + 1) return
+      if (e.deltaY === 0 || Math.abs(e.deltaX) >= Math.abs(e.deltaY)) return
+      const prev = el.scrollLeft
+      el.scrollLeft += e.deltaY
+      if (el.scrollLeft !== prev) {
+        e.preventDefault()
+      }
+    }
+
+    syncOverflow()
+    el.addEventListener('scroll', syncOverflow, { passive: true })
+    el.addEventListener('wheel', onWheel, { passive: false })
+
+    const hasWindow = typeof window !== 'undefined'
+    if (hasWindow) {
+      window.addEventListener('resize', syncOverflow)
+    }
+    const ro = typeof ResizeObserver === 'function' ? new ResizeObserver(syncOverflow) : null
+    ro?.observe(el)
+    const mo =
+      typeof MutationObserver === 'function'
+        ? new MutationObserver(scheduleSync)
+        : null
+    mo?.observe(el, { childList: true, subtree: true, characterData: true, attributes: false })
+
+    return () => {
+      el.removeEventListener('scroll', syncOverflow)
+      el.removeEventListener('wheel', onWheel)
+      if (hasWindow) {
+        window.removeEventListener('resize', syncOverflow)
+      }
+      ro?.disconnect()
+      mo?.disconnect()
+      if (rafId !== null && typeof window !== 'undefined' && typeof window.cancelAnimationFrame === 'function') {
+        window.cancelAnimationFrame(rafId)
+      }
+    }
+  }, [])
+
+  return (
+    <div
+      ref={rowRef}
+      className="composer-status-row"
+      data-overflow-left={overflow.left ? 'true' : undefined}
+      data-overflow-right={overflow.right ? 'true' : undefined}
+    >
+      {children}
+    </div>
+  )
+}
+
 export function ComposerInputShell({
   attachments,
   draft,
@@ -394,7 +473,7 @@ export function ComposerInputShell({
             {slots.sendControls}
           </div>
         </div>
-        {slots.statusRow !== undefined ? <div className="composer-status-row">{slots.statusRow}</div> : null}
+        {slots.statusRow !== undefined ? <ComposerStatusRow>{slots.statusRow}</ComposerStatusRow> : null}
       </div>
     </div>
   )

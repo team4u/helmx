@@ -17,7 +17,7 @@
 
 /* Composer quota pill (22px geometry, tones, hover, and open states inherited from .helmx-toolbar-pill) */
 .magpie-quota-trigger {
-  max-width: 100%;
+  max-width: 320px;
   text-overflow: ellipsis;
 }
 
@@ -223,5 +223,23 @@
 @media (max-width: 680px) {
   .magpie-quota-popover {
     width: calc(100vw - 24px);
+  }
+}
+
+@container (max-width: 560px) {
+  .magpie-quota-trigger {
+    max-width: 220px;
+  }
+  .magpie-quota-trigger:not(.magpie-quota-trigger--warn):not(.magpie-quota-trigger--err) .magpie-quota-trigger-reset {
+    display: none;
+  }
+}
+
+@media (max-width: 560px) {
+  .magpie-quota-trigger {
+    max-width: 220px;
+  }
+  .magpie-quota-trigger:not(.magpie-quota-trigger--warn):not(.magpie-quota-trigger--err) .magpie-quota-trigger-reset {
+    display: none;
   }
 }

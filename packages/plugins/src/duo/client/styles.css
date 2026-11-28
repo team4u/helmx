@@ -199,7 +199,6 @@
 /* ---- Composer orchestrator status pill (22px geometry, neutral surface, hover & open states inherited from .helmx-toolbar-pill) ---- */
 .duo-status-trigger {
   position: relative;
-  max-width: 100%;
 }
 
 .duo-status-phase,
