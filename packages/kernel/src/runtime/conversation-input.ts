@@ -40,6 +40,10 @@ export interface SubmitInputOptions {
   meta?: Record<string, unknown>
   attachments?: string[]
   replaceFromEntryId?: number
+  /** One-turn runtime model override (`'provider/modelId'` or `'tier/<id>'`); auto-resets to baseline when this run ends. */
+  model?: string
+  /** One-turn runtime thinking level override; auto-resets to baseline when this run ends. */
+  thinkingLevel?: string
   /** Internal durable idempotency key for completion callbacks; never exposed on HTTP input. */
   requestId?: string
   /**

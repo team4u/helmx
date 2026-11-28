@@ -19,10 +19,9 @@ import { HelmxError, isPlainObject } from '@helmx/protocol'
 import type { SecretStash } from '../services/index.js'
 import type { ConversationTracker } from './conversations.js'
 import type { EventHub } from './events.js'
-import { findActiveOrchestratorTier, type ConversationProfileService } from './conversation-profile.js'
+import { type ConversationProfileService } from './conversation-profile.js'
 import { requireConv } from './conversation-require.js'
 import { assertValidConversationOwnership } from './guards/conversation-guards.js'
-import { clampThinkingLevelForModel } from './models.js'
 import { asEntryId, getSdkConversation, readSdkEntryPage } from './sdk-ids.js'
 import { resolveCleanForkAnchor } from './spawn-fork.js'
 import type { HelmxStore } from './store.js'
@@ -38,6 +37,8 @@ interface ConversationContextOpsHost {
   readonly assertModelEnabled: (provider: string, modelId: string) => void
   readonly isClosed: () => boolean
   readonly alignConversationModel: (id: number) => Promise<void>
+  readonly hasRuntimeModelOverride?: (id: number) => boolean
+  readonly clearRuntimeModelOverride?: (id: number) => void
   readonly withOwnership: (summary: ConversationSummary) => ConversationSummary
   /**
    * Guarded-mutation synchronous re-check (ownership human red line + optional CAS watermark),
@@ -108,6 +109,10 @@ export class ConversationContextOps {
     if (guard !== undefined) this.host.assertMutationGuard(id, guard)
     const safeHandoff = handoff !== undefined && handoff !== '' ? this.host.stash.redact(handoff) : undefined
     await conversation.reset(safeHandoff, BACKGROUND_CONTEXT)
+    if (this.host.hasRuntimeModelOverride?.(id) === true) {
+      this.host.clearRuntimeModelOverride?.(id)
+      await this.host.alignConversationModel(id)
+    }
     const latestMeta = this.host.store.getConv(id)
     if (latestMeta === undefined || this.host.store.isDeleted(id)) {
       throw new HelmxError('not_found', `conversation not found: ${id}`, 404, { conversationId: id })
@@ -195,30 +200,8 @@ export class ConversationContextOps {
       }
     }
     const { meta: sourceMeta, conversation: sourceConv } = await this.conversationForContextOp(id)
-    // Forked children always receive parentConversationId and therefore cannot be orchestrator-tier conversations:
-    // unwrap an active orchestrator tier via `subagent_inherit` and freeze concrete executorModel + executorThinkingLevel
-    // before forking so follow-up profile/tag updates (e.g. Swarm worker dispatch) never fall back to global/profile defaults.
-    const inheritedOrchestratorTier =
-      sourceMeta.modelTier !== undefined && sourceMeta.modelTier !== ''
-        ? sourceMeta.modelTier
-        : sourceMeta.modelOverride === undefined && explicitParentId !== undefined
-          ? findActiveOrchestratorTier(this.host.store, explicitParentId)
-          : undefined
-    let forkedModelOverride = sourceMeta.modelOverride
-    let forkedThinkingLevelOverride = sourceMeta.thinkingLevelOverride
-    if (inheritedOrchestratorTier !== undefined) {
-      const resolvedTier = this.host.profileAlignment.resolveRef(inheritedOrchestratorTier, 'subagent_inherit')
-      this.host.assertModelEnabled(resolvedTier.provider, resolvedTier.modelId)
-      forkedModelOverride = resolvedTier.canonicalRef
-      forkedThinkingLevelOverride =
-        resolvedTier.tierThinkingLevel !== undefined
-          ? clampThinkingLevelForModel(
-              this.host.models(),
-              { provider: resolvedTier.provider, modelId: resolvedTier.modelId },
-              resolvedTier.tierThinkingLevel,
-            )
-          : undefined
-    }
+    const forkedModelOverride = sourceMeta.modelOverride
+    const forkedThinkingLevelOverride = sourceMeta.thinkingLevelOverride
     let entryId: number
     if (explicitEntryId !== undefined) {
       // Verify exact entry existence (min=max=entryId limit 1; missing yields 404).

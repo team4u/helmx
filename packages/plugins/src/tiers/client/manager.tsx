@@ -38,9 +38,7 @@ import {
   useScreenDrawer,
 } from '@helmx/plugin-client'
 import {
-  ORCHESTRATOR_DEFAULT_MAX_STEPS,
   TIERS_STATE_DOC,
-  countTierItemsByKind,
   createEmptyTierDraft,
   filterTierItems,
   getStarterTierPresets,
@@ -53,7 +51,6 @@ import {
   type TierAvailabilityStatus,
   type TierFormDraft,
   type TierItemView,
-  type TierKindFilter,
   type TierTemplateView,
   type TiersManagerTab,
 } from './models.ts'
@@ -61,7 +58,6 @@ import {
   TIERS_COPY as C,
   buildTiersPickerCopy,
   tiersActionFailed,
-  tiersOrchestratorStepsBadge,
   tiersSuggestedLevelBadge,
   tiersTemplateAppliedNotice,
   tiersTemplateDeleteConfirmBody,
@@ -85,8 +81,6 @@ const VALIDATION_ERROR_COPY = {
   id_required: C.errIdRequired,
   duplicate_id: C.errDuplicateId,
   model_required: C.errModelRequired,
-  executor_required: C.errExecutorRequired,
-  max_steps_invalid: C.errMaxStepsInvalid,
 } as const
 
 export function TiersManagerScreen(
@@ -118,7 +112,6 @@ export function TiersManagerScreen(
   const drawerOpen = drawer.open
 
   const [query, setQuery] = useState('')
-  const [kindFilter, setKindFilter] = useState<TierKindFilter>('all')
   const [saveTemplateOpen, setSaveTemplateOpen] = useState(false)
   const [templateSaveError, setTemplateSaveError] = useState<string | null>(null)
   const [pendingDeleteTier, setPendingDeleteTier] = useState<TierItemView | null>(null)
@@ -138,10 +131,9 @@ export function TiersManagerScreen(
   }
 
   const tierItems = useMemo(() => synthesizeTierItems(parsed.tiers, models), [parsed.tiers, models])
-  const kindCounts = useMemo(() => countTierItemsByKind(tierItems), [tierItems])
   const filteredItems = useMemo(
-    () => filterTierItems(tierItems, { query, kindFilter }),
-    [tierItems, query, kindFilter],
+    () => filterTierItems(tierItems, { query }),
+    [tierItems, query],
   )
   const existingIds = useMemo(() => new Set(Object.keys(parsed.tiers)), [parsed.tiers])
   const editingItem = useMemo(
@@ -386,30 +378,6 @@ export function TiersManagerScreen(
               </TabsTrigger>
             </TabsList>
           </Tabs>
-
-          {activeTab === 'tiers' && savedCount > 0 && (
-            <Tabs
-              value={kindFilter}
-              onValueChange={(nextValue) => setKindFilter(nextValue as TierKindFilter)}
-              variant="pills"
-              size="sm"
-            >
-              <TabsList aria-label={t(C.tierKindAria)}>
-                <TabsTrigger value="all">
-                  <span>{t(C.filterAll)}</span>
-                  <TabCount>{kindCounts.all}</TabCount>
-                </TabsTrigger>
-                <TabsTrigger value="single">
-                  <span>{t(C.filterSingle)}</span>
-                  <TabCount>{kindCounts.single}</TabCount>
-                </TabsTrigger>
-                <TabsTrigger value="orchestrator">
-                  <span>{t(C.filterOrchestrator)}</span>
-                  <TabCount>{kindCounts.orchestrator}</TabCount>
-                </TabsTrigger>
-              </TabsList>
-            </Tabs>
-          )}
         </ScreenToolbar>
       }
     >
@@ -491,7 +459,6 @@ export function TiersManagerScreen(
                 icon="rotate-ccw"
                 onClick={() => {
                   setQuery('')
-                  setKindFilter('all')
                 }}
               >
                 {t(C.resetFilters)}
@@ -509,17 +476,7 @@ export function TiersManagerScreen(
                 item.spec.thinkingLevel,
                 'tier',
               )
-              const execDisplayLevel =
-                item.kind === 'orchestrator' && item.spec.executorModel !== undefined
-                  ? resolveDefaultChainThinkingLevel(
-                      hostModels,
-                      item.spec.executorModel,
-                      item.spec.executorThinkingLevel,
-                      'tier',
-                    )
-                  : ''
               const showPrimaryLevel = primaryDisplayLevel !== '' && primaryDisplayLevel !== 'off'
-              const showExecLevel = execDisplayLevel !== '' && execDisplayLevel !== 'off'
 
               return (
                 <ListRow
@@ -540,21 +497,6 @@ export function TiersManagerScreen(
                         <code className="tiers-model-name">{formatModelShortName(item.spec.model)}</code>
                         {showPrimaryLevel && <span className="tiers-model-level">· {primaryDisplayLevel}</span>}
                       </span>
-                      {item.kind === 'orchestrator' && item.spec.executorModel !== undefined && (
-                        <>
-                          <HelmxIcon name="arrow-right" size={11} className="tiers-model-arrow" />
-                          <span className="tiers-model-endpoint" title={item.spec.executorModel}>
-                            <code className="tiers-model-name">{formatModelShortName(item.spec.executorModel)}</code>
-                            {showExecLevel && <span className="tiers-model-level">· {execDisplayLevel}</span>}
-                          </span>
-                          <Badge tone="accent">
-                            {tiersOrchestratorStepsBadge(
-                              item.spec.maxExecutionSteps ?? ORCHESTRATOR_DEFAULT_MAX_STEPS,
-                              locale,
-                            )}
-                          </Badge>
-                        </>
-                      )}
                       {item.status !== 'available' && (
                         <Badge tone="warn">{statusLabel}</Badge>
                       )}
@@ -651,17 +593,10 @@ export function TiersManagerScreen(
                   <span
                     key={tid}
                     className="tiers-template-chip mono"
-                    title={
-                      spec.kind === 'orchestrator' && spec.executorModel
-                        ? `${spec.model} -> ${spec.executorModel}`
-                        : spec.model
-                    }
+                    title={spec.model}
                   >
                     tier/{tid} → {formatModelShortName(spec.model)}
                     {spec.thinkingLevel ? ` · ${spec.thinkingLevel}` : ''}
-                    {spec.kind === 'orchestrator' && spec.executorModel
-                      ? ` → ${formatModelShortName(spec.executorModel)}`
-                      : ''}
                   </span>
                 ))}
               </div>

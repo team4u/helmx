@@ -434,12 +434,12 @@ test('插件配置分层：磁盘不固化 default、sources 三态溯源、null
   await rejectsCode(store.set('ext:req', { token: 42 }, reqSchema), 'validation_error', 400)
 })
 
-test('createHelmx 全部 16 个内置插件的只读契约投影完整暴露 presentationMetaSchema', { timeout: 60_000 }, async (t) => {
+test('createHelmx 全部 17 个内置插件的只读契约投影完整暴露 presentationMetaSchema', { timeout: 60_000 }, async (t) => {
   const dataDir = useTempDir(t, 'helmx-hub-manifests-')
   const { app, kernel } = await createHubTestApp({ dataDir, cwd: dataDir })
   try {
     const initial = kernel.plugins.listManifests()
-    assert.equal(initial.length, 16)
+    assert.equal(initial.length, 17)
     assert.ok(initial.every((m) => m.id.startsWith('builtin:') && m.status === 'active'))
 
     const wfManifest = kernel.plugins.getManifest('builtin:workflow')
@@ -467,6 +467,18 @@ test('createHelmx 全部 16 个内置插件的只读契约投影完整暴露 pre
 
     const tiersManifest = kernel.plugins.getManifest('builtin:tiers')
     assert.equal(tiersManifest.actions.find((a) => a.id === 'replace')?.visibility, 'ui')
+    assert.equal(tiersManifest.tools.length, 0)
+
+    const duoManifest = kernel.plugins.getManifest('builtin:duo')
+    assert.ok(duoManifest.tools.some((tool) => tool.name === 'exit_plan_mode' && tool.presentationMetaSchema !== undefined))
+    assert.ok(duoManifest.tools.some((tool) => tool.name === 'hand_back_to_planner' && tool.presentationMetaSchema !== undefined))
+    assert.equal(duoManifest.actions.find((a) => a.id === 'status')?.idempotent, true)
+    assert.equal(duoManifest.actions.find((a) => a.id === 'set_conversation')?.exposeToPrompt, false)
+    assert.equal(duoManifest.actions.find((a) => a.id === 'set_profile')?.exposeToPrompt, false)
+    assert.equal(duoManifest.docs.find((d) => d.name === 'profiles')?.durable, true)
+    assert.equal(duoManifest.docs.find((d) => d.name === 'duo')?.durable, false)
+    assert.ok(duoManifest.ui.some((u) => u.surface === 'plugin.slot' && u.spec.target === 'builtin:profile/detail-section'))
+    assert.ok(duoManifest.ui.some((u) => u.surface === 'tool.view' && u.spec.id === 'duo-transition-row'))
 
     const titleManifest = kernel.plugins.getManifest('builtin:title')
     assert.equal(titleManifest.actions.find((a) => a.id === 'generate')?.exposeToPrompt, false)

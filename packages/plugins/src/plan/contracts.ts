@@ -13,6 +13,7 @@ import {
   asDeletedConversationId,
   isTopLevelHumanConversation,
 } from '../shared-helpers.js'
+import { READ_ONLY_PLANNING_BASE_TOOLS } from '../shared-planning.js'
 
 export { asConversationEntryEvent, asDeletedConversationId as asPlanDeletedConversationId }
 
@@ -44,12 +45,7 @@ export const PLAN_HANDOFF_MAX_BYTES = 131_072
  * excludes `update_steps` and all file-editing / dispatch tools).
  */
 export const PLAN_MODE_TOOL_WHITELIST: ReadonlySet<string> = new Set([
-  'read',
-  'read_artifact',
-  'load_skill',
-  'ask_user',
-  'bash',
-  'run_action',
+  ...READ_ONLY_PLANNING_BASE_TOOLS,
   PLAN_TOOL_SAVE,
   PLAN_TOOL_PROPOSE,
 ])

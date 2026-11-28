@@ -23,7 +23,6 @@ import {
   resolveClampedThinkingLevel,
   resolveModelRefWith,
   type ModelRefParts,
-  type ModelRefResolutionMode,
   type ResolvedModelRef,
 } from './models.js'
 
@@ -45,7 +44,7 @@ interface ForkModelAndThinkingInput {
   parentSummary: { model?: string; thinkingLevel?: string; thinkingLevelOverride?: string } | undefined
   defaultModel: () => ModelRefParts & { tierThinkingLevel?: string }
   /** Optional model-reference resolver (`ModelRegistry.resolveModelRef`); dereferences `tier/<id>` into concrete `{ provider, modelId, tierThinkingLevel }`. */
-  resolveModelRef?: (ref: string, opts?: { mode?: ModelRefResolutionMode }) => ResolvedModelRef
+  resolveModelRef?: (ref: string) => ResolvedModelRef
   defaultThinkingLevel?: () => string | undefined
   /** Per-model thinking default lookup (`config.json.modelThinkingLevels`); ranks between explicit sources and Profile level. */
   modelThinkingLevelOf?: (model: ModelRefParts) => string | undefined
@@ -107,9 +106,9 @@ export function resolveInheritedModelAndThinking(
       : (rawExplicit ?? rawProfile)
   const resolved =
     rawExplicit !== undefined
-      ? resolveModelRefWith(rawExplicit, resolveModelRef, undefined, { mode: 'single_only' })
+      ? resolveModelRefWith(rawExplicit, resolveModelRef)
       : winningRaw !== undefined
-        ? resolveModelRefWith(winningRaw, resolveModelRef, undefined, { mode: 'subagent_inherit' })
+        ? resolveModelRefWith(winningRaw, resolveModelRef)
         : defaultModel()
   const resolvedModel: ModelRefParts = { provider: resolved.provider, modelId: resolved.modelId }
   const tierThinking = resolved.tierThinkingLevel
@@ -158,18 +157,14 @@ export function resolveInheritedModelAndThinking(
   }
 }
 
-/** Compute `modelOverride` to persist (explicit model takes precedence, then non-orchestrator parent override on same-profile fork). */
+/** Compute `modelOverride` to persist (explicit model takes precedence, then parent override on same-profile fork). */
 export function resolveInheritedModelOverride(
   requestModel: string | undefined,
   forkSameProfile: boolean,
   parentModelOverride: string | undefined,
-  parentModelTier?: string,
 ): string | undefined {
   if (requestModel !== undefined && requestModel !== '') return requestModel
   if (!forkSameProfile) return undefined
-  if (parentModelOverride !== undefined && parentModelTier !== undefined && parentModelOverride === parentModelTier) {
-    return undefined
-  }
   return parentModelOverride
 }
 

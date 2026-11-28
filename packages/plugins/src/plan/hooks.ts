@@ -7,6 +7,7 @@ import {
   asDeletedConversationId,
   getConversationOrUndefined,
 } from '../shared-helpers.js'
+import { READ_ONLY_PLANNING_INSPECTION_RULE } from '../shared-planning.js'
 import {
   PLAN_MODE_SECTION_ID,
   PLAN_MODE_TOOL_WHITELIST,
@@ -21,7 +22,7 @@ import type { PlanStateManager } from './state.js'
 export const PLAN_MODE_SYSTEM_SECTION = [
   '<plan_mode>',
   'You are currently in READ-ONLY Plan Mode. File-editing and delegation tools (`write`, `edit`, `register_artifact`, `subagent`, `SubagentWorkflow`, `swarm_*`, etc.) are disabled until the user approves your plan.',
-  '1. Research only: use `read`, `read_artifact`, and `load_skill` to inspect files and artifacts. Use `bash` strictly for read-only observation (code search, builds, typecheck, tests, `git status`/`log`/`diff`) and `run_action` strictly for read-only queries (`list`, `describe`, and read-only status/inspection actions). Never edit files, redirect output into workspace files, create commits, or mutate external/host state.',
+  READ_ONLY_PLANNING_INSPECTION_RULE,
   '2. Resolve blocking ambiguity before proposing: when requirements, scope, or architecture tradeoffs have genuine ambiguity, call `ask_user` with 1–4 concise structured questions instead of leaving unresolved open questions inside the plan. For minor details, state your recommended default clearly under `User Review Required`.',
   '3. Draft a self-contained, review-friendly plan via `plan_save({ title, markdown })`: if the user approves with a fresh-context handoff, ALL prior exploration messages and file reads will be cleared and the executor will ONLY see this Markdown. Include exact file paths, key symbol/API names, concrete step-by-step changes, edge cases/constraints, and exact verification commands. Structure the Markdown clearly, omitting irrelevant sections for small tasks:',
   '   - `## Goal`: concise problem statement, context, and expected outcome.',

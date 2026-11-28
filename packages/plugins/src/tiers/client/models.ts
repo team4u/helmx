@@ -6,11 +6,8 @@ export const TIERS_STATE_DOC = 'state' as const
 export const TIERS_SCREEN_ID = 'main' as const
 const TIER_ID_PATTERN = /^[a-z0-9][a-z0-9_-]{0,62}$/
 const TIER_TEMPLATE_ID_PATTERN = /^[a-z0-9][a-z0-9_-]{0,62}$/
-export const ORCHESTRATOR_DEFAULT_MAX_STEPS = 30
-export const ORCHESTRATOR_MAX_STEPS_LIMIT = 100
 
 export type TiersManagerTab = 'tiers' | 'templates'
-export type TierKindFilter = 'all' | 'single' | 'orchestrator'
 export type TierAvailabilityStatus = 'available' | 'disabled' | 'unavailable'
 
 export interface TierTemplateView {
@@ -24,7 +21,6 @@ export interface TierTemplateView {
 export interface TierItemView {
   id: string
   spec: ModelTierSpec
-  kind: 'single' | 'orchestrator'
   status: TierAvailabilityStatus
 }
 
@@ -36,24 +32,16 @@ export interface StarterTierPreset {
 
 export interface TierFormDraft {
   id: string
-  kind: 'single' | 'orchestrator'
   model: string
   thinkingLevel: string
   suggestedThinkingLevel: string
-  executorModel: string
-  executorThinkingLevel: string
-  maxExecutionSteps: string
   description: string
 }
 
 export interface SetTierActionInput {
   id: string
-  kind: 'single' | 'orchestrator'
   model: string
   thinkingLevel?: string
-  executorModel?: string
-  executorThinkingLevel?: string
-  maxExecutionSteps?: number
   description?: string
 }
 
@@ -71,30 +59,10 @@ export function parseTiersStateDoc(raw: unknown): ParsedTiersDoc {
   if (isRecord(raw.tiers)) {
     for (const [id, rawSpec] of Object.entries(raw.tiers)) {
       if (!isRecord(rawSpec) || typeof rawSpec.model !== 'string') continue
-      const base: ModelTierSpec = {
+      tiers[id] = {
         model: rawSpec.model,
         ...(typeof rawSpec.thinkingLevel === 'string' && rawSpec.thinkingLevel ? { thinkingLevel: rawSpec.thinkingLevel } : {}),
         ...(typeof rawSpec.description === 'string' && rawSpec.description ? { description: rawSpec.description } : {}),
-      }
-      if (rawSpec.kind === 'orchestrator' && typeof rawSpec.executorModel === 'string' && rawSpec.executorModel) {
-        const steps =
-          typeof rawSpec.maxExecutionSteps === 'number' &&
-          Number.isInteger(rawSpec.maxExecutionSteps) &&
-          rawSpec.maxExecutionSteps >= 0 &&
-          rawSpec.maxExecutionSteps <= ORCHESTRATOR_MAX_STEPS_LIMIT
-            ? rawSpec.maxExecutionSteps
-            : ORCHESTRATOR_DEFAULT_MAX_STEPS
-        tiers[id] = {
-          ...base,
-          kind: 'orchestrator',
-          executorModel: rawSpec.executorModel,
-          ...(typeof rawSpec.executorThinkingLevel === 'string' && rawSpec.executorThinkingLevel
-            ? { executorThinkingLevel: rawSpec.executorThinkingLevel }
-            : {}),
-          maxExecutionSteps: steps,
-        }
-      } else {
-        tiers[id] = base
       }
     }
   }
@@ -139,13 +107,9 @@ export function getStarterTierPresets(locale: HelmxLocale): StarterTierPreset[] 
 export function createEmptyTierDraft(preset?: StarterTierPreset): TierFormDraft {
   return {
     id: preset?.id ?? '',
-    kind: 'single',
     model: '',
     thinkingLevel: '',
     suggestedThinkingLevel: preset?.suggestedThinkingLevel ?? '',
-    executorModel: '',
-    executorThinkingLevel: '',
-    maxExecutionSteps: String(ORCHESTRATOR_DEFAULT_MAX_STEPS),
     description: preset?.description ?? '',
   }
 }
@@ -153,13 +117,9 @@ export function createEmptyTierDraft(preset?: StarterTierPreset): TierFormDraft 
 export function tierSpecToDraft(id: string, spec: ModelTierSpec): TierFormDraft {
   return {
     id,
-    kind: spec.kind === 'orchestrator' ? 'orchestrator' : 'single',
     model: spec.model,
     thinkingLevel: spec.thinkingLevel ?? '',
     suggestedThinkingLevel: '',
-    executorModel: spec.executorModel ?? '',
-    executorThinkingLevel: spec.executorThinkingLevel ?? '',
-    maxExecutionSteps: String(spec.maxExecutionSteps ?? ORCHESTRATOR_DEFAULT_MAX_STEPS),
     description: spec.description ?? '',
   }
 }
@@ -170,34 +130,18 @@ export function isTierDraftDirty(
   savedSpec: ModelTierSpec | undefined,
 ): boolean {
   if (savedId === undefined || savedSpec === undefined) return true
-  const savedKind: 'single' | 'orchestrator' = savedSpec.kind === 'orchestrator' ? 'orchestrator' : 'single'
-  if (
+  return (
     draft.id.trim() !== savedId ||
-    draft.kind !== savedKind ||
     draft.model.trim() !== savedSpec.model ||
     draft.thinkingLevel.trim() !== (savedSpec.thinkingLevel ?? '') ||
     draft.description.trim() !== (savedSpec.description ?? '')
-  ) {
-    return true
-  }
-  if (draft.kind === 'orchestrator') {
-    const stepsRaw = draft.maxExecutionSteps.trim()
-    const parsedSteps = stepsRaw === '' ? ORCHESTRATOR_DEFAULT_MAX_STEPS : Number.parseInt(stepsRaw, 10)
-    return (
-      draft.executorModel.trim() !== (savedSpec.executorModel ?? '') ||
-      draft.executorThinkingLevel.trim() !== (savedSpec.executorThinkingLevel ?? '') ||
-      parsedSteps !== (savedSpec.maxExecutionSteps ?? ORCHESTRATOR_DEFAULT_MAX_STEPS)
-    )
-  }
-  return false
+  )
 }
 
 export type TierDraftValidationError =
   | 'id_required'
   | 'duplicate_id'
   | 'model_required'
-  | 'executor_required'
-  | 'max_steps_invalid'
 
 export function validateTierDraft(
   draft: TierFormDraft,
@@ -212,41 +156,12 @@ export function validateTierDraft(
   if (!model.includes('/')) return { ok: false, code: 'model_required' }
   const thinkingLevel = draft.thinkingLevel.trim()
   const description = draft.description.trim()
-  if (draft.kind === 'single') {
-    return {
-      ok: true,
-      payload: {
-        id,
-        kind: 'single',
-        model,
-        ...(thinkingLevel ? { thinkingLevel } : {}),
-        ...(description ? { description } : {}),
-      },
-    }
-  }
-  const executorModel = draft.executorModel.trim()
-  if (!executorModel.includes('/')) return { ok: false, code: 'executor_required' }
-  const executorThinkingLevel = draft.executorThinkingLevel.trim()
-  const stepsRaw = draft.maxExecutionSteps.trim()
-  let maxExecutionSteps = ORCHESTRATOR_DEFAULT_MAX_STEPS
-  if (stepsRaw !== '') {
-    if (!/^\d+$/.test(stepsRaw)) return { ok: false, code: 'max_steps_invalid' }
-    const parsed = Number.parseInt(stepsRaw, 10)
-    if (parsed < 0 || parsed > ORCHESTRATOR_MAX_STEPS_LIMIT) {
-      return { ok: false, code: 'max_steps_invalid' }
-    }
-    maxExecutionSteps = parsed
-  }
   return {
     ok: true,
     payload: {
       id,
-      kind: 'orchestrator',
       model,
       ...(thinkingLevel ? { thinkingLevel } : {}),
-      executorModel,
-      ...(executorThinkingLevel ? { executorThinkingLevel } : {}),
-      maxExecutionSteps,
       ...(description ? { description } : {}),
     },
   }
@@ -265,7 +180,10 @@ export function validateTemplateForm(input: {
   return { ok: true, payload: { id, name, ...(description ? { description } : {}) } }
 }
 
-function resolveSingleRefStatus(modelRef: string, models: ReadonlyArray<HostModelEntry>): 'draft' | TierAvailabilityStatus {
+export function resolveTierRowStatus(
+  modelRef: string,
+  models: ReadonlyArray<HostModelEntry>,
+): 'draft' | TierAvailabilityStatus {
   const trimmed = modelRef.trim()
   if (!trimmed) return 'draft'
   const entry = models.find((m) => m.id === trimmed)
@@ -274,69 +192,31 @@ function resolveSingleRefStatus(modelRef: string, models: ReadonlyArray<HostMode
   return entry.available ? 'available' : 'unavailable'
 }
 
-export function resolveTierRowStatus(
-  rowOrModel: string | { kind: 'single' | 'orchestrator'; model: string; executorModel: string },
-  models: ReadonlyArray<HostModelEntry>,
-): 'draft' | TierAvailabilityStatus {
-  if (typeof rowOrModel === 'string') {
-    return resolveSingleRefStatus(rowOrModel, models)
-  }
-  const primary = resolveSingleRefStatus(rowOrModel.model, models)
-  if (rowOrModel.kind !== 'orchestrator') return primary
-  const executor = resolveSingleRefStatus(rowOrModel.executorModel, models)
-  if (primary === 'draft' || executor === 'draft') return 'draft'
-  if (primary === 'disabled' || executor === 'disabled') return 'disabled'
-  if (primary === 'unavailable' || executor === 'unavailable') return 'unavailable'
-  return 'available'
-}
-
 export function synthesizeTierItems(
   tiers: Readonly<Record<string, ModelTierSpec>>,
   models: ReadonlyArray<HostModelEntry>,
 ): TierItemView[] {
   return Object.entries(tiers).map(([id, spec]) => {
-    const kind: 'single' | 'orchestrator' = spec.kind === 'orchestrator' ? 'orchestrator' : 'single'
-    const rawStatus = resolveTierRowStatus(
-      { kind, model: spec.model, executorModel: spec.executorModel ?? '' },
-      models,
-    )
+    const rawStatus = resolveTierRowStatus(spec.model, models)
     return {
       id,
       spec,
-      kind,
       status: rawStatus === 'draft' ? 'unavailable' : rawStatus,
     }
   })
 }
 
-export function countTierItemsByKind(items: ReadonlyArray<TierItemView>): {
-  all: number
-  single: number
-  orchestrator: number
-} {
-  let single = 0
-  let orchestrator = 0
-  for (const item of items) {
-    if (item.kind === 'orchestrator') orchestrator += 1
-    else single += 1
-  }
-  return { all: items.length, single, orchestrator }
-}
-
 export function filterTierItems(
   items: ReadonlyArray<TierItemView>,
-  opts: { query: string; kindFilter: TierKindFilter },
+  opts: { query: string },
 ): TierItemView[] {
   const queryLower = opts.query.trim().toLowerCase()
-  return items.filter((item) => {
-    if (opts.kindFilter !== 'all' && item.kind !== opts.kindFilter) return false
-    if (queryLower === '') return true
-    return (
+  if (queryLower === '') return [...items]
+  return items.filter(
+    (item) =>
       `tier/${item.id}`.toLowerCase().includes(queryLower) ||
       item.id.toLowerCase().includes(queryLower) ||
       item.spec.model.toLowerCase().includes(queryLower) ||
-      (item.spec.executorModel?.toLowerCase().includes(queryLower) ?? false) ||
-      (item.spec.description?.toLowerCase().includes(queryLower) ?? false)
-    )
-  })
+      (item.spec.description?.toLowerCase().includes(queryLower) ?? false),
+  )
 }

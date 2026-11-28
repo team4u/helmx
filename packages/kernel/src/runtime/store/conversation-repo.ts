@@ -24,10 +24,8 @@ export interface ConvMeta {
   cwd: string
   /** Resolved effective model snapshot (empty string when unconfigured; display-only). */
   model: string
-  /** Explicit model override (`'provider/model'` or `'tier/<id>'` for orchestrators); `undefined` = inherit Profile/global. */
+  /** Explicit model override (`'provider/model'` or `'tier/<id>'`); `undefined` = inherit Profile/global. */
   modelOverride?: string
-  /** Active dual-phase orchestrator tier ref (`'tier/<id>'`) when top-level human conversation uses an orchestrator tier. */
-  modelTier?: string
   /** Reasoning effort snapshot (`off`/`minimal`/`low`/`medium`/`high`/`xhigh`/`max`; empty string = unset). */
   thinkingLevel: string
   /** Explicit reasoning effort override; `undefined` = inherit Profile/global. */
@@ -70,7 +68,6 @@ export class ConversationRepo {
       cwd: string
       model: string
       model_override: string | null
-      model_tier: string | null
       thinking_level: string | null
       thinking_level_override: string | null
       unread: number
@@ -82,7 +79,7 @@ export class ConversationRepo {
       created_at: number
       updated_at: number
     }>(
-      'SELECT id, title, profile_id, tags, parent_conversation_id, parent_tool_call_id, owned_by, node_id, cwd, model, model_override, model_tier, thinking_level, thinking_level_override, unread, pinned, state_change_seq, completion_seq, run_duration_ms, run_started_at, created_at, updated_at FROM helmx_conversations',
+      'SELECT id, title, profile_id, tags, parent_conversation_id, parent_tool_call_id, owned_by, node_id, cwd, model, model_override, thinking_level, thinking_level_override, unread, pinned, state_change_seq, completion_seq, run_duration_ms, run_started_at, created_at, updated_at FROM helmx_conversations',
     )) {
       if (row.owned_by !== null && row.owned_by !== 'human' && row.owned_by !== 'helmx') {
         throw new HelmxError(
@@ -104,7 +101,6 @@ export class ConversationRepo {
         cwd: row.cwd,
         model: row.model,
         modelOverride: row.model_override ?? undefined,
-        ...(row.model_tier !== null && row.model_tier !== '' ? { modelTier: row.model_tier } : {}),
         thinkingLevel: row.thinking_level ?? '',
         thinkingLevelOverride: row.thinking_level_override ?? undefined,
         unread: row.unread === 1,
@@ -184,9 +180,9 @@ export class ConversationRepo {
       fts.recordTitleChangeOverlay(snap.id, fts.redactTitle(snap.title))
     }
     this.queue.enqueue(async () => {
-      const upsertSql = `INSERT INTO helmx_conversations (id, title, profile_id, tags, parent_conversation_id, parent_tool_call_id, owned_by, node_id, cwd, model, model_override, model_tier, thinking_level, thinking_level_override, unread, pinned, state_change_seq, completion_seq, run_duration_ms, run_started_at, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(id) DO UPDATE SET title=excluded.title, profile_id=excluded.profile_id, tags=excluded.tags, parent_conversation_id=excluded.parent_conversation_id, parent_tool_call_id=excluded.parent_tool_call_id, owned_by=excluded.owned_by, node_id=excluded.node_id, cwd=excluded.cwd, model=excluded.model, model_override=excluded.model_override, model_tier=excluded.model_tier, thinking_level=excluded.thinking_level, thinking_level_override=excluded.thinking_level_override, unread=excluded.unread, pinned=excluded.pinned, state_change_seq=excluded.state_change_seq, completion_seq=excluded.completion_seq, run_duration_ms=excluded.run_duration_ms, run_started_at=excluded.run_started_at, updated_at=excluded.updated_at`
+      const upsertSql = `INSERT INTO helmx_conversations (id, title, profile_id, tags, parent_conversation_id, parent_tool_call_id, owned_by, node_id, cwd, model, model_override, thinking_level, thinking_level_override, unread, pinned, state_change_seq, completion_seq, run_duration_ms, run_started_at, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET title=excluded.title, profile_id=excluded.profile_id, tags=excluded.tags, parent_conversation_id=excluded.parent_conversation_id, parent_tool_call_id=excluded.parent_tool_call_id, owned_by=excluded.owned_by, node_id=excluded.node_id, cwd=excluded.cwd, model=excluded.model, model_override=excluded.model_override, thinking_level=excluded.thinking_level, thinking_level_override=excluded.thinking_level_override, unread=excluded.unread, pinned=excluded.pinned, state_change_seq=excluded.state_change_seq, completion_seq=excluded.completion_seq, run_duration_ms=excluded.run_duration_ms, run_started_at=excluded.run_started_at, updated_at=excluded.updated_at`
       const upsertParams = [
         snap.id,
         snap.title,
@@ -199,7 +195,6 @@ export class ConversationRepo {
         snap.cwd,
         snap.model,
         snap.modelOverride ?? null,
-        snap.modelTier ?? null,
         snap.thinkingLevel || '',
         snap.thinkingLevelOverride ?? null,
         snap.unread ? 1 : 0,
@@ -265,6 +260,7 @@ export interface ConversationSummaryInput {
   lastError?: string
   lastEntryId?: number
   pendingAskSince?: number
+  runtimeModelOverride?: boolean
 }
 
 export function summaryOf({
@@ -275,6 +271,7 @@ export function summaryOf({
   lastError,
   lastEntryId,
   pendingAskSince,
+  runtimeModelOverride,
 }: ConversationSummaryInput): ConversationSummary {
   return {
     id: meta.id,
@@ -290,7 +287,7 @@ export function summaryOf({
     cwd: meta.cwd,
     model: meta.model,
     ...(meta.modelOverride !== undefined && meta.modelOverride !== '' ? { modelOverride: meta.modelOverride } : {}),
-    ...(meta.modelTier !== undefined && meta.modelTier !== '' ? { modelTier: meta.modelTier } : {}),
+    ...(runtimeModelOverride === true ? { runtimeModelOverride: true } : {}),
     thinkingLevel: meta.thinkingLevel,
     ...(meta.thinkingLevelOverride !== undefined ? { thinkingLevelOverride: meta.thinkingLevelOverride } : {}),
     status,

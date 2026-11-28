@@ -32,6 +32,8 @@ export interface ConversationSubmissionHost {
   readonly isStarted: () => boolean
   readonly assertMutationGuard: (id: number, guard: GuardedMutationExpectation) => void
   readonly withMutationGate: <T>(id: number, op: () => Promise<T>) => Promise<T>
+  readonly hasAutoResetRuntimeModel?: (id: number) => boolean
+  readonly resetRuntimeModelOnRunEnd?: (id: number, opts?: { insideMutationGate?: boolean }) => Promise<void>
 }
 
 export class ConversationSubmissionService {
@@ -192,6 +194,9 @@ export class ConversationSubmissionService {
     if (!conversation) throw new HelmxError('not_found', `conversation not found: ${id}`, 404)
     const wasBusy = this.host.tracker.hasLiveWork(id)
     await conversation.abort(BACKGROUND_CONTEXT)
+    if (this.host.hasAutoResetRuntimeModel?.(id)) {
+      await this.host.resetRuntimeModelOnRunEnd?.(id)
+    }
     if (wasBusy) this.host.tracker.settleAborted(id)
     else this.host.tracker.clearQueuedTracking(id)
   }
@@ -219,6 +224,9 @@ export class ConversationSubmissionService {
       this.host.assertMutationGuard(id, guard)
       const wasBusy = this.host.tracker.hasLiveWork(id)
       await conversation.abort(BACKGROUND_CONTEXT)
+      if (this.host.hasAutoResetRuntimeModel?.(id)) {
+        await this.host.resetRuntimeModelOnRunEnd?.(id, { insideMutationGate: true })
+      }
       if (wasBusy) this.host.tracker.settleAborted(id)
       else this.host.tracker.clearQueuedTracking(id)
     })

@@ -20,9 +20,6 @@ export const TIERS_COPY = {
   },
   tabTiers: { en: 'Tiers', 'zh-CN': '档位' },
   tabTemplates: { en: 'Templates', 'zh-CN': '模板' },
-  filterAll: { en: 'All', 'zh-CN': '全部' },
-  filterSingle: { en: 'Single', 'zh-CN': '单模型' },
-  filterOrchestrator: { en: 'Dual-phase', 'zh-CN': '双相' },
   searchPlaceholder: { en: 'Search tiers or models…', 'zh-CN': '搜索档位或模型…' },
   filterEmptyTitle: { en: 'No matching tiers', 'zh-CN': '未找到匹配的档位' },
   resetFilters: { en: 'Reset filters', 'zh-CN': '重置筛选' },
@@ -87,53 +84,6 @@ export const TIERS_COPY = {
     en: "Template ID must use lowercase letters, digits, '-' or '_'.",
     'zh-CN': '模板 ID 仅支持小写字母、数字、连字符或下划线。',
   },
-  oneTurnTabLabel: { en: 'Next turn', 'zh-CN': '仅下一轮' },
-  oneTurnModeHint: {
-    en: 'Applies only to your next message, then restores automatically',
-    'zh-CN': '仅对下一条消息生效，回合结束后自动恢复原模型',
-  },
-  borrowPillArmedPrefix: { en: 'Next turn:', 'zh-CN': '下一轮:' },
-  borrowPillActivePrefix: { en: 'This turn:', 'zh-CN': '本轮借用:' },
-  borrowClearArmedAria: { en: 'Cancel armed one-turn model', 'zh-CN': '取消下一轮借用模型' },
-  borrowClearActiveAria: {
-    en: 'Cancel auto-restore and stay on the borrowed model',
-    'zh-CN': '取消自动恢复并留在当前模型',
-  },
-  toolSwitchModelTitle: { en: 'Switch model', 'zh-CN': '切换模型' },
-  toolSwitchModelBadgeOneTurn: { en: 'One-turn', 'zh-CN': '单轮' },
-  toolSwitchModelBadgePermanent: { en: 'Persistent', 'zh-CN': '持久' },
-  toolStatusRunning: { en: 'Switching', 'zh-CN': '切换中' },
-  toolStatusDone: { en: 'Switched', 'zh-CN': '已切换' },
-  toolStatusError: { en: 'Failed', 'zh-CN': '失败' },
-  tierKindSingle: { en: 'Single', 'zh-CN': '单模型' },
-  tierKindOrchestrator: { en: 'Dual-phase', 'zh-CN': '双相编排' },
-  tierKindAria: { en: 'Mode', 'zh-CN': '模式' },
-  fieldPlannerModel: { en: 'Planner model', 'zh-CN': '规划模型' },
-  fieldExecutorModel: { en: 'Executor model', 'zh-CN': '执行模型' },
-  fieldMaxSteps: { en: 'Max execution steps', 'zh-CN': '执行步数上限' },
-  fieldMaxStepsHint: { en: '0 = unlimited', 'zh-CN': '0 为不限' },
-  fieldMaxStepsUnit: { en: 'steps', 'zh-CN': '步' },
-  fieldMaxStepsPlaceholder: { en: '30', 'zh-CN': '30' },
-  errExecutorRequired: {
-    en: 'Dual-phase tiers must bind an Executor model before saving.',
-    'zh-CN': '双相编排档位保存前必须绑定执行模型（Executor）。',
-  },
-  errMaxStepsInvalid: {
-    en: 'Max execution steps must be an integer between 0 and 100 (0 = unlimited).',
-    'zh-CN': '最大执行步数必须为 0 到 100 之间的整数（0 表示不限）。',
-  },
-  orchestratorStatusPlan: { en: 'Plan', 'zh-CN': '规划' },
-  orchestratorStatusExec: { en: 'Exec', 'zh-CN': '执行' },
-  orchestratorPhasePlanning: { en: 'Planning', 'zh-CN': '规划阶段' },
-  orchestratorPhaseExecution: { en: 'Execution', 'zh-CN': '执行阶段' },
-  orchestratorPopoverPlanner: { en: 'Planner', 'zh-CN': '规划模型' },
-  orchestratorPopoverExecutor: { en: 'Executor', 'zh-CN': '执行模型' },
-  orchestratorPopoverSteps: { en: 'Execution steps', 'zh-CN': '执行步数' },
-  orchestratorPopoverActiveBadge: { en: 'Active', 'zh-CN': '当前' },
-  toolExitPlanTitle: { en: 'Enter execution phase', 'zh-CN': '切换执行阶段' },
-  toolHandBackTitle: { en: 'Hand back to planner', 'zh-CN': '交回规划阶段' },
-  toolOrchPhaseExec: { en: 'Executor', 'zh-CN': '执行' },
-  toolOrchPhasePlan: { en: 'Planner', 'zh-CN': '规划' },
 } as const satisfies Record<string, LocalizedText>
 
 export const tiersTemplateDeleteConfirmBody = (name: string, id: string, locale: HelmxLocale): string =>
@@ -147,11 +97,6 @@ export const tiersPickModelWithHint = (level: string, locale: HelmxLocale): stri
 
 export const tiersSuggestedLevelBadge = (level: string, locale: HelmxLocale): string =>
   locale === 'zh-CN' ? `建议 ${level}` : `suggested ${level}`
-
-export const tiersOrchestratorStepsBadge = (steps: number, locale: HelmxLocale): string => {
-  if (steps === 0) return locale === 'zh-CN' ? '双相 · 不限' : 'Dual · Unlimited'
-  return locale === 'zh-CN' ? `双相 · ${steps} 步` : `Dual · ${steps} steps`
-}
 
 export const tiersTierSavedNotice = (id: string, locale: HelmxLocale): string =>
   locale === 'zh-CN' ? `已保存档位「tier/${id}」并同步至内核。` : `Saved tier "tier/${id}" and synced to kernel.`
@@ -174,82 +119,6 @@ export const tiersTemplateDeletedNotice = (name: string, locale: HelmxLocale): s
 export const tiersActionFailed = (err: unknown, locale: HelmxLocale): string => {
   const detail = err instanceof Error ? err.message : String(err)
   return locale === 'zh-CN' ? `操作失败：${detail}` : `Operation failed: ${detail}`
-}
-
-export const borrowArmedPillTitle = (concreteModel: string, locale: HelmxLocale): string =>
-  locale === 'zh-CN'
-    ? `下一条消息将临时使用 ${concreteModel}（回合结束后自动恢复原模型）；点击可重选`
-    : `Next message will temporarily use ${concreteModel} (auto-restores after the turn); click to change`
-
-export const borrowActivePillTitle = (concreteModel: string, locale: HelmxLocale): string =>
-  locale === 'zh-CN'
-    ? `本轮正在借用 ${concreteModel}，本轮结束后自动恢复原模型；点击 × 取消自动恢复并留在当前模型`
-    : `Borrowing ${concreteModel} for this turn (auto-restores when done); click × to cancel auto-restore and stay on this model`
-
-export const switchModelSummaryLabel = (
-  target: string,
-  restoreAfterTurn: boolean,
-  locale: HelmxLocale,
-): string => {
-  if (restoreAfterTurn) {
-    return locale === 'zh-CN'
-      ? `切换到 ${target}（本轮结束自动恢复）`
-      : `Switched to ${target} (auto-restores after turn)`
-  }
-  return locale === 'zh-CN' ? `永久切换到 ${target}` : `Permanently switched to ${target}`
-}
-
-export const orchestratorStatusTitle = (
-  tierId: string,
-  phase: 'planning' | 'execution',
-  plannerModel: string,
-  executorModel: string,
-  steps: number,
-  maxSteps: number,
-  locale: HelmxLocale,
-): string => {
-  if (locale === 'zh-CN') {
-    const phaseLabel =
-      phase === 'execution'
-        ? maxSteps > 0
-          ? `执行阶段（${steps}/${maxSteps} 步）`
-          : `执行阶段（第 ${steps} 步 · 不限步数）`
-        : '规划阶段'
-    return `双相编排 tier/${tierId} · ${phaseLabel}（Planner: ${plannerModel} / Executor: ${executorModel}）`
-  }
-  const phaseLabel =
-    phase === 'execution'
-      ? maxSteps > 0
-        ? `Execution (${steps}/${maxSteps} steps)`
-        : `Execution (step ${steps} · unlimited)`
-      : 'Planning'
-  return `Dual-phase tier/${tierId} · ${phaseLabel} (Planner: ${plannerModel} / Executor: ${executorModel})`
-}
-
-export const orchestratorPopoverStepsValue = (
-  steps: number,
-  maxSteps: number,
-  locale: HelmxLocale,
-): string => {
-  if (maxSteps > 0) return `${steps} / ${maxSteps}`
-  return locale === 'zh-CN' ? `${steps}（不限）` : `${steps} (unlimited)`
-}
-
-export const orchestratorTransitionSummary = (
-  tool: 'exit_plan_mode' | 'hand_back_to_planner',
-  toModelShort: string,
-  reason: string | undefined,
-  locale: HelmxLocale,
-): string => {
-  if (tool === 'exit_plan_mode') {
-    return locale === 'zh-CN'
-      ? `切换至执行模型 ${toModelShort}`
-      : `Switched to executor ${toModelShort}`
-  }
-  const base = locale === 'zh-CN'
-    ? `交回规划模型 ${toModelShort}`
-    : `Returned to planner ${toModelShort}`
-  return reason !== undefined && reason !== '' ? `${base} · ${reason}` : base
 }
 
 const ZH_PICKER_COPY: Partial<ModelPickerControlCopy> = {

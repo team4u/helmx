@@ -262,7 +262,8 @@ test('T3 & T4: /plan <task> first turn transforms input, derives clean title, en
       'cleanup_worktree',
       'update_memory',
       'swarm_dispatch_worker',
-      'switch_model',
+      'exit_plan_mode',
+      'hand_back_to_planner',
     ]) {
       assert.equal(
         planReq.toolNames.includes(forbiddenTool),
@@ -596,7 +597,9 @@ test('T5: plan_propose outcome matrix (no-draft, revise, cancelled, Composer sup
 
     assert.equal(modelHandoffReqs.length, 1)
     assert.equal(modelHandoffReqs[0]!.modelId, 'faux/coder')
-    assert.equal(kernel.conversations.getConversation(cid).model, 'faux/coder')
+    // setConversationRuntimeModel(..., { resetOnRunEnd: true }) auto-restores baseline after run settles without mutating modelOverride
+    assert.equal(kernel.conversations.getConversation(cid).modelOverride, undefined)
+    assert.equal(kernel.conversations.getConversation(cid).runtimeModelOverride, undefined)
     assert.equal(await kernel.conversations.getLastAssistantText(cid), 'Executed on coder model.')
     assert.equal(readPlanSession(kernel, cid).mode, 'normal')
     assert.equal(readPlanSession(kernel, cid).approved?.executionModel, 'tier/coder')

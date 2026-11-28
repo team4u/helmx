@@ -78,6 +78,14 @@
       "types": "./dist/tiers/contracts.d.ts",
       "import": "./dist/tiers/contracts.js"
     },
+    "./duo": {
+      "types": "./dist/duo.d.ts",
+      "import": "./dist/duo.js"
+    },
+    "./duo/contracts": {
+      "types": "./dist/duo/contracts.d.ts",
+      "import": "./dist/duo/contracts.js"
+    },
     "./title": {
       "types": "./dist/title.d.ts",
       "import": "./dist/title.js"

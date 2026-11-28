@@ -19,14 +19,12 @@ import type { EventHub } from './events.js'
 import type { ConversationOwnership } from './runtime-ownership.js'
 import { requireConv } from './conversation-require.js'
 import { assertGuardedMutationTarget } from './conversation-service/guarded-mutations.js'
-import { parseModelRefOrThrow } from './model-config-helpers.js'
 import {
   THINKING_LEVELS,
   clampThinkingLevelForModel,
-  type ModelRefResolutionMode,
   type ResolvedModelRef,
 } from './models.js'
-import { findActiveOrchestratorTier, type ConversationProfileService } from './conversation-profile.js'
+import { type ConversationProfileService } from './conversation-profile.js'
 import { asSdkThinkingLevel, getSdkConversation } from './sdk-ids.js'
 import type { ConvMeta, HelmxStore } from './store.js'
 import { normalizeSessionCwd, trustedPlatformFromEnvFabric, type TrustedNodePlatformSource } from './target-cwd.js'
@@ -40,11 +38,14 @@ export interface ConversationLifecycleHost {
   readonly profileAlignment: ConversationProfileService
   readonly defaultCwd: string
   readonly models: () => Models
-  readonly resolveModelRef?: (ref: string, opts?: { mode?: ModelRefResolutionMode }) => ResolvedModelRef
+  readonly resolveModelRef?: (ref: string) => ResolvedModelRef
   readonly assertModelEnabled: (provider: string, modelId: string) => void
   readonly trustedPlatformOf?: TrustedNodePlatformSource
   readonly evictConversationBase: (conversationId: number) => void
   readonly onConversationDeleted?: (conversationId: number) => void
+  readonly hasRuntimeModelOverride: (conversationId: number) => boolean
+  readonly onSetRuntimeModelOverride: (conversationId: number, resetOnRunEnd: boolean) => void
+  readonly onClearRuntimeModelOverride: (conversationId: number) => void
   readonly managedConversations: Map<number, Set<string>>
   readonly cancelAsksByConversation: (id: number) => Promise<void>
   readonly ownershipOf: (id: number) => ConversationOwnership
@@ -99,41 +100,20 @@ export class ConversationLifecycleService {
       (parentMeta !== undefined && !this.host.store.isDeleted(parentMeta.id) && parentMeta.ownedBy === 'helmx'
         ? 'helmx'
         : 'human')
-    const isTopLevelHuman = init.parentConversationId === undefined && effectiveOwnedBy === 'human'
-    const explicitMode: ModelRefResolutionMode = isTopLevelHuman ? 'human_conversation' : 'single_only'
-    const inheritMode: ModelRefResolutionMode = isTopLevelHuman ? 'human_conversation' : 'subagent_inherit'
     let frozenModelOverride: string | undefined
     let initTierThinking: string | undefined
     if (init.model !== undefined && init.model !== '') {
-      const resolvedInit = this.host.profileAlignment.resolveRef(init.model, explicitMode)
+      const resolvedInit = this.host.profileAlignment.resolveRef(init.model)
       this.assertResolvedModelEnabled(resolvedInit)
-      // Freeze concrete `'provider/modelId'` on single/non-orchestrator conversations so later tier edits or
-      // plugin disables never break in-flight conversations or bust prompt caches. Dual-phase orchestrator
-      // tiers retain symbolic `'tier/<id>'` on top-level human conversations for runtime planner/executor routing.
-      frozenModelOverride =
-        resolvedInit.isOrchestratorTier && resolvedInit.tierId !== undefined
-          ? `${MODEL_TIER_PREFIX}/${resolvedInit.tierId}`
-          : resolvedInit.canonicalRef
-      initTierThinking = resolvedInit.isOrchestratorTier ? undefined : resolvedInit.tierThinkingLevel
-    } else if (init.parentConversationId !== undefined) {
-      const parentOrchestratorTier = findActiveOrchestratorTier(this.host.store, init.parentConversationId)
-      if (parentOrchestratorTier !== undefined) {
-        const resolvedParentTier = this.host.profileAlignment.resolveRef(parentOrchestratorTier, 'subagent_inherit')
-        this.assertResolvedModelEnabled(resolvedParentTier)
-        frozenModelOverride = resolvedParentTier.canonicalRef
-        initTierThinking = resolvedParentTier.tierThinkingLevel
-      }
+      // Freeze concrete `'provider/modelId'` so later tier edits or plugin disables never break
+      // in-flight conversations or bust prompt caches.
+      frozenModelOverride = resolvedInit.canonicalRef
+      initTierThinking = resolvedInit.tierThinkingLevel
     }
     const effectiveDetails = await this.host.profileAlignment.resolveEffectiveModelDetails(
       frozenModelOverride,
       profileId,
-      undefined,
-      inheritMode,
     )
-    const modelTier =
-      effectiveDetails?.isOrchestratorTier && effectiveDetails.tierId !== undefined
-        ? `${MODEL_TIER_PREFIX}/${effectiveDetails.tierId}`
-        : undefined
     const effectiveModel = effectiveDetails?.canonicalRef
     const effectiveRef = effectiveDetails
       ? { provider: effectiveDetails.provider, modelId: effectiveDetails.modelId }
@@ -184,7 +164,6 @@ export class ConversationLifecycleService {
       model: effectiveModel ?? '',
       thinkingLevel: effectiveThinking ?? '',
       ...(frozenModelOverride !== undefined ? { modelOverride: frozenModelOverride } : {}),
-      ...(modelTier !== undefined ? { modelTier } : {}),
       ...(clampedTierThinkingOverride !== undefined && clampedTierThinkingOverride !== ''
         ? { thinkingLevelOverride: clampedTierThinkingOverride }
         : {}),
@@ -243,37 +222,23 @@ export class ConversationLifecycleService {
         throw new HelmxError('validation_error', `profile not found: ${patch.profileId}`, 400)
       }
     }
-    const isTopLevelHuman = meta.parentConversationId === undefined && (meta.ownedBy ?? 'human') === 'human'
-    const explicitMode: ModelRefResolutionMode = isTopLevelHuman ? 'human_conversation' : 'single_only'
-    const inheritMode: ModelRefResolutionMode = isTopLevelHuman ? 'human_conversation' : 'subagent_inherit'
     let nextOverride: string | undefined
     let patchTierThinking: string | undefined
     if (patch.model === undefined) {
       nextOverride = meta.modelOverride
     } else if (patch.model !== '') {
-      const resolvedPatch = this.host.profileAlignment.resolveRef(patch.model, explicitMode)
+      const resolvedPatch = this.host.profileAlignment.resolveRef(patch.model)
       this.assertResolvedModelEnabled(resolvedPatch)
-      nextOverride =
-        resolvedPatch.isOrchestratorTier && resolvedPatch.tierId !== undefined
-          ? `${MODEL_TIER_PREFIX}/${resolvedPatch.tierId}`
-          : resolvedPatch.canonicalRef
-      patchTierThinking = resolvedPatch.isOrchestratorTier ? undefined : resolvedPatch.tierThinkingLevel
+      nextOverride = resolvedPatch.canonicalRef
+      patchTierThinking = resolvedPatch.tierThinkingLevel
     }
     const nextProfileId = patch.profileId ?? meta.profileId
     const effectiveDetails = await this.host.profileAlignment.resolveEffectiveModelDetails(
       nextOverride,
       nextProfileId,
-      undefined,
-      inheritMode,
     )
-    const nextModelTier =
-      effectiveDetails?.isOrchestratorTier && effectiveDetails.tierId !== undefined
-        ? `${MODEL_TIER_PREFIX}/${effectiveDetails.tierId}`
-        : undefined
     const effectiveModel = effectiveDetails?.canonicalRef
-    const modelSwitched =
-      patch.model !== undefined &&
-      ((effectiveModel ?? '') !== meta.model || (nextModelTier ?? undefined) !== (meta.modelTier ?? undefined))
+    const modelSwitched = patch.model !== undefined && (effectiveModel ?? '') !== meta.model
     let nextThinkingOverride: string | undefined
     if (patch.thinkingLevel === undefined) {
       if (patchTierThinking !== undefined) {
@@ -349,7 +314,6 @@ export class ConversationLifecycleService {
       ...(patch.nodeId !== undefined ? { nodeId: patch.nodeId } : {}),
       ...(effectivePatchCwd !== undefined ? { cwd: effectivePatchCwd } : {}),
       model: effectiveModel ?? '',
-      modelTier: nextModelTier,
       thinkingLevel: nextThinking ?? '',
       thinkingLevelOverride: clampedOverride,
       ...(nextOverride !== undefined ? { modelOverride: nextOverride } : { modelOverride: undefined }),
@@ -363,6 +327,7 @@ export class ConversationLifecycleService {
       this.host.evictConversationBase(id)
     }
     if (patch.model !== undefined || patch.profileId !== undefined || patch.thinkingLevel !== undefined) {
+      this.host.onClearRuntimeModelOverride(id)
       this.host.tracker.scheduleContextUsageRefresh(id)
     }
     const summary = this.host.withOwnership(this.host.tracker.summaryOf(id))
@@ -371,23 +336,65 @@ export class ConversationLifecycleService {
   }
 
   /**
-   * Switch a conversation's active runtime SDK model/thinkingLevel without modifying `modelOverride`,
-   * `modelTier`, `thinkingLevelOverride`, or advancing `stateChangeSeq` (for dual-phase orchestrator execution).
+   * Switch a conversation's active runtime SDK model/thinkingLevel without modifying persisted `modelOverride`,
+   * `thinkingLevelOverride`, or advancing `stateChangeSeq` (safe against pending AskDoc CAS).
+   * Passing `null` clears any transient override and restores the conversation's configured baseline.
    */
   async setConversationRuntimeModel(
     id: number,
-    target: { model: string; thinkingLevel?: string },
+    target: { model: string; thinkingLevel?: string; resetOnRunEnd?: boolean } | null,
   ): Promise<ConversationSummary> {
+    if (target === null) {
+      const meta = requireConv(this.host.store, id)
+      const conversation = await getSdkConversation(this.host.harness, id, BACKGROUND_CONTEXT)
+      if (!conversation) throw new HelmxError('not_found', `conversation not found: ${id}`, 404)
+      const effectiveDetails = await this.host.profileAlignment.resolveEffectiveModelDetails(
+        meta.modelOverride,
+        meta.profileId,
+      )
+      const ref = effectiveDetails
+        ? { provider: effectiveDetails.provider, modelId: effectiveDetails.modelId }
+        : undefined
+      const clampedOverride = ref
+        ? clampThinkingLevelForModel(this.host.models(), ref, meta.thinkingLevelOverride)
+        : meta.thinkingLevelOverride
+      const nextThinking = await this.host.profileAlignment.resolveEffectiveThinkingLevel(
+        clampedOverride,
+        meta.profileId,
+        ref,
+        effectiveDetails?.tierThinkingLevel,
+      )
+      await conversation.configure(
+        {
+          model: ref ?? null,
+          thinkingLevel: asSdkThinkingLevel(nextThinking) ?? null,
+        },
+        BACKGROUND_CONTEXT,
+      )
+      this.host.onClearRuntimeModelOverride(id)
+      const latest = requireConv(this.host.store, id)
+      this.host.store.upsertConv({
+        ...latest,
+        model: effectiveDetails?.canonicalRef ?? '',
+        thinkingLevel: nextThinking ?? '',
+        updatedAt: Date.now(),
+      })
+      this.host.tracker.scheduleContextUsageRefresh(id)
+      const summary = this.host.withOwnership(this.host.tracker.summaryOf(id))
+      this.host.events.publish('conversation.upsert', summary)
+      return summary
+    }
+
     if (
-      target === null ||
       typeof target !== 'object' ||
       Array.isArray(target) ||
       typeof target.model !== 'string' ||
-      target.model.trim() === ''
+      target.model.trim() === '' ||
+      (target.resetOnRunEnd !== undefined && typeof target.resetOnRunEnd !== 'boolean')
     ) {
       throw new HelmxError(
         'validation_error',
-        'runtime model target must be an object with a non-empty concrete model string',
+        'runtime model target must be null or an object with a non-empty model string',
         400,
       )
     }
@@ -400,28 +407,26 @@ export class ConversationLifecycleService {
       )
     }
     const meta = requireConv(this.host.store, id)
-    const ref = parseModelRefOrThrow(target.model.trim())
-    if (ref.provider === MODEL_TIER_PREFIX) {
-      throw new HelmxError(
-        'validation_error',
-        `Runtime model target must be concrete 'provider/modelId', got '${target.model}'`,
-        400,
-        { model: target.model },
-      )
-    }
-    if (!this.host.models().getModel(ref.provider, ref.modelId)) {
+    const resolved = this.host.profileAlignment.resolveRef(target.model.trim())
+    if (!this.host.models().getModel(resolved.provider, resolved.modelId)) {
       throw new HelmxError(
         'model_not_found',
-        `Runtime model '${ref.provider}/${ref.modelId}' is not available in the model catalog`,
+        `Runtime model '${resolved.canonicalRef}' is not available in the model catalog`,
         404,
         { model: target.model },
       )
     }
-    this.host.assertModelEnabled(ref.provider, ref.modelId)
+    this.assertResolvedModelEnabled(resolved)
+    const ref = { provider: resolved.provider, modelId: resolved.modelId }
 
     let nextThinking: string | undefined
     if (target.thinkingLevel === undefined) {
-      nextThinking = await this.host.profileAlignment.resolveEffectiveThinkingLevel(undefined, meta.profileId, ref)
+      nextThinking = await this.host.profileAlignment.resolveEffectiveThinkingLevel(
+        undefined,
+        meta.profileId,
+        ref,
+        resolved.tierThinkingLevel,
+      )
     } else if (typeof target.thinkingLevel !== 'string') {
       throw new HelmxError('validation_error', 'thinkingLevel must be a string when provided', 400)
     } else {
@@ -448,17 +453,17 @@ export class ConversationLifecycleService {
     }
     await conversation.configure(
       {
-        model: { provider: ref.provider, modelId: ref.modelId },
+        model: ref,
         thinkingLevel: asSdkThinkingLevel(nextThinking) ?? null,
       },
       BACKGROUND_CONTEXT,
     )
 
+    this.host.onSetRuntimeModelOverride(id, Boolean(target.resetOnRunEnd))
     const latest = requireConv(this.host.store, id)
-    const canonicalRef = `${ref.provider}/${ref.modelId}`
     this.host.store.upsertConv({
       ...latest,
-      model: canonicalRef,
+      model: resolved.canonicalRef,
       thinkingLevel: nextThinking ?? '',
       updatedAt: Date.now(),
     })
@@ -610,6 +615,7 @@ export class ConversationLifecycleService {
     await this.host.artifactsSvc.deleteConversation(id)
     assertGuarded?.()
     this.host.tracker.deleteConversation(id)
+    this.host.onClearRuntimeModelOverride(id)
     this.host.store.deleteConv(id)
     this.host.evictConversationBase(id)
     this.host.onConversationDeleted?.(id)
