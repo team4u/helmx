@@ -102,6 +102,7 @@ export class RunCoordinatorCore {
       caps: RunRuntimeCaps
       autoRecoverOption: boolean | (() => boolean) | undefined
       releaseRuntimeReady: () => void
+      writeStderr?: (chunk: string) => void
     },
   ) {}
 
@@ -310,7 +311,8 @@ export class RunCoordinatorCore {
       const rawMsg = `onRunSettled failed: ${errorMessage(settledError)}`
       const fallbackCode = settledError instanceof HelmxError && settledError.code !== '' ? settledError.code : 'unknown'
       const diag = safeRedactDiagnostic(this.deps.redact, rawMsg, `onRunSettled failed (${fallbackCode})`)
-      process.stderr.write(`workflow ${run.runId}: ${diag}\n`)
+      const writeStderr = this.deps.writeStderr ?? ((chunk: string) => { process.stderr.write(chunk) })
+      writeStderr(`workflow ${run.runId}: ${diag}\n`)
       run.header.error = run.header.error ? `${run.header.error}\n${diag}` : diag
       run.summary = this.deps.repo.fullSummaryOf(run.header, run.detail)
       try {

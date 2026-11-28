@@ -64,6 +64,171 @@ describe('builtin:swarm lifecycle, activation & index governance', { concurrency
       if (sharedRoot) rmSync(sharedRoot, { recursive: true, force: true })
     }, { timeout: 60_000 })
 
+  test('swarm-int10: list_groups manifest (idempotent, hidden from tools/prompt, unscoped) and cross-conversation run_action listing & filtering', { timeout: 60_000 }, async () => {
+    const env = sharedEnv!
+    try {
+      const { kernel } = env.app
+
+      const listManifest = kernel.plugins
+        .listActions()
+        .find((a) => a.pluginId === SWARM_PLUGIN_ID && a.id === 'list_groups')
+      assert.ok(listManifest, 'builtin:swarm must register list_groups action')
+      assert.equal(listManifest!.idempotent, true, 'list_groups must declare idempotent: true')
+      assert.equal(listManifest!.exposeToPrompt, false, 'list_groups must declare exposeToPrompt: false')
+      assert.equal(listManifest!.exposeAsTool, false, 'list_groups must NOT be exposed as a standalone model tool')
+      assert.equal(listManifest!.visibility, 'public')
+      assert.equal(listManifest!.scope, undefined, 'list_groups must not restrict conversation scope')
+      assert.deepEqual(listManifest!.cli?.command, ['swarm', 'list-groups'])
+      assert.equal(
+        kernel.plugins.listTools().some((tool) => tool.name === 'swarm_list_groups' || tool.name === 'list_groups'),
+        false,
+        'list_groups must not bloat model tool list',
+      )
+
+      const coord1 = await kernel.conversations.createConversation({ title: 'Coord 1', profileId: 'assistant', cwd: env.repoDir })
+      const coord2 = await kernel.conversations.createConversation({ title: 'Coord 2', profileId: 'assistant', cwd: env.repoDir })
+      const observer = await kernel.conversations.createConversation({ title: 'Observer Chat', profileId: 'assistant', cwd: env.repoDir })
+
+      const g1 = (await kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'create_group', {
+        title: 'Closed Alpha Squad',
+        objective: 'Finish alpha milestone',
+        conversationId: coord1.id,
+      })) as { groupId: string }
+      await kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'close_group', { groupId: g1.groupId }, { conversationId: coord1.id })
+
+      // Ensure distinct createdAt ordering between g1 and g2
+      await new Promise((r) => setTimeout(r, 10))
+      const g2 = (await kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'create_group', {
+        title: 'Active Beta Squad',
+        objective: 'Build beta feature',
+        conversationId: coord2.id,
+      })) as { groupId: string }
+
+      setSwarmRoleResponses(env.faux, {
+        worker1: [
+          fauxAssistantMessage([fauxToolCall('swarm_board_post', { to: ['coordinator'], kind: 'comment', body: 'ready' })], { stopReason: 'toolUse' }),
+          fauxAssistantMessage('Standing by.'),
+        ],
+        coordinator: [fauxAssistantMessage('Noted.')],
+      })
+      const worker = (await kernel.plugins.invokeAction(
+        SWARM_PLUGIN_ID,
+        'dispatch_worker',
+        { name: 'worker1', prompt: 'Stand by.' },
+        { conversationId: coord2.id },
+      )) as { workerConversationId: number }
+      await kernel.conversations.waitForIdle(worker.workerConversationId)
+      await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
+      await kernel.conversations.waitForIdle(coord2.id)
+
+      type ListGroupsResp = {
+        groups: Array<{
+          groupId: string
+          title: string
+          objective?: string
+          status: 'active' | 'closed'
+          coordinatorConversationId: number
+          headSeq: number
+          memberCount: number
+          activeMemberCount: number
+          activeWorkingMembers: string[]
+          retainedWorktreeCount: number
+          createdAt: number
+          closedAt?: number
+        }>
+      }
+
+      // Accessible via run_action surface from an unrelated non-swarm conversation
+      const all = (await kernel.plugins.invokeAction(
+        SWARM_PLUGIN_ID,
+        'list_groups',
+        {},
+        { conversationId: observer.id },
+        { surface: 'run_action' },
+      )) as ListGroupsResp
+      assert.deepEqual(
+        all.groups.map((g) => g.groupId),
+        [g2.groupId, g1.groupId],
+        'newest-first ordering across conversations',
+      )
+      assert.equal(all.groups[0]!.status, 'active')
+      assert.equal(all.groups[0]!.coordinatorConversationId, coord2.id)
+      assert.equal(all.groups[0]!.memberCount, 1)
+      assert.equal(all.groups[0]!.activeMemberCount, 1)
+      assert.deepEqual(all.groups[0]!.activeWorkingMembers, [])
+      assert.equal(all.groups[0]!.retainedWorktreeCount, 0)
+      assert.ok(all.groups[0]!.headSeq >= 2)
+      assert.equal(all.groups[1]!.status, 'closed')
+      assert.equal(all.groups[1]!.coordinatorConversationId, coord1.id)
+      assert.equal(typeof all.groups[1]!.closedAt, 'number')
+
+      const activeOnly = (await kernel.plugins.invokeAction(
+        SWARM_PLUGIN_ID,
+        'list_groups',
+        { status: 'active' },
+        { conversationId: observer.id },
+        { surface: 'run_action' },
+      )) as ListGroupsResp
+      assert.deepEqual(activeOnly.groups.map((g) => g.groupId), [g2.groupId])
+
+      const closedOnly = (await kernel.plugins.invokeAction(
+        SWARM_PLUGIN_ID,
+        'list_groups',
+        { status: 'closed' },
+        { conversationId: observer.id },
+        { surface: 'run_action' },
+      )) as ListGroupsResp
+      assert.deepEqual(closedOnly.groups.map((g) => g.groupId), [g1.groupId])
+
+      const byCoord = (await kernel.plugins.invokeAction(
+        SWARM_PLUGIN_ID,
+        'list_groups',
+        { coordinatorConversationId: coord1.id },
+        { conversationId: observer.id },
+        { surface: 'run_action' },
+      )) as ListGroupsResp
+      assert.deepEqual(byCoord.groups.map((g) => g.groupId), [g1.groupId])
+
+      // Real LLM turn in unrelated conversation invokes run_action({ actionId: 'builtin:swarm.list_groups', ... })
+      // and sees neither swarm_list_groups tool nor builtin:swarm.list_groups in <available_actions>
+      let observerMeta: { toolNames: string[]; sectionsById: Record<string, string> } | undefined
+      env.faux.setResponses([
+        (ctx) => {
+          observerMeta = captureRequestMeta(ctx.messages as unknown as Record<string, unknown>[])
+          return fauxAssistantMessage(
+            [fauxToolCall('run_action', { actionId: 'builtin:swarm.list_groups', input: { status: 'active' } })],
+            { stopReason: 'toolUse' },
+          )
+        },
+        fauxAssistantMessage('Listed active swarm groups via run_action.'),
+      ])
+      await kernel.conversations.submitInput(observer.id, 'List active swarm groups')
+      await kernel.conversations.waitForIdle(observer.id)
+      assert.ok(observerMeta !== undefined)
+      assert.equal(observerMeta!.toolNames.includes('swarm_list_groups'), false)
+      assert.equal((observerMeta!.sectionsById['prompt.actions'] ?? '').includes('builtin:swarm.list_groups'), false)
+      const observerDetail = await kernel.conversations.getConversationDetail(observer.id, { limit: 20 })
+      const runActionResultText = JSON.stringify(observerDetail.entries)
+      assert.ok(runActionResultText.includes(g2.groupId), 'run_action tool must return active group summary')
+      assert.equal(runActionResultText.includes(g1.groupId), false, 'status=active filter must exclude closed group')
+
+      // Swarm skill documents list-groups
+      const loadedSkill = (await kernel.plugins.executeTool(
+        'load_skill',
+        { skillId: SWARM_SKILL_ID },
+        { conversationId: observer.id },
+      )) as { text: string }
+      assert.ok(loadedSkill.text.includes('helmx swarm list-groups'))
+      assert.ok(loadedSkill.text.includes('builtin:swarm.list_groups'))
+
+      // Clean up active group before shared tests continue
+      await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
+      await kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'close_group', { groupId: g2.groupId }, { conversationId: coord2.id })
+    } finally {
+      env.faux.setResponses([])
+    }
+  })
+
   test('swarm-int5: /skill:swarm activation loop (task auto-create + same-turn tools, empty/idempotent reuse, worker/child block, non-matching passthrough)', { timeout: 60_000 }, async () => {
     const env = sharedEnv!
     const createdGroups: Array<{ groupId: string; coordId: number }> = []
@@ -884,212 +1049,9 @@ describe('builtin:swarm lifecycle, activation & index governance', { concurrency
       env.faux.setResponses([])
     }
   })
-  })
 
-  test('swarm-int1: default-enabled zero-resident boot, idle workflow-disable freedom, swarm skill lifecycle, same-turn tool unlock, byte-constant <active_swarm_group>, and inUse guard', { timeout: 60_000 }, async (t) => {
-    const env = await openSwarmEnv(useTempDir(t, 'helmx-swarm-int-'), gitTemplate, { fullHub: true })
-    try {
-      const { kernel } = env.app
-
-      // 1) Default-enabled in createHelmx, zero background resident conversations created on boot!
-      const swarmSummary = kernel.plugins.list().find((p) => p.id === SWARM_PLUGIN_ID)
-      assert.ok(swarmSummary, 'createHelmx must register builtin:swarm')
-      assert.equal(swarmSummary!.enabled, true, 'builtin:swarm must be default-enabled')
-      const bootConvs = kernel.conversations.listConversations()
-      assert.equal(
-        bootConvs.some((c) => c.ownedBy === 'helmx' || c.tags.includes(COORDINATOR_TAG) || c.tags.includes(WORKER_TAG)),
-        false,
-        'builtin:swarm must NOT create any global resident conversations on boot',
-      )
-
-      // 2) Idle workflow/worktree disable freedom:
-      //    - Idle builtin:swarm has NO static dependency on builtin:workflow / builtin:worktree -> disabling & re-enabling both succeeds!
-      await kernel.plugins.disable(WORKFLOW_ID)
-      assert.equal(kernel.plugins.list().find((p) => p.id === WORKFLOW_ID)?.enabled, false)
-      await kernel.plugins.enable(WORKFLOW_ID)
-      assert.equal(kernel.plugins.list().find((p) => p.id === WORKFLOW_ID)?.enabled, true)
-      await kernel.plugins.disable(WORKTREE_ID)
-      assert.equal(kernel.plugins.list().find((p) => p.id === WORKTREE_ID)?.enabled, false)
-      await kernel.plugins.enable(WORKTREE_ID)
-      assert.equal(kernel.plugins.list().find((p) => p.id === WORKTREE_ID)?.enabled, true)
-
-      const coord = await kernel.conversations.createConversation({ title: 'Feature Chat', profileId: 'assistant', cwd: env.repoDir })
-
-      // 3) swarm managed skill is available while builtin:swarm is enabled, with no duplicate ui.command
-      assert.equal(SWARM_SKILL_ID, 'swarm')
-      assert.equal(
-        kernel.plugins.listUi().filter((u) => u.pluginId === SWARM_PLUGIN_ID && u.surface === 'commandPalette').length,
-        0,
-        'builtin:swarm must not register duplicate ui.command',
-      )
-      const loadedSkill = (await kernel.plugins.executeTool(
-        'load_skill',
-        { skillId: SWARM_SKILL_ID },
-        { conversationId: coord.id },
-      )) as { text: string }
-      assert.match(loadedSkill.text, /Coordinator Rule: Do Not Do the Work/)
-      for (const toolName of [
-        'swarm_create_group',
-        'swarm_update_group',
-        'swarm_dispatch_worker',
-        'swarm_board_post',
-        'swarm_board_read',
-        'swarm_board_status',
-        'swarm_inspect_worker',
-        'swarm_abort_worker',
-        'swarm_switch_worker_model',
-        'swarm_archive_worker',
-        'swarm_close_group',
-      ]) {
-        assert.ok(loadedSkill.text.includes(toolName), `swarm SKILL.md should document ${toolName}`)
-      }
-      assert.match(loadedSkill.text, /helmx swarm/)
-
-      // 4) Before swarm_create_group: #C sees swarm_create_group + subagent/bash/edit/write, NOT swarm_dispatch_worker/swarm_board_*
-      const preCapture: Array<{ toolNames: string[]; sectionsById: Record<string, string> }> = []
-      env.faux.setResponses([
-        (ctx) => {
-          preCapture.push(captureRequestMeta(ctx.messages as unknown as Record<string, unknown>[]))
-          return fauxAssistantMessage([fauxToolCall('swarm_create_group', { title: 'API Squad', objective: 'Ship v2 API' })], {
-            stopReason: 'toolUse',
-          })
-        },
-        (ctx) => {
-          // Same turn, very next LLM request after swarm_create_group!
-          preCapture.push(captureRequestMeta(ctx.messages as unknown as Record<string, unknown>[]))
-          return fauxAssistantMessage('Group created and squad tools unlocked.')
-        },
-      ])
-
-      await kernel.conversations.submitInput(coord.id, 'Start a squad')
-      await kernel.conversations.waitForIdle(coord.id)
-      assert.equal(preCapture.length, 2)
-
-      const beforeTools = preCapture[0]!.toolNames
-      assert.ok(beforeTools.includes('swarm_create_group'))
-      assert.ok(beforeTools.includes('subagent'))
-      assert.ok(beforeTools.includes('bash'))
-      assert.equal(beforeTools.includes('swarm_dispatch_worker'), false)
-      assert.equal(beforeTools.includes('swarm_board_post'), false)
-      assert.equal(preCapture[0]!.sectionsById['swarm.active_group'], undefined)
-
-      // Next beat inside the SAME turn: squad tools unlocked, swarm_create_group hidden, general tools preserved!
-      const afterTools = preCapture[1]!.toolNames
-      for (const expected of [
-        'swarm_update_group',
-        'swarm_dispatch_worker',
-        'swarm_board_post',
-        'swarm_board_read',
-        'swarm_board_status',
-        'swarm_abort_worker',
-        'swarm_switch_worker_model',
-        'swarm_inspect_worker',
-        'swarm_archive_worker',
-        'swarm_close_group',
-        'subagent',
-        'SubagentWorkflow',
-        'bash',
-        'edit',
-        'write',
-      ]) {
-        assert.ok(afterTools.includes(expected), `expected ${expected} available after swarm_create_group (actual: ${afterTools.join(',')})`)
-      }
-      assert.equal(afterTools.includes('swarm_create_group'), false, 'expected swarm_create_group hidden on active coordinator')
-      const sectionInitial = preCapture[1]!.sectionsById['swarm.active_group']
-      assert.ok(typeof sectionInitial === 'string' && sectionInitial.includes('<active_swarm_group'))
-
-      // Duplicate create_group on the same coordinator returns 409 swarm_group_already_active
-      await assert.rejects(
-        () => kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'create_group', { title: 'Second', conversationId: coord.id }),
-        (err: unknown) => err instanceof HelmxError && err.code === 'swarm_group_already_active' && err.status === 409,
-      )
-
-      // Active group blocks non-force disable of builtin:swarm via inUse()
-      await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
-      await assert.rejects(
-        () => kernel.plugins.disable(SWARM_PLUGIN_ID),
-        (err: unknown) => err instanceof HelmxError && err.code === 'plugin_in_use' && err.status === 409,
-      )
-
-      // 5) Recruit 2 members, mutate group title/objective, archive 1 member -> coordinator <active_swarm_group> stays 100% byte-identical!
-      setSwarmRoleResponses(env.faux, {
-        alpha: [
-          fauxAssistantMessage([fauxToolCall('swarm_board_post', { to: ['coordinator'], kind: 'comment', body: 'w1 booted' })], { stopReason: 'toolUse' }),
-          fauxAssistantMessage('w1 idle'),
-        ],
-        beta: [
-          fauxAssistantMessage([fauxToolCall('swarm_board_post', { to: ['coordinator'], kind: 'comment', body: 'w2 booted' })], { stopReason: 'toolUse' }),
-          fauxAssistantMessage('w2 idle'),
-        ],
-        coordinator: [fauxAssistantMessage('Coordinator noted idle boot comments.')],
-      })
-      const w1 = (await kernel.plugins.invokeAction(
-        SWARM_PLUGIN_ID,
-        'dispatch_worker',
-        { prompt: 'Role 1', name: 'alpha' },
-        { conversationId: coord.id },
-      )) as { workerConversationId: number; groupId: string }
-      const w2 = (await kernel.plugins.invokeAction(
-        SWARM_PLUGIN_ID,
-        'dispatch_worker',
-        { prompt: 'Role 2', name: 'beta' },
-        { conversationId: coord.id },
-      )) as { workerConversationId: number }
-      await kernel.conversations.waitForIdle(w1.workerConversationId)
-      await kernel.conversations.waitForIdle(w2.workerConversationId)
-      await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
-      await kernel.conversations.waitForIdle(coord.id)
-
-      const indexDoc = kernel.plugins.getPublicDoc(SWARM_PLUGIN_ID, 'index').value as SwarmIndexDoc
-      assert.equal(indexDoc.workers.length, 2)
-      assert.equal(indexDoc.workers[0]!.coordinatorConversationId, coord.id)
-
-      await kernel.plugins.invokeAction(
-        SWARM_PLUGIN_ID,
-        'update_group',
-        { groupId: w1.groupId, title: 'Renamed API Squad', objective: 'Updated objective text' },
-        { conversationId: coord.id },
-      )
-      await kernel.plugins.invokeAction(
-        SWARM_PLUGIN_ID,
-        'archive_worker',
-        { groupId: w1.groupId, name: 'beta' },
-        { conversationId: coord.id },
-      )
-
-      let sectionAfterScaling: string | undefined
-      setSwarmRoleResponses(env.faux, {
-        coordinator: [
-          (ctx) => {
-            sectionAfterScaling = captureRequestMeta(ctx.messages as unknown as Record<string, unknown>[]).sectionsById['swarm.active_group']
-            return fauxAssistantMessage([fauxToolCall('bash', { command: 'echo quick-lookup-ok' })], { stopReason: 'toolUse' })
-          },
-          fauxAssistantMessage('Quick lookup finished.'),
-        ],
-      })
-      await kernel.conversations.submitInput(coord.id, 'Check prompt cache stability')
-      await kernel.conversations.waitForIdle(coord.id)
-
-      assert.equal(sectionAfterScaling, sectionInitial, 'active_swarm_group section must stay 100% byte-constant across member scaling and metadata edits')
-      const detail = await kernel.conversations.getConversationDetail(coord.id, { limit: 10 })
-      assert.match(JSON.stringify(detail.entries), /quick-lookup-ok/, 'coordinator retains bash for lightweight lookups')
-
-      // Close group -> skill disappears once plugin is disabled
-      await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
-      await kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'close_group', { groupId: w1.groupId }, { conversationId: coord.id })
-      await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
-      await kernel.plugins.disable(SWARM_PLUGIN_ID)
-      await assert.rejects(
-        () => kernel.plugins.executeTool('load_skill', { skillId: SWARM_SKILL_ID }, { conversationId: coord.id }),
-        (err: unknown) => err instanceof HelmxError && err.code === 'skill_not_available',
-      )
-    } finally {
-      await env.close()
-    }
-  })
-
-  test('swarm-int12: external runtime & nodeId rejection, flat forkFrom, skill whitelist gating, bounded index lazy load & prompt metadata', { timeout: 60_000 }, async (t) => {
-    const env = await openSwarmEnv(useTempDir(t, 'helmx-swarm-int8-'), gitTemplate)
+  test('swarm-int12: external runtime & nodeId rejection, flat forkFrom, skill whitelist gating, bounded index lazy load & prompt metadata', { timeout: 60_000 }, async () => {
+    const env = sharedEnv!
     try {
       const { kernel } = env.app
       // Restricted profile without swarm skill
@@ -1295,170 +1257,208 @@ describe('builtin:swarm lifecycle, activation & index governance', { concurrency
       )) as BoardViewDoc
       assert.equal(byArchivedWorker.group.id, evictedGroup.groupId)
     } finally {
-      await env.close()
+      env.faux.setResponses([])
     }
   })
+  })
 
-  test('swarm-int10: list_groups manifest (idempotent, hidden from tools/prompt, unscoped) and cross-conversation run_action listing & filtering', { timeout: 60_000 }, async (t) => {
-    const env = await openSwarmEnv(useTempDir(t, 'helmx-swarm-list-groups-'), gitTemplate)
+  test('swarm-int1: default-enabled zero-resident boot, idle workflow-disable freedom, swarm skill lifecycle, same-turn tool unlock, byte-constant <active_swarm_group>, and inUse guard', { timeout: 60_000 }, async (t) => {
+    const env = await openSwarmEnv(useTempDir(t, 'helmx-swarm-int-'), gitTemplate, { fullHub: true })
     try {
       const { kernel } = env.app
 
-      const listManifest = kernel.plugins
-        .listActions()
-        .find((a) => a.pluginId === SWARM_PLUGIN_ID && a.id === 'list_groups')
-      assert.ok(listManifest, 'builtin:swarm must register list_groups action')
-      assert.equal(listManifest!.idempotent, true, 'list_groups must declare idempotent: true')
-      assert.equal(listManifest!.exposeToPrompt, false, 'list_groups must declare exposeToPrompt: false')
-      assert.equal(listManifest!.exposeAsTool, false, 'list_groups must NOT be exposed as a standalone model tool')
-      assert.equal(listManifest!.visibility, 'public')
-      assert.equal(listManifest!.scope, undefined, 'list_groups must not restrict conversation scope')
-      assert.deepEqual(listManifest!.cli?.command, ['swarm', 'list-groups'])
+      // 1) Default-enabled in createHelmx, zero background resident conversations created on boot!
+      const swarmSummary = kernel.plugins.list().find((p) => p.id === SWARM_PLUGIN_ID)
+      assert.ok(swarmSummary, 'createHelmx must register builtin:swarm')
+      assert.equal(swarmSummary!.enabled, true, 'builtin:swarm must be default-enabled')
+      const bootConvs = kernel.conversations.listConversations()
       assert.equal(
-        kernel.plugins.listTools().some((tool) => tool.name === 'swarm_list_groups' || tool.name === 'list_groups'),
+        bootConvs.some((c) => c.ownedBy === 'helmx' || c.tags.includes(COORDINATOR_TAG) || c.tags.includes(WORKER_TAG)),
         false,
-        'list_groups must not bloat model tool list',
+        'builtin:swarm must NOT create any global resident conversations on boot',
       )
 
-      const coord1 = await kernel.conversations.createConversation({ title: 'Coord 1', profileId: 'assistant', cwd: env.repoDir })
-      const coord2 = await kernel.conversations.createConversation({ title: 'Coord 2', profileId: 'assistant', cwd: env.repoDir })
-      const observer = await kernel.conversations.createConversation({ title: 'Observer Chat', profileId: 'assistant', cwd: env.repoDir })
+      // 2) Idle workflow/worktree disable freedom:
+      //    - Idle builtin:swarm has NO static dependency on builtin:workflow / builtin:worktree -> disabling & re-enabling both succeeds!
+      await kernel.plugins.disable(WORKFLOW_ID)
+      assert.equal(kernel.plugins.list().find((p) => p.id === WORKFLOW_ID)?.enabled, false)
+      await kernel.plugins.enable(WORKFLOW_ID)
+      assert.equal(kernel.plugins.list().find((p) => p.id === WORKFLOW_ID)?.enabled, true)
+      await kernel.plugins.disable(WORKTREE_ID)
+      assert.equal(kernel.plugins.list().find((p) => p.id === WORKTREE_ID)?.enabled, false)
+      await kernel.plugins.enable(WORKTREE_ID)
+      assert.equal(kernel.plugins.list().find((p) => p.id === WORKTREE_ID)?.enabled, true)
 
-      const g1 = (await kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'create_group', {
-        title: 'Closed Alpha Squad',
-        objective: 'Finish alpha milestone',
-        conversationId: coord1.id,
-      })) as { groupId: string }
-      await kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'close_group', { groupId: g1.groupId }, { conversationId: coord1.id })
+      const coord = await kernel.conversations.createConversation({ title: 'Feature Chat', profileId: 'assistant', cwd: env.repoDir })
 
-      // Ensure distinct createdAt ordering between g1 and g2
-      await new Promise((r) => setTimeout(r, 10))
-      const g2 = (await kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'create_group', {
-        title: 'Active Beta Squad',
-        objective: 'Build beta feature',
-        conversationId: coord2.id,
-      })) as { groupId: string }
-
-      setSwarmRoleResponses(env.faux, {
-        worker1: [
-          fauxAssistantMessage([fauxToolCall('swarm_board_post', { to: ['coordinator'], kind: 'comment', body: 'ready' })], { stopReason: 'toolUse' }),
-          fauxAssistantMessage('Standing by.'),
-        ],
-        coordinator: [fauxAssistantMessage('Noted.')],
-      })
-      const worker = (await kernel.plugins.invokeAction(
-        SWARM_PLUGIN_ID,
-        'dispatch_worker',
-        { name: 'worker1', prompt: 'Stand by.' },
-        { conversationId: coord2.id },
-      )) as { workerConversationId: number }
-      await kernel.conversations.waitForIdle(worker.workerConversationId)
-      await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
-      await kernel.conversations.waitForIdle(coord2.id)
-
-      type ListGroupsResp = {
-        groups: Array<{
-          groupId: string
-          title: string
-          objective?: string
-          status: 'active' | 'closed'
-          coordinatorConversationId: number
-          headSeq: number
-          memberCount: number
-          activeMemberCount: number
-          activeWorkingMembers: string[]
-          retainedWorktreeCount: number
-          createdAt: number
-          closedAt?: number
-        }>
-      }
-
-      // Accessible via run_action surface from an unrelated non-swarm conversation
-      const all = (await kernel.plugins.invokeAction(
-        SWARM_PLUGIN_ID,
-        'list_groups',
-        {},
-        { conversationId: observer.id },
-        { surface: 'run_action' },
-      )) as ListGroupsResp
-      assert.deepEqual(
-        all.groups.map((g) => g.groupId),
-        [g2.groupId, g1.groupId],
-        'newest-first ordering across conversations',
+      // 3) swarm managed skill is available while builtin:swarm is enabled, with no duplicate ui.command
+      assert.equal(SWARM_SKILL_ID, 'swarm')
+      assert.equal(
+        kernel.plugins.listUi().filter((u) => u.pluginId === SWARM_PLUGIN_ID && u.surface === 'commandPalette').length,
+        0,
+        'builtin:swarm must not register duplicate ui.command',
       )
-      assert.equal(all.groups[0]!.status, 'active')
-      assert.equal(all.groups[0]!.coordinatorConversationId, coord2.id)
-      assert.equal(all.groups[0]!.memberCount, 1)
-      assert.equal(all.groups[0]!.activeMemberCount, 1)
-      assert.deepEqual(all.groups[0]!.activeWorkingMembers, [])
-      assert.equal(all.groups[0]!.retainedWorktreeCount, 0)
-      assert.ok(all.groups[0]!.headSeq >= 2)
-      assert.equal(all.groups[1]!.status, 'closed')
-      assert.equal(all.groups[1]!.coordinatorConversationId, coord1.id)
-      assert.equal(typeof all.groups[1]!.closedAt, 'number')
-
-      const activeOnly = (await kernel.plugins.invokeAction(
-        SWARM_PLUGIN_ID,
-        'list_groups',
-        { status: 'active' },
-        { conversationId: observer.id },
-        { surface: 'run_action' },
-      )) as ListGroupsResp
-      assert.deepEqual(activeOnly.groups.map((g) => g.groupId), [g2.groupId])
-
-      const closedOnly = (await kernel.plugins.invokeAction(
-        SWARM_PLUGIN_ID,
-        'list_groups',
-        { status: 'closed' },
-        { conversationId: observer.id },
-        { surface: 'run_action' },
-      )) as ListGroupsResp
-      assert.deepEqual(closedOnly.groups.map((g) => g.groupId), [g1.groupId])
-
-      const byCoord = (await kernel.plugins.invokeAction(
-        SWARM_PLUGIN_ID,
-        'list_groups',
-        { coordinatorConversationId: coord1.id },
-        { conversationId: observer.id },
-        { surface: 'run_action' },
-      )) as ListGroupsResp
-      assert.deepEqual(byCoord.groups.map((g) => g.groupId), [g1.groupId])
-
-      // Real LLM turn in unrelated conversation invokes run_action({ actionId: 'builtin:swarm.list_groups', ... })
-      // and sees neither swarm_list_groups tool nor builtin:swarm.list_groups in <available_actions>
-      let observerMeta: { toolNames: string[]; sectionsById: Record<string, string> } | undefined
-      env.faux.setResponses([
-        (ctx) => {
-          observerMeta = captureRequestMeta(ctx.messages as unknown as Record<string, unknown>[])
-          return fauxAssistantMessage(
-            [fauxToolCall('run_action', { actionId: 'builtin:swarm.list_groups', input: { status: 'active' } })],
-            { stopReason: 'toolUse' },
-          )
-        },
-        fauxAssistantMessage('Listed active swarm groups via run_action.'),
-      ])
-      await kernel.conversations.submitInput(observer.id, 'List active swarm groups')
-      await kernel.conversations.waitForIdle(observer.id)
-      assert.ok(observerMeta !== undefined)
-      assert.equal(observerMeta!.toolNames.includes('swarm_list_groups'), false)
-      assert.equal((observerMeta!.sectionsById['prompt.actions'] ?? '').includes('builtin:swarm.list_groups'), false)
-      const observerDetail = await kernel.conversations.getConversationDetail(observer.id, { limit: 20 })
-      const runActionResultText = JSON.stringify(observerDetail.entries)
-      assert.ok(runActionResultText.includes(g2.groupId), 'run_action tool must return active group summary')
-      assert.equal(runActionResultText.includes(g1.groupId), false, 'status=active filter must exclude closed group')
-
-      // Swarm skill documents list-groups
       const loadedSkill = (await kernel.plugins.executeTool(
         'load_skill',
         { skillId: SWARM_SKILL_ID },
-        { conversationId: observer.id },
+        { conversationId: coord.id },
       )) as { text: string }
-      assert.ok(loadedSkill.text.includes('helmx swarm list-groups'))
-      assert.ok(loadedSkill.text.includes('builtin:swarm.list_groups'))
+      assert.match(loadedSkill.text, /Coordinator Rule: Do Not Do the Work/)
+      for (const toolName of [
+        'swarm_create_group',
+        'swarm_update_group',
+        'swarm_dispatch_worker',
+        'swarm_board_post',
+        'swarm_board_read',
+        'swarm_board_status',
+        'swarm_inspect_worker',
+        'swarm_abort_worker',
+        'swarm_switch_worker_model',
+        'swarm_archive_worker',
+        'swarm_close_group',
+      ]) {
+        assert.ok(loadedSkill.text.includes(toolName), `swarm SKILL.md should document ${toolName}`)
+      }
+      assert.match(loadedSkill.text, /helmx swarm/)
 
-      // Clean up active group before shutdown
+      // 4) Before swarm_create_group: #C sees swarm_create_group + subagent/bash/edit/write, NOT swarm_dispatch_worker/swarm_board_*
+      const preCapture: Array<{ toolNames: string[]; sectionsById: Record<string, string> }> = []
+      env.faux.setResponses([
+        (ctx) => {
+          preCapture.push(captureRequestMeta(ctx.messages as unknown as Record<string, unknown>[]))
+          return fauxAssistantMessage([fauxToolCall('swarm_create_group', { title: 'API Squad', objective: 'Ship v2 API' })], {
+            stopReason: 'toolUse',
+          })
+        },
+        (ctx) => {
+          // Same turn, very next LLM request after swarm_create_group!
+          preCapture.push(captureRequestMeta(ctx.messages as unknown as Record<string, unknown>[]))
+          return fauxAssistantMessage('Group created and squad tools unlocked.')
+        },
+      ])
+
+      await kernel.conversations.submitInput(coord.id, 'Start a squad')
+      await kernel.conversations.waitForIdle(coord.id)
+      assert.equal(preCapture.length, 2)
+
+      const beforeTools = preCapture[0]!.toolNames
+      assert.ok(beforeTools.includes('swarm_create_group'))
+      assert.ok(beforeTools.includes('subagent'))
+      assert.ok(beforeTools.includes('bash'))
+      assert.equal(beforeTools.includes('swarm_dispatch_worker'), false)
+      assert.equal(beforeTools.includes('swarm_board_post'), false)
+      assert.equal(preCapture[0]!.sectionsById['swarm.active_group'], undefined)
+
+      // Next beat inside the SAME turn: squad tools unlocked, swarm_create_group hidden, general tools preserved!
+      const afterTools = preCapture[1]!.toolNames
+      for (const expected of [
+        'swarm_update_group',
+        'swarm_dispatch_worker',
+        'swarm_board_post',
+        'swarm_board_read',
+        'swarm_board_status',
+        'swarm_abort_worker',
+        'swarm_switch_worker_model',
+        'swarm_inspect_worker',
+        'swarm_archive_worker',
+        'swarm_close_group',
+        'subagent',
+        'SubagentWorkflow',
+        'bash',
+        'edit',
+        'write',
+      ]) {
+        assert.ok(afterTools.includes(expected), `expected ${expected} available after swarm_create_group (actual: ${afterTools.join(',')})`)
+      }
+      assert.equal(afterTools.includes('swarm_create_group'), false, 'expected swarm_create_group hidden on active coordinator')
+      const sectionInitial = preCapture[1]!.sectionsById['swarm.active_group']
+      assert.ok(typeof sectionInitial === 'string' && sectionInitial.includes('<active_swarm_group'))
+
+      // Duplicate create_group on the same coordinator returns 409 swarm_group_already_active
+      await assert.rejects(
+        () => kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'create_group', { title: 'Second', conversationId: coord.id }),
+        (err: unknown) => err instanceof HelmxError && err.code === 'swarm_group_already_active' && err.status === 409,
+      )
+
+      // Active group blocks non-force disable of builtin:swarm via inUse()
       await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
-      await kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'close_group', { groupId: g2.groupId }, { conversationId: coord2.id })
+      await assert.rejects(
+        () => kernel.plugins.disable(SWARM_PLUGIN_ID),
+        (err: unknown) => err instanceof HelmxError && err.code === 'plugin_in_use' && err.status === 409,
+      )
+
+      // 5) Recruit 2 members, mutate group title/objective, archive 1 member -> coordinator <active_swarm_group> stays 100% byte-identical!
+      setSwarmRoleResponses(env.faux, {
+        alpha: [
+          fauxAssistantMessage([fauxToolCall('swarm_board_post', { to: ['coordinator'], kind: 'comment', body: 'w1 booted' })], { stopReason: 'toolUse' }),
+          fauxAssistantMessage('w1 idle'),
+        ],
+        beta: [
+          fauxAssistantMessage([fauxToolCall('swarm_board_post', { to: ['coordinator'], kind: 'comment', body: 'w2 booted' })], { stopReason: 'toolUse' }),
+          fauxAssistantMessage('w2 idle'),
+        ],
+        coordinator: [fauxAssistantMessage('Coordinator noted idle boot comments.')],
+      })
+      const w1 = (await kernel.plugins.invokeAction(
+        SWARM_PLUGIN_ID,
+        'dispatch_worker',
+        { prompt: 'Role 1', name: 'alpha' },
+        { conversationId: coord.id },
+      )) as { workerConversationId: number; groupId: string }
+      const w2 = (await kernel.plugins.invokeAction(
+        SWARM_PLUGIN_ID,
+        'dispatch_worker',
+        { prompt: 'Role 2', name: 'beta' },
+        { conversationId: coord.id },
+      )) as { workerConversationId: number }
+      await kernel.conversations.waitForIdle(w1.workerConversationId)
+      await kernel.conversations.waitForIdle(w2.workerConversationId)
+      await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
+      await kernel.conversations.waitForIdle(coord.id)
+
+      const indexDoc = kernel.plugins.getPublicDoc(SWARM_PLUGIN_ID, 'index').value as SwarmIndexDoc
+      assert.equal(indexDoc.workers.length, 2)
+      assert.equal(indexDoc.workers[0]!.coordinatorConversationId, coord.id)
+
+      await kernel.plugins.invokeAction(
+        SWARM_PLUGIN_ID,
+        'update_group',
+        { groupId: w1.groupId, title: 'Renamed API Squad', objective: 'Updated objective text' },
+        { conversationId: coord.id },
+      )
+      await kernel.plugins.invokeAction(
+        SWARM_PLUGIN_ID,
+        'archive_worker',
+        { groupId: w1.groupId, name: 'beta' },
+        { conversationId: coord.id },
+      )
+
+      let sectionAfterScaling: string | undefined
+      setSwarmRoleResponses(env.faux, {
+        coordinator: [
+          (ctx) => {
+            sectionAfterScaling = captureRequestMeta(ctx.messages as unknown as Record<string, unknown>[]).sectionsById['swarm.active_group']
+            return fauxAssistantMessage([fauxToolCall('bash', { command: 'echo quick-lookup-ok' })], { stopReason: 'toolUse' })
+          },
+          fauxAssistantMessage('Quick lookup finished.'),
+        ],
+      })
+      await kernel.conversations.submitInput(coord.id, 'Check prompt cache stability')
+      await kernel.conversations.waitForIdle(coord.id)
+
+      assert.equal(sectionAfterScaling, sectionInitial, 'active_swarm_group section must stay 100% byte-constant across member scaling and metadata edits')
+      const detail = await kernel.conversations.getConversationDetail(coord.id, { limit: 10 })
+      assert.match(JSON.stringify(detail.entries), /quick-lookup-ok/, 'coordinator retains bash for lightweight lookups')
+
+      // Close group -> skill disappears once plugin is disabled
+      await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
+      await kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'close_group', { groupId: w1.groupId }, { conversationId: coord.id })
+      await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
+      await kernel.plugins.disable(SWARM_PLUGIN_ID)
+      await assert.rejects(
+        () => kernel.plugins.executeTool('load_skill', { skillId: SWARM_SKILL_ID }, { conversationId: coord.id }),
+        (err: unknown) => err instanceof HelmxError && err.code === 'skill_not_available',
+      )
     } finally {
       await env.close()
     }

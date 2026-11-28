@@ -72,7 +72,7 @@ function makeGitRepo(dir: string): string {
   return gitTemplate.cloneTo(dir)
 }
 
-describe('运行租约释放（原生子会话失败路径）', { timeout: 60_000 }, () => {
+describe('运行租约释放（原生子会话失败路径）', { concurrency: 2, timeout: 60_000 }, () => {
   it('next 抛错且原生子会话确认停止：释放运行租约，保留 Worktree 记录与 agentId 绑定，cleanup 不再被 unknown 阻塞', {
     timeout: 60_000,
   }, async () => {
@@ -313,7 +313,7 @@ describe('运行租约释放（原生子会话失败路径）', { timeout: 60_00
   })
 })
 
-describe('ManagedWorktreeHold 与隐藏内部动作 acquire_worktree / release_worktree_hold', { timeout: 60_000 }, () => {
+describe('ManagedWorktreeHold 与隐藏内部动作 acquire_worktree / release_worktree_hold', { concurrency: 2, timeout: 60_000 }, () => {
   it('动作元数据与边界校验：visibility=internal、exposeAsTool=false、HTTP/run_action 403，非法入参显式 400 validation_error', {
     timeout: 60_000,
   }, async () => {
@@ -1043,7 +1043,7 @@ describe('ManagedWorktreeHold 与隐藏内部动作 acquire_worktree / release_w
   })
 })
 
-describe('WorktreeIsolation：租约与并发窗口保护', { timeout: 60_000 }, () => {
+describe('WorktreeIsolation：租约与并发窗口保护', { concurrency: 2, timeout: 60_000 }, () => {
   it('resumeWithWorktree 租约前置：远端验证窗口内并发 cleanup 被租约 fail-closed 拒绝；resume 正常续接', { timeout: 60_000 }, async () => {
     const wtPath = '/wt/resume-race'
     const worktreeId = `local:${wtPath}`
@@ -1325,7 +1325,7 @@ describe('WorktreeIsolation：租约与并发窗口保护', { timeout: 60_000 },
   })
 })
 
-describe('WorktreeStore KV 持久化契约（单条隔离 / >1000 分页遍历 / 超长与特殊键 / service.stop flush）', { timeout: 60_000 }, () => {
+describe('WorktreeStore KV 持久化契约（单条隔离 / >1000 分页遍历 / 超长与特殊键 / service.stop flush）', { concurrency: 2, timeout: 60_000 }, () => {
   it('按单条 KV 独立落库（零 worktree-state 文档写入）并在 service.stop 时经 stopWindow flush KV', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 't25-kv-stop')
     const repo = makeGitRepo(join(dir, 'repo'))
@@ -1575,18 +1575,17 @@ describe('WorktreeStore KV 持久化契约（单条隔离 / >1000 分页遍历 /
   })
 
   it('受管技能 worktree：启动自举、停用即时消失无幻影提示，且 workflow 技能不硬编码 builtin:worktree 动作', { timeout: 60_000 }, async () => {
-    const { createHelmx } = await import('../../hub/src/app.js')
+    const { createProfilePlugin } = await import('../src/profile.js')
+    const { createWorkflowPlugin } = await import('../src/workflow.js')
+    const { createWorktreePlugin } = await import('../src/worktree.js')
+    const { openMinimalRuntime } = await import('./helpers/plugin-test-env.js')
     const dataDir = mkdtempSync(join(tmpdir(), 'helmx-worktree-skill-'))
-    const faux = makeFauxProvider()
-    const app = await createHelmx({
-      buildProvider: createPluginBuildProvider(),
-      dataDir,
-      cwd: dataDir,
-      model: 'faux/faux-1',
-      providers: [faux.provider],
-    })
+    const runtime = await openMinimalRuntime(
+      [createProfilePlugin(), createWorkflowPlugin(), createWorktreePlugin()],
+      { dataDir },
+    )
     try {
-      const { kernel } = app
+      const { kernel } = runtime
       const skills = await kernel.skills.list()
       const wtSkill = skills.find((s) => s.id === WORKTREE_SKILL_ID)
       assert.ok(wtSkill, 'builtin:worktree 启动应自举受管技能 worktree')
@@ -1641,7 +1640,7 @@ describe('WorktreeStore KV 持久化契约（单条隔离 / >1000 分页遍历 /
       await kernel.plugins.enable('builtin:worktree')
       assert.ok((await readSkillsSection()).includes('id="worktree"'), '重新启用后 worktree 技能应恢复')
     } finally {
-      await app.close().catch(() => {})
+      await runtime.close()
       rmSync(dataDir, { recursive: true, force: true })
     }
   })

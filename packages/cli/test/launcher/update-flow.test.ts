@@ -8,10 +8,10 @@
  * artifacts through a fake registry with correct sha512 SRI metadata.
  */
 import assert from 'node:assert/strict';
-import { existsSync, openSync, closeSync, unlinkSync } from 'node:fs';
+import { closeSync, existsSync, openSync, readFileSync, unlinkSync } from 'node:fs';
 import { rm, readFile, writeFile as writeFilePromise } from 'node:fs/promises';
 import path from 'node:path';
-import { test } from 'node:test';
+import { describe, test } from 'node:test';
 import { useTempDir, sanitizedHostEnv } from '@helmx/test-kit/node';
 import { readBlockedRelease, readCurrentRelease, writeBlockedRelease, writeCurrentRelease } from '@helmx/env-io';
 import { stageHubRelease } from '@helmx/env-io/hub-payload';
@@ -28,6 +28,7 @@ import {
   freePort,
   getJson,
   packPayloadTarball,
+  prepareNestedDepPayload,
   spawnAlienProcess,
   waitUntilDead,
   writeFakePayload,
@@ -88,6 +89,7 @@ function baseOptions(h: FlowHarness) {
   };
 }
 
+describe('update-flow', { concurrency: 3, timeout: 60_000 }, () => {
 test('update installs a release even when nothing is running and clears blocked state', { timeout: 60_000 }, async (t) => {
   const h = await setupFlow(t, useTempDir(t, 'helmx-launcher-flow-'));
   await h.addPayload('1.1.0');
@@ -186,7 +188,7 @@ test('staging failures change no state and write no blocked marker', { timeout: 
   // A hanging self-check hits the staging timeout and terminates the check child.
   await h.addPayload('1.2.0', 'check-hang');
   await assert.rejects(
-    performHubUpdate({ ...baseOptions(h), targetVersion: '1.2.0', payloadCheckTimeoutMs: 350 }),
+    performHubUpdate({ ...baseOptions(h), targetVersion: '1.2.0', payloadCheckTimeoutMs: 150 }),
     /payload self-check timed out/,
   );
   assert.equal(await readCurrentRelease(h.root), null);
@@ -256,7 +258,7 @@ test('failed candidate readiness rolls the pointer back, restarts the old hub, a
   t.after(() => cleanupPid(old.pid));
 
   await assert.rejects(
-    performHubUpdate({ ...baseOptions(h), healthTimeoutMs: 800 }),
+    performHubUpdate({ ...baseOptions(h), healthTimeoutMs: 300 }),
     /rolled back to 1\.0\.0/,
   );
   // Pointer restored, old hub restarted on the same port and serving again.
@@ -441,14 +443,14 @@ test('check reports current/latest/blocked without touching state', { timeout: 6
 
 test('golden path: real npm pack tarball stages through the production extractor (registry channel)', { timeout: 60_000 }, async (t) => {
   const root = useTempDir(t, 'helmx-launcher-golden-');
-  const [registry, payloadDir, tamperedPayload] = await Promise.all([
+  const [registry, nestedTarball, tamperedPayload] = await Promise.all([
     createFakeRegistry(PKG, '2.1.0'),
-    writeFakePayload({ dir: path.join(root, 'fixture-payload'), pkgName: PKG, version: '2.1.0' }),
+    prepareNestedDepPayload(root, '2.1.0', PKG),
     writeFakePayload({ dir: path.join(root, 'fixture-221'), pkgName: PKG, version: '2.2.0' }),
   ]);
   const badSri = 'sha512-' + 'A'.repeat(86) + '=';
   const tamperedPackPromise = packPayloadTarball(tamperedPayload);
-  await registry.serve('2.1.0', await packPayloadTarball(payloadDir));
+  await registry.serve('2.1.0', nestedTarball);
   const { io } = captureIo(sanitizedHostEnv({ HELMX_PAYLOAD_PACKAGE: PKG }));
   const dataDir = path.join(path.dirname(root), `${path.basename(root)}-user-data`);
 
@@ -469,6 +471,11 @@ test('golden path: real npm pack tarball stages through the production extractor
   // The packed artifact was unpacked to the candidate root (npm-pack layout, stripped prefix).
   assert.match(path.relative(root, staged.entryPath), /^releases[/\\]2\.1\.0[/\\][^/]+[/\\]start\.mjs$/);
   assert.equal(staged.reusedCached, false);
+  // The nested file:./<dep>.tgz dependency resolved through real npm install and .downloads cleaned.
+  const depEntry = path.join(staged.releaseDir, 'node_modules', '@fake', 'dep', 'index.js');
+  assert.ok(existsSync(depEntry), `nested dependency must be installed at ${depEntry}`);
+  assert.match(readFileSync(depEntry, 'utf8'), /dep-of-2\.1\.0/);
+  assert.equal(existsSync(path.join(staged.releaseDir, '.downloads')), false);
 
   // Corrupt-integrity metadata is rejected by the production verification chain.
   await registry.serve('2.2.0', tamperedTarball, { integrity: badSri });
@@ -488,8 +495,7 @@ test('golden path: real npm pack tarball stages through the production extractor
 
 test('golden path: local --tarball of a real npm pack artifact installs and self-checks', { timeout: 60_000 }, async (t) => {
   const root = useTempDir(t, 'helmx-launcher-goldentgz-');
-  const payloadDir = await writeFakePayload({ dir: path.join(root, 'fixture-payload'), pkgName: PKG, version: '3.0.0' });
-  const tarballPath = await packPayloadTarball(payloadDir);
+  const tarballPath = await prepareNestedDepPayload(root, '3.0.0', PKG);
   const { io } = captureIo(sanitizedHostEnv({ HELMX_PAYLOAD_PACKAGE: PKG }));
 
   const staged = await stageHubRelease({
@@ -502,6 +508,9 @@ test('golden path: local --tarball of a real npm pack artifact installs and self
   });
   assert.equal(staged.version, '3.0.0');
   assert.ok(existsSync(staged.entryPath));
+  const depEntry = path.join(staged.releaseDir, 'node_modules', '@fake', 'dep', 'index.js');
+  assert.ok(existsSync(depEntry), `nested dependency must be installed at ${depEntry}`);
+  assert.match(readFileSync(depEntry, 'utf8'), /dep-of-3\.0\.0/);
 
   // The staged candidate runs for real through the production entry: banner-gated start + stop.
   await writeCurrentRelease(root, {
@@ -650,8 +659,26 @@ test('a busy Hub stages a candidate without stopping or committing', { timeout: 
   assert.equal(ok.changed, true);
   assert.equal(ok.restarted, true);
   t.after(() => cleanupPid(ok.pid!));
-  await stopHub(h.root, h.io);
+  await waitUntilDead(started.pid);
+
+  // --force bypasses a busy hub explicitly while running 1.1.0 -> 1.2.0.
+  await h.addPayload('1.2.0');
+  await h.setState({ mode: 'busy', counts: { activeConversations: 5 } });
+  const forced = await performHubUpdate({
+    ...h.options(),
+    targetVersion: '1.2.0',
+    force: true,
+    healthTimeoutMs: 10_000,
+    launchFlags: { port, dataDir: h.dataDir },
+  });
+  assert.equal(forced.changed, true);
+  assert.equal(forced.restarted, true);
+  assert.equal(forced.deferred, undefined);
+  t.after(() => cleanupPid(forced.pid!));
   await waitUntilDead(ok.pid!);
+  assert.deepEqual(await getJson(port, '/__version'), { version: '1.2.0' });
+  await stopHub(h.root, h.io);
+  await waitUntilDead(forced.pid!);
 });
 
 test('a Hub that becomes busy during staging defers the switch and reuses the candidate', { timeout: 60_000 }, async (t) => {
@@ -753,29 +780,4 @@ test('a stale or missing heartbeat fails closed (unknown) and keeps the hub serv
   await stopHub(h.root, h.io);
   await waitUntilDead(forced.pid!);
 });
-
-test('--force bypasses a busy hub explicitly', { timeout: 60_000 }, async (t) => {
-  const h = await setupGate(t, useTempDir(t, 'helmx-launcher-gate4-'));
-  await h.addPayload('1.0.0');
-  await h.addPayload('1.1.0');
-  const port = await freePort();
-  await performHubUpdate({ ...h.options(), targetVersion: '1.0.0', launchFlags: { port, dataDir: h.dataDir } });
-  await h.setState({ mode: 'busy', counts: { activeConversations: 5 } });
-  const started = await startHub(h.root, h.io, { flags: { port, dataDir: h.dataDir }, pollMs: 20 });
-  t.after(() => cleanupPid(started.pid));
-
-  const forced = await performHubUpdate({
-    ...h.options(),
-    force: true,
-    healthTimeoutMs: 10_000,
-    launchFlags: { port, dataDir: h.dataDir },
-  });
-  assert.equal(forced.changed, true);
-  assert.equal(forced.restarted, true);
-  assert.equal(forced.deferred, undefined);
-  t.after(() => cleanupPid(forced.pid!));
-  await waitUntilDead(started.pid);
-  assert.deepEqual(await getJson(port, '/__version'), { version: '1.1.0' });
-  await stopHub(h.root, h.io);
-  await waitUntilDead(forced.pid!);
 });

@@ -76,16 +76,18 @@ function clickToggle(host: HTMLElement): void {
 
 async function withCapturedClipboard(run: (captured: string[]) => Promise<void>): Promise<void> {
   const captured: string[] = []
-  const original = Object.getOwnPropertyDescriptor(globalThis, 'navigator')
-  Object.defineProperty(globalThis, 'navigator', {
-    value: { clipboard: { writeText: async (text: string) => { captured.push(text) } } },
+  const nav = globalThis.navigator as unknown as { clipboard?: unknown }
+  const originalClipboard = Object.getOwnPropertyDescriptor(nav, 'clipboard')
+  Object.defineProperty(nav, 'clipboard', {
+    value: { writeText: async (text: string) => { captured.push(text) } },
     configurable: true,
     writable: true,
   })
   try {
     await run(captured)
   } finally {
-    if (original !== undefined) Object.defineProperty(globalThis, 'navigator', original)
+    if (originalClipboard !== undefined) Object.defineProperty(nav, 'clipboard', originalClipboard)
+    else delete nav.clipboard
   }
 }
 

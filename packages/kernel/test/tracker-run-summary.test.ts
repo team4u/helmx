@@ -82,7 +82,7 @@ function recordUpserts(kernel: KernelRuntime, conversationId: number): {
   return { frames, stop: unsubscribe }
 }
 
-describe('emitRunSummary: real-time summary on run start and doing semantic changes', { timeout: 60_000 }, () => {
+describe('emitRunSummary: real-time summary on run start and doing semantic changes', { concurrency: 4, timeout: 60_000 }, () => {
   it('emits working(doing=thinking...) on run start before first token; terminal completed emitted once', { timeout: 60_000 }, async () => {
     const kernel = await openRuntime('run-start')
     let releaseResponse = () => {}
@@ -197,26 +197,37 @@ describe('emitRunSummary: real-time summary on run start and doing semantic chan
 
   it('successive followUp runs emit working and completed updates and converge cleanly without stale run state', { timeout: 60_000 }, async () => {
     const kernel = await openRuntime('run-switch')
+    let releaseToolRound = () => {}
+    const toolRoundGate = new Promise<void>((resolve) => { releaseToolRound = resolve })
     try {
       // followUp queuing: while run1 (with a tool round) is in flight, a second input is submitted;
       // SDK consumes run2 immediately after run1 finishes (observer may collapse run1 ending and run2
       // starting into the same snapshot).
       kernel.__faux.setResponses([
-        fauxAssistantMessage([fauxToolCall('bash', { command: 'sleep 1' })], { stopReason: 'toolUse' }),
-        fauxAssistantMessage('run1 answer'),
+        fauxAssistantMessage([fauxToolCall('bash', { command: 'echo tool-round' })], { stopReason: 'toolUse' }),
+        async () => {
+          await toolRoundGate
+          return fauxAssistantMessage('run1 answer')
+        },
         fauxAssistantMessage('run2 answer'),
       ])
       const recorded = recordUpserts(kernel, 1)
       try {
         await kernel.conversations.submitInput(1, 'run1 prompt')
-        await new Promise((r) => setTimeout(r, 200))
+        await waitFor(() => recorded.frames.some((f) => (f.doing ?? '').startsWith('bash:')))
         assert.equal(kernel.conversations.getConversation(1).status, 'working')
-        void kernel.conversations.submitInput(1, 'run2 follow-up prompt', { whenBusy: 'followUp' }).catch(() => {})
+        const followUpP = kernel.conversations.submitInput(1, 'run2 follow-up prompt', { whenBusy: 'followUp' }).catch(() => {})
+        releaseToolRound()
+        await followUpP
         await kernel.conversations.waitForIdle(1)
-        await waitFor(() => recorded.frames.filter((f) => f.status === 'done').length >= 1)
+        await waitFor(
+          () =>
+            kernel.conversations.getConversation(1).status === 'done' &&
+            recorded.frames.filter((f) => f.status === 'done').length >= 1,
+        )
         // Valid event ordering: done may follow working; another round of working may follow done
         // (for run2 consumed via followUp) -- but final status must converge to done (run2 completes).
-        await new Promise((r) => setTimeout(r, 400))
+        await new Promise((r) => setTimeout(r, 60))
         const last = recorded.frames[recorded.frames.length - 1]!
         assert.equal(
           kernel.conversations.getConversation(1).status,
@@ -238,6 +249,7 @@ describe('emitRunSummary: real-time summary on run start and doing semantic chan
         recorded.stop()
       }
     } finally {
+      releaseToolRound()
       await kernel.close()
     }
   })
@@ -260,7 +272,7 @@ describe('emitRunSummary: real-time summary on run start and doing semantic chan
         // usage-only (same status, same seq, watermark not advanced); state machine must never re-emit or regress.
         const frozenAt = recorded.frames.length
         const frozenLast = recorded.frames[frozenAt - 1]!
-        await new Promise((r) => setTimeout(r, 250))
+        await new Promise((r) => setTimeout(r, 60))
         for (const late of recorded.frames.slice(frozenAt)) {
           assert.equal(late.status, frozenLast.status, `post-terminal frames can only be usage-only: ${JSON.stringify(recorded.frames.slice(frozenAt))}`)
           assert.equal(late.seq, frozenLast.seq, 'usage-only frames must not advance stateChangeSeq')
@@ -321,8 +333,8 @@ describe('emitRunSummary: real-time summary on run start and doing semantic chan
         })
         void askPromise.catch(() => {})
         await waitFor(() => kernel.conversations.getConversation(1).status === 'blocked')
-        // Tool keeps running (sleep 3s): snapshots keep arriving; blocked must not regress back to working.
-        await new Promise((r) => setTimeout(r, 800))
+        // Tool keeps running: snapshots keep arriving; blocked must not regress back to working.
+        await new Promise((r) => setTimeout(r, 200))
         assert.equal(
           kernel.conversations.getConversation(1).status,
           'blocked',

@@ -15,12 +15,14 @@
  * - T8: spawned `subagent` reads approved `plan-v1.md` via `read_artifact`; deleting parent cleans KV/sessionDoc/badges.
  */
 import assert from 'node:assert/strict'
-import { test } from 'node:test'
+import { after, before, test } from 'node:test'
 import { fauxAssistantMessage, fauxToolCall, type FauxResponseStep } from '@earendil-works/pi-ai/providers/faux'
 import { getCurrentTools } from '@earendil-works/pi-ai/utils/transcript'
 import { HelmxError } from '@helmx/protocol'
 import { createPluginBuildProvider } from '@helmx/plugin-build'
 import { createHelmx } from '../../hub/src/app.js'
+import { createProfilePlugin } from '../src/profile.js'
+import { createWorkflowPlugin } from '../src/workflow.js'
 import { TIERS_PLUGIN_ID } from '../src/tiers/contracts.js'
 import { TITLE_PLUGIN_ID } from '../src/title/contracts.js'
 import {
@@ -36,6 +38,7 @@ import {
   PLAN_SKILL_ID,
   PLAN_TOOL_PROPOSE,
   PLAN_TOOL_SAVE,
+  createPlanPlugin,
   type PlanBadgesDoc,
   type PlanConversationRecord,
   type PlanSessionView,
@@ -45,6 +48,7 @@ import {
   cleanupDir,
   makeFauxProvider,
   makeTempDir,
+  openMinimalRuntime,
   waitFor,
   type FauxProviderHandle,
 } from './helpers/plugin-test-env.js'
@@ -98,6 +102,22 @@ async function openPlanIntegrationEnv(options: {
   }
 }
 
+let sharedEnv!: PlanIntegrationEnv
+
+before(async () => {
+  sharedEnv = await openPlanIntegrationEnv({
+    models: [
+      { id: 'faux-1', name: 'Primary', contextWindow: 100_000 },
+      { id: 'coder', name: 'Coder', contextWindow: 200_000 },
+      { id: 'disabled-target', contextWindow: 100_000 },
+    ],
+  })
+})
+
+after(async () => {
+  await sharedEnv?.close()
+}, { timeout: 60_000 })
+
 function captureRequest(
   sink: CapturedTurnRequest[],
   reply: string | ReturnType<typeof fauxAssistantMessage> = 'acknowledged',
@@ -138,9 +158,8 @@ function readPlanBadges(kernel: PlanIntegrationEnv['app']['kernel']): PlanBadges
 // ---------------------------------------------------------------------------
 
 test('T3 & T4: /plan <task> first turn transforms input, derives clean title, enforces strict whitelist; normal mode & non-eligible conversations stay isolated', TIMEOUT, async () => {
-  const env = await openPlanIntegrationEnv()
-  try {
-    const { kernel } = env.app
+  const env = sharedEnv
+  const { kernel } = env.app
 
     // Registered & enabled by default with command, workbench panel, and compiled client bundle
     const summary = kernel.plugins.get(PLAN_PLUGIN_ID)
@@ -343,9 +362,6 @@ test('T3 & T4: /plan <task> first turn transforms input, derives clean title, en
       'standby inputMeta must apply strict planning whitelist on Turn 1',
     )
     assert.ok(typeof metaRequests[0]!.sectionsById[PLAN_MODE_SECTION_ID] === 'string')
-  } finally {
-    await env.close()
-  }
 })
 
 // ---------------------------------------------------------------------------
@@ -353,7 +369,7 @@ test('T3 & T4: /plan <task> first turn transforms input, derives clean title, en
 // ---------------------------------------------------------------------------
 
 test('T5: plan_propose outcome matrix (no-draft, revise, cancelled, Composer superseded, approve, approve_handoff, approve_handoff_model)', TIMEOUT, async () => {
-  const env = await openPlanIntegrationEnv()
+  const env = sharedEnv
   const disposeSecret = env.app.kernel.stash.addRedaction('TOP_SECRET_PLAN_KEY')
   try {
     const { kernel } = env.app
@@ -610,7 +626,6 @@ test('T5: plan_propose outcome matrix (no-draft, revise, cancelled, Composer sup
     assert.match(JSON.stringify(lastReset.model), /Execution Model: tier\/coder/)
   } finally {
     disposeSecret()
-    await env.close()
   }
 })
 
@@ -619,14 +634,9 @@ test('T5: plan_propose outcome matrix (no-draft, revise, cancelled, Composer sup
 // ---------------------------------------------------------------------------
 
 test('T6: approve_handoff with disabled model or missing tier fails honestly, stays planning, and creates no artifact', TIMEOUT, async () => {
-  const env = await openPlanIntegrationEnv({
-    models: [
-      { id: 'faux-1', contextWindow: 100_000 },
-      { id: 'disabled-target', contextWindow: 100_000 },
-    ],
-  })
+  const env = sharedEnv
+  const { kernel } = env.app
   try {
-    const { kernel } = env.app
     await kernel.models.setDisabledModels('faux', ['disabled-target'])
     await kernel.plugins.setConfig(PLAN_PLUGIN_ID, { executionModel: 'faux/disabled-target' })
 
@@ -706,7 +716,8 @@ test('T6: approve_handoff with disabled model or missing tier fails honestly, st
     assert.equal(proposeMetas.length, 2)
     assert.ok(proposeMetas.every((m) => m?.isError === true && m?.details?.outcome === 'error'))
   } finally {
-    await env.close()
+    await kernel.models.setDisabledModels('faux', [])
+    await kernel.plugins.setConfig(PLAN_PLUGIN_ID, { executionModel: '' })
   }
 })
 
@@ -716,27 +727,15 @@ test('T6: approve_handoff with disabled model or missing tier fails honestly, st
 
 test('T7: pending ask abort, set_mode/toggle cancellation, disable 409 gates, restart reconcile(), force-disable & re-enable', TIMEOUT, async () => {
   const dataDir = await makeTempDir('helmx-plan-t7-')
-  let activeEnv: PlanIntegrationEnv | undefined
+  let activeRuntime: Awaited<ReturnType<typeof openMinimalRuntime>> | undefined
   try {
-    const faux1 = makeFauxProvider({ models: [{ id: 'faux-1' }] })
-    const app1 = await createHelmx({
-      buildProvider: createPluginBuildProvider(),
-      dataDir,
-      cwd: dataDir,
-      model: 'faux/faux-1',
-      providers: [faux1.provider],
-    })
-    await app1.kernel.plugins.setConfig(TITLE_PLUGIN_ID, { autoTitle: false })
-    activeEnv = {
-      dataDir,
-      faux: faux1,
-      app: app1,
-      close: async () => {
-        await app1.close().catch(() => {})
-      },
-    }
-
-    const k1 = app1.kernel
+    const rt1 = await openMinimalRuntime(
+      [createProfilePlugin(), createWorkflowPlugin(), createPlanPlugin()],
+      { dataDir, fauxOptions: { models: [{ id: 'faux-1' }] } },
+    )
+    activeRuntime = rt1
+    const faux1 = rt1.faux
+    const k1 = rt1.kernel
     const conv = await k1.conversations.createConversation({ title: 'Lifecycle test' })
     const cid = conv.id
     await k1.plugins.invokeAction(PLAN_PLUGIN_ID, 'set_mode', { conversationId: cid, mode: 'planning' })
@@ -849,28 +848,17 @@ test('T7: pending ask abort, set_mode/toggle cancellation, disable 409 gates, re
     )
     await k1.kvStore.flush()
 
-    await app1.close()
-    activeEnv = undefined
+    await rt1.close()
+    activeRuntime = undefined
 
     // Simulated Hub restart: reconcile() must supersede orphaned AskDoc & clear pendingAskId
-    const faux2 = makeFauxProvider({ models: [{ id: 'faux-1' }] })
-    const app2 = await createHelmx({
-      buildProvider: createPluginBuildProvider(),
-      dataDir,
-      cwd: dataDir,
-      model: 'faux/faux-1',
-      providers: [faux2.provider],
-    })
-    await app2.kernel.plugins.setConfig(TITLE_PLUGIN_ID, { autoTitle: false })
-    activeEnv = {
-      dataDir,
-      faux: faux2,
-      app: app2,
-      close: async () => {
-        await app2.close().catch(() => {})
-      },
-    }
-    const k2 = app2.kernel
+    const rt2 = await openMinimalRuntime(
+      [createProfilePlugin(), createWorkflowPlugin(), createPlanPlugin()],
+      { dataDir, fauxOptions: { models: [{ id: 'faux-1' }] } },
+    )
+    activeRuntime = rt2
+    const faux2 = rt2.faux
+    const k2 = rt2.kernel
     assert.equal(k2.asks.listAsks('pending').length, 0)
     assert.equal(k2.asks.listAsks('superseded').some((a) => a.id === orphanAskId), true)
     assert.equal(k2.conversations.getConversation(cid).pendingAskCount, 0)
@@ -916,7 +904,7 @@ test('T7: pending ask abort, set_mode/toggle cancellation, disable 409 gates, re
     assert.equal(reenabledReqs[0]!.toolNames.includes('update_steps'), false)
     assert.ok(typeof reenabledReqs[0]!.sectionsById[PLAN_MODE_SECTION_ID] === 'string')
   } finally {
-    await activeEnv?.close()
+    await activeRuntime?.close()
     await cleanupDir(dataDir)
   }
 })
@@ -926,9 +914,8 @@ test('T7: pending ask abort, set_mode/toggle cancellation, disable 409 gates, re
 // ---------------------------------------------------------------------------
 
 test('T8: spawned subagent reads approved plan artifact via read_artifact and deleting parent cleans KV, sessionDoc, and badges', TIMEOUT, async () => {
-  const env = await openPlanIntegrationEnv()
-  try {
-    const { kernel } = env.app
+  const env = sharedEnv
+  const { kernel } = env.app
     const parent = await kernel.conversations.createConversation({ title: 'Parent with plan artifact' })
     const pid = parent.id
 
@@ -1003,9 +990,6 @@ test('T8: spawned subagent reads approved plan artifact via read_artifact and de
       () => kernel.plugins.getPublicSessionDoc(PLAN_PLUGIN_ID, PLAN_SESSION_DOC, pid),
       (err: unknown) => err instanceof HelmxError && err.status === 404,
     )
-  } finally {
-    await env.close()
-  }
 })
 
 // ---------------------------------------------------------------------------
@@ -1013,9 +997,8 @@ test('T8: spawned subagent reads approved plan artifact via read_artifact and de
 // ---------------------------------------------------------------------------
 
 test('T9: native bash & read-only run_action work in plan mode, ask_user clarifies without setting awaitingApproval, update_draft edits before approval, and resetConversation clears plan state', TIMEOUT, async () => {
-  const env = await openPlanIntegrationEnv()
-  try {
-    const { kernel } = env.app
+  const env = sharedEnv
+  const { kernel } = env.app
     const conv = await kernel.conversations.createConversation({ title: 'T9 Plan Enhancements' })
     const cid = conv.id
     await kernel.plugins.invokeAction(PLAN_PLUGIN_ID, 'set_mode', { conversationId: cid, mode: 'planning' })
@@ -1182,9 +1165,6 @@ test('T9: native bash & read-only run_action work in plan mode, ask_user clarifi
     assert.equal(resetView.mode, 'normal')
     assert.equal(resetView.draft, undefined)
     assert.equal(resetView.approved, undefined)
-  } finally {
-    await env.close()
-  }
 })
 
 // ---------------------------------------------------------------------------
@@ -1192,9 +1172,10 @@ test('T9: native bash & read-only run_action work in plan mode, ask_user clarifi
 // ---------------------------------------------------------------------------
 
 test('T9: builtin:plan bootstraps managed skill plan and removes it cleanly from <available_skills> and load_skill on disable', TIMEOUT, async () => {
-  const env = await openPlanIntegrationEnv()
+  const dataDir = await makeTempDir('helmx-plan-skill-')
+  const env = await openMinimalRuntime([createProfilePlugin(), createPlanPlugin()], { dataDir })
   try {
-    const { kernel } = env.app
+    const { kernel } = env
     const skills = await kernel.skills.list()
     const planSkill = skills.find((s) => s.id === PLAN_SKILL_ID)
     assert.ok(planSkill, 'builtin:plan must bootstrap managed skill plan on startup')
@@ -1251,13 +1232,13 @@ test('T9: builtin:plan bootstraps managed skill plan and removes it cleanly from
     assert.ok((await readSkillsSection()).includes('id="plan"'), 're-enabled builtin:plan must restore plan in <available_skills>')
   } finally {
     await env.close()
+    await cleanupDir(dataDir)
   }
 })
 
 test('T10: idempotent plan_save and anchored previousDraft baseline persist cleanly across propose -> revise -> multi-save -> approve', TIMEOUT, async () => {
-  const env = await openPlanIntegrationEnv()
-  try {
-    const { kernel } = env.app
+  const env = sharedEnv
+  const { kernel } = env.app
     const conv = await kernel.conversations.createConversation({ title: 'T10 Revision Diff' })
     const cid = conv.id
     await kernel.plugins.invokeAction(PLAN_PLUGIN_ID, 'set_mode', { conversationId: cid, mode: 'planning' })
@@ -1331,7 +1312,4 @@ test('T10: idempotent plan_save and anchored previousDraft baseline persist clea
     assert.equal(afterApprove.draft?.version, 4)
     assert.equal(afterApprove.previousDraft?.version, 2)
     assert.equal(afterApprove.approved?.version, 4)
-  } finally {
-    await env.close()
-  }
 })

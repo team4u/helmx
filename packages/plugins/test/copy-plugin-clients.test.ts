@@ -14,10 +14,12 @@
  * Runner: node:test; every test sets an explicit timeout: 60_000.
  */
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { describe, test } from 'node:test'
 import { fileURLToPath, pathToFileURL } from 'node:url'
+import { gzipSync } from 'node:zlib'
 import { buildPluginClientBundleDir } from '@helmx/plugin-build'
 import {
   PREBUILT_CLIENT_DIR_NAME,
@@ -179,6 +181,65 @@ function createPluginsFixture(root: string, options: { withChunkInAlpha?: boolea
   return { root, pluginsRoot, distDir, cacheFile, pluginsModule }
 }
 
+/**
+ * Fast synthetic bundle builder matching the `PrebuiltClientManifest` + `.gz` file contract
+ * so fingerprint caching, tamper detection, and force-rebuild tests run without repeated esbuild
+ * invocations (real `buildPluginClientBundleDir` E2E remains covered in the `dist/index.js` test).
+ */
+async function fakeBuildBundle(
+  opts: BuildPluginClientBundleDirOptions,
+): Promise<BuildPluginClientBundleDirResult> {
+  mkdirSync(opts.outDir, { recursive: true })
+  const modules: PrebuiltClientManifest['modules'] = {}
+  let totalBytes = 0
+  for (const modRef of opts.modules ?? ['index.tsx']) {
+    const src = readFileSync(path.join(opts.clientRoot, modRef), 'utf8')
+    const exports = [...src.matchAll(/export\s+(?:async\s+)?function\s+([A-Za-z0-9_$]+)|export\s+const\s+([A-Za-z0-9_$]+)/g)]
+      .map((m) => m[1] ?? m[2]!)
+      .filter(Boolean)
+    const contentHash = createHash('sha256').update(src).digest('hex').slice(0, 12)
+    const entryFile = `${modRef.replace(/\.[^.]+$/, '')}.${contentHash}.mjs`
+    const entryBytes = Buffer.from(`// prebuilt ${opts.pluginId} (${contentHash})\n${src}`, 'utf8')
+    const gzBytes = gzipSync(entryBytes)
+    writeFileSync(path.join(opts.outDir, entryFile), entryBytes)
+    writeFileSync(path.join(opts.outDir, `${entryFile}.gz`), gzBytes)
+    totalBytes += entryBytes.length + gzBytes.length
+
+    const hasDynamicChunk = /import\(["']\.\/[^"']+["']\)/.test(src)
+    let chunks: string[] | undefined
+    if (hasDynamicChunk) {
+      const chunkName = 'lazy.chunk.js'
+      chunks = [chunkName]
+      const chunkRel = prebuiltChunkFileName(entryFile, chunkName, opts.pluginId)
+      const chunkBytes = Buffer.from(`export const chunkHash = ${JSON.stringify(contentHash)};\n`, 'utf8')
+      const chunkGz = gzipSync(chunkBytes)
+      writeFileSync(path.join(opts.outDir, chunkRel), chunkBytes)
+      writeFileSync(path.join(opts.outDir, `${chunkRel}.gz`), chunkGz)
+      totalBytes += chunkBytes.length + chunkGz.length
+    }
+
+    modules[modRef] = {
+      entryFile,
+      contentHash,
+      exports: exports.length > 0 ? exports : ['default'],
+      ...(chunks !== undefined ? { chunks } : {}),
+    }
+  }
+  const manifest: PrebuiltClientManifest = { version: 1, modules }
+  const manifestPath = path.join(opts.outDir, PREBUILT_CLIENT_MANIFEST_FILE)
+  const manifestBytes = Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`, 'utf8')
+  writeFileSync(manifestPath, manifestBytes)
+  totalBytes += manifestBytes.length
+  return {
+    pluginId: opts.pluginId,
+    clientRoot: opts.clientRoot,
+    outDir: opts.outDir,
+    manifestPath,
+    manifest,
+    totalBytes,
+  }
+}
+
 describe('copy-plugin-clients incremental fingerprint caching', () => {
   test('cache hit skips esbuild; editing one plugin rebuilds ONLY that plugin; shared input edits invalidate all', { timeout: 60_000 }, async (t) => {
     const { copyAndPrebuildPluginClients } = await copyClientsModPromise
@@ -188,7 +249,7 @@ describe('copy-plugin-clients incremental fingerprint caching', () => {
     const builtCalls: string[] = []
     const trackingBuild = async (opts: BuildPluginClientBundleDirOptions) => {
       builtCalls.push(opts.pluginId)
-      return buildPluginClientBundleDir(opts)
+      return fakeBuildBundle(opts)
     }
 
     // 1. Cold build compiles both alpha and beta via real esbuild
@@ -335,6 +396,7 @@ describe('copy-plugin-clients incremental fingerprint caching', () => {
         repoRoot: fixture.root,
         cacheFile: fixture.cacheFile,
         pluginsModule: fixture.pluginsModule,
+        buildBundle: fakeBuildBundle,
         env: {},
         quiet: true,
       })
@@ -422,7 +484,7 @@ describe('copy-plugin-clients incremental fingerprint caching', () => {
       if (opts.pluginId === 'builtin:alpha') {
         observedNpmRootsOnBuild.push((opts.npmRoots ?? []).length)
       }
-      return buildPluginClientBundleDir(opts)
+      return fakeBuildBundle(opts)
     }
 
     // 1. Cold build
@@ -625,6 +687,7 @@ export function createSoloPlugin() {
       repoRoot: fixture.root,
       cacheFile: fixture.cacheFile,
       pluginsModule: fixture.pluginsModule,
+      buildBundle: fakeBuildBundle,
       env: {},
       quiet: true,
     })
@@ -642,6 +705,7 @@ export function createSoloPlugin() {
       repoRoot: fixture.root,
       cacheFile: fixture.cacheFile,
       pluginsModule: fixture.pluginsModule,
+      buildBundle: fakeBuildBundle,
       env: {},
       quiet: true,
     })

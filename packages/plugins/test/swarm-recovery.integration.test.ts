@@ -51,255 +51,237 @@ describe('builtin:swarm crash replay & boot reconciliation', { concurrency: 2, t
   // ---------------------------------------------------------------------------
 
   test('swarm-int8: SIGKILL before toolResult commit replays swarm_dispatch_worker and swarm_board_post idempotently with replay=safe', { timeout: 60_000 }, async (t) => {
-    const rootA = useTempDir(t, 'helmx-swarm-replay-dispatch-')
-    const rootB = useTempDir(t, 'helmx-swarm-replay-post-')
+    const root = useTempDir(t, 'helmx-swarm-replay-both-')
+    const dataDir = join(root, 'data')
+    const repoDir = join(root, 'repo')
+    gitTemplate.cloneTo(repoDir)
 
-    // Phase A (dispatch_worker) and Phase B (board_post) use fully independent temp dirs, repos, and apps;
-    // running both phases concurrently cuts real SIGKILL seeder wall time in half with identical assertions.
-    const runPhaseA = async (): Promise<void> => {
-      const dataDirA = join(rootA, 'data')
-      const repoDirA = join(rootA, 'repo')
-      gitTemplate.cloneTo(repoDirA)
+    const seedBothScript = `
+      import { writeSync } from 'node:fs'
+      import { fauxProvider, fauxAssistantMessage, fauxToolCall } from ${JSON.stringify(PI_AI_FAUX_URL)}
+      ${buildSwarmSeederOpenSnippet()}
 
-      const seedDispatchScript = `
-        import { writeSync } from 'node:fs'
-        import { fauxProvider, fauxAssistantMessage, fauxToolCall } from ${JSON.stringify(PI_AI_FAUX_URL)}
-        ${buildSwarmSeederOpenSnippet()}
-
-        const faux = fauxProvider({ models: [{ id: 'faux-1' }], tokensPerSecond: 500 })
-        let coordId = 0
-        faux.setResponses([
-          (ctx) => {
-            // Hold worker turn if scheduled before coordinator tool_result trap fires.
-            const isWorker = ctx.messages.some(
-              (m) => m['role'] === 'system' && JSON.stringify(m['sections'] ?? '').includes('role="worker"'),
+      const faux = fauxProvider({ models: [{ id: 'faux-1' }], tokensPerSecond: 500 })
+      const sectionOf = (ctx) => {
+        for (const m of ctx.messages) {
+          if (m.role === 'system' && m.sections && typeof m.sections['swarm.active_group'] === 'string') {
+            return m.sections['swarm.active_group']
+          }
+        }
+        return ''
+      }
+      let coordADispatched = false
+      let coderBPosted = false
+      faux.setResponses(Array.from({ length: 16 }, () => (ctx) => {
+        const sec = sectionOf(ctx)
+        if (sec.includes('role="worker"') && sec.includes('name="coder-a"')) {
+          return new Promise(() => {})
+        }
+        if (sec.includes('role="worker"') && sec.includes('name="coder-b"')) {
+          if (!coderBPosted) {
+            coderBPosted = true
+            return fauxAssistantMessage(
+              [fauxToolCall('swarm_board_post', { to: ['coordinator'], kind: 'done', body: 'Single idempotent done post.' })],
+              { stopReason: 'toolUse' },
             )
-            if (isWorker) {
-              return new Promise(() => {})
-            }
+          }
+          return new Promise(() => {})
+        }
+        if (sec.includes('role="coordinator"')) {
+          if (!coordADispatched) {
+            coordADispatched = true
             return fauxAssistantMessage(
               [
                 fauxToolCall('swarm_dispatch_worker', {
-                  name: 'coder',
+                  name: 'coder-a',
                   isolation: 'worktree',
                   prompt: 'Complete task once after dispatch replay.',
                 }),
               ],
               { stopReason: 'toolUse' },
             )
-          },
-          () => new Promise(() => {}),
-        ])
-
-        const app = await openSwarmApp({
-          dataDir: ${JSON.stringify(dataDirA)},
-          cwd: ${JSON.stringify(repoDirA)},
-          model: 'faux/faux-1',
-          providers: [faux.provider],
-        })
-        const origExecTool = app.kernel.plugins.executeTool.bind(app.kernel.plugins)
-        app.kernel.plugins.executeTool = async (name, input, ctx) => {
-          const result = await origExecTool(name, input, ctx)
-          if (name === 'swarm_dispatch_worker') {
-            writeSync(1, 'TRAPPED_DISPATCH=' + JSON.stringify({ callId: ctx?.callId }) + '\\n')
-            process.kill(process.pid, 'SIGKILL')
           }
-          return result
+          return new Promise(() => {})
         }
-        const coord = await app.kernel.conversations.createConversation({
-          title: 'Replay Dispatch Coord',
-          profileId: 'assistant',
-          cwd: ${JSON.stringify(repoDirA)},
-        })
-        coordId = coord.id
-        const { groupId } = await app.kernel.plugins.invokeAction(SWARM_PLUGIN_ID_LITERAL, 'create_group', {
-          title: 'Replay Dispatch Squad',
-          conversationId: coord.id,
-        })
-        writeSync(1, 'GROUP_INFO=' + JSON.stringify({ coordId: coord.id, groupId }) + '\\n')
-        await app.kernel.conversations.submitInput(coord.id, 'Dispatch coder worker.')
-        await new Promise(() => {})
-      `.replace('SWARM_PLUGIN_ID_LITERAL', JSON.stringify(SWARM_PLUGIN_ID))
+        return new Promise(() => {})
+      }))
 
-      const resA = await spawnSigkillSeeder(t, rootA, 'seed-dispatch-kill.mjs', seedDispatchScript)
-      const groupLineA = resA.stdout.split(/\r?\n/).find((l) => l.startsWith('GROUP_INFO='))
-      assert.ok(groupLineA !== undefined && resA.stdout.includes('TRAPPED_DISPATCH='), `unexpected stdout: ${resA.stdout}`)
-      const infoA = JSON.parse(groupLineA.slice('GROUP_INFO='.length)) as { coordId: number; groupId: string }
-
-      const fauxA = makeFauxProvider({ models: [{ id: 'faux-1' }] })
-      setSwarmRoleResponses(fauxA, {
-        coordinator: [
-          fauxAssistantMessage('Coordinator observed idempotent dispatch replay result.'),
-          fauxAssistantMessage('Coordinator acknowledged coder done report.'),
-        ],
-        coder: [
-          fauxAssistantMessage(
-            [fauxToolCall('swarm_board_post', { to: ['coordinator'], kind: 'done', body: 'Finished after dispatch replay.' })],
-            { stopReason: 'toolUse' },
-          ),
-          fauxAssistantMessage('Coder finished cleanly.'),
-        ],
+      const app = await openSwarmApp({
+        dataDir: ${JSON.stringify(dataDir)},
+        cwd: ${JSON.stringify(repoDir)},
+        model: 'faux/faux-1',
+        providers: [faux.provider],
       })
 
-      const appA = await openSwarmRuntime({
-        dataDir: dataDirA,
-        cwd: repoDirA,
-        faux: fauxA,
-      })
-      try {
-        try {
-          await waitFor(
-            () =>
-              isSettledStatus(appA.kernel.conversations.getConversation(infoA.coordId).status) &&
-              appA.kernel.conversations.getConversation(infoA.coordId).completionSeq >= 2 &&
-              appA.kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0,
-            { timeoutMs: 8_000 },
-          )
-        } catch (err) {
-          const cSummary = appA.kernel.conversations.getConversation(infoA.coordId)
-          const cDetail = await appA.kernel.conversations.getConversationDetail(infoA.coordId, { limit: 20 })
-          const convs = appA.kernel.conversations.listConversations()
-          throw new Error(
-            `${(err as Error).message}\ncoord=${JSON.stringify(cSummary)}\nconvs=${JSON.stringify(convs)}\ncEntries=${JSON.stringify(cDetail.entries)}`,
-          )
+      let trappedDispatchInfo
+      let trappedPost = false
+      const killIfReady = () => {
+        if (trappedDispatchInfo !== undefined && trappedPost) {
+          writeSync(1, 'TRAPPED_DISPATCH=' + JSON.stringify(trappedDispatchInfo) + '\\n')
+          writeSync(1, 'TRAPPED_POST=1\\n')
+          process.kill(process.pid, 'SIGKILL')
         }
-        const metaA = JSON.parse(
-          readFileSync(join(dataDirA, 'plugins', 'builtin%3Aswarm', 'groups', infoA.groupId, 'meta.json'), 'utf8'),
-        ) as CollabGroupRecord
-        assert.equal(metaA.members.length, 1, 'replaying swarm_dispatch_worker must not duplicate members')
-        const coderA = metaA.members[0]!
-        await appA.kernel.conversations.waitForIdle(coderA.conversationId)
-        await waitFor(() => appA.kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
-        await appA.kernel.conversations.waitForIdle(infoA.coordId)
-
-        const wtList = (await appA.kernel.plugins.invokeAction('builtin:worktree', 'list_worktrees', {})) as {
-          worktrees: Array<{ status: string }>
-        }
-        assert.equal(
-          wtList.worktrees.filter((w) => w.status === 'active').length,
-          1,
-          'replaying swarm_dispatch_worker must reuse the single acquired worktree',
-        )
-        const coordDetailA = await appA.kernel.conversations.getConversationDetail(infoA.coordId, { limit: 50 })
-        const dispatchErrors = coordDetailA.entries.filter(
-          (e) =>
-            e.kind === 'pi.toolResult' &&
-            JSON.stringify(e.data ?? '').includes('swarm_dispatch_worker') &&
-            (e.data as { isError?: boolean } | undefined)?.isError === true,
-        )
-        assert.equal(dispatchErrors.length, 0, 'replay of swarm_dispatch_worker must not raise 409 conflict')
-        const workerDetailA = await appA.kernel.conversations.getConversationDetail(coderA.conversationId, { limit: 50 })
-        assert.equal(workerDetailA.entries.filter((e) => e.kind === 'helmx.input').length, 1)
-      } finally {
-        await appA.close()
       }
+      const origExecTool = app.kernel.plugins.executeTool.bind(app.kernel.plugins)
+      app.kernel.plugins.executeTool = async (name, input, ctx) => {
+        const result = await origExecTool(name, input, ctx)
+        if (name === 'swarm_dispatch_worker') {
+          trappedDispatchInfo = { callId: ctx?.callId }
+          killIfReady()
+          await new Promise(() => {})
+        }
+        if (name === 'swarm_board_post') {
+          trappedPost = true
+          killIfReady()
+          await new Promise(() => {})
+        }
+        return result
+      }
+
+      const coordA = await app.kernel.conversations.createConversation({
+        title: 'Replay Dispatch Coord',
+        profileId: 'assistant',
+        cwd: ${JSON.stringify(repoDir)},
+      })
+      const { groupId: groupIdA } = await app.kernel.plugins.invokeAction(${JSON.stringify(SWARM_PLUGIN_ID)}, 'create_group', {
+        title: 'Replay Dispatch Squad',
+        conversationId: coordA.id,
+      })
+      writeSync(1, 'GROUP_INFO=' + JSON.stringify({ coordId: coordA.id, groupId: groupIdA }) + '\\n')
+
+      const coordB = await app.kernel.conversations.createConversation({
+        title: 'Post Replay Coord',
+        profileId: 'assistant',
+        cwd: ${JSON.stringify(repoDir)},
+      })
+      const { groupId: groupIdB } = await app.kernel.plugins.invokeAction(${JSON.stringify(SWARM_PLUGIN_ID)}, 'create_group', {
+        title: 'Post Replay Squad',
+        conversationId: coordB.id,
+      })
+      const workerB = await app.kernel.plugins.invokeAction(
+        ${JSON.stringify(SWARM_PLUGIN_ID)},
+        'dispatch_worker',
+        { prompt: 'Post done once.', name: 'coder-b' },
+        { conversationId: coordB.id },
+      )
+      writeSync(1, 'POST_INFO=' + JSON.stringify({ coordId: coordB.id, groupId: groupIdB, workerId: workerB.workerConversationId }) + '\\n')
+
+      void app.kernel.conversations.submitInput(coordA.id, 'Dispatch coderA worker.')
+      await new Promise(() => {})
+    `
+
+    const res = await spawnSigkillSeeder(t, root, 'seed-replay-both-kill.mjs', seedBothScript)
+    const groupLineA = res.stdout.split(/\r?\n/).find((l) => l.startsWith('GROUP_INFO='))
+    const postLineB = res.stdout.split(/\r?\n/).find((l) => l.startsWith('POST_INFO='))
+    assert.ok(
+      groupLineA !== undefined &&
+        postLineB !== undefined &&
+        res.stdout.includes('TRAPPED_DISPATCH=') &&
+        res.stdout.includes('TRAPPED_POST=1'),
+      `unexpected stdout: ${res.stdout}`,
+    )
+    const infoA = JSON.parse(groupLineA.slice('GROUP_INFO='.length)) as { coordId: number; groupId: string }
+    const infoB = JSON.parse(postLineB.slice('POST_INFO='.length)) as {
+      coordId: number
+      groupId: string
+      workerId: number
     }
 
-    const runPhaseB = async (): Promise<void> => {
-      const dataDirB = join(rootB, 'data')
-      const repoDirB = join(rootB, 'repo')
-      gitTemplate.cloneTo(repoDirB)
-
-      const seedPostScript = `
-        import { writeSync } from 'node:fs'
-        import { fauxProvider, fauxAssistantMessage, fauxToolCall } from ${JSON.stringify(PI_AI_FAUX_URL)}
-        ${buildSwarmSeederOpenSnippet()}
-
-        const faux = fauxProvider({ models: [{ id: 'faux-1' }], tokensPerSecond: 500 })
-        faux.setResponses([
-          fauxAssistantMessage(
-            [fauxToolCall('swarm_board_post', { to: ['coordinator'], kind: 'done', body: 'Single idempotent done post.' })],
-            { stopReason: 'toolUse' },
-          ),
-          () => new Promise(() => {}),
-        ])
-        const app = await openSwarmApp({
-          dataDir: ${JSON.stringify(dataDirB)},
-          cwd: ${JSON.stringify(repoDirB)},
-          model: 'faux/faux-1',
-          providers: [faux.provider],
-        })
-        const origExecTool = app.kernel.plugins.executeTool.bind(app.kernel.plugins)
-        app.kernel.plugins.executeTool = async (name, input, ctx) => {
-          const result = await origExecTool(name, input, ctx)
-          if (name === 'swarm_board_post') {
-            writeSync(1, 'TRAPPED_POST=1\\n')
-            process.kill(process.pid, 'SIGKILL')
+    const faux = makeFauxProvider({ models: [{ id: 'faux-1' }] })
+    const coordAQueue = [
+      fauxAssistantMessage('Coordinator observed idempotent dispatch replay result.'),
+      fauxAssistantMessage('Coordinator acknowledged coder done report.'),
+    ]
+    const coordBQueue = [fauxAssistantMessage('Coordinator acknowledged single done report.')]
+    const coderAQueue = [
+      fauxAssistantMessage(
+        [fauxToolCall('swarm_board_post', { to: ['coordinator'], kind: 'done', body: 'Finished after dispatch replay.' })],
+        { stopReason: 'toolUse' },
+      ),
+      fauxAssistantMessage('Coder finished cleanly.'),
+    ]
+    const coderBQueue = [fauxAssistantMessage('Coder completed after board_post replay.')]
+    faux.setResponses(
+      Array.from({ length: 32 }, () => (ctx) => {
+        let sec = ''
+        for (const m of ctx.messages as unknown as Array<{ role?: string; sections?: Record<string, string> }>) {
+          if (m.role === 'system' && typeof m.sections?.['swarm.active_group'] === 'string') {
+            sec = m.sections['swarm.active_group']
           }
-          return result
         }
-        const coord = await app.kernel.conversations.createConversation({
-          title: 'Post Replay Coord',
-          profileId: 'assistant',
-          cwd: ${JSON.stringify(repoDirB)},
-        })
-        const { groupId } = await app.kernel.plugins.invokeAction('builtin:swarm', 'create_group', {
-          title: 'Post Replay Squad',
-          conversationId: coord.id,
-        })
-        const worker = await app.kernel.plugins.invokeAction(
-          'builtin:swarm',
-          'dispatch_worker',
-          { prompt: 'Post done once.', name: 'coder' },
-          { conversationId: coord.id },
-        )
-        writeSync(1, 'POST_INFO=' + JSON.stringify({ coordId: coord.id, groupId, workerId: worker.workerConversationId }) + '\\n')
-        await new Promise(() => {})
-      `
-      const resB = await spawnSigkillSeeder(t, rootB, 'seed-post-kill.mjs', seedPostScript)
-      const postLineB = resB.stdout.split(/\r?\n/).find((l) => l.startsWith('POST_INFO='))
-      assert.ok(postLineB !== undefined && resB.stdout.includes('TRAPPED_POST=1'), `unexpected stdout: ${resB.stdout}`)
-      const infoB = JSON.parse(postLineB.slice('POST_INFO='.length)) as {
-        coordId: number
-        groupId: string
-        workerId: number
-      }
+        if (sec.includes('role="worker"') && sec.includes('name="coder-a"')) return coderAQueue.shift() ?? fauxAssistantMessage('CoderA idle.')
+        if (sec.includes('role="worker"') && sec.includes('name="coder-b"')) return coderBQueue.shift() ?? fauxAssistantMessage('CoderB idle.')
+        if (sec.includes(infoA.groupId)) return coordAQueue.shift() ?? fauxAssistantMessage('CoordA idle.')
+        if (sec.includes(infoB.groupId)) return coordBQueue.shift() ?? fauxAssistantMessage('CoordB idle.')
+        throw new Error(`Unexpected faux request for section: ${sec}`)
+      }),
+    )
 
-      const fauxB = makeFauxProvider({ models: [{ id: 'faux-1' }] })
-      setSwarmRoleResponses(fauxB, {
-        coder: [fauxAssistantMessage('Coder completed after board_post replay.')],
-        coordinator: [fauxAssistantMessage('Coordinator acknowledged single done report.')],
-      })
-      const appB = await openSwarmRuntime({
-        dataDir: dataDirB,
-        cwd: repoDirB,
-        faux: fauxB,
-      })
-      try {
-        await waitFor(
-          () =>
-            isSettledStatus(appB.kernel.conversations.getConversation(infoB.workerId).status) &&
-            isSettledStatus(appB.kernel.conversations.getConversation(infoB.coordId).status) &&
-            appB.kernel.conversations.getConversation(infoB.workerId).completionSeq >= 1 &&
-            appB.kernel.conversations.getConversation(infoB.coordId).completionSeq >= 1 &&
-            appB.kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0,
-          { timeoutMs: 8_000 },
-        )
-        const readB = (await appB.kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'board_read', { groupId: infoB.groupId })) as {
-          posts: BoardPost[]
-        }
-        const donePosts = readB.posts.filter((p) => p.kind === 'done' && p.from === 'coder')
-        assert.equal(donePosts.length, 1, `replaying swarm_board_post must keep exactly 1 done post, got ${donePosts.length}`)
-        const coordDetailB = await appB.kernel.conversations.getConversationDetail(infoB.coordId, { limit: 50 })
-        const reportsB = coordDetailB.entries.filter(
-          (e) => e.kind === 'helmx.input' && JSON.stringify(e.data ?? '').includes('swarm_board_report'),
-        )
-        assert.equal(reportsB.length, 1)
-      } finally {
-        await appB.close()
+    const app = await openSwarmRuntime({ dataDir, cwd: repoDir, faux })
+    try {
+      await waitFor(
+        () =>
+          isSettledStatus(app.kernel.conversations.getConversation(infoA.coordId).status) &&
+          app.kernel.conversations.getConversation(infoA.coordId).completionSeq >= 2 &&
+          isSettledStatus(app.kernel.conversations.getConversation(infoB.workerId).status) &&
+          isSettledStatus(app.kernel.conversations.getConversation(infoB.coordId).status) &&
+          app.kernel.conversations.getConversation(infoB.workerId).completionSeq >= 1 &&
+          app.kernel.conversations.getConversation(infoB.coordId).completionSeq >= 1 &&
+          app.kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0,
+        { timeoutMs: 8_000 },
+      )
+
+      const metaA = JSON.parse(
+        readFileSync(join(dataDir, 'plugins', 'builtin%3Aswarm', 'groups', infoA.groupId, 'meta.json'), 'utf8'),
+      ) as CollabGroupRecord
+      assert.equal(metaA.members.length, 1, 'replaying swarm_dispatch_worker must not duplicate members')
+      const coderA = metaA.members[0]!
+      await app.kernel.conversations.waitForIdle(coderA.conversationId)
+      await waitFor(() => app.kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
+      await app.kernel.conversations.waitForIdle(infoA.coordId)
+
+      const wtList = (await app.kernel.plugins.invokeAction('builtin:worktree', 'list_worktrees', {})) as {
+        worktrees: Array<{ status: string }>
       }
+      assert.equal(
+        wtList.worktrees.filter((w) => w.status === 'active').length,
+        1,
+        'replaying swarm_dispatch_worker must reuse the single acquired worktree',
+      )
+      const coordDetailA = await app.kernel.conversations.getConversationDetail(infoA.coordId, { limit: 50 })
+      const dispatchErrors = coordDetailA.entries.filter(
+        (e) =>
+          e.kind === 'pi.toolResult' &&
+          JSON.stringify(e.data ?? '').includes('swarm_dispatch_worker') &&
+          (e.data as { isError?: boolean } | undefined)?.isError === true,
+      )
+      assert.equal(dispatchErrors.length, 0, 'replay of swarm_dispatch_worker must not raise 409 conflict')
+      const workerDetailA = await app.kernel.conversations.getConversationDetail(coderA.conversationId, { limit: 50 })
+      assert.equal(workerDetailA.entries.filter((e) => e.kind === 'helmx.input').length, 1)
+
+      const readB = (await app.kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'board_read', { groupId: infoB.groupId })) as {
+        posts: BoardPost[]
+      }
+      const donePosts = readB.posts.filter((p) => p.kind === 'done' && p.from === 'coder-b')
+      assert.equal(donePosts.length, 1, `replaying swarm_board_post must keep exactly 1 done post, got ${donePosts.length}`)
+      const coordDetailB = await app.kernel.conversations.getConversationDetail(infoB.coordId, { limit: 50 })
+      const reportsB = coordDetailB.entries.filter(
+        (e) => e.kind === 'helmx.input' && JSON.stringify(e.data ?? '').includes('swarm_board_report'),
+      )
+      assert.equal(reportsB.length, 1)
+    } finally {
+      await app.close()
     }
-
-    await Promise.all([runPhaseA(), runPhaseB()])
   })
 
   // ---------------------------------------------------------------------------
-  // int9: 启动单真源收敛 — WAL 尾行截断回滚 + 孤儿/错配标签收敛 + 孤儿 Swarm Worktree 清理（不越权）
+  // int9 + int10: 启动单真源收敛 + runtime.started 对账（合用单次重启闭环）
   // ---------------------------------------------------------------------------
 
-  test('swarm-int9: boot reconciliation rolls back uncommitted WAL tail, converges orphan/stale tags, and cleans orphan swarm worktree holds without touching workflow holds', { timeout: 60_000 }, async (t) => {
-    const root = useTempDir(t, 'helmx-swarm-orphans-')
+  test('swarm-int9+10: boot reconciliation rolls back WAL, converges tags/orphan worktree holds, wakes uncommitted inflightWakeup, nudges silent-exit, and posts blocker for errored member', { timeout: 60_000 }, async (t) => {
+    const root = useTempDir(t, 'helmx-swarm-boot-reconcile-')
     const env1 = await openSwarmEnv(root, gitTemplate)
+    // int9 state
     let groupId = ''
     let group2Id = ''
     let coordId = 0
@@ -309,8 +291,15 @@ describe('builtin:swarm crash replay & boot reconciliation', { concurrency: 2, t
     let swarmOrphanWtId = ''
     let workflowWtId = ''
     let committedHeadSeq = 0
+    // int10 state
+    let group10Id = ''
+    let coord10Id = 0
+    let workerAId = 0
+    let workerBId = 0
+    let workerCId = 0
 
     try {
+      // --- Seed int9 ---
       const coord = await env1.app.kernel.conversations.createConversation({ title: 'Clean Coord', profileId: 'assistant', cwd: env1.repoDir })
       coordId = coord.id
       const created = (await env1.app.kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'create_group', {
@@ -341,14 +330,12 @@ describe('builtin:swarm crash replay & boot reconciliation', { concurrency: 2, t
       await waitFor(() => env1.app.kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
       await env1.app.kernel.conversations.waitForIdle(coordId)
 
-      // Archive coder, then re-apply stale WORKER_TAG to simulate crash between meta.json commit and tag swap.
       await env1.app.kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'archive_worker', {
         groupId,
         name: 'coder',
       })
       await env1.app.kernel.conversations.updateConversation(coderId, { tags: [WORKER_TAG] })
 
-      // Orphan coordinator clone & orphan worker carrying stale live tags outside meta.json.
       const orphanCoord = await env1.app.kernel.conversations.createConversation({
         title: 'Forked Orphan Coord',
         profileId: 'assistant',
@@ -365,7 +352,6 @@ describe('builtin:swarm crash replay & boot reconciliation', { concurrency: 2, t
       })
       orphanWorkerId = orphanWorker.id
 
-      // Orphan builtin:swarm worktree hold + foreign builtin:workflow worktree hold.
       const wtSwarmConv = await env1.app.kernel.conversations.createConversation({
         title: 'Swarm Orphan WT Holder',
         profileId: 'assistant',
@@ -410,11 +396,61 @@ describe('builtin:swarm crash replay & boot reconciliation', { concurrency: 2, t
         ).id,
       })) as { groupId: string }
       group2Id = created2.groupId
+
+      // --- Seed int10 ---
+      const coord10 = await env1.app.kernel.conversations.createConversation({ title: 'Reconcile Coord', profileId: 'assistant', cwd: env1.repoDir })
+      coord10Id = coord10.id
+      const created10 = (await env1.app.kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'create_group', {
+        title: 'Missed Settlement Squad',
+        conversationId: coord10.id,
+      })) as { groupId: string }
+      group10Id = created10.groupId
+
+      workerAId = (
+        await env1.app.kernel.conversations.createConversation({
+          title: 'Worker A',
+          profileId: 'assistant',
+          cwd: env1.repoDir,
+          tags: [WORKER_TAG],
+        })
+      ).id
+      workerBId = (
+        await env1.app.kernel.conversations.createConversation({
+          title: 'Worker B',
+          profileId: 'assistant',
+          cwd: env1.repoDir,
+          tags: [WORKER_TAG],
+        })
+      ).id
+      workerCId = (
+        await env1.app.kernel.conversations.createConversation({
+          title: 'Worker C',
+          profileId: 'assistant',
+          cwd: env1.repoDir,
+          tags: [WORKER_TAG],
+        })
+      ).id
+
+      env1.faux.setResponses([
+        fauxAssistantMessage('Silent exit response without calling swarm_board_post.'),
+        fauxAssistantMessage('Partial failure output.', { stopReason: 'error', errorMessage: 'simulated model crash' }),
+      ])
+      await env1.app.kernel.conversations.submitInput(workerBId, '[swarm_worker_brief] Finish task B.', {
+        origin: 'agent',
+        requestId: `swarm-wakeup:${group10Id}:workerB:1-2`,
+      })
+      await env1.app.kernel.conversations.waitForIdle(workerBId)
+
+      await env1.app.kernel.conversations.submitInput(workerCId, '[swarm_worker_brief] Finish task C.', {
+        origin: 'agent',
+        requestId: `swarm-wakeup:${group10Id}:workerC:1-3`,
+      })
+      await waitFor(() => env1.app.kernel.conversations.getConversation(workerCId).status !== 'working')
     } finally {
       await env1.close()
     }
 
-    // Inject uncommitted complete WAL tail post on group1 and partial truncated JSON tail on group2.
+    // Mutate int9 WAL files
     const groupDir2 = join(env1.dataDir, 'plugins', 'builtin%3Aswarm', 'groups', group2Id)
     const boardPath2 = join(groupDir2, 'board.jsonl')
     writeFileSync(boardPath2, `{"seq":1,"groupId":"${group2Id}"`, 'utf8')
@@ -435,128 +471,16 @@ describe('builtin:swarm crash replay & boot reconciliation', { concurrency: 2, t
       body: 'Uncommitted crash post that must be rolled back',
       createdAt: Date.now(),
     }
-    writeFileSync(
-      boardPath,
-      `${existingBoard}${JSON.stringify(dirtyPost)}\n`,
-      'utf8',
-    )
+    writeFileSync(boardPath, `${existingBoard}${JSON.stringify(dirtyPost)}\n`, 'utf8')
 
-    const faux2 = makeFauxProvider({ models: [{ id: 'faux-1' }] })
-    const app2 = await openSwarmRuntime({
-      dataDir: env1.dataDir,
-      cwd: env1.repoDir,
-      faux: faux2,
-    })
-    try {
-      await waitFor(() => app2.kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
-
-      // 1) WAL rolled back cleanly to committed headSeq.
-      const read = (await app2.kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'board_read', { groupId })) as { posts: BoardPost[] }
-      assert.equal(read.posts.every((p) => p.seq <= committedHeadSeq), true)
-      assert.equal(read.posts.some((p) => p.body.includes('Uncommitted crash post')), false)
-      const repairedLines = readFileSync(boardPath, 'utf8').trim().split('\n').filter(Boolean)
-      assert.equal(repairedLines.length, committedHeadSeq)
-
-      const read2 = (await app2.kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'board_read', { groupId: group2Id })) as { posts: BoardPost[] }
-      assert.equal(read2.posts.length, 0)
-      assert.equal(readFileSync(boardPath2, 'utf8'), '')
-
-      // 2) Tags converged strictly against meta.json.
-      assert.equal(app2.kernel.conversations.getConversation(coordId).tags.includes(COORDINATOR_TAG), true)
-      assert.equal(app2.kernel.conversations.getConversation(orphanCoordId).tags.includes(COORDINATOR_TAG), false)
-      assert.equal(app2.kernel.conversations.getConversation(coderId).tags.includes(WORKER_TAG), false)
-      assert.equal(app2.kernel.conversations.getConversation(coderId).tags.includes(ARCHIVED_WORKER_TAG), true)
-      assert.equal(app2.kernel.conversations.getConversation(orphanWorkerId).tags.includes(WORKER_TAG), false)
-
-      // 3) Orphaned builtin:swarm worktree hold was released and removed; builtin:workflow hold remained intact.
-      const swarmWtInspect = (await app2.kernel.plugins.invokeAction('builtin:worktree', 'inspect_worktree', {
-        worktreeId: swarmOrphanWtId,
-      })) as { exists: boolean }
-      assert.equal(swarmWtInspect.exists, false)
-      const workflowWtInspect = (await app2.kernel.plugins.invokeAction('builtin:worktree', 'inspect_worktree', {
-        worktreeId: workflowWtId,
-      })) as { exists: boolean }
-      assert.equal(workflowWtInspect.exists, true)
-    } finally {
-      await app2.close()
-    }
-  })
-
-  // ---------------------------------------------------------------------------
-  // int10: runtime.started 对账 — inflightWakeup 未提交死锁恢复、漏收 turn_settled 哑巴续催与异常自动 blocker
-  // ---------------------------------------------------------------------------
-
-  test('swarm-int10: runtime.started reconciliation wakes uncommitted inflightWakeup, nudges silent-exit member, and posts blocker for errored member', { timeout: 60_000 }, async (t) => {
-    const root = useTempDir(t, 'helmx-swarm-reconcile-')
-    const env1 = await openSwarmEnv(root, gitTemplate)
-    let groupId = ''
-    let coordId = 0
-    let workerAId = 0
-    let workerBId = 0
-    let workerCId = 0
-
-    try {
-      const coord = await env1.app.kernel.conversations.createConversation({ title: 'Reconcile Coord', profileId: 'assistant', cwd: env1.repoDir })
-      coordId = coord.id
-      const created = (await env1.app.kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'create_group', {
-        title: 'Missed Settlement Squad',
-        conversationId: coord.id,
-      })) as { groupId: string }
-      groupId = created.groupId
-
-      const convA = await env1.app.kernel.conversations.createConversation({
-        title: 'Worker A',
-        profileId: 'assistant',
-        cwd: env1.repoDir,
-        tags: [WORKER_TAG],
-      })
-      workerAId = convA.id
-
-      const convB = await env1.app.kernel.conversations.createConversation({
-        title: 'Worker B',
-        profileId: 'assistant',
-        cwd: env1.repoDir,
-        tags: [WORKER_TAG],
-      })
-      workerBId = convB.id
-
-      const convC = await env1.app.kernel.conversations.createConversation({
-        title: 'Worker C',
-        profileId: 'assistant',
-        cwd: env1.repoDir,
-        tags: [WORKER_TAG],
-      })
-      workerCId = convC.id
-
-      // Seed real pre-restart turns for workerB (silent idle completion) and workerC (error stopReason)
-      // before registering them into meta.json so pre-crash turn_settled didn't run on them yet.
-      env1.faux.setResponses([
-        fauxAssistantMessage('Silent exit response without calling swarm_board_post.'),
-        fauxAssistantMessage('Partial failure output.', { stopReason: 'error', errorMessage: 'simulated model crash' }),
-      ])
-      await env1.app.kernel.conversations.submitInput(workerBId, '[swarm_worker_brief] Finish task B.', {
-        origin: 'agent',
-        requestId: `swarm-wakeup:${groupId}:workerB:1-2`,
-      })
-      await env1.app.kernel.conversations.waitForIdle(workerBId)
-
-      await env1.app.kernel.conversations.submitInput(workerCId, '[swarm_worker_brief] Finish task C.', {
-        origin: 'agent',
-        requestId: `swarm-wakeup:${groupId}:workerC:1-3`,
-      })
-      await waitFor(() => env1.app.kernel.conversations.getConversation(workerCId).status !== 'working')
-    } finally {
-      await env1.close()
-    }
-
-    // Persist post-crash disk state: 3 briefs in board.jsonl + inflightWakeup / missed settlements in meta.json.
-    const groupDir = join(env1.dataDir, 'plugins', 'builtin%3Aswarm', 'groups', groupId)
-    const metaPath = join(groupDir, 'meta.json')
-    const boardPath = join(groupDir, 'board.jsonl')
+    // Mutate int10 post-crash board.jsonl + meta.json
+    const groupDir10 = join(env1.dataDir, 'plugins', 'builtin%3Aswarm', 'groups', group10Id)
+    const metaPath10 = join(groupDir10, 'meta.json')
+    const boardPath10 = join(groupDir10, 'board.jsonl')
     const now = Date.now()
-    const posts: BoardPost[] = [
+    const posts10: BoardPost[] = [
       {
-        groupId,
+        groupId: group10Id,
         seq: 1,
         from: 'coordinator',
         to: ['workerA'],
@@ -568,7 +492,7 @@ describe('builtin:swarm crash replay & boot reconciliation', { concurrency: 2, t
         createdAt: now - 30,
       },
       {
-        groupId,
+        groupId: group10Id,
         seq: 2,
         from: 'coordinator',
         to: ['workerB'],
@@ -580,7 +504,7 @@ describe('builtin:swarm crash replay & boot reconciliation', { concurrency: 2, t
         createdAt: now - 20,
       },
       {
-        groupId,
+        groupId: group10Id,
         seq: 3,
         from: 'coordinator',
         to: ['workerC'],
@@ -592,11 +516,11 @@ describe('builtin:swarm crash replay & boot reconciliation', { concurrency: 2, t
         createdAt: now - 10,
       },
     ]
-    writeFileSync(boardPath, `${posts.map((p) => JSON.stringify(p)).join('\n')}\n`, 'utf8')
+    writeFileSync(boardPath10, `${posts10.map((p) => JSON.stringify(p)).join('\n')}\n`, 'utf8')
 
-    const meta = JSON.parse(readFileSync(metaPath, 'utf8')) as CollabGroupRecord
-    meta.headSeq = 3
-    meta.members = [
+    const meta10 = JSON.parse(readFileSync(metaPath10, 'utf8')) as CollabGroupRecord
+    meta10.headSeq = 3
+    meta10.members = [
       {
         name: 'workerA',
         conversationId: workerAId,
@@ -610,7 +534,7 @@ describe('builtin:swarm crash replay & boot reconciliation', { concurrency: 2, t
         pendingWakeupSeq: 1,
         lastWakeTaskSeq: 1,
         inflightWakeup: {
-          requestId: `swarm-wakeup:${groupId}:workerA:1-1`,
+          requestId: `swarm-wakeup:${group10Id}:workerA:1-1`,
           fromSeq: 1,
           toSeq: 1,
           baseCompletionSeq: 0,
@@ -648,7 +572,7 @@ describe('builtin:swarm crash replay & boot reconciliation', { concurrency: 2, t
         createdAt: now - 10,
       },
     ]
-    writeFileSync(metaPath, `${JSON.stringify(meta, null, 2)}\n`, 'utf8')
+    writeFileSync(metaPath10, `${JSON.stringify(meta10, null, 2)}\n`, 'utf8')
 
     const faux2 = makeFauxProvider({ models: [{ id: 'faux-1' }] })
     setSwarmRoleResponses(faux2, {
@@ -679,40 +603,55 @@ describe('builtin:swarm crash replay & boot reconciliation', { concurrency: 2, t
       faux: faux2,
     })
     try {
-      try {
-        await waitFor(
-          () =>
-            isSettledStatus(app2.kernel.conversations.getConversation(workerAId).status) &&
-            app2.kernel.conversations.getConversation(workerAId).completionSeq >= 1 &&
-            isSettledStatus(app2.kernel.conversations.getConversation(workerBId).status) &&
-            app2.kernel.conversations.getConversation(workerBId).completionSeq >= 2 &&
-            isSettledStatus(app2.kernel.conversations.getConversation(coordId).status) &&
-            app2.kernel.conversations.getConversation(coordId).completionSeq >= 1 &&
-            app2.kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0,
-          { timeoutMs: 8_000 },
-        )
-      } catch (err) {
-        const a = app2.kernel.conversations.getConversation(workerAId)
-        const b = app2.kernel.conversations.getConversation(workerBId)
-        const c = app2.kernel.conversations.getConversation(workerCId)
-        const cr = app2.kernel.conversations.getConversation(coordId)
-        const dB = await app2.kernel.conversations.getConversationDetail(workerBId, { limit: 20 })
-        const dCoord = await app2.kernel.conversations.getConversationDetail(coordId, { limit: 20 })
-        throw new Error(
-          `${(err as Error).message}\nworkerA=${JSON.stringify(a)}\nworkerB=${JSON.stringify(b)}\nworkerC=${JSON.stringify(c)}\ncoord=${JSON.stringify(cr)}\nbEntries=${JSON.stringify(dB.entries)}\ncoordEntries=${JSON.stringify(dCoord.entries)}`,
-        )
-      }
+      await waitFor(
+        () =>
+          isSettledStatus(app2.kernel.conversations.getConversation(workerAId).status) &&
+          app2.kernel.conversations.getConversation(workerAId).completionSeq >= 1 &&
+          isSettledStatus(app2.kernel.conversations.getConversation(workerBId).status) &&
+          app2.kernel.conversations.getConversation(workerBId).completionSeq >= 2 &&
+          isSettledStatus(app2.kernel.conversations.getConversation(coord10Id).status) &&
+          app2.kernel.conversations.getConversation(coord10Id).completionSeq >= 1 &&
+          app2.kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0,
+        { timeoutMs: 8_000 },
+      )
       await app2.kernel.conversations.waitForIdle(workerAId)
       await app2.kernel.conversations.waitForIdle(workerBId)
-      await app2.kernel.conversations.waitForIdle(coordId)
+      await app2.kernel.conversations.waitForIdle(coord10Id)
 
-      const read = (await app2.kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'board_read', { groupId })) as {
+      // int9 assertions
+      const read = (await app2.kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'board_read', { groupId })) as { posts: BoardPost[] }
+      assert.equal(read.posts.every((p) => p.seq <= committedHeadSeq), true)
+      assert.equal(read.posts.some((p) => p.body.includes('Uncommitted crash post')), false)
+      const repairedLines = readFileSync(boardPath, 'utf8').trim().split('\n').filter(Boolean)
+      assert.equal(repairedLines.length, committedHeadSeq)
+
+      const read2 = (await app2.kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'board_read', { groupId: group2Id })) as { posts: BoardPost[] }
+      assert.equal(read2.posts.length, 0)
+      assert.equal(readFileSync(boardPath2, 'utf8'), '')
+
+      assert.equal(app2.kernel.conversations.getConversation(coordId).tags.includes(COORDINATOR_TAG), true)
+      assert.equal(app2.kernel.conversations.getConversation(orphanCoordId).tags.includes(COORDINATOR_TAG), false)
+      assert.equal(app2.kernel.conversations.getConversation(coderId).tags.includes(WORKER_TAG), false)
+      assert.equal(app2.kernel.conversations.getConversation(coderId).tags.includes(ARCHIVED_WORKER_TAG), true)
+      assert.equal(app2.kernel.conversations.getConversation(orphanWorkerId).tags.includes(WORKER_TAG), false)
+
+      const swarmWtInspect = (await app2.kernel.plugins.invokeAction('builtin:worktree', 'inspect_worktree', {
+        worktreeId: swarmOrphanWtId,
+      })) as { exists: boolean }
+      assert.equal(swarmWtInspect.exists, false)
+      const workflowWtInspect = (await app2.kernel.plugins.invokeAction('builtin:worktree', 'inspect_worktree', {
+        worktreeId: workflowWtId,
+      })) as { exists: boolean }
+      assert.equal(workflowWtInspect.exists, true)
+
+      // int10 assertions
+      const read10 = (await app2.kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'board_read', { groupId: group10Id })) as {
         posts: BoardPost[]
       }
-      assert.equal(read.posts.filter((p) => p.kind === 'done' && p.from === 'workerA').length, 1)
-      assert.equal(read.posts.filter((p) => p.kind === 'done' && p.from === 'workerB').length, 1)
-      const blockerC = read.posts.find((p) => p.kind === 'blocker' && p.from === 'system' && p.to.includes('coordinator'))
-      assert.ok(blockerC !== undefined, `expected auto system blocker for errored workerC, got ${JSON.stringify(read.posts)}`)
+      assert.equal(read10.posts.filter((p) => p.kind === 'done' && p.from === 'workerA').length, 1)
+      assert.equal(read10.posts.filter((p) => p.kind === 'done' && p.from === 'workerB').length, 1)
+      const blockerC = read10.posts.find((p) => p.kind === 'blocker' && p.from === 'system' && p.to.includes('coordinator'))
+      assert.ok(blockerC !== undefined, `expected auto system blocker for errored workerC, got ${JSON.stringify(read10.posts)}`)
       assert.match(blockerC.body, /workerC/)
 
       const detailB = await app2.kernel.conversations.getConversationDetail(workerBId, { limit: 50 })
@@ -728,7 +667,7 @@ describe('builtin:swarm crash replay & boot reconciliation', { concurrency: 2, t
         'errored workerC must receive auto blocker rather than silent-exit nudge',
       )
 
-      const coordDetail = await app2.kernel.conversations.getConversationDetail(coordId, { limit: 50 })
+      const coordDetail = await app2.kernel.conversations.getConversationDetail(coord10Id, { limit: 50 })
       const coordReportText = JSON.stringify(
         coordDetail.entries.filter((e) => e.kind === 'helmx.input' && JSON.stringify(e.data ?? '').includes('swarm_board_report')),
       )

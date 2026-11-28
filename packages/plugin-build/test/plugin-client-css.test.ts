@@ -13,7 +13,7 @@
  * - cache version invalidation (an old v3 manifest is not reused, forcing recompilation).
  */
 import assert from 'node:assert/strict'
-import { test, before, after } from 'node:test'
+import { after, before, describe, test } from 'node:test'
 import { mkdtemp, mkdir, writeFile, rm, symlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
@@ -57,6 +57,7 @@ async function evalModule(code: string): Promise<Record<string, unknown>> {
   return (await import(url)) as Record<string, unknown>
 }
 
+describe('plugin-client-css compiler tests', { concurrency: 4, timeout: 60_000 }, () => {
 test('two CSS dependencies merge in order: the first import\'s rules appear first, and the artifact is executable and readable', { timeout: 60_000 }, async () => {
   const root = join(dataDir, 'order-src')
   await writePluginSource(
@@ -143,24 +144,28 @@ test('data: / https: / protocol-relative asset URLs are preserved verbatim', { t
 })
 
 test('local relative / root-relative / fragment asset URLs are explicitly rejected with a data: suggestion', { timeout: 60_000 }, async () => {
-  for (const [label, decl] of [
-    ['relative', '.x { background: url(./icon.png) }'],
-    ['root-relative', '.x { background: url(/assets/icon.png) }'],
-    ['fragment', '.x { fill: url(#grad) }'],
-  ] as const) {
-    const root = join(dataDir, `asset-bad-${label}-src`)
-    await writePluginSource(root, { 'styles.css': decl }, ["'./styles.css'"])
-    await assert.rejects(
-      () => compilePluginClientModule(`test:css-bad-${label}`, root, 'index.tsx', dataDir),
-      (err: unknown) =>
-        err instanceof HelmxError &&
-        err.code === 'client_compile_failed' &&
-        /asset reference/.test(err.message) &&
-        /rejected/.test(err.message) &&
-        /data:/.test(err.message),
-      `asset form ${label} must be explicitly rejected`,
-    )
-  }
+  await Promise.all(
+    (
+      [
+        ['relative', '.x { background: url(./icon.png) }'],
+        ['root-relative', '.x { background: url(/assets/icon.png) }'],
+        ['fragment', '.x { fill: url(#grad) }'],
+      ] as const
+    ).map(async ([label, decl]) => {
+      const root = join(dataDir, `asset-bad-${label}-src`)
+      await writePluginSource(root, { 'styles.css': decl }, ["'./styles.css'"])
+      await assert.rejects(
+        () => compilePluginClientModule(`test:css-bad-${label}`, root, 'index.tsx', dataDir),
+        (err: unknown) =>
+          err instanceof HelmxError &&
+          err.code === 'client_compile_failed' &&
+          /asset reference/.test(err.message) &&
+          /rejected/.test(err.message) &&
+          /data:/.test(err.message),
+        `asset form ${label} must be explicitly rejected`,
+      )
+    }),
+  )
 })
 
 test('nested @import in inline CSS also passes through the asset boundary and cannot bypass the remote-reference rejection', { timeout: 60_000 }, async () => {
@@ -234,21 +239,23 @@ test('reserved export conflict: a plugin occupying __helmxClientCss itself fails
 })
 
 test('reserved-export validation uses module metadata: neither no-CSS nor a trailing license comment allows occupying it', { timeout: 60_000 }, async () => {
-  for (const withCss of [false, true]) {
-    const root = join(dataDir, `metadata-conflict-${withCss}`)
-    await writePluginSource(root, { 'styles.css': '.reserved { color: red }' }, [])
-    await writeFile(join(root, 'index.tsx'), [
-      ...(withCss ? ["import './styles.css'"] : []),
-      "const value = 'not-managed-css'",
-      `export { value as ${PLUGIN_CLIENT_CSS_EXPORT} }`,
-      '/*! 保留的尾部许可证注释 */',
-    ].join('\n'))
-    await assert.rejects(
-      () => compilePluginClientModule(`test:css-reserved-${withCss}`, root, 'index.tsx', dataDir),
-      (error: unknown) => error instanceof HelmxError && error.code === 'client_compile_failed' && error.message.includes(PLUGIN_CLIENT_CSS_EXPORT),
-      `withCss=${withCss} must both reject the reserved export name at the compile boundary`,
-    )
-  }
+  await Promise.all(
+    [false, true].map(async (withCss) => {
+      const root = join(dataDir, `metadata-conflict-${withCss}`)
+      await writePluginSource(root, { 'styles.css': '.reserved { color: red }' }, [])
+      await writeFile(join(root, 'index.tsx'), [
+        ...(withCss ? ["import './styles.css'"] : []),
+        "const value = 'not-managed-css'",
+        `export { value as ${PLUGIN_CLIENT_CSS_EXPORT} }`,
+        '/*! 保留的尾部许可证注释 */',
+      ].join('\n'))
+      await assert.rejects(
+        () => compilePluginClientModule(`test:css-reserved-${withCss}`, root, 'index.tsx', dataDir),
+        (error: unknown) => error instanceof HelmxError && error.code === 'client_compile_failed' && error.message.includes(PLUGIN_CLIENT_CSS_EXPORT),
+        `withCss=${withCss} must both reject the reserved export name at the compile boundary`,
+      )
+    }),
+  )
 })
 
 test('an unexported same-named local variable does not collide: const __helmxClientCss inside the entry still compiles and evaluates while referenced by the component', { timeout: 60_000 }, async () => {
@@ -311,4 +318,5 @@ test('cache version invalidation: an old v5 manifest is not reused, forcing reco
   assert.equal(after.code, fresh.code, 'an old-version manifest must be invalidated; never reuse the old poisoned artifact')
   const mod = await evalModule(after.code)
   assert.match(mod[PLUGIN_CLIENT_CSS_EXPORT] as string, /\.v3/)
+})
 })

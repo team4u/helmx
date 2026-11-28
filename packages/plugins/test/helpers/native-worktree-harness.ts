@@ -10,7 +10,7 @@ import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import { Harness, createRegistry } from '@earendil-works/pi-durable'
 import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node'
 import { MemoryStorage } from '@earendil-works/pi-durable/storage/memory'
-import { HelmxError } from '@helmx/protocol'
+import { HelmxError, type NodePathUsage } from '@helmx/protocol'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -51,6 +51,27 @@ export { createPluginHostBackendFixture as createWorktreeHostBackendFixture }
  * 非 Linux 上 cleanup 在进程检查处默认显式拒绝（501 worktree_usage_unverifiable）
  * ——不伪造 complete=true、不静默跳过；这是当前跨平台行为限制的如实断言。
  */
+export function fastInspectPathUsage(
+  fallback: (nodeId: string, targetPath: string, signal?: AbortSignal) => Promise<NodePathUsage> = (nodeId, path, signal) =>
+    bareFabricOf().inspectPathUsage(nodeId, path, signal),
+): (nodeId: string, targetPath: string, signal?: AbortSignal) => Promise<NodePathUsage> {
+  return async (nodeId, targetPath, signal) => {
+    if (nodeId === 'local' && process.platform === 'linux') {
+      if (signal?.aborted) throw new HelmxError('aborted', 'path usage scan cancelled', 499, { nodeId })
+      return {
+        path: targetPath,
+        processes: [],
+        matchedTotal: 0,
+        processesTruncated: false,
+        complete: true,
+        unobservable: 0,
+        diagnostics: [],
+      }
+    }
+    return fallback(nodeId, targetPath, signal)
+  }
+}
+
 export const PROCESS_SCAN_ON = process.platform === 'linux'
 
 /** 非 Linux 平台断言 cleanup 显式拒绝（进程占用扫描不支持，不伪造 0 占用）。 */
@@ -136,9 +157,10 @@ export async function openSpawnHarness(repoDir: string, dataDir: string): Promis
   const kvStore = new MemoryKvStore()
   const worktreeKv = createMemoryWorktreeKv(kvStore)
   const working = new Set<number>()
+  const inspectPathUsage = fastInspectPathUsage((nodeId, path, signal) => envFabric.inspectPathUsage(nodeId, path, signal))
   const allocator = new WorktreeAllocator({
     ...localNodePorts(),
-    inspectPathUsage: (nodeId, path, signal) => envFabric.inspectPathUsage(nodeId, path, signal),
+    inspectPathUsage,
     kv: worktreeKv,
     redact: (t) => stash.redact(t),
     isConversationWorking: (id) => working.has(id),
@@ -170,7 +192,7 @@ export async function openSpawnHarness(repoDir: string, dataDir: string): Promis
         return { ok: result.value.exitCode === 0, exitCode: result.value.exitCode, output: combined, timedOut: false }
       },
       executionEnv: (_nodeId, cwd) => new NodeExecutionEnv({ cwd }),
-      inspectNodePathUsage: (input) => envFabric.inspectPathUsage(input.nodeId, input.path, input.signal),
+      inspectNodePathUsage: (input) => inspectPathUsage(input.nodeId, input.path, input.signal),
       listActiveSpawnExecutions: () => [],
       redact: (t) => stash.redact(t),
       getConversation: (id: number) => {
@@ -337,7 +359,7 @@ export function bareAllocator(
 ) {
   return new WorktreeAllocator({
     ...localNodePorts(),
-    inspectPathUsage: (nodeId, path, signal) => bareFabricOf().inspectPathUsage(nodeId, path, signal),
+    inspectPathUsage: fastInspectPathUsage(),
     kv: createMemoryWorktreeKv(kvStore),
     ...(extra?.redact !== undefined ? { redact: extra.redact } : {}),
     ...(extra?.isPathInUse !== undefined ? { isPathInUse: extra.isPathInUse } : {}),
@@ -436,7 +458,7 @@ export async function executeCleanupTool(
     resolveSpawnTarget: async () => ({ nodeId: 'local', sourceCwd: dataDir, parentCwd: dataDir }),
     listActiveSpawnExecutions: () => [],
     inspectNodePathUsage: (input: { nodeId: string; path: string; signal?: AbortSignal }) =>
-      bareFabricOf().inspectPathUsage(input.nodeId, input.path, input.signal),
+      fastInspectPathUsage()(input.nodeId, input.path, input.signal),
     executionEnv: (_nodeId: string, cwd: string) => new NodeExecutionEnv({ cwd }),
     redact: (t: string) => t,
     execEnv: async (req: { command: string | string[]; cwd?: string; timeoutMs?: number }) =>
@@ -552,8 +574,7 @@ export async function openWorkflowPluginHost(options: {
       }
     },
     listActiveSpawnExecutions: () => [],
-    inspectNodePathUsage: (input) =>
-      bareFabricOf().inspectPathUsage(input.nodeId, input.path, input.signal),
+    inspectNodePathUsage: (input) => fastInspectPathUsage()(input.nodeId, input.path, input.signal),
     executionEnv: (_nodeId: string, cwd: string) => new NodeExecutionEnv({ cwd }),
     redact: (t: string) => stash.redact(t),
     execEnv: async (req: { command: string | string[]; cwd?: string; timeoutMs?: number }) =>

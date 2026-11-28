@@ -640,6 +640,82 @@ const cliRequire = createRequire(import.meta.url)
 const tscCliScript = cliRequire.resolve('typescript/bin/tsc')
 const cliTestRepoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..')
 
+interface TsDiagnosticLike {
+  file?: { fileName: string; getLineAndCharacterOfPosition: (pos: number) => { line: number; character: number } }
+  start?: number
+  code: number
+  messageText: unknown
+}
+interface TsLike {
+  sys: {
+    fileExists: (p: string) => boolean
+    readFile: (p: string) => string | undefined
+    readDirectory: (...args: unknown[]) => string[]
+  }
+  readConfigFile: (p: string, readFile: (p: string) => string | undefined) => { config?: unknown; error?: TsDiagnosticLike }
+  parseJsonConfigFileContent: (
+    json: unknown,
+    host: unknown,
+    basePath: string,
+  ) => { options: Record<string, unknown>; fileNames: string[]; errors: TsDiagnosticLike[] }
+  createCompilerHost: (options: Record<string, unknown>) => {
+    getSourceFile: (fileName: string, languageVersionOrOptions: unknown, ...rest: unknown[]) => unknown
+  }
+  createProgram: (rootNames: string[], options: Record<string, unknown>, host: unknown) => unknown
+  getPreEmitDiagnostics: (program: unknown) => TsDiagnosticLike[]
+  flattenDiagnosticMessageText: (msg: unknown, newLine: string) => string
+}
+
+let cachedTs: TsLike | undefined
+const sharedLibSourceFiles = new Map<string, unknown>()
+
+function runTscNoEmitInProcess(
+  tsconfigPath: string,
+): { status: number; stdout: string; stderr: string } {
+  cachedTs ??= cliRequire('typescript') as TsLike
+  const ts = cachedTs
+  const configRes = ts.readConfigFile(tsconfigPath, ts.sys.readFile)
+  if (configRes.error) {
+    return { status: 1, stdout: '', stderr: ts.flattenDiagnosticMessageText(configRes.error.messageText, '\n') }
+  }
+  const parsed = ts.parseJsonConfigFileContent(configRes.config, ts.sys, path.dirname(tsconfigPath))
+  const options = { ...parsed.options, noEmit: true }
+  const host = ts.createCompilerHost(options)
+  const origGetSourceFile = host.getSourceFile.bind(host)
+  host.getSourceFile = (fileName, languageVersionOrOptions, ...rest) => {
+    const isLib = fileName.includes('/typescript/lib/lib.') || fileName.includes('\\typescript\\lib\\lib.')
+    if (isLib) {
+      const langKey =
+        typeof languageVersionOrOptions === 'object' && languageVersionOrOptions !== null
+          ? JSON.stringify(languageVersionOrOptions)
+          : String(languageVersionOrOptions)
+      const cacheKey = `${fileName}:${langKey}`
+      const hit = sharedLibSourceFiles.get(cacheKey)
+      if (hit !== undefined) return hit
+      const sf = origGetSourceFile(fileName, languageVersionOrOptions, ...rest)
+      if (sf !== undefined) sharedLibSourceFiles.set(cacheKey, sf)
+      return sf
+    }
+    return origGetSourceFile(fileName, languageVersionOrOptions, ...rest)
+  }
+  const program = ts.createProgram(parsed.fileNames, options, host)
+  const diagnostics = [...parsed.errors, ...ts.getPreEmitDiagnostics(program)]
+  if (diagnostics.length === 0) {
+    return { status: 0, stdout: '', stderr: '' }
+  }
+  const formatted = diagnostics
+    .map((d) => {
+      const msg = ts.flattenDiagnosticMessageText(d.messageText, '\n')
+      if (d.file && typeof d.start === 'number') {
+        const { line, character } = d.file.getLineAndCharacterOfPosition(d.start)
+        return `${d.file.fileName}(${line + 1},${character + 1}): error TS${d.code}: ${msg}`
+      }
+      return `error TS${d.code}: ${msg}`
+    })
+    .join('\n')
+  return { status: 1, stdout: formatted, stderr: '' }
+}
+
 function runTscNoEmitAsync(
   tsconfigPath: string,
   cwd: string,
@@ -892,14 +968,15 @@ test('plugins init: all three templates pass real standalone tsc --noEmit outsid
     'utf8',
   )
 
-  const [minimalRes, fullRes, appAndShimRes, badBackend, badFrontend, withRealTypes] = await Promise.all([
-    runTscNoEmitAsync(path.join(minimalDir, 'tsconfig.json'), minimalDir),
-    runTscNoEmitAsync(path.join(fullDir, 'tsconfig.json'), fullDir),
-    runTscNoEmitAsync(path.join(appDir, 'tsconfig.json'), appDir),
-    runTscNoEmitAsync(path.join(badBackendDir, 'tsconfig.json'), badBackendDir),
-    runTscNoEmitAsync(path.join(badFrontendDir, 'tsconfig.json'), badFrontendDir),
-    runTscNoEmitAsync(path.join(coexistDir, 'tsconfig.json'), coexistDir),
-  ])
+  const appTscPromise = runTscNoEmitAsync(path.join(appDir, 'tsconfig.json'), appDir)
+  const [minimalRes, fullRes, badBackend, badFrontend, withRealTypes] = [
+    runTscNoEmitInProcess(path.join(minimalDir, 'tsconfig.json')),
+    runTscNoEmitInProcess(path.join(fullDir, 'tsconfig.json')),
+    runTscNoEmitInProcess(path.join(badBackendDir, 'tsconfig.json')),
+    runTscNoEmitInProcess(path.join(badFrontendDir, 'tsconfig.json')),
+    runTscNoEmitInProcess(path.join(coexistDir, 'tsconfig.json')),
+  ]
+  const appAndShimRes = await appTscPromise
 
   assert.equal(minimalRes.status, 0, `standalone tsc --noEmit failed for template minimal:\n${minimalRes.stdout}\n${minimalRes.stderr}`)
   assert.equal(fullRes.status, 0, `standalone tsc --noEmit failed for template full:\n${fullRes.stdout}\n${fullRes.stderr}`)

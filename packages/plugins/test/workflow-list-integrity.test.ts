@@ -12,7 +12,7 @@
  */
 import { strict as assert } from 'node:assert'
 import { after, before, describe, it, test } from 'node:test'
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawn } from 'node:child_process'
@@ -499,13 +499,19 @@ describe('workflow listRuns failure visibility over HTTP (plugin actions)', () =
 
 const testDir = fileURLToPath(new URL('.', import.meta.url))
 const repoRoot = join(testDir, '..', '..', '..')
+const distCliEntry = join(repoRoot, 'packages', 'cli', 'dist', 'index.js')
+const cliUseDist = existsSync(distCliEntry) && existsSync(join(repoRoot, 'packages', 'protocol', 'dist', 'index.js'))
 const cliEntry = join(repoRoot, 'packages', 'cli', 'src', 'index.ts')
 const require = createRequire(import.meta.url)
-const tsxCli = require.resolve('tsx/cli')
+const tsxCli = cliUseDist ? '' : require.resolve('tsx/cli')
 
 function runCliChild(args: string[], env: NodeJS.ProcessEnv, timeoutMs = 30_000): Promise<{ code: number | null; out: string; err: string }> {
   return new Promise((resolve) => {
-    const child = spawn(process.execPath, [tsxCli, cliEntry, ...args], { env, stdio: ['ignore', 'pipe', 'pipe'] })
+    const child = spawn(
+      process.execPath,
+      cliUseDist ? [distCliEntry, ...args] : [tsxCli, cliEntry, ...args],
+      { env, stdio: ['ignore', 'pipe', 'pipe'] },
+    )
     let out = ''
     let err = ''
     const timer = setTimeout(() => child.kill('SIGKILL'), timeoutMs)
@@ -528,6 +534,7 @@ test('CLI: helmx workflows inspect 在 detail 损坏时非零退出并显示错�
   const app = await createHelmx({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', providers: [faux.provider] })
   let app2: Awaited<ReturnType<typeof createHelmx>> | undefined
   let hub: Awaited<ReturnType<typeof startHub>> | undefined
+  let procToken: { token: string; dispose(): void } | undefined
   try {
     const conversationId = app.kernel.conversations.listConversations()[0]!.id
     await app.kernel.plugins.invokeAction('builtin:workflow', 'run', { script: META('cli-int-1') + 'return 1', wait: true }, { conversationId })
@@ -551,12 +558,8 @@ test('CLI: helmx workflows inspect 在 detail 损坏时非零退出并显示错�
 
     app2 = await createHelmx({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', providers: [faux.provider] })
     hub = await startHub({ kernel: app2.kernel as never, port: 0 })
-    const setupRes = await fetch(`${hub.url}/api/auth/setup`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ password: 'cli-integration-password' }),
-    })
-    const userToken = ((await setupRes.json()) as { token: string }).token
+    procToken = app2.kernel.auth.createProcessToken()
+    const userToken = procToken.token
 
     const healthy = await runCliChild(['workflows', 'runs', '--json'], {
       ...process.env,
@@ -577,6 +580,7 @@ test('CLI: helmx workflows inspect 在 detail 损坏时非零退出并显示错�
     assert.ok(broken.err.includes('workflow_record_corrupt'), `stderr should carry error code: ${broken.err}`)
     assert.ok(broken.err.includes(victim), `stderr should name runId: ${broken.err}`)
   } finally {
+    procToken?.dispose()
     await hub?.close()
     await app2?.close().catch(() => {})
     await app.close().catch(() => {})
