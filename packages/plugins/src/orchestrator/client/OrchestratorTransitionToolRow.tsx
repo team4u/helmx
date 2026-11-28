@@ -14,29 +14,29 @@ import {
   type StatusLightTone,
 } from '@helmx/ui'
 import { formatModelShortName, usePluginLocale, usePluginTranslator, useToolActivity } from '@helmx/plugin-client'
-import { DUO_COPY, formatDuoTransitionSummary } from './copy.ts'
-import { DUO_EXIT_PLAN_MODE_TOOL, extractFirstLine, parseDuoTransitionMeta } from './models.ts'
+import { ORCHESTRATOR_COPY, formatOrchestratorTransitionSummary } from './copy.ts'
+import { ORCHESTRATOR_EXIT_PLAN_MODE_TOOL, extractFirstLine, parseOrchestratorTransitionMeta } from './models.ts'
 import './styles.css'
 
-export function DuoTransitionToolRow(props: ToolViewProps): ReactNode {
+export function OrchestratorTransitionToolRow(props: ToolViewProps): ReactNode {
   const locale = usePluginLocale()
   const t = usePluginTranslator()
 
   const isRunning = props.status === 'running'
   useToolActivity(props.callId, isRunning)
 
-  const meta = parseDuoTransitionMeta(props.presentationMeta)
+  const meta = parseOrchestratorTransitionMeta(props.presentationMeta)
   const isError = props.status === 'error' || props.isError === true
   const errorLine = isError ? extractFirstLine(props.result) : undefined
-  const isExitPlan = (meta?.tool ?? props.toolName) === DUO_EXIT_PLAN_MODE_TOOL
-  const toolTitle = isExitPlan ? t(DUO_COPY.toolExitPlanTitle) : t(DUO_COPY.toolHandBackTitle)
+  const isExitPlan = (meta?.tool ?? props.toolName) === ORCHESTRATOR_EXIT_PLAN_MODE_TOOL
+  const toolTitle = isExitPlan ? t(ORCHESTRATOR_COPY.toolExitPlanTitle) : t(ORCHESTRATOR_COPY.toolHandBackTitle)
 
   let summary = ''
   if (meta !== undefined && !isError) {
     const toShort = formatModelShortName(meta.toModel) || meta.toModel
-    summary = formatDuoTransitionSummary(meta.tool, toShort, meta.reason, locale)
+    summary = formatOrchestratorTransitionSummary(meta.tool, toShort, meta.reason, locale)
   } else if (isError) {
-    summary = errorLine ?? t(DUO_COPY.toolStatusError)
+    summary = errorLine ?? t(ORCHESTRATOR_COPY.toolStatusError)
   } else if (isRunning && props.input && typeof props.input === 'object') {
     const rawReason = (props.input as Record<string, unknown>)['reason']
     if (typeof rawReason === 'string' && rawReason.trim() !== '') {
@@ -48,13 +48,13 @@ export function DuoTransitionToolRow(props: ToolViewProps): ReactNode {
   let lightLabel: string
   if (isRunning) {
     lightTone = 'working'
-    lightLabel = t(DUO_COPY.toolStatusRunning)
+    lightLabel = t(ORCHESTRATOR_COPY.toolStatusRunning)
   } else if (isError) {
     lightTone = 'failed'
-    lightLabel = t(DUO_COPY.toolStatusError)
+    lightLabel = t(ORCHESTRATOR_COPY.toolStatusError)
   } else {
     lightTone = 'done'
-    lightLabel = t(isExitPlan ? DUO_COPY.toolPhaseExec : DUO_COPY.toolPhasePlan)
+    lightLabel = t(isExitPlan ? ORCHESTRATOR_COPY.toolPhaseExec : ORCHESTRATOR_COPY.toolPhasePlan)
   }
 
   const durationText =
@@ -63,9 +63,9 @@ export function DuoTransitionToolRow(props: ToolViewProps): ReactNode {
   return (
     <div className="trace-entry">
       <div
-        className={`trace-row duo-trace-row${isError ? ' trace-row-error' : ''}`}
-        data-duo-tool={meta?.tool ?? props.toolName}
-        data-duo-to-phase={meta?.toPhase}
+        className={`trace-row orch-trace-row${isError ? ' trace-row-error' : ''}`}
+        data-orch-tool={meta?.tool ?? props.toolName}
+        data-orch-to-phase={meta?.toPhase}
       >
         <span className="trace-row-left">
           <HelmxIcon
@@ -73,25 +73,25 @@ export function DuoTransitionToolRow(props: ToolViewProps): ReactNode {
             size={12}
             className={isRunning ? 'spin-slow' : undefined}
           />
-          <span className="trace-tool-name duo-trace-name" title={toolTitle}>
+          <span className="trace-tool-name orch-trace-name" title={toolTitle}>
             {toolTitle}
           </span>
           {summary !== '' ? (
             <span
-              className={`trace-tool-summary${isError ? ' duo-trace-error' : ''}`}
+              className={`trace-tool-summary${isError ? ' orch-trace-error' : ''}`}
               title={meta !== undefined ? `${meta.fromModel} -> ${meta.toModel}` : summary}
             >
               {summary}
             </span>
           ) : null}
         </span>
-        <span className="trace-row-right duo-trace-right">
+        <span className="trace-row-right orch-trace-right">
           {!isRunning && !isError && meta !== undefined ? (
             <Badge
               tone={meta.toPhase === 'execution' ? 'accent' : 'neutral'}
-              className="duo-trace-badge"
+              className="orch-trace-badge"
             >
-              {t(meta.toPhase === 'execution' ? DUO_COPY.toolPhaseExec : DUO_COPY.toolPhasePlan)}
+              {t(meta.toPhase === 'execution' ? ORCHESTRATOR_COPY.toolPhaseExec : ORCHESTRATOR_COPY.toolPhasePlan)}
             </Badge>
           ) : null}
           <StatusLight tone={lightTone} label={lightLabel} />

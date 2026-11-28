@@ -11,12 +11,12 @@ Model tiers decouple **semantic capability tiers** (`tier/<id>`) from **concrete
 ## Core Mechanics
 
 1. **Symbolic in configuration & scripts, frozen on live instances**:
-   - Saved workflow scripts, `Profile.model`, global `defaultModel`, `compactionModel`, and `builtin:duo` `executorModel` may store `tier/<id>` references symbolically so switching a tier binding or applying a preset template upgrades future runs immediately.
+   - Saved workflow scripts, `Profile.model`, global `defaultModel`, `compactionModel`, and `builtin:orchestrator` `executorModel` may store `tier/<id>` references symbolically so switching a tier binding or applying a preset template upgrades future runs immediately.
    - When a conversation, subagent, or worker is created (or explicitly switched to a tier), Helmx resolves `tier/<id>` once and freezes the concrete `provider/model` + preset `thinkingLevel` onto that instance. This protects Prompt Cache hit rates and guarantees deterministic resume/reattach.
 2. **Honest failure (never silent fallback)**:
    - If a referenced tier is missing or its underlying concrete model is disabled, execution fails explicitly (`404 model_tier_not_found` / `409 model_disabled`) instead of silently falling back to an unintended default model.
 3. **Native runtimes only**:
-   - `tier/<id>` works everywhere a native session model is accepted (subagent dispatch, workflow `agent()`, Swarm worker creation and `switch_worker_model`, `Profile.model`, `builtin:duo` executor configuration, global defaults, CLI).
+   - `tier/<id>` works everywhere a native session model is accepted (subagent dispatch, workflow `agent()`, Swarm worker creation and `switch_worker_model`, `Profile.model`, `builtin:orchestrator` executor configuration, global defaults, CLI).
    - Always pass `tier/<id>` via the **`model`** parameter—never in `agentType` or `profileId` (which select Profiles or external runtimes, not model tiers).
    - External CLI runtimes (e.g. `herdr:*`) manage their own models—never pass `model` to them.
 
@@ -45,8 +45,8 @@ Keep long-running interactive sessions on a responsive workhorse tier; when hitt
 - **Deterministic workflows**: Start implementation on a fast/workhorse tier backed by a strict shell `gate` (build + typecheck + tests). In a `try/catch`, escalate only failures to a stronger tier with the failure diagnostics.
 - **Peer Swarm**: Dispatch workers on the workhorse tier; if a worker stalls on a complex bug, upgrade that worker in place via `switch_worker_model` using a stronger `tier/<id>` while keeping its accumulated context.
 
-### 4. Orchestrators (`builtin:duo`)
-Pair `builtin:tiers` with `builtin:duo` orchestrators (`duo list`, `duo set`): define an Orchestrator referencing single-model Planner and Executor tiers (e.g. `tier/architect` -> `tier/coder`), then select `tier/<id>` on a top-level human conversation or Profile. Updating or applying preset templates via `builtin:tiers.apply_template` propagates automatically to every Orchestrator referencing those tiers.
+### 4. Orchestrators (`builtin:orchestrator`)
+Pair `builtin:tiers` with `builtin:orchestrator` orchestrators (`helmx orchestrator list`, `helmx orchestrator set`): define an Orchestrator referencing single-model Planner and Executor tiers (e.g. `tier/architect` -> `tier/coder`), then select `tier/<id>` on a top-level human conversation or Profile. Updating or applying preset templates via `builtin:tiers.apply_template` propagates automatically to every Orchestrator referencing those tiers.
 
 ## Managing Tiers & Preset Templates (`run_action`)
 

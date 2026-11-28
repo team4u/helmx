@@ -147,21 +147,27 @@ export function createWriteTool(deps: HelmxToolDeps): ToolRegistration<typeof wr
 }
 
 const singleEditItemParameters = obj({
-  oldText: str({ description: 'Exact text snippet to replace (non-empty; unique unless replaceAll is true)' }),
-  newText: str({ description: 'Replacement text (literal)' }),
+  oldText: str({ description: 'Exact text to replace (non-empty; include exact leading indentation/whitespace; unique unless replaceAll is true)' }),
+  newText: str({ description: 'Complete literal drop-in replacement (no placeholder comments; pass "" to delete oldText)' }),
   replaceAll: opt(bool({ description: 'Replace every non-overlapping occurrence in the file (default false)' })),
-  allowEmbeddedMatch: opt(bool({ description: 'When replaceAll is true, allow matching inside larger identifiers' })),
+  allowEmbeddedMatch: opt(bool({ description: 'Allow replaceAll to match inside larger identifiers' })),
 })
 
 const editParameters = obj({
   path: str({ description: 'Target file path (relative to conversation cwd or absolute; supports ../ traversal)' }),
-  oldText: opt(str({ description: 'Text snippet to replace in single-edit mode (mutually exclusive with edits[])' })),
-  newText: opt(str({ description: 'Replacement text in single-edit mode' })),
+  oldText: opt(str({ description: 'Exact text to replace in single-edit mode (non-empty; include exact leading indentation/whitespace; mutually exclusive with edits[])' })),
+  newText: opt(str({ description: 'Complete literal drop-in replacement in single-edit mode (no placeholder comments; pass "" to delete oldText)' })),
   replaceAll: opt(bool({ description: 'Replace every non-overlapping occurrence in single-edit mode (default false)' })),
-  allowEmbeddedMatch: opt(bool({ description: 'When replaceAll is true, allow matching inside larger identifiers' })),
+  allowEmbeddedMatch: opt(bool({ description: 'Allow replaceAll to match inside larger identifiers' })),
   edits: opt(
     arr(singleEditItemParameters, {
-      description: 'Multiple non-overlapping replacements applied atomically in one call (mutually exclusive with top-level oldText/newText)',
+      description: 'Atomic multi-hunk replacements for non-adjacent regions (mutually exclusive with top-level oldText/newText; merge nearby changes into one edit)',
+    }),
+  ),
+  artifact: opt(
+    bool({
+      description:
+        'Whether to also register the updated file as a conversation artifact (visible/previewable/downloadable in Web UI; outputs [Artifact] id=<id> so replies can link [filename](artifact:<id>) or ![caption](artifact:<id>))',
     }),
   ),
 })
@@ -169,15 +175,15 @@ const editParameters = obj({
 /**
  * `edit` tool: targeted single or multi-hunk replacements (`oldText`/`newText` or `edits[]`), with optional
  * `replaceAll` (guarded by identifier-boundary isolation unless `allowEmbeddedMatch: true`), BOM + per-line ending
- * preservation, and per-item fuzzy fallback on exact miss. Diff runs inside the canonical mutex lock prior to
- * writing (`computeMultiEditDiff` matching `@helmx/protocol` `EDIT_TOOL_RESULT_SCHEMA`).
+ * preservation, per-item fuzzy fallback on exact miss, and optional `artifact: true` registration. Diff runs inside
+ * the canonical mutex lock prior to writing (`computeMultiEditDiff` matching `@helmx/protocol`
+ * `EDIT_TOOL_RESULT_SCHEMA`).
  */
 export function createEditTool(deps: HelmxToolDeps): ToolRegistration<typeof editParameters> {
   return defineTool({
     name: 'edit',
     description:
-      'Replace targeted text in a file. Pass either { path, oldText, newText, replaceAll? } for one target or { path, edits: [{ oldText, newText, replaceAll? }, ...] } ' +
-      'for multiple non-overlapping targets in one atomic write. Preserves BOM and per-line CRLF/LF endings; paths resolve relative to conversation cwd and run on the bound node.',
+      'Replace targeted text in an existing file on the bound node (paths resolve relative to conversation cwd). Provide EITHER { path, oldText, newText } for one contiguous block OR { path, edits: [{ oldText, newText }, ...] } for multiple non-adjacent blocks in one atomic write (never both). Rules: 1) oldText must match exact file text including leading indentation/whitespace and be unique unless replaceAll is true; 2) newText must be a complete literal replacement with no ellipsis/placeholder comments (use "" to delete); 3) merge nearby edits into a single contiguous hunk to avoid overlaps. Pass artifact: true to also register the updated file as a conversation artifact for Web preview/download.',
     parameters: editParameters,
     prepareArguments: (raw) => prepareEditArguments(raw) as Static<typeof editParameters>,
     structuredOutputSchema: EDIT_TOOL_RESULT_SCHEMA,
@@ -185,6 +191,17 @@ export function createEditTool(deps: HelmxToolDeps): ToolRegistration<typeof edi
       const opsR = extractEditOperations(args)
       if (!opsR.ok) {
         return { output: [{ type: 'text', text: opsR.error }], isError: true }
+      }
+      if (args.artifact === true && deps.artifacts.writeUploaded === undefined) {
+        return {
+          output: [
+            {
+              type: 'text',
+              text: 'edit_failed: artifact service does not support writeUploaded; cannot register conversation artifact',
+            },
+          ],
+          isError: true,
+        }
       }
       const target0 = await resolveToolTarget(deps, api, context)
       if ('error' in target0) {
@@ -230,18 +247,45 @@ export function createEditTool(deps: HelmxToolDeps): ToolRegistration<typeof edi
             deps.redact,
           )
           await envR.env.writeFile(target.abs, applied.updatedFileContent, context)
-          const structured = {
+          let artifactMeta: { id: string; name: string } | undefined
+          if (args.artifact === true) {
+            const fileName = basenameForShape(target.abs)
+            try {
+              const meta = await deps.artifacts.writeUploaded!(api.conversationId as number, {
+                name: fileName,
+                bytes: Buffer.from(applied.updatedFileContent, 'utf8'),
+              })
+              artifactMeta = { id: meta.id, name: meta.name }
+            } catch (artifactError) {
+              return {
+                output: [
+                  {
+                    type: 'text',
+                    text: `edit_failed: file was updated at ${target.abs}, but artifact registration failed: ${deps.redact(String(artifactError))}`,
+                  },
+                ],
+                isError: true,
+              }
+            }
+          }
+          const structured: EditToolResult = {
             path: target.abs,
             nodeId,
             replaced: true,
             diff,
-          } satisfies EditToolResult as unknown as JsonValue
+            ...(artifactMeta !== undefined ? { artifactId: artifactMeta.id } : {}),
+          }
+          const okLine = editOkText(target.abs, nodeId, applied.totalReplacements)
+          const outputText =
+            artifactMeta !== undefined
+              ? `${okLine}\n[Artifact] id=${artifactMeta.id} name=${artifactMeta.name}`
+              : okLine
           return {
-            output: [{ type: 'text', text: editOkText(target.abs, nodeId, applied.totalReplacements) }],
-            structuredOutput: structured,
+            output: [{ type: 'text', text: outputText }],
+            structuredOutput: structured as unknown as JsonValue,
             // Web timeline diff UI reads persisted `details` (`structuredOutput` isn't persisted); both channels
             // carry identical values against the single `EDIT_TOOL_RESULT_SCHEMA` contract.
-            details: structured,
+            details: structured as unknown as JsonValue,
           }
         }, context)
       } catch (error) {

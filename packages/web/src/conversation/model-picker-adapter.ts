@@ -27,7 +27,7 @@ export function buildModelPickerControlCopy(t: WebMessageTranslator): ModelPicke
     searchPlaceholder: t('composer.model.searchPlaceholder'),
     refreshCatalog: t('composer.model.refreshCatalog'),
     tiersHeader: t('composer.model.tiersHeader'),
-    tierGroupLabels: { duo: t('composer.model.duoGroupHeader') },
+    tierGroupLabels: { orchestrator: t('composer.model.orchestratorGroupHeader') },
     tierRowTitle: t('composer.model.tierRowTitle'),
     listHeader: t('composer.model.listHeader'),
     navHint: t('composer.kbd.navConfirm'),

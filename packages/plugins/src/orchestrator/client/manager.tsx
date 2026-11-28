@@ -1,4 +1,4 @@
-/** Dedicated full-screen management entrypoint for builtin:duo (`DuoManagerScreen`). */
+/** Dedicated full-screen management entrypoint for builtin:orchestrator (`OrchestratorManagerScreen`). */
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import type { ScreenProps } from '@helmx/protocol/browser'
 import {
@@ -36,39 +36,39 @@ import {
   useScreenDrawer,
 } from '@helmx/plugin-client'
 import {
-  DUO_COPY,
-  buildDuoPickerCopy,
-  formatDuoRemovedNotice,
-  formatDuoSavedNotice,
-  formatDuoStepsBadge,
-  getDuoValidationMessage,
+  ORCHESTRATOR_COPY,
+  buildOrchestratorPickerCopy,
+  formatOrchestratorRemovedNotice,
+  formatOrchestratorSavedNotice,
+  formatOrchestratorStepsBadge,
+  getOrchestratorValidationMessage,
 } from './copy.ts'
-import { DuoDetailDrawer } from './DuoDetailDrawer.tsx'
+import { OrchestratorDetailDrawer } from './OrchestratorDetailDrawer.tsx'
 import {
-  DUO_DEFAULT_MAX_STEPS,
-  DUO_STATE_DOC,
+  ORCHESTRATOR_DEFAULT_MAX_STEPS,
+  ORCHESTRATOR_STATE_DOC,
   collectExternalTierIds,
-  countDuoRecipeItemsByStatus,
-  createEmptyDuoDraft,
-  filterDuoRecipeItems,
-  getStarterDuoPresets,
-  isDuoDraftDirty,
-  parseDuoStateDoc,
-  recipeToDraft,
-  synthesizeDuoRecipeItems,
-  validateDuoDraft,
-  type DuoRecipeAvailability,
-  type DuoRecipeDraft,
-  type DuoRecipeViewItem,
-  type DuoStatusFilter,
-  type StarterDuoPreset,
+  countOrchestratorItemsByStatus,
+  createEmptyOrchestratorDraft,
+  filterOrchestratorItems,
+  getStarterOrchestratorPresets,
+  isOrchestratorDraftDirty,
+  itemToDraft,
+  parseOrchestratorStateDoc,
+  synthesizeOrchestratorItems,
+  validateOrchestratorDraft,
+  type OrchestratorAvailability,
+  type OrchestratorDraft,
+  type OrchestratorStatusFilter,
+  type OrchestratorViewItem,
+  type StarterOrchestratorPreset,
 } from './models.ts'
 import './styles.css'
 
-const STATUS_META: Readonly<Record<DuoRecipeAvailability, { tone: StatusLightTone; copy: LocalizedText }>> = {
-  available: { tone: 'done', copy: DUO_COPY.statusAvailable },
-  disabled: { tone: 'blocked', copy: DUO_COPY.statusDisabled },
-  unavailable: { tone: 'aborted', copy: DUO_COPY.statusUnavailable },
+const STATUS_META: Readonly<Record<OrchestratorAvailability, { tone: StatusLightTone; copy: LocalizedText }>> = {
+  available: { tone: 'done', copy: ORCHESTRATOR_COPY.statusAvailable },
+  disabled: { tone: 'blocked', copy: ORCHESTRATOR_COPY.statusDisabled },
+  unavailable: { tone: 'aborted', copy: ORCHESTRATOR_COPY.statusUnavailable },
 }
 
 function isInUseConflictError(err: unknown, message: string): boolean {
@@ -79,15 +79,15 @@ function isInUseConflictError(err: unknown, message: string): boolean {
   return /in use|model_tier_in_use/i.test(message)
 }
 
-export function DuoManagerScreen(
+export function OrchestratorManagerScreen(
   props: Partial<ScreenProps> & { inlineDrawer?: boolean },
 ): ReactNode {
   const ctx = usePluginContext()
   const locale = usePluginLocale()
   const t = usePluginTranslator()
   const hostModels = useHostModels()
-  const rawDoc = usePluginDoc(DUO_STATE_DOC)
-  const stateDoc = useMemo(() => parseDuoStateDoc(rawDoc), [rawDoc])
+  const rawDoc = usePluginDoc(ORCHESTRATOR_STATE_DOC)
+  const stateDoc = useMemo(() => parseOrchestratorStateDoc(rawDoc), [rawDoc])
 
   const actions = usePluginAction({
     formatError: (err) => (err instanceof Error ? err.message : String(err)),
@@ -96,44 +96,44 @@ export function DuoManagerScreen(
   const drawer = useScreenDrawer({ param: 'edit', createParam: 'create', scope: props })
 
   const [search, setSearch] = useState('')
-  const [statusFilter, setStatusFilter] = useState<DuoStatusFilter>('all')
-  const [draft, setDraft] = useState<DuoRecipeDraft>(() => createEmptyDuoDraft())
-  const [baseline, setBaseline] = useState<DuoRecipeDraft>(() => createEmptyDuoDraft())
+  const [statusFilter, setStatusFilter] = useState<OrchestratorStatusFilter>('all')
+  const [draft, setDraft] = useState<OrchestratorDraft>(() => createEmptyOrchestratorDraft())
+  const [baseline, setBaseline] = useState<OrchestratorDraft>(() => createEmptyOrchestratorDraft())
   const [drawerError, setDrawerError] = useState<string | null>(null)
   const [stageError, setStageError] = useState<string | null>(null)
-  const [deleteTarget, setDeleteTarget] = useState<DuoRecipeViewItem | null>(null)
-  const [forceDeleteTarget, setForceDeleteTarget] = useState<{ item: DuoRecipeViewItem; message: string } | null>(null)
+  const [deleteTarget, setDeleteTarget] = useState<OrchestratorViewItem | null>(null)
+  const [forceDeleteTarget, setForceDeleteTarget] = useState<{ item: OrchestratorViewItem; message: string } | null>(null)
 
-  const pickerCopy = useMemo(() => buildDuoPickerCopy(locale), [locale])
+  const pickerCopy = useMemo(() => buildOrchestratorPickerCopy(locale), [locale])
   const allItems = useMemo(
-    () => synthesizeDuoRecipeItems(stateDoc.recipes, hostModels),
-    [stateDoc.recipes, hostModels],
+    () => synthesizeOrchestratorItems(stateDoc.items, hostModels),
+    [stateDoc.items, hostModels],
   )
-  const statusCounts = useMemo(() => countDuoRecipeItemsByStatus(allItems), [allItems])
+  const statusCounts = useMemo(() => countOrchestratorItemsByStatus(allItems), [allItems])
   const visibleItems = useMemo(
-    () => filterDuoRecipeItems(allItems, search, statusFilter),
+    () => filterOrchestratorItems(allItems, search, statusFilter),
     [allItems, search, statusFilter],
   )
-  const existingRecipeIds = useMemo(() => new Set(Object.keys(stateDoc.recipes)), [stateDoc.recipes])
+  const existingItemIds = useMemo(() => new Set(Object.keys(stateDoc.items)), [stateDoc.items])
   const externalTierIds = useMemo(() => collectExternalTierIds(hostModels), [hostModels])
-  const starterPresets = useMemo(() => getStarterDuoPresets(locale, hostModels), [locale, hostModels])
+  const starterPresets = useMemo(() => getStarterOrchestratorPresets(locale, hostModels), [locale, hostModels])
 
   const editingItem = useMemo(
-    () => (drawer.itemId ? allItems.find((i) => i.recipe.id === drawer.itemId) : undefined),
+    () => (drawer.itemId ? allItems.find((i) => i.item.id === drawer.itemId) : undefined),
     [allItems, drawer.itemId],
   )
 
   const prevDrawerSyncKeyRef = useRef<string>('')
-  const pendingPresetDraftRef = useRef<DuoRecipeDraft | null>(null)
+  const pendingPresetDraftRef = useRef<OrchestratorDraft | null>(null)
   useEffect(() => {
-    const syncKey = `${drawer.mode}:${drawer.itemId ?? ''}:${editingItem?.recipe.updatedAt ?? ''}`
+    const syncKey = `${drawer.mode}:${drawer.itemId ?? ''}:${editingItem?.item.updatedAt ?? ''}`
     if (syncKey === prevDrawerSyncKeyRef.current) return
     prevDrawerSyncKeyRef.current = syncKey
 
     setDrawerError(null)
     if (drawer.mode === 'create') {
-      const next = pendingPresetDraftRef.current ?? createEmptyDuoDraft()
-      const base = createEmptyDuoDraft()
+      const next = pendingPresetDraftRef.current ?? createEmptyOrchestratorDraft()
+      const base = createEmptyOrchestratorDraft()
       pendingPresetDraftRef.current = null
       setDraft(next)
       setBaseline(base)
@@ -141,26 +141,26 @@ export function DuoManagerScreen(
     }
     if (drawer.mode === 'edit' && editingItem !== undefined) {
       pendingPresetDraftRef.current = null
-      const next = recipeToDraft(editingItem.recipe)
+      const next = itemToDraft(editingItem.item)
       setDraft(next)
       setBaseline(next)
     }
   }, [drawer.mode, drawer.itemId, editingItem])
 
   const openCreateWithPreset = useCallback(
-    (preset?: StarterDuoPreset) => {
-      const next = createEmptyDuoDraft(preset)
+    (preset?: StarterOrchestratorPreset) => {
+      const next = createEmptyOrchestratorDraft(preset)
       pendingPresetDraftRef.current = next
       setDraft(next)
-      setBaseline(createEmptyDuoDraft())
+      setBaseline(createEmptyOrchestratorDraft())
       setDrawerError(null)
       drawer.openCreate()
     },
     [drawer],
   )
 
-  const handleApplyPreset = useCallback((preset: StarterDuoPreset) => {
-    setDraft(createEmptyDuoDraft(preset))
+  const handleApplyPreset = useCallback((preset: StarterOrchestratorPreset) => {
+    setDraft(createEmptyOrchestratorDraft(preset))
     setDrawerError(null)
   }, [])
 
@@ -171,18 +171,18 @@ export function DuoManagerScreen(
 
   const handleSave = useCallback(() => {
     const mode = drawer.mode === 'edit' ? 'edit' : 'create'
-    const validationErr = validateDuoDraft(draft, {
+    const validationErr = validateOrchestratorDraft(draft, {
       mode,
-      existingRecipeIds,
+      existingItemIds,
       externalTierIds,
     })
     if (validationErr !== null) {
-      setDrawerError(getDuoValidationMessage(validationErr, locale))
+      setDrawerError(getOrchestratorValidationMessage(validationErr, locale))
       return
     }
 
     const parsedSteps = Number(draft.maxExecutionSteps.trim())
-    const maxExecutionSteps = Number.isInteger(parsedSteps) ? parsedSteps : DUO_DEFAULT_MAX_STEPS
+    const maxExecutionSteps = Number.isInteger(parsedSteps) ? parsedSteps : ORCHESTRATOR_DEFAULT_MAX_STEPS
     const id = draft.id.trim()
     const payload = {
       id,
@@ -199,8 +199,8 @@ export function DuoManagerScreen(
     void actions.run('set', payload, {
       key: `set:${id}`,
       onSuccess: () => {
-        ctx.notify(formatDuoSavedNotice(id, locale), 'info')
-        const saved = recipeToDraft({
+        ctx.notify(formatOrchestratorSavedNotice(id, locale), 'info')
+        const saved = itemToDraft({
           id,
           name: payload.name,
           description: payload.description || undefined,
@@ -219,29 +219,29 @@ export function DuoManagerScreen(
         setDrawerError(msg)
       },
     })
-  }, [drawer, draft, existingRecipeIds, externalTierIds, locale, actions, ctx])
+  }, [drawer, draft, existingItemIds, externalTierIds, locale, actions, ctx])
 
   const executeDelete = useCallback(
-    (item: DuoRecipeViewItem, force: boolean) => {
+    (entry: OrchestratorViewItem, force: boolean) => {
       setStageError(null)
       setDrawerError(null)
       void actions.run(
         'remove',
-        { id: item.recipe.id, ...(force ? { force: true } : {}) },
+        { id: entry.item.id, ...(force ? { force: true } : {}) },
         {
-          key: `remove:${item.recipe.id}`,
+          key: `remove:${entry.item.id}`,
           onSuccess: () => {
             setDeleteTarget(null)
             setForceDeleteTarget(null)
-            if (drawer.itemId === item.recipe.id) {
+            if (drawer.itemId === entry.item.id) {
               drawer.close()
             }
-            ctx.notify(formatDuoRemovedNotice(item.recipe.id, locale), 'info')
+            ctx.notify(formatOrchestratorRemovedNotice(entry.item.id, locale), 'info')
           },
           onError: (msg, err) => {
             if (!force && isInUseConflictError(err, msg)) {
               setDeleteTarget(null)
-              setForceDeleteTarget({ item, message: msg })
+              setForceDeleteTarget({ item: entry, message: msg })
               return
             }
             if (drawer.open) {
@@ -258,15 +258,15 @@ export function DuoManagerScreen(
     [actions, drawer, ctx, locale],
   )
 
-  const dirty = useMemo(() => isDuoDraftDirty(draft, baseline), [draft, baseline])
+  const dirty = useMemo(() => isOrchestratorDraftDirty(draft, baseline), [draft, baseline])
   const saving = actions.pending && actions.pendingKey?.startsWith('set:') === true
   const deleting = actions.pending && actions.pendingKey?.startsWith('remove:') === true
   const busy = actions.pending
 
   if (rawDoc === undefined) {
     return (
-      <Screen layout="contained" title={t(DUO_COPY.screenTitle)}>
-        <LoadingState label={t(DUO_COPY.loading)} />
+      <Screen layout="contained" title={t(ORCHESTRATOR_COPY.screenTitle)}>
+        <LoadingState label={t(ORCHESTRATOR_COPY.loading)} />
       </Screen>
     )
   }
@@ -274,53 +274,53 @@ export function DuoManagerScreen(
   return (
     <Screen
       layout="contained"
-      className="duo-screen"
-      title={t(DUO_COPY.screenTitle)}
+      className="orch-screen"
+      title={t(ORCHESTRATOR_COPY.screenTitle)}
       actions={
         <Button
           variant="primary"
           size="sm"
           icon="plus"
-          aria-label={t(DUO_COPY.createItem)}
-          title={t(DUO_COPY.createItem)}
+          aria-label={t(ORCHESTRATOR_COPY.createItem)}
+          title={t(ORCHESTRATOR_COPY.createItem)}
           disabled={busy}
           onClick={() => openCreateWithPreset()}
         >
-          <span className="pane-action-label">{t(DUO_COPY.createItem)}</span>
+          <span className="pane-action-label">{t(ORCHESTRATOR_COPY.createItem)}</span>
         </Button>
       }
       toolbar={
         allItems.length > 0 ? (
           <ScreenToolbar
-            label={t(DUO_COPY.screenTitle)}
+            label={t(ORCHESTRATOR_COPY.screenTitle)}
             actions={
               <SearchBox
                 variant="toolbar"
                 size="sm"
                 value={search}
                 onChange={setSearch}
-                placeholder={t(DUO_COPY.searchPlaceholder)}
-                ariaLabel={t(DUO_COPY.searchLabel)}
+                placeholder={t(ORCHESTRATOR_COPY.searchPlaceholder)}
+                ariaLabel={t(ORCHESTRATOR_COPY.searchLabel)}
               />
             }
           >
             <Tabs
               value={statusFilter}
-              onValueChange={(nextValue) => setStatusFilter(nextValue as DuoStatusFilter)}
+              onValueChange={(nextValue) => setStatusFilter(nextValue as OrchestratorStatusFilter)}
               variant="pills"
               size="sm"
             >
-              <TabsList aria-label={t(DUO_COPY.filterAria)}>
+              <TabsList aria-label={t(ORCHESTRATOR_COPY.filterAria)}>
                 <TabsTrigger value="all">
-                  <span>{t(DUO_COPY.filterAll)}</span>
+                  <span>{t(ORCHESTRATOR_COPY.filterAll)}</span>
                   <TabCount>{statusCounts.all}</TabCount>
                 </TabsTrigger>
                 <TabsTrigger value="ready">
-                  <span>{t(DUO_COPY.filterReady)}</span>
+                  <span>{t(ORCHESTRATOR_COPY.filterReady)}</span>
                   <TabCount>{statusCounts.ready}</TabCount>
                 </TabsTrigger>
                 <TabsTrigger value="attention">
-                  <span>{t(DUO_COPY.filterAttention)}</span>
+                  <span>{t(ORCHESTRATOR_COPY.filterAttention)}</span>
                   <TabCount>{statusCounts.attention}</TabCount>
                 </TabsTrigger>
               </TabsList>
@@ -338,10 +338,10 @@ export function DuoManagerScreen(
       {allItems.length === 0 ? (
         <>
           <EmptyState
-            className="duo-empty"
+            className="orch-empty"
             icon="git-pull-request"
-            title={t(DUO_COPY.emptyTitle)}
-            hint={t(DUO_COPY.emptyHint)}
+            title={t(ORCHESTRATOR_COPY.emptyTitle)}
+            hint={t(ORCHESTRATOR_COPY.emptyHint)}
             hintSubtle
             action={
               <Button
@@ -351,39 +351,39 @@ export function DuoManagerScreen(
                 disabled={busy}
                 onClick={() => openCreateWithPreset()}
               >
-                {t(DUO_COPY.createItem)}
+                {t(ORCHESTRATOR_COPY.createItem)}
               </Button>
             }
           />
           {starterPresets.length > 0 && (
-            <ScreenSection title={t(DUO_COPY.startersHeading)}>
-              <List label={t(DUO_COPY.startersHeading)}>
+            <ScreenSection title={t(ORCHESTRATOR_COPY.startersHeading)}>
+              <List label={t(ORCHESTRATOR_COPY.startersHeading)}>
                 {starterPresets.map((preset) => (
                   <ListRow
                     key={preset.id}
-                    data-starter-duo={preset.id}
+                    data-starter-orchestrator={preset.id}
                     selected={drawer.creating && draft.id === preset.id}
-                    leading={<HelmxIcon name="sparkles" size={12} className="duo-starter-icon" />}
+                    leading={<HelmxIcon name="sparkles" size={12} className="orch-starter-icon" />}
                     title={<span>{preset.name}</span>}
                     meta={
                       <>
-                        <code className="mono duo-id-code">
-                          <span className="duo-prefix">tier/</span>
+                        <code className="mono orch-id-code">
+                          <span className="orch-prefix">tier/</span>
                           {preset.id}
                         </code>
                         {preset.plannerModel ? (
-                          <span className="duo-model-endpoint" title={preset.plannerModel}>
-                            <code className="duo-model-name">
+                          <span className="orch-model-endpoint" title={preset.plannerModel}>
+                            <code className="orch-model-name">
                               {formatModelShortName(preset.plannerModel)}
                             </code>
                           </span>
                         ) : null}
                         {preset.plannerModel && preset.executorModel ? (
-                          <HelmxIcon name="arrow-right" size={11} className="duo-model-arrow" />
+                          <HelmxIcon name="arrow-right" size={11} className="orch-model-arrow" />
                         ) : null}
                         {preset.executorModel ? (
-                          <span className="duo-model-endpoint" title={preset.executorModel}>
-                            <code className="duo-model-name">
+                          <span className="orch-model-endpoint" title={preset.executorModel}>
+                            <code className="orch-model-name">
                               {formatModelShortName(preset.executorModel)}
                             </code>
                           </span>
@@ -395,10 +395,10 @@ export function DuoManagerScreen(
                       <Button
                         variant="inline"
                         size="xs"
-                        className="duo-starter-cta"
+                        className="orch-starter-cta"
                         onClick={() => openCreateWithPreset(preset)}
                       >
-                        <span>{t(DUO_COPY.useStarter)}</span>
+                        <span>{t(ORCHESTRATOR_COPY.useStarter)}</span>
                         <HelmxIcon name="arrow-right" size={12} />
                       </Button>
                     }
@@ -411,100 +411,100 @@ export function DuoManagerScreen(
         </>
       ) : visibleItems.length === 0 ? (
         <EmptyState
-          className="duo-empty"
+          className="orch-empty"
           icon="search"
-          title={t(DUO_COPY.noMatchTitle)}
+          title={t(ORCHESTRATOR_COPY.noMatchTitle)}
           action={
             <Button variant="secondary" size="sm" icon="rotate-ccw" onClick={resetFilters}>
-              {t(DUO_COPY.resetFilters)}
+              {t(ORCHESTRATOR_COPY.resetFilters)}
             </Button>
           }
         />
       ) : (
-        <List label={t(DUO_COPY.screenTitle)}>
-          {visibleItems.map((item) => {
-            const statusMeta = STATUS_META[item.status]
+        <List label={t(ORCHESTRATOR_COPY.screenTitle)}>
+          {visibleItems.map((entry) => {
+            const statusMeta = STATUS_META[entry.status]
             const statusLabel = t(statusMeta.copy)
-            const plannerRef = item.recipe.plannerModel
-            const executorRef = item.recipe.executorModel
-            const plannerShort = formatModelShortName(item.resolvedPlannerModel ?? plannerRef)
-            const executorShort = formatModelShortName(item.resolvedExecutorModel ?? executorRef)
+            const plannerRef = entry.item.plannerModel
+            const executorRef = entry.item.executorModel
+            const plannerShort = formatModelShortName(entry.resolvedPlannerModel ?? plannerRef)
+            const executorShort = formatModelShortName(entry.resolvedExecutorModel ?? executorRef)
             const plannerLevel =
-              item.resolvedPlannerThinkingLevel ??
+              entry.resolvedPlannerThinkingLevel ??
               resolveDefaultChainThinkingLevel(
                 hostModels ?? undefined,
                 plannerRef,
-                item.recipe.plannerThinkingLevel,
+                entry.item.plannerThinkingLevel,
                 'tier',
               )
             const execLevel =
-              item.resolvedExecutorThinkingLevel ??
+              entry.resolvedExecutorThinkingLevel ??
               resolveDefaultChainThinkingLevel(
                 hostModels ?? undefined,
                 executorRef,
-                item.recipe.executorThinkingLevel,
+                entry.item.executorThinkingLevel,
                 'tier',
               )
             const showPlannerLevel = plannerLevel !== '' && plannerLevel !== 'off'
             const showExecLevel = execLevel !== '' && execLevel !== 'off'
-            const stepsBadge = formatDuoStepsBadge(item.recipe.maxExecutionSteps, locale)
+            const stepsBadge = formatOrchestratorStepsBadge(entry.item.maxExecutionSteps, locale)
 
             return (
               <ListRow
-                key={item.recipe.id}
-                data-duo-recipe-id={item.recipe.id}
-                selected={drawer.mode === 'edit' && drawer.itemId === item.recipe.id}
-                tone={item.status !== 'available' ? 'warn' : 'default'}
+                key={entry.item.id}
+                data-orchestrator-id={entry.item.id}
+                selected={drawer.mode === 'edit' && drawer.itemId === entry.item.id}
+                tone={entry.status !== 'available' ? 'warn' : 'default'}
                 leading={<StatusLight tone={statusMeta.tone} label={statusLabel} />}
-                title={<span>{item.recipe.name}</span>}
+                title={<span>{entry.item.name}</span>}
                 meta={
                   <>
-                    <code className="mono duo-id-code">
-                      <span className="duo-prefix">tier/</span>
-                      {item.recipe.id}
+                    <code className="mono orch-id-code">
+                      <span className="orch-prefix">tier/</span>
+                      {entry.item.id}
                     </code>
-                    <span className="duo-model-endpoint" title={plannerRef}>
-                      <code className="duo-model-name">{plannerShort}</code>
-                      {showPlannerLevel && <span className="duo-model-level">· {plannerLevel}</span>}
+                    <span className="orch-model-endpoint" title={plannerRef}>
+                      <code className="orch-model-name">{plannerShort}</code>
+                      {showPlannerLevel && <span className="orch-model-level">· {plannerLevel}</span>}
                     </span>
-                    <HelmxIcon name="arrow-right" size={11} className="duo-model-arrow" />
-                    <span className="duo-model-endpoint" title={executorRef}>
-                      <code className="duo-model-name">{executorShort}</code>
-                      {showExecLevel && <span className="duo-model-level">· {execLevel}</span>}
+                    <HelmxIcon name="arrow-right" size={11} className="orch-model-arrow" />
+                    <span className="orch-model-endpoint" title={executorRef}>
+                      <code className="orch-model-name">{executorShort}</code>
+                      {showExecLevel && <span className="orch-model-level">· {execLevel}</span>}
                     </span>
                     <Badge tone="accent" className="tabular-nums">
                       {stepsBadge}
                     </Badge>
-                    {item.status !== 'available' && <Badge tone="warn">{statusLabel}</Badge>}
+                    {entry.status !== 'available' && <Badge tone="warn">{statusLabel}</Badge>}
                   </>
                 }
-                description={item.unavailableReason || item.recipe.description || undefined}
+                description={entry.unavailableReason || entry.item.description || undefined}
                 actions={
                   <IconButton
                     icon="trash-2"
                     size="xs"
                     variant="ghost"
-                    className="duo-row-delete-btn"
-                    label={`${t(DUO_COPY.deleteItem)} ${item.recipe.name}`}
+                    className="orch-row-delete-btn"
+                    label={`${t(ORCHESTRATOR_COPY.deleteItem)} ${entry.item.name}`}
                     disabled={busy}
-                    pending={actions.pendingKey === `remove:${item.recipe.id}`}
-                    onClick={() => setDeleteTarget(item)}
+                    pending={actions.pendingKey === `remove:${entry.item.id}`}
+                    onClick={() => setDeleteTarget(entry)}
                   />
                 }
-                onSelect={() => drawer.openItem(item.recipe.id)}
+                onSelect={() => drawer.openItem(entry.item.id)}
               />
             )
           })}
         </List>
       )}
 
-      <DuoDetailDrawer
+      <OrchestratorDetailDrawer
         open={drawer.open}
         mode={drawer.mode === 'edit' ? 'edit' : 'create'}
         inline={props.inlineDrawer}
         draft={draft}
         editingItem={editingItem}
-        existingRecipeIds={existingRecipeIds}
+        existingItemIds={existingItemIds}
         starterPresets={starterPresets}
         hostModels={hostModels}
         pickerCopy={pickerCopy}
@@ -521,7 +521,7 @@ export function DuoManagerScreen(
         }}
         onApplyPreset={handleApplyPreset}
         onSave={handleSave}
-        onRequestDelete={(item) => setDeleteTarget(item)}
+        onRequestDelete={(entry) => setDeleteTarget(entry)}
         onClose={drawer.close}
       />
 
@@ -530,17 +530,17 @@ export function DuoManagerScreen(
         onOpenChange={(nextOpen) => {
           if (!nextOpen) setDeleteTarget(null)
         }}
-        title={t(DUO_COPY.deleteConfirmTitle)}
+        title={t(ORCHESTRATOR_COPY.deleteConfirmTitle)}
         description={
           deleteTarget
-            ? `${deleteTarget.recipe.name} (tier/${deleteTarget.recipe.id}) · ${t(DUO_COPY.deleteConfirmDescription)}`
+            ? `${deleteTarget.item.name} (tier/${deleteTarget.item.id}) · ${t(ORCHESTRATOR_COPY.deleteConfirmDescription)}`
             : ''
         }
         danger
         inline={props.inlineDrawer}
         pending={deleting}
-        confirmText={t(DUO_COPY.deleteItem)}
-        cancelText={t(DUO_COPY.cancel)}
+        confirmText={t(ORCHESTRATOR_COPY.deleteItem)}
+        cancelText={t(ORCHESTRATOR_COPY.cancel)}
         onConfirm={() => {
           if (deleteTarget) executeDelete(deleteTarget, false)
         }}
@@ -552,13 +552,13 @@ export function DuoManagerScreen(
         onOpenChange={(nextOpen) => {
           if (!nextOpen) setForceDeleteTarget(null)
         }}
-        title={t(DUO_COPY.forceDeleteConfirmTitle)}
+        title={t(ORCHESTRATOR_COPY.forceDeleteConfirmTitle)}
         description={forceDeleteTarget?.message ?? ''}
         danger
         inline={props.inlineDrawer}
         pending={deleting}
-        confirmText={t(DUO_COPY.forceDeleteConfirmAction)}
-        cancelText={t(DUO_COPY.cancel)}
+        confirmText={t(ORCHESTRATOR_COPY.forceDeleteConfirmAction)}
+        cancelText={t(ORCHESTRATOR_COPY.cancel)}
         onConfirm={() => {
           if (forceDeleteTarget) executeDelete(forceDeleteTarget.item, true)
         }}

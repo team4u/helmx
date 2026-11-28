@@ -193,7 +193,7 @@ function ModelPickerTierRow({
   const primaryLabel = hasDisplayLabel ? tier.displayLabel! : tierRef
   const detailText =
     tier.displayDetail !== undefined && tier.displayDetail !== '' ? tier.displayDetail : `· ${targetShort}`
-  const iconName = tier.displayGroup === 'duo' ? 'git-pull-request' : 'layers'
+  const iconName = tier.displayGroup === 'orchestrator' ? 'git-pull-request' : 'layers'
   const hasDisplayGroup = tier.displayGroup !== undefined && tier.displayGroup !== ''
   const subtitle = tier.description || (hasDisplayGroup ? tierRef : titleModel)
 
@@ -484,7 +484,7 @@ export interface ModelPickerControlProps {
   showThinkingLevels?: boolean
   /** Include mounted runtime model tiers (`tier/<id>`) at the top of the picker (default `true`; pass `false` when selecting concrete models only). */
   allowTiers?: boolean
-  /** Include symbolic `preserveRef` tiers (e.g. dual-phase recipes; default `true`, pass `false` for child/compaction pickers). */
+  /** Include symbolic `preserveRef` tiers (e.g. dual-phase orchestrators; default `true`, pass `false` for child/compaction pickers). */
   allowPreserveRefTiers?: boolean
   disabled?: boolean
   pending?: boolean
@@ -912,7 +912,7 @@ export function ModelPickerControl({
   const triggerBody = (
     <>
       {pending ? <HelmxIcon name="loader" size={12} className="spin-slow" /> : null}
-      {!pending && currentTier?.displayGroup === 'duo' ? (
+      {!pending && currentTier?.displayGroup === 'orchestrator' ? (
         <HelmxIcon name="git-pull-request" size={11.5} className="composer-model-tier-trigger-icon" />
       ) : null}
       <span className={labelClassName}>{shortName}</span>

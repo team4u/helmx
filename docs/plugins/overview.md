@@ -20,7 +20,7 @@
 | `builtin:magpie` | Magpie 网关 | 动态模型网关接入：目录、配额与路由组诊断 | 启用 |
 | `builtin:token-speed` | Token 速率 | 输入区状态行实时解码速率（只读展示，内核零速率计算） | 启用 |
 | `builtin:tiers` | 模型档位 | 语义模型档位（`tier/<id>`）、自定义多套模板与 `model-tiers` 受管技能 | 启用 |
-| `builtin:duo` | 编排器 | Planner + Executor 编排器（挂载为 `tier/<id>`）、独立编排器管理页、状态行胶囊与单会话临时覆盖、`exit_plan_mode` / `hand_back_to_planner`、`helmx.default-child-model` 与 `duo` 受管技能 | 启用 |
+| `builtin:orchestrator` | 编排器 | Planner + Executor 编排器（挂载为 `tier/<id>`）、独立编排器管理页、状态行胶囊与单会话临时覆盖、`exit_plan_mode` / `hand_back_to_planner`、`helmx.default-child-model` 与 `orchestrator` 受管技能 | 启用 |
 | `builtin:title` | 会话标题 | 首轮完成后后台静默整理清晰标题，提供 `/title` 命令按当前内容随时重整 | 启用 |
 | `builtin:plan` | 计划模式 | 只读调研、澄清问答与结构化计划草拟：规划工具白名单（剥离写与派工工具）、`AskDoc` 审批、人工编辑、产物归档与可选新上下文/模型交接执行 | 启用 |
 | `builtin:steps` | 实时步骤清单 | 由 `update_steps` 工具驱动的实时步骤清单：输入框上方可折叠进度条、时间线紧凑轨迹与全生命周期收敛 | 启用 |
@@ -128,7 +128,7 @@
 
 ## 相关文档
 
-- 各内置插件深度文档：[mentions](mentions.md) · [workflow](workflow.md) · [worktree](worktree.md) · [changes](changes.md) · [swarm](swarm.md) · [memory](memory.md) · [triggers](triggers.md) · [magpie](magpie.md) · [json-render](json-render.md) · [mermaid](mermaid.md) · [token-speed](token-speed.md) · [tiers](tiers.md) · [duo](duo.md) · [title](title.md) · [plan](plan.md) · [steps](steps.md) · [port-forward](port-forward.md)
+- 各内置插件深度文档：[mentions](mentions.md) · [workflow](workflow.md) · [worktree](worktree.md) · [changes](changes.md) · [swarm](swarm.md) · [memory](memory.md) · [triggers](triggers.md) · [magpie](magpie.md) · [json-render](json-render.md) · [mermaid](mermaid.md) · [token-speed](token-speed.md) · [tiers](tiers.md) · [orchestrator](orchestrator.md) · [title](title.md) · [plan](plan.md) · [steps](steps.md) · [port-forward](port-forward.md)
 - [插件开发实战](plugin-development.md)：从 `helmx plugins init` 到 doctor / rescan / enable / reload 的完整闭环
 - [生命周期 Hook 与全界面扩展点](../architecture/extension-points.md)：4 个 Hook 与 10 个 UI surface 的逐项契约
 - [微内核架构总览](../architecture/overview.md)：内核四块机制与包依赖方向

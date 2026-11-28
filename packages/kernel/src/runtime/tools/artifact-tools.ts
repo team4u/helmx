@@ -289,7 +289,7 @@ export function createRegisterArtifactTool(
     description:
       'Register an existing regular file on the conversation\'s target node as a conversation artifact (copied into Hub dataDir for Web preview/download). ' +
       'Supports binary (verbatim bytes) and text (redacted) up to 15 MiB; reads from the target node when bound remotely without falling back locally. ' +
-      'Prefer write(..., artifact: true) when generating new text; use this tool to hand existing files (command outputs, build artifacts, images) to the user.',
+      'Prefer write(..., artifact: true) or edit(..., artifact: true) when creating or updating text files; use this tool to hand existing files (command outputs, build artifacts, images) to the user.',
     parameters: registerArtifactParameters,
     structuredOutputSchema: {
       type: 'object',

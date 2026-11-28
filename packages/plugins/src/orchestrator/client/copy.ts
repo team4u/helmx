@@ -1,9 +1,9 @@
-/** Display copy for builtin:duo Orchestrator client (Fast Refresh friendly; zero Emoji). */
+/** Display copy for builtin:orchestrator client (Fast Refresh friendly; zero Emoji). */
 import type { HelmxLocale, LocalizedText, ModelPickerControlCopy } from '@helmx/plugin-client'
 import { formatModelShortName } from '@helmx/plugin-client'
-import type { DuoDraftValidationError, DuoPhase } from './models.ts'
+import type { OrchestratorDraftValidationError, OrchestratorPhase } from './models.ts'
 
-export const DUO_COPY = {
+export const ORCHESTRATOR_COPY = {
   screenTitle: { en: 'Orchestrator', 'zh-CN': '编排器' },
   loading: { en: 'Loading orchestrators…', 'zh-CN': '正在加载编排器…' },
   createItem: { en: 'New Orchestrator', 'zh-CN': '新建编排器' },
@@ -93,8 +93,8 @@ export const DUO_COPY = {
   settingsKvReady: { en: 'Available', 'zh-CN': '可用' },
   settingsOpenManager: { en: 'Open Orchestrator', 'zh-CN': '打开编排器管理' },
   settingsDisabledAlert: {
-    en: 'Enable builtin:duo to configure and run Orchestrators.',
-    'zh-CN': '启用 builtin:duo 插件后即可配置并运行编排器。',
+    en: 'Enable builtin:orchestrator to configure and run Orchestrators.',
+    'zh-CN': '启用 builtin:orchestrator 插件后即可配置并运行编排器。',
   },
 
   statusPlan: { en: 'Plan', 'zh-CN': '规划' },
@@ -140,11 +140,11 @@ const EN_PICKER_COPY: Partial<ModelPickerControlCopy> = {
   tiersHeader: 'Single-model tiers',
 }
 
-export const buildDuoPickerCopy = (locale: HelmxLocale): Partial<ModelPickerControlCopy> =>
+export const buildOrchestratorPickerCopy = (locale: HelmxLocale): Partial<ModelPickerControlCopy> =>
   locale === 'zh-CN' ? ZH_PICKER_COPY : EN_PICKER_COPY
 
-export function getDuoValidationMessage(
-  err: DuoDraftValidationError,
+export function getOrchestratorValidationMessage(
+  err: OrchestratorDraftValidationError,
   locale: HelmxLocale,
 ): string {
   const zh = locale === 'zh-CN'
@@ -163,11 +163,11 @@ export function getDuoValidationMessage(
       return zh ? '显示名称不得超过 80 个字符。' : 'Display name must be 80 characters or fewer.'
     case 'planner_required':
       return zh ? '请选择规划模型。' : 'Planner model is required.'
-    case 'planner_duo_ref':
+    case 'planner_orchestrator_ref':
       return zh ? '规划模型不能引用编排器自身或其他编排器。' : 'Planner model cannot reference an Orchestrator.'
     case 'executor_required':
       return zh ? '请选择执行模型。' : 'Executor model is required.'
-    case 'executor_duo_ref':
+    case 'executor_orchestrator_ref':
       return zh ? '执行模型不能引用编排器自身或其他编排器。' : 'Executor model cannot reference an Orchestrator.'
     case 'steps_invalid':
       return zh ? '执行步数上限须为 0 到 100 的整数。' : 'Max execution steps must be an integer from 0 to 100.'
@@ -176,7 +176,7 @@ export function getDuoValidationMessage(
   }
 }
 
-export function formatDuoPopoverStepsValue(
+export function formatOrchestratorPopoverStepsValue(
   steps: number,
   maxSteps: number,
   locale: HelmxLocale,
@@ -185,15 +185,15 @@ export function formatDuoPopoverStepsValue(
   return locale === 'zh-CN' ? `${steps}（不限）` : `${steps} (unlimited)`
 }
 
-export function formatDuoStepsBadge(maxSteps: number, locale: HelmxLocale): string {
+export function formatOrchestratorStepsBadge(maxSteps: number, locale: HelmxLocale): string {
   if (maxSteps <= 0) return locale === 'zh-CN' ? '不限步数' : 'Unlimited'
   return locale === 'zh-CN' ? `${maxSteps} 步` : `${maxSteps} steps`
 }
 
-export function formatDuoStatusTitle(
-  recipeName: string,
-  recipeId: string,
-  phase: DuoPhase,
+export function formatOrchestratorStatusTitle(
+  orchestratorName: string,
+  orchestratorId: string,
+  phase: OrchestratorPhase,
   suppressed: boolean,
   plannerModel: string,
   executorModel: string,
@@ -209,7 +209,7 @@ export function formatDuoStatusTitle(
           ? `执行阶段（${steps}/${maxSteps} 步）`
           : `执行阶段（第 ${steps} 步 · 不限步数）`
         : '规划阶段'
-    return `${recipeName}（tier/${recipeId}） · ${phaseLabel}（规划模型: ${plannerModel} / 执行模型: ${executorModel}）`
+    return `${orchestratorName}（tier/${orchestratorId}） · ${phaseLabel}（规划模型: ${plannerModel} / 执行模型: ${executorModel}）`
   }
   const phaseLabel = suppressed
     ? 'Coordinator (stays on Planner)'
@@ -218,29 +218,29 @@ export function formatDuoStatusTitle(
         ? `Execution (${steps}/${maxSteps} steps)`
         : `Execution (step ${steps} · unlimited)`
       : 'Planning'
-  return `${recipeName} (tier/${recipeId}) · ${phaseLabel} (Planner: ${plannerModel} / Executor: ${executorModel})`
+  return `${orchestratorName} (tier/${orchestratorId}) · ${phaseLabel} (Planner: ${plannerModel} / Executor: ${executorModel})`
 }
 
-export function formatDuoSavedNotice(id: string, locale: HelmxLocale): string {
+export function formatOrchestratorSavedNotice(id: string, locale: HelmxLocale): string {
   return locale === 'zh-CN' ? `已保存编排器 tier/${id}` : `Saved orchestrator tier/${id}`
 }
 
-export function formatDuoRemovedNotice(id: string, locale: HelmxLocale): string {
+export function formatOrchestratorRemovedNotice(id: string, locale: HelmxLocale): string {
   return locale === 'zh-CN' ? `已删除编排器 tier/${id}` : `Deleted orchestrator tier/${id}`
 }
 
-export function formatDuoOverrideUpdatedNotice(modelRef: string, locale: HelmxLocale): string {
+export function formatOrchestratorOverrideUpdatedNotice(modelRef: string, locale: HelmxLocale): string {
   const short = formatModelShortName(modelRef)
   return locale === 'zh-CN'
     ? `当前会话执行模型已临时覆盖为 ${short}`
     : `Temporarily overrode Executor to ${short}`
 }
 
-export function formatDuoOverrideClearedNotice(locale: HelmxLocale): string {
+export function formatOrchestratorOverrideClearedNotice(locale: HelmxLocale): string {
   return locale === 'zh-CN' ? '已恢复编排器默认执行模型' : 'Reset Executor to orchestrator default'
 }
 
-export function formatDuoTransitionSummary(
+export function formatOrchestratorTransitionSummary(
   tool: 'exit_plan_mode' | 'hand_back_to_planner',
   toModelShort: string,
   reason: string | undefined,

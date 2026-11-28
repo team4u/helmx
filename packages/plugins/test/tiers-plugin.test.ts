@@ -95,7 +95,7 @@ test('validation: rejects malformed IDs, recursive tier targets, invalid thinkin
     { id: 'broken', model: 'faux/missing', description: 'Should be hidden', available: false },
     { id: 'muted', model: 'faux/workhorse', description: 'Disabled', available: true, disabled: true },
     {
-      id: 'architect_duo',
+      id: 'architect_orch',
       model: 'faux/workhorse',
       description: 'Orchestrator should never leak to subagent tiers',
       available: true,
@@ -107,11 +107,11 @@ test('validation: rejects malformed IDs, recursive tier targets, invalid thinkin
   assert.match(xml, /never agentType or profileId/)
   assert.doesNotMatch(xml, /tier\/broken/)
   assert.doesNotMatch(xml, /tier\/muted/)
-  assert.doesNotMatch(xml, /tier\/architect_duo/)
+  assert.doesNotMatch(xml, /tier\/architect_orch/)
   assert.equal(renderModelTiersCatalogSection([{ id: 'x', model: 'faux/fast', available: false }]), undefined)
   assert.equal(
     renderModelTiersCatalogSection([
-      { id: 'duo_only', model: 'faux/fast', available: true, singleTurnEligible: false },
+      { id: 'orch_only', model: 'faux/fast', available: true, singleTurnEligible: false },
     ]),
     undefined,
   )

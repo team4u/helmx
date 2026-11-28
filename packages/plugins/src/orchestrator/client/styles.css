@@ -1,21 +1,21 @@
-/* builtin:duo domain-specific styles (.duo-* prefix; shared layout & primitives come from @helmx/ui). */
-.duo-empty {
+/* builtin:orchestrator domain-specific styles (.orch-* prefix; shared layout & primitives come from @helmx/ui). */
+.orch-empty {
   padding: 28px 16px;
   min-height: 120px;
 }
 
 /* ---- Orchestrator row domain micro-visuals inside SDK <ListRow> ---- */
-.duo-id-code {
+.orch-id-code {
   font-size: 11.5px;
   color: var(--fg-secondary);
 }
 
-.duo-prefix {
+.orch-prefix {
   color: var(--fg-muted);
   font-weight: 400;
 }
 
-.duo-model-endpoint {
+.orch-model-endpoint {
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -23,7 +23,7 @@
   max-width: 100%;
 }
 
-.duo-model-name {
+.orch-model-name {
   font-family: var(--font-mono);
   font-size: 12px;
   color: var(--fg);
@@ -33,7 +33,7 @@
   white-space: nowrap;
 }
 
-.duo-model-level {
+.orch-model-level {
   font-family: var(--font-mono);
   font-size: 11px;
   color: var(--fg-muted);
@@ -41,52 +41,52 @@
   flex-shrink: 0;
 }
 
-.duo-model-arrow {
+.orch-model-arrow {
   color: var(--fg-subtle);
   flex-shrink: 0;
 }
 
 @media (hover: hover) {
-  .duo-row-delete-btn:hover:not(:disabled) {
+  .orch-row-delete-btn:hover:not(:disabled) {
     color: var(--err);
   }
 }
 
-.duo-starter-icon {
+.orch-starter-icon {
   color: var(--accent);
   flex-shrink: 0;
 }
 
-.duo-starter-cta {
+.orch-starter-cta {
   color: var(--accent);
   font-weight: 500;
 }
 
 /* ---- Detail drawer domain layout (starter chips, grouped orchestrator box & description field) ---- */
-.duo-drawer-form {
+.orch-drawer-form {
   min-width: 0;
 }
 
-.duo-starter-chips {
+.orch-starter-chips {
   display: flex;
   align-items: center;
   gap: var(--space-2);
   flex-wrap: wrap;
 }
 
-.duo-starter-chips-label {
+.orch-starter-chips-label {
   font-size: 11.5px;
   color: var(--fg-muted);
   white-space: nowrap;
 }
 
-.duo-starter-chips-list {
+.orch-starter-chips-list {
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
 }
 
-.duo-orchestrator-fields {
+.orch-fields {
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
@@ -96,7 +96,7 @@
   background: var(--bg-subtle);
 }
 
-.duo-orch-connector {
+.orch-connector {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -104,7 +104,7 @@
   color: var(--fg-subtle);
 }
 
-.duo-steps-row {
+.orch-steps-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -114,41 +114,41 @@
   border-top: 1px solid var(--line-2);
 }
 
-.duo-steps-label-col {
+.orch-steps-label-col {
   display: flex;
   flex-direction: column;
   gap: 1px;
   min-width: 0;
 }
 
-.duo-steps-hint {
+.orch-steps-hint {
   font-size: 11px;
   color: var(--fg-muted);
 }
 
-.duo-steps-control {
+.orch-steps-control {
   display: inline-flex;
   align-items: center;
   gap: 6px;
   flex-shrink: 0;
 }
 
-.duo-steps-input {
+.orch-steps-input {
   width: 68px;
   text-align: right;
 }
 
-.duo-steps-unit {
+.orch-steps-unit {
   font-size: 12px;
   color: var(--fg-muted);
   white-space: nowrap;
 }
 
-.duo-desc-field .helmx-field-label {
+.orch-desc-field .helmx-field-label {
   flex: 1;
 }
 
-.duo-desc-label-row {
+.orch-desc-label-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -156,35 +156,35 @@
   width: 100%;
 }
 
-.duo-char-count {
+.orch-char-count {
   font-size: 11px;
   font-weight: 400;
   color: var(--fg-muted);
 }
 
-.duo-desc-textarea {
+.orch-desc-textarea {
   min-height: 54px;
 }
 
 /* ---- Timeline 26px phase transition trace row ---- */
-.duo-trace-row {
+.orch-trace-row {
   width: 100%;
   min-width: 0;
   cursor: default;
 }
 
-.duo-trace-name {
+.orch-trace-name {
   color: var(--fg-secondary);
 }
 
-.duo-trace-right {
+.orch-trace-right {
   display: inline-flex;
   align-items: center;
   gap: 6px;
   flex: 0 0 auto;
 }
 
-.duo-trace-badge {
+.orch-trace-badge {
   height: 18px;
   line-height: 16px;
   padding: 0 5px;
@@ -192,32 +192,32 @@
   flex-shrink: 0;
 }
 
-.duo-trace-error {
+.orch-trace-error {
   color: var(--err);
 }
 
 /* ---- Composer orchestrator status pill (22px geometry, neutral surface, hover & open states inherited from .helmx-toolbar-pill) ---- */
-.duo-status-trigger {
+.orch-status-trigger {
   position: relative;
 }
 
-.duo-status-phase,
-.duo-status-sep {
+.orch-status-phase,
+.orch-status-sep {
   flex-shrink: 0;
 }
 
-.duo-status-sep {
+.orch-status-sep {
   opacity: 0.45;
 }
 
-.duo-status-model {
+.orch-status-model {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.duo-popover {
+.orch-popover {
   width: min(328px, calc(100vw - 24px));
   max-height: min(400px, 65dvh);
   overflow-y: auto;
@@ -229,11 +229,11 @@
   font-size: 12.5px;
 }
 
-.duo-popover-header {
+.orch-popover-header {
   padding: 0 0 8px;
 }
 
-.duo-popover-title-wrap {
+.orch-popover-title-wrap {
   display: inline-flex;
   align-items: center;
   flex-wrap: wrap;
@@ -241,20 +241,20 @@
   min-width: 0;
 }
 
-.duo-popover-title {
+.orch-popover-title {
   font-size: 12.5px;
   font-weight: 600;
   color: var(--fg);
   overflow-wrap: anywhere;
 }
 
-.duo-popover-rows {
+.orch-popover-rows {
   display: flex;
   flex-direction: column;
   gap: 6px;
 }
 
-.duo-popover-row {
+.orch-popover-row {
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -262,62 +262,62 @@
   border-radius: var(--radius-xs);
 }
 
-.duo-popover-row[data-active='true'] {
+.orch-popover-row[data-active='true'] {
   background: var(--bg-subtle);
 }
 
-.duo-popover-row--inline {
+.orch-popover-row--inline {
   flex-direction: row;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
 }
 
-.duo-popover-row-head {
+.orch-popover-row-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 6px;
 }
 
-.duo-popover-badges {
+.orch-popover-badges {
   display: inline-flex;
   align-items: center;
   gap: 4px;
   flex-shrink: 0;
 }
 
-.duo-popover-label {
+.orch-popover-label {
   font-size: 11.5px;
   color: var(--fg-muted);
 }
 
-.duo-popover-model {
+.orch-popover-model {
   font-size: 12px;
   color: var(--fg);
   overflow-wrap: anywhere;
 }
 
-.duo-popover-steps {
+.orch-popover-steps {
   font-size: 12px;
   font-weight: 500;
   color: var(--fg);
 }
 
-.duo-popover-override-actions {
+.orch-popover-override-actions {
   display: flex;
   justify-content: flex-end;
   padding-top: 2px;
 }
 
 @media (max-width: 680px) {
-  .duo-popover {
+  .orch-popover {
     width: calc(100vw - 24px);
   }
 }
 
 @media (pointer: coarse) {
-  .duo-status-trigger::after {
+  .orch-status-trigger::after {
     content: '';
     position: absolute;
     inset: -5px -2px;

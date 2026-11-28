@@ -5,7 +5,7 @@
  *   `turn_settled`, human `onInput`, and `pi.reset`;
  * - Disabling `builtin:steps` removes `update_steps` from tools and manifests immediately;
  * - Cross-plugin interop:
- *   - `builtin:duo` Planning Phase strips `update_steps` while keeping `exit_plan_mode`, and
+ *   - `builtin:orchestrator` Planning Phase strips `update_steps` while keeping `exit_plan_mode`, and
  *     Execution Phase restores `update_steps` so the Executor can track live progress;
  *   - `builtin:plan` Planning Mode strips `update_steps` during read-only planning and restores it in normal mode;
  * - Real conversation rewind (`replaceFromEntryId`) accurately rolls `steps` `sessionDoc` back to prior steps
@@ -26,9 +26,9 @@ import {
   type StepsSessionView,
 } from '../src/steps.js'
 import {
-  DUO_EXIT_PLAN_MODE_TOOL,
-  DUO_PLUGIN_ID,
-} from '../src/duo.js'
+  ORCHESTRATOR_EXIT_PLAN_MODE_TOOL,
+  ORCHESTRATOR_PLUGIN_ID,
+} from '../src/orchestrator.js'
 import { TITLE_PLUGIN_ID } from '../src/title/contracts.js'
 import {
   cleanupDir,
@@ -229,18 +229,18 @@ test('end-to-end update_steps persistence, disable cleanup, and rewind recovery'
   }
 })
 
-test('cross-plugin interop: duo planning strips update_steps and execution restores it; /plan strips it during planning', TIMEOUT, async () => {
+test('cross-plugin interop: orchestrator planning strips update_steps and execution restores it; /plan strips it during planning', TIMEOUT, async () => {
   const env = await openStepsIntegrationEnv()
   try {
     const { kernel } = env.app
-    await kernel.plugins.invokeAction(DUO_PLUGIN_ID, 'set', {
+    await kernel.plugins.invokeAction(ORCHESTRATOR_PLUGIN_ID, 'set', {
       id: 'steps_pair',
       name: 'Steps Pair',
       plannerModel: 'faux/flagship',
       executorModel: 'faux/workhorse',
     })
-    const duoConv = await kernel.conversations.createConversation({
-      title: 'duo-with-steps',
+    const orchConv = await kernel.conversations.createConversation({
+      title: 'orchestrator-with-steps',
       model: 'tier/steps_pair',
     })
 
@@ -251,7 +251,7 @@ test('cross-plugin interop: duo planning strips update_steps and execution resto
         captured,
         fauxAssistantMessage(
           [
-            fauxToolCall(DUO_EXIT_PLAN_MODE_TOOL, { plan: 'Implement fix cleanly and verify.' }),
+            fauxToolCall(ORCHESTRATOR_EXIT_PLAN_MODE_TOOL, { plan: 'Implement fix cleanly and verify.' }),
           ],
           { stopReason: 'toolUse' },
         ),
@@ -291,19 +291,19 @@ test('cross-plugin interop: duo planning strips update_steps and execution resto
       captureTurn(captured, fauxAssistantMessage('Execution finished.')),
     ])
 
-    await kernel.conversations.submitInput(duoConv.id, 'Plan and implement the fix')
-    await kernel.conversations.waitForIdle(duoConv.id)
+    await kernel.conversations.submitInput(orchConv.id, 'Plan and implement the fix')
+    await kernel.conversations.waitForIdle(orchConv.id)
 
-    assert.equal(captured[0]!.toolNames.includes(STEPS_TOOL_UPDATE), false, 'Duo Planning Phase must strip update_steps')
-    assert.ok(captured[0]!.toolNames.includes(DUO_EXIT_PLAN_MODE_TOOL), 'Duo Planning Phase must keep exit_plan_mode')
-    assert.ok(captured[1]!.toolNames.includes(STEPS_TOOL_UPDATE), 'Duo Execution Phase must restore update_steps')
-    await waitFor(() => readStepsDoc(kernel, duoConv.id) === null)
-    const duoDetail = await kernel.conversations.getConversationDetail(duoConv.id, { limit: 50 })
-    const duoStepResults = duoDetail.entries
+    assert.equal(captured[0]!.toolNames.includes(STEPS_TOOL_UPDATE), false, 'Orchestrator Planning Phase must strip update_steps')
+    assert.ok(captured[0]!.toolNames.includes(ORCHESTRATOR_EXIT_PLAN_MODE_TOOL), 'Orchestrator Planning Phase must keep exit_plan_mode')
+    assert.ok(captured[1]!.toolNames.includes(STEPS_TOOL_UPDATE), 'Orchestrator Execution Phase must restore update_steps')
+    await waitFor(() => readStepsDoc(kernel, orchConv.id) === null)
+    const orchDetail = await kernel.conversations.getConversationDetail(orchConv.id, { limit: 50 })
+    const orchStepResults = orchDetail.entries
       .filter((e) => e.kind === 'pi.tool-result')
       .flatMap((e) => (Array.isArray(e.model) ? e.model : []))
       .filter((m) => (m as { toolName?: string }).toolName === STEPS_TOOL_UPDATE)
-    const lastStepDetails = (duoStepResults[duoStepResults.length - 1] as { details?: { allTerminal?: boolean; done?: number; total?: number } } | undefined)?.details
+    const lastStepDetails = (orchStepResults[orchStepResults.length - 1] as { details?: { allTerminal?: boolean; done?: number; total?: number } } | undefined)?.details
     assert.equal(lastStepDetails?.allTerminal, true)
     assert.equal(lastStepDetails?.done, 3)
     assert.equal(lastStepDetails?.total, 3)

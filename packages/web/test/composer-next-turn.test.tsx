@@ -374,17 +374,17 @@ describe('Composer one-turn override & runtimeModelOverride', () => {
     }
   })
 
-  test('renders effectiveModelRef displayLabel, duo group header, Next-turn eligibility filter & hides preserveRef tiers on child/helmx conversations', { timeout: 60_000 }, async () => {
+  test('renders effectiveModelRef displayLabel, orchestrator group header, Next-turn eligibility filter & hides preserveRef tiers on child/helmx conversations', { timeout: 60_000 }, async () => {
     const richTiers: ModelTierCatalogEntry[] = [
       ...TEST_TIERS,
       {
-        id: 'claude-duo',
+        id: 'claude-orch',
         model: 'anthropic/claude-opus-4-6',
         available: true,
         thinkingLevel: 'medium',
         thinkingLevels: ['off', 'medium', 'max'],
         description: 'Plan then review',
-        displayGroup: 'duo',
+        displayGroup: 'orchestrator',
         displayLabel: 'Claude 精修',
         displayDetail: 'opus → sonnet',
         preserveRef: true,
@@ -394,7 +394,7 @@ describe('Composer one-turn override & runtimeModelOverride', () => {
     const h = mountComposerApp(
       makeConv(1, {
         model: 'anthropic/claude-opus-4-6',
-        effectiveModelRef: 'tier/claude-duo',
+        effectiveModelRef: 'tier/claude-orch',
         thinkingLevel: 'medium',
       }),
       richTiers,
@@ -408,7 +408,7 @@ describe('Composer one-turn override & runtimeModelOverride', () => {
       h.rerender(
         makeConv(1, {
           model: 'anthropic/claude-3-7-sonnet',
-          effectiveModelRef: 'tier/claude-duo',
+          effectiveModelRef: 'tier/claude-orch',
           runtimeModelOverride: true,
           thinkingLevel: 'high',
         }),

@@ -1,5 +1,5 @@
 /**
- * Shared read-only planning sandbox primitives consumed by both `builtin:plan` and `builtin:duo`.
+ * Shared read-only planning sandbox primitives consumed by both `builtin:plan` and `builtin:orchestrator`.
  * Keeping the base inspection whitelist and bash/run_action read-only guidance in one place prevents drift.
  */
 

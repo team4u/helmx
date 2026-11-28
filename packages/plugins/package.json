@@ -78,13 +78,13 @@
       "types": "./dist/tiers/contracts.d.ts",
       "import": "./dist/tiers/contracts.js"
     },
-    "./duo": {
-      "types": "./dist/duo.d.ts",
-      "import": "./dist/duo.js"
+    "./orchestrator": {
+      "types": "./dist/orchestrator.d.ts",
+      "import": "./dist/orchestrator.js"
     },
-    "./duo/contracts": {
-      "types": "./dist/duo/contracts.d.ts",
-      "import": "./dist/duo/contracts.js"
+    "./orchestrator/contracts": {
+      "types": "./dist/orchestrator/contracts.d.ts",
+      "import": "./dist/orchestrator/contracts.js"
     },
     "./title": {
       "types": "./dist/title.d.ts",

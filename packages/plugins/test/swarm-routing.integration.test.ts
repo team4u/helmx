@@ -45,7 +45,11 @@ import {
 import { createCollabGroupRuntime } from '../src/swarm/group-store.js'
 import type { CollabGroupRuntime } from '../src/swarm/contracts.js'
 import { FORKED_CHILD_CONTEXT_GUIDANCE } from '../src/shared-helpers.js'
-import { DUO_EXECUTE_SECTION_ID, DUO_PLAN_SECTION_ID, DUO_PLUGIN_ID } from '../src/duo.js'
+import {
+  ORCHESTRATOR_EXECUTE_SECTION_ID,
+  ORCHESTRATOR_PLAN_SECTION_ID,
+  ORCHESTRATOR_PLUGIN_ID,
+} from '../src/orchestrator.js'
 import { TIERS_PLUGIN_ID } from '../src/tiers.js'
 import { TITLE_PLUGIN_ID } from '../src/title.js'
 import {
@@ -1570,8 +1574,8 @@ describe('builtin:swarm board routing, settlement & self-healing', { concurrency
     }
   })
 
-  test('swarm-int16: Duo + Swarm integration keeps SWARM_TOOL_NAMES in planning phase, keeps coordinator on Planner, inherits executorModel with atomic ownedBy=helmx, and honors explicit worker model', { timeout: 60_000 }, async (t) => {
-    const root = mkdtempSync(join(tmpdir(), 'helmx-swarm-duo-it-'))
+  test('swarm-int16: Orchestrator + Swarm integration keeps SWARM_TOOL_NAMES in planning phase, keeps coordinator on Planner, inherits executorModel with atomic ownedBy=helmx, and honors explicit worker model', { timeout: 60_000 }, async (t) => {
+    const root = mkdtempSync(join(tmpdir(), 'helmx-swarm-orch-it-'))
     const repoDir = join(root, 'repo')
     const dataDir = join(root, 'data')
     gitTemplate.cloneTo(repoDir)
@@ -1613,7 +1617,7 @@ describe('builtin:swarm board routing, settlement & self-healing', { concurrency
       model: 'faux/coder',
       thinkingLevel: 'low',
     })
-    await kernel.plugins.invokeAction(DUO_PLUGIN_ID, 'set', {
+    await kernel.plugins.invokeAction(ORCHESTRATOR_PLUGIN_ID, 'set', {
       id: 'coord_pair',
       name: 'Coordinator Pair',
       plannerModel: 'faux/flagship',
@@ -1621,7 +1625,7 @@ describe('builtin:swarm board routing, settlement & self-healing', { concurrency
     })
 
     const coord = await kernel.conversations.createConversation({
-      title: 'Duo Swarm Coordinator',
+      title: 'Orchestrator Swarm Coordinator',
       profileId: 'assistant',
       model: 'tier/coord_pair',
       cwd: repoDir,
@@ -1661,7 +1665,7 @@ describe('builtin:swarm board routing, settlement & self-healing', { concurrency
       if (!createdGroup) {
         createdGroup = true
         return fauxAssistantMessage(
-          [fauxToolCall('swarm_create_group', { title: 'Duo Swarm Squad' })],
+          [fauxToolCall('swarm_create_group', { title: 'Orchestrator Swarm Squad' })],
           { stopReason: 'toolUse' },
         )
       }
@@ -1687,9 +1691,9 @@ describe('builtin:swarm board routing, settlement & self-healing', { concurrency
     const coordSteps = observed.filter((entry) => entry.who === 'coordinator')
     assert.ok(coordSteps.length >= 2, 'coordinator must execute at least planning + dispatch turns')
     const initialPlanningStep = coordSteps[0]!
-    assert.ok(initialPlanningStep.sectionsById[DUO_PLAN_SECTION_ID] !== undefined, 'step 1 must run in Duo planning phase')
-    assert.equal(initialPlanningStep.toolNames.includes('write'), false, 'Duo planning phase must still strip coding tools')
-    assert.ok(initialPlanningStep.toolNames.includes('swarm_create_group'), 'Duo planning phase must keep swarm_create_group')
+    assert.ok(initialPlanningStep.sectionsById[ORCHESTRATOR_PLAN_SECTION_ID] !== undefined, 'step 1 must run in Orchestrator planning phase')
+    assert.equal(initialPlanningStep.toolNames.includes('write'), false, 'Orchestrator planning phase must still strip coding tools')
+    assert.ok(initialPlanningStep.toolNames.includes('swarm_create_group'), 'Orchestrator planning phase must keep swarm_create_group')
     const postGroupStep = coordSteps[1]!
     for (const toolName of SWARM_TOOL_NAMES.filter((name) => name !== 'swarm_create_group')) {
       assert.ok(postGroupStep.toolNames.includes(toolName), `coordinator step must expose ${toolName}`)
@@ -1705,22 +1709,22 @@ describe('builtin:swarm board routing, settlement & self-healing', { concurrency
 
     assert.equal(kernel.conversations.getConversation(autoConv!.id).ownedBy, 'helmx', 'auto_w must be atomically owned by helmx')
     assert.equal(kernel.conversations.getConversation(fastConv!.id).ownedBy, 'helmx', 'fast_w must be atomically owned by helmx')
-    assert.equal(autoConv!.model, 'faux/coder', 'worker omitting model must inherit Duo executorModel')
-    assert.equal(fastConv!.model, 'faux/fast', 'worker with explicit model must override Duo executorModel')
+    assert.equal(autoConv!.model, 'faux/coder', 'worker omitting model must inherit Orchestrator executorModel')
+    assert.equal(fastConv!.model, 'faux/fast', 'worker with explicit model must override Orchestrator executorModel')
 
     const autoSteps = observed.filter((entry) => entry.who === 'auto_w')
     const fastSteps = observed.filter((entry) => entry.who === 'fast_w')
     assert.ok(autoSteps.length >= 1 && autoSteps.every((s) => s.modelId === 'faux/coder'), 'auto_w runtime must run on faux/coder')
     assert.ok(fastSteps.length >= 1 && fastSteps.every((s) => s.modelId === 'faux/fast'), 'fast_w runtime must run on faux/fast')
 
-    // Follow-up coordinator turn retains Planner posture & suppresses Duo plan/execute prompts
+    // Follow-up coordinator turn retains Planner posture & suppresses Orchestrator plan/execute prompts
     const beforeFollowUp = observed.length
     await kernel.conversations.submitInput(coord.id, 'Review worker progress')
     await kernel.conversations.waitForIdle(coord.id)
     const followUpCoord = observed.slice(beforeFollowUp).filter((entry) => entry.who === 'coordinator')
     assert.ok(followUpCoord.length >= 1)
     assert.equal(followUpCoord[0]!.modelId, 'faux/flagship')
-    assert.equal(followUpCoord[0]!.sectionsById[DUO_PLAN_SECTION_ID], undefined)
-    assert.equal(followUpCoord[0]!.sectionsById[DUO_EXECUTE_SECTION_ID], undefined)
+    assert.equal(followUpCoord[0]!.sectionsById[ORCHESTRATOR_PLAN_SECTION_ID], undefined)
+    assert.equal(followUpCoord[0]!.sectionsById[ORCHESTRATOR_EXECUTE_SECTION_ID], undefined)
   })
 })

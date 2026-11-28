@@ -897,13 +897,13 @@ test('effectiveModelRef 与 modelTiers 新展示元数据在快照/详情合并/
     thinkingLevels: { 'anthropic/claude-3-7-sonnet': ['off', 'high'] },
     modelTiers: [
       {
-        id: 'claude-duo',
+        id: 'claude-orch',
         model: 'anthropic/claude-3-7-sonnet',
         available: true,
         thinkingLevel: 'high',
         thinkingLevels: ['off', 'high'],
         description: 'Plan then verify',
-        displayGroup: 'duo',
+        displayGroup: 'orchestrator',
         displayLabel: 'Claude 精修',
         displayDetail: 'opus → sonnet',
         preserveRef: true,
@@ -913,13 +913,13 @@ test('effectiveModelRef 与 modelTiers 新展示元数据在快照/详情合并/
   })
   assert.deepEqual(catalog.modelTiers, [
     {
-      id: 'claude-duo',
+      id: 'claude-orch',
       model: 'anthropic/claude-3-7-sonnet',
       available: true,
       thinkingLevel: 'high',
       thinkingLevels: ['off', 'high'],
       description: 'Plan then verify',
-      displayGroup: 'duo',
+      displayGroup: 'orchestrator',
       displayLabel: 'Claude 精修',
       displayDetail: 'opus → sonnet',
       preserveRef: true,
@@ -936,15 +936,15 @@ test('effectiveModelRef 与 modelTiers 新展示元数据在快照/详情合并/
   const withSymbolic: ConversationSummary = {
     ...conv,
     model: 'faux/base',
-    effectiveModelRef: 'tier/claude-duo',
+    effectiveModelRef: 'tier/claude-orch',
   }
 
   const snapState = applySnapshot({ ...emptyLiveState(), conversationDetails: { 1: baseDetail } }, {
     ...snapshot,
     conversations: [withSymbolic],
   })
-  assert.equal(snapState.conversations[0]?.effectiveModelRef, 'tier/claude-duo')
-  assert.equal(snapState.conversationDetails[1]?.effectiveModelRef, 'tier/claude-duo')
+  assert.equal(snapState.conversations[0]?.effectiveModelRef, 'tier/claude-orch')
+  assert.equal(snapState.conversationDetails[1]?.effectiveModelRef, 'tier/claude-orch')
 
   const staleDetail: ConversationDetail = { ...withSymbolic, entries: [{ id: '1', kind: 'pi.assistant' }] }
   const clearedSummaryState = {

@@ -1,5 +1,5 @@
 /**
- * Contracts, schemas, and validation helpers for `builtin:duo` Orchestrator.
+ * Contracts, schemas, and validation helpers for `builtin:orchestrator` Orchestrator.
  */
 import {
   HelmxError,
@@ -14,51 +14,51 @@ import {
 } from '@helmx/protocol'
 import { READ_ONLY_PLANNING_BASE_TOOLS } from '../shared-planning.js'
 
-export const DUO_PLUGIN_ID = 'builtin:duo' as const
-export const DUO_SKILL_ID = 'duo' as const
+export const ORCHESTRATOR_PLUGIN_ID = 'builtin:orchestrator' as const
+export const ORCHESTRATOR_SKILL_ID = 'orchestrator' as const
 
-export const DUO_STATE_DOC = 'state' as const
-export const DUO_SESSION_DOC = 'duo' as const
-export const DUO_SCREEN_ID = 'main' as const
-export const DUO_RECIPES_KV = 'recipes' as const
-export const DUO_CONV_OVERRIDES_KV = 'conv_overrides' as const
-export const DUO_STATES_KV = 'states' as const
+export const ORCHESTRATOR_STATE_DOC = 'state' as const
+export const ORCHESTRATOR_SESSION_DOC = 'orchestrator' as const
+export const ORCHESTRATOR_SCREEN_ID = 'main' as const
+export const ORCHESTRATOR_ITEMS_KV = 'items' as const
+export const ORCHESTRATOR_CONV_OVERRIDES_KV = 'conv_overrides' as const
+export const ORCHESTRATOR_STATES_KV = 'states' as const
 
-export const DUO_ELIGIBLE_SCOPE: ConversationScope = {
+export const ORCHESTRATOR_ELIGIBLE_SCOPE: ConversationScope = {
   topLevelOnly: true,
   ownedBy: 'human',
 }
 
-export const DUO_EXIT_PLAN_MODE_TOOL = 'exit_plan_mode' as const
-export const DUO_HAND_BACK_TOOL = 'hand_back_to_planner' as const
-export const DUO_ONLY_TOOL_NAMES: ReadonlySet<string> = new Set([
-  DUO_EXIT_PLAN_MODE_TOOL,
-  DUO_HAND_BACK_TOOL,
+export const ORCHESTRATOR_EXIT_PLAN_MODE_TOOL = 'exit_plan_mode' as const
+export const ORCHESTRATOR_HAND_BACK_TOOL = 'hand_back_to_planner' as const
+export const ORCHESTRATOR_ONLY_TOOL_NAMES: ReadonlySet<string> = new Set([
+  ORCHESTRATOR_EXIT_PLAN_MODE_TOOL,
+  ORCHESTRATOR_HAND_BACK_TOOL,
 ])
 
-export const DUO_PLAN_SECTION_ID = 'duo.plan' as const
-export const DUO_EXECUTE_SECTION_ID = 'duo.execute' as const
-export const DUO_STEP_LIMIT_SECTION_ID = 'duo.step_limit' as const
+export const ORCHESTRATOR_PLAN_SECTION_ID = 'orchestrator.plan' as const
+export const ORCHESTRATOR_EXECUTE_SECTION_ID = 'orchestrator.execute' as const
+export const ORCHESTRATOR_STEP_LIMIT_SECTION_ID = 'orchestrator.step_limit' as const
 
-export const DUO_DEFAULT_MAX_STEPS = 30
-export const DUO_MAX_STEPS_LIMIT = 100
-export const DUO_RECIPE_NAME_MAX_LENGTH = 80
-export const MAX_DUO_RECIPES_COUNT = 32
-export const DUO_THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const
-export type DuoThinkingLevel = (typeof DUO_THINKING_LEVELS)[number]
+export const ORCHESTRATOR_DEFAULT_MAX_STEPS = 30
+export const ORCHESTRATOR_MAX_STEPS_LIMIT = 100
+export const ORCHESTRATOR_NAME_MAX_LENGTH = 80
+export const MAX_ORCHESTRATORS_COUNT = 32
+export const ORCHESTRATOR_THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const
+export type OrchestratorThinkingLevel = (typeof ORCHESTRATOR_THINKING_LEVELS)[number]
 
 /** Planning baseline tools retained alongside exit_plan_mode and active delegation tools. */
-export const DUO_PLAN_BASE_TOOL_WHITELIST: ReadonlySet<string> = new Set([
+export const ORCHESTRATOR_PLAN_BASE_TOOL_WHITELIST: ReadonlySet<string> = new Set([
   ...READ_ONLY_PLANNING_BASE_TOOLS,
-  DUO_EXIT_PLAN_MODE_TOOL,
+  ORCHESTRATOR_EXIT_PLAN_MODE_TOOL,
 ])
 
 export const COORDINATOR_SUPPRESS_TAG = 'swarm-coordinator' as const
 
-export type DuoPhase = 'planning' | 'execution'
-export type DuoTransitionTool = typeof DUO_EXIT_PLAN_MODE_TOOL | typeof DUO_HAND_BACK_TOOL
+export type OrchestratorPhase = 'planning' | 'execution'
+export type OrchestratorTransitionTool = typeof ORCHESTRATOR_EXIT_PLAN_MODE_TOOL | typeof ORCHESTRATOR_HAND_BACK_TOOL
 
-export interface DuoRecipe {
+export interface OrchestratorItem {
   id: string
   name: string
   description?: string
@@ -70,7 +70,7 @@ export interface DuoRecipe {
   updatedAt: number
 }
 
-export interface DuoRecipeView extends DuoRecipe {
+export interface OrchestratorItemView extends OrchestratorItem {
   resolvedPlannerModel?: string
   resolvedPlannerThinkingLevel?: string
   resolvedExecutorModel?: string
@@ -79,11 +79,11 @@ export interface DuoRecipeView extends DuoRecipe {
   unavailableReason?: string
 }
 
-export interface DuoStateDocSnapshot {
-  recipes: Record<string, DuoRecipe>
+export interface OrchestratorStateDocSnapshot {
+  items: Record<string, OrchestratorItem>
 }
 
-export interface DuoConversationOverrideRecord {
+export interface OrchestratorConversationOverrideRecord {
   conversationId: number
   executorModel: string
   executorThinkingLevel?: string
@@ -91,9 +91,9 @@ export interface DuoConversationOverrideRecord {
   updatedAt: number
 }
 
-export interface DuoResolvedConfig {
-  recipeId: string
-  recipeName: string
+export interface OrchestratorResolvedConfig {
+  orchestratorId: string
+  orchestratorName: string
   plannerModel: string
   plannerThinkingLevel?: string
   executorModel: string
@@ -102,10 +102,10 @@ export interface DuoResolvedConfig {
   hasExecutorOverride: boolean
 }
 
-export interface DuoRuntimeRecord {
+export interface OrchestratorRuntimeRecord {
   conversationId: number
-  recipeId?: string
-  phase: DuoPhase
+  orchestratorId?: string
+  phase: OrchestratorPhase
   executorModel: string
   executorThinkingLevel?: string
   maxExecutionSteps: number
@@ -119,11 +119,11 @@ export interface DuoRuntimeRecord {
   updatedAt: number
 }
 
-export interface DuoSessionView {
+export interface OrchestratorSessionView {
   enabled: boolean
-  recipeId: string
-  recipeName: string
-  phase: DuoPhase
+  orchestratorId: string
+  orchestratorName: string
+  phase: OrchestratorPhase
   plannerModel: string
   plannerThinkingLevel?: string
   executorModel: string
@@ -135,45 +135,45 @@ export interface DuoSessionView {
   hasExecutorOverride: boolean
 }
 
-export type DuoTransitionMeta = {
-  tool: DuoTransitionTool
+export type OrchestratorTransitionMeta = {
+  tool: OrchestratorTransitionTool
   fromModel: string
   toModel: string
-  fromPhase: DuoPhase
-  toPhase: DuoPhase
+  fromPhase: OrchestratorPhase
+  toPhase: OrchestratorPhase
   reason?: string
 }
 
-export const DUO_RECIPE_SCHEMA: JsonSchema = {
+export const ORCHESTRATOR_ITEM_SCHEMA: JsonSchema = {
   type: 'object',
   required: ['id', 'name', 'plannerModel', 'executorModel', 'maxExecutionSteps', 'updatedAt'],
   additionalProperties: false,
   properties: {
     id: { type: 'string', minLength: 1 },
-    name: { type: 'string', minLength: 1, maxLength: DUO_RECIPE_NAME_MAX_LENGTH },
+    name: { type: 'string', minLength: 1, maxLength: ORCHESTRATOR_NAME_MAX_LENGTH },
     description: { type: 'string', maxLength: MODEL_TIER_DESCRIPTION_MAX_LENGTH },
     plannerModel: { type: 'string', minLength: 1 },
-    plannerThinkingLevel: { type: 'string', enum: [...DUO_THINKING_LEVELS] },
+    plannerThinkingLevel: { type: 'string', enum: [...ORCHESTRATOR_THINKING_LEVELS] },
     executorModel: { type: 'string', minLength: 1 },
-    executorThinkingLevel: { type: 'string', enum: [...DUO_THINKING_LEVELS] },
-    maxExecutionSteps: { type: 'integer', minimum: 0, maximum: DUO_MAX_STEPS_LIMIT },
+    executorThinkingLevel: { type: 'string', enum: [...ORCHESTRATOR_THINKING_LEVELS] },
+    maxExecutionSteps: { type: 'integer', minimum: 0, maximum: ORCHESTRATOR_MAX_STEPS_LIMIT },
     updatedAt: { type: 'number' },
   },
 }
 
-export const DUO_RECIPE_VIEW_SCHEMA: JsonSchema = {
+export const ORCHESTRATOR_ITEM_VIEW_SCHEMA: JsonSchema = {
   type: 'object',
   required: ['id', 'name', 'plannerModel', 'executorModel', 'maxExecutionSteps', 'updatedAt', 'available'],
   additionalProperties: false,
   properties: {
     id: { type: 'string', minLength: 1 },
-    name: { type: 'string', minLength: 1, maxLength: DUO_RECIPE_NAME_MAX_LENGTH },
+    name: { type: 'string', minLength: 1, maxLength: ORCHESTRATOR_NAME_MAX_LENGTH },
     description: { type: 'string', maxLength: MODEL_TIER_DESCRIPTION_MAX_LENGTH },
     plannerModel: { type: 'string', minLength: 1 },
-    plannerThinkingLevel: { type: 'string', enum: [...DUO_THINKING_LEVELS] },
+    plannerThinkingLevel: { type: 'string', enum: [...ORCHESTRATOR_THINKING_LEVELS] },
     executorModel: { type: 'string', minLength: 1 },
-    executorThinkingLevel: { type: 'string', enum: [...DUO_THINKING_LEVELS] },
-    maxExecutionSteps: { type: 'integer', minimum: 0, maximum: DUO_MAX_STEPS_LIMIT },
+    executorThinkingLevel: { type: 'string', enum: [...ORCHESTRATOR_THINKING_LEVELS] },
+    maxExecutionSteps: { type: 'integer', minimum: 0, maximum: ORCHESTRATOR_MAX_STEPS_LIMIT },
     updatedAt: { type: 'number' },
     resolvedPlannerModel: { type: 'string' },
     resolvedPlannerThinkingLevel: { type: 'string' },
@@ -184,12 +184,12 @@ export const DUO_RECIPE_VIEW_SCHEMA: JsonSchema = {
   },
 }
 
-export const DUO_SESSION_VIEW_SCHEMA: JsonSchema = {
+export const ORCHESTRATOR_SESSION_VIEW_SCHEMA: JsonSchema = {
   type: 'object',
   required: [
     'enabled',
-    'recipeId',
-    'recipeName',
+    'orchestratorId',
+    'orchestratorName',
     'phase',
     'plannerModel',
     'executorModel',
@@ -201,14 +201,14 @@ export const DUO_SESSION_VIEW_SCHEMA: JsonSchema = {
   additionalProperties: false,
   properties: {
     enabled: { type: 'boolean' },
-    recipeId: { type: 'string' },
-    recipeName: { type: 'string' },
+    orchestratorId: { type: 'string' },
+    orchestratorName: { type: 'string' },
     phase: { type: 'string', enum: ['planning', 'execution'] },
     plannerModel: { type: 'string' },
     plannerThinkingLevel: { type: 'string' },
     executorModel: { type: 'string' },
     executorThinkingLevel: { type: 'string' },
-    maxExecutionSteps: { type: 'integer', minimum: 0, maximum: DUO_MAX_STEPS_LIMIT },
+    maxExecutionSteps: { type: 'integer', minimum: 0, maximum: ORCHESTRATOR_MAX_STEPS_LIMIT },
     executionStepCount: { type: 'integer', minimum: 0 },
     stepLimitPaused: { type: 'boolean' },
     suppressedByCoordinator: { type: 'boolean' },
@@ -216,12 +216,12 @@ export const DUO_SESSION_VIEW_SCHEMA: JsonSchema = {
   },
 }
 
-export const DUO_TRANSITION_META_SCHEMA: JsonSchema = {
+export const ORCHESTRATOR_TRANSITION_META_SCHEMA: JsonSchema = {
   type: 'object',
   required: ['tool', 'fromModel', 'toModel', 'fromPhase', 'toPhase'],
   additionalProperties: false,
   properties: {
-    tool: { type: 'string', enum: [DUO_EXIT_PLAN_MODE_TOOL, DUO_HAND_BACK_TOOL] },
+    tool: { type: 'string', enum: [ORCHESTRATOR_EXIT_PLAN_MODE_TOOL, ORCHESTRATOR_HAND_BACK_TOOL] },
     fromModel: { type: 'string' },
     toModel: { type: 'string' },
     fromPhase: { type: 'string', enum: ['planning', 'execution'] },
@@ -230,7 +230,9 @@ export const DUO_TRANSITION_META_SCHEMA: JsonSchema = {
   },
 }
 
-export function isDuoConversationEligible(conv: Pick<ConversationSummary, 'parentConversationId' | 'ownedBy'>): boolean {
+export function isOrchestratorConversationEligible(
+  conv: Pick<ConversationSummary, 'parentConversationId' | 'ownedBy'>,
+): boolean {
   return conv.parentConversationId === undefined && (conv.ownedBy ?? 'human') === 'human'
 }
 
@@ -238,7 +240,7 @@ export function isCoordinatorSuppressed(conv: Pick<ConversationSummary, 'tags'>)
   return Array.isArray(conv.tags) && conv.tags.includes(COORDINATOR_SUPPRESS_TAG)
 }
 
-export function assertDuoRecipeId(raw: unknown): string {
+export function assertOrchestratorId(raw: unknown): string {
   if (typeof raw !== 'string') {
     throw new HelmxError('validation_error', 'Orchestrator id must be a string', 400, { id: raw })
   }
@@ -254,15 +256,15 @@ export function assertDuoRecipeId(raw: unknown): string {
   return id
 }
 
-export function normalizeDuoRecipeName(raw: unknown): string {
+export function normalizeOrchestratorName(raw: unknown): string {
   if (typeof raw !== 'string') {
     throw new HelmxError('validation_error', 'Orchestrator name must be a non-empty string', 400, { name: raw })
   }
   const name = raw.trim()
-  if (!name || name.length > DUO_RECIPE_NAME_MAX_LENGTH) {
+  if (!name || name.length > ORCHESTRATOR_NAME_MAX_LENGTH) {
     throw new HelmxError(
       'validation_error',
-      `Orchestrator name must be 1..${DUO_RECIPE_NAME_MAX_LENGTH} characters`,
+      `Orchestrator name must be 1..${ORCHESTRATOR_NAME_MAX_LENGTH} characters`,
       400,
       { name: raw },
     )
@@ -270,7 +272,7 @@ export function normalizeDuoRecipeName(raw: unknown): string {
   return name
 }
 
-export function normalizeDuoDescription(raw: unknown): string | undefined {
+export function normalizeOrchestratorDescription(raw: unknown): string | undefined {
   if (raw === undefined || raw === null) return undefined
   if (typeof raw !== 'string') {
     throw new HelmxError('validation_error', 'Orchestrator description must be a string', 400, { description: raw })
@@ -288,7 +290,7 @@ export function normalizeDuoDescription(raw: unknown): string | undefined {
   return trimmed
 }
 
-export function normalizeDuoModelRef(raw: unknown, field = 'executorModel'): string {
+export function normalizeOrchestratorModelRef(raw: unknown, field = 'executorModel'): string {
   if (typeof raw !== 'string') {
     throw new HelmxError('validation_error', `${field} must be a non-empty string`, 400)
   }
@@ -314,36 +316,36 @@ export function normalizeDuoModelRef(raw: unknown, field = 'executorModel'): str
   return trimmed
 }
 
-export function normalizeDuoThinkingLevel(raw: unknown, field = 'executorThinkingLevel'): string | undefined {
+export function normalizeOrchestratorThinkingLevel(raw: unknown, field = 'executorThinkingLevel'): string | undefined {
   if (raw === undefined || raw === null) return undefined
   if (typeof raw !== 'string') {
     throw new HelmxError('validation_error', `${field} must be a string`, 400)
   }
   const trimmed = raw.trim()
   if (!trimmed) return undefined
-  if (!(DUO_THINKING_LEVELS as readonly string[]).includes(trimmed)) {
+  if (!(ORCHESTRATOR_THINKING_LEVELS as readonly string[]).includes(trimmed)) {
     throw new HelmxError(
       'validation_error',
-      `${field} must be one of: ${DUO_THINKING_LEVELS.join(', ')}`,
+      `${field} must be one of: ${ORCHESTRATOR_THINKING_LEVELS.join(', ')}`,
       400,
     )
   }
   return trimmed
 }
 
-export function normalizeMaxExecutionSteps(raw: unknown, fallback = DUO_DEFAULT_MAX_STEPS): number {
+export function normalizeMaxExecutionSteps(raw: unknown, fallback = ORCHESTRATOR_DEFAULT_MAX_STEPS): number {
   if (raw === undefined) return fallback
-  if (typeof raw !== 'number' || !Number.isInteger(raw) || raw < 0 || raw > DUO_MAX_STEPS_LIMIT) {
+  if (typeof raw !== 'number' || !Number.isInteger(raw) || raw < 0 || raw > ORCHESTRATOR_MAX_STEPS_LIMIT) {
     throw new HelmxError(
       'validation_error',
-      `maxExecutionSteps must be an integer between 0 and ${DUO_MAX_STEPS_LIMIT}`,
+      `maxExecutionSteps must be an integer between 0 and ${ORCHESTRATOR_MAX_STEPS_LIMIT}`,
       400,
     )
   }
   return raw
 }
 
-export function formatDuoModelShortName(modelRef: string | undefined): string {
+export function formatOrchestratorModelShortName(modelRef: string | undefined): string {
   if (!modelRef) return ''
   const trimmed = modelRef.trim()
   if (!trimmed) return ''
@@ -355,7 +357,7 @@ export function formatDuoModelShortName(modelRef: string | undefined): string {
 }
 
 /**
- * Collect concrete external `ModelTierSpec` definitions from all non-Duo providers
+ * Collect concrete external `ModelTierSpec` definitions from all non-Orchestrator providers
  * implementing `'helmx.model-tiers'` (e.g. `builtin:tiers`).
  */
 export function collectExternalTierMap(
@@ -363,7 +365,7 @@ export function collectExternalTierMap(
 ): Record<string, ModelTierSpec> {
   const map: Record<string, ModelTierSpec> = {}
   for (const entry of providers) {
-    if (entry.pluginId === DUO_PLUGIN_ID) continue
+    if (entry.pluginId === ORCHESTRATOR_PLUGIN_ID) continue
     let tiers: Readonly<Record<string, ModelTierSpec>> | undefined
     try {
       tiers = entry.impl.getTiers()
@@ -385,7 +387,7 @@ export function collectExternalTierMap(
  * Resolve a model ref (`provider/model` or external `tier/<id>`) into a concrete model + thinking level.
  * Returns `undefined` when `modelRef` points to a missing/unmounted external `tier/<id>`.
  */
-export function resolveDuoModelThroughExternalTiers(
+export function resolveOrchestratorModelThroughExternalTiers(
   modelRef: string,
   explicitThinkingLevel: string | undefined,
   externalTiers: Readonly<Record<string, ModelTierSpec>>,

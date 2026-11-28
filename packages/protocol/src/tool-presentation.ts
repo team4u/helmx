@@ -28,6 +28,7 @@ export interface EditToolResult {
   nodeId: string
   replaced: true
   diff: ToolEditDiff
+  artifactId?: string
 }
 
 export const TOOL_DIFF_MAX_ROWS = 160
@@ -84,6 +85,7 @@ export const EDIT_TOOL_RESULT_SCHEMA = {
       required: ['rows', 'addedLines', 'removedLines', 'firstChangedLine', 'truncated'],
       additionalProperties: false,
     },
+    artifactId: { type: 'string', minLength: 1 },
   },
   required: ['path', 'nodeId', 'replaced', 'diff'],
   additionalProperties: false,

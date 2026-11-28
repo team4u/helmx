@@ -2,7 +2,7 @@
 
 `builtin:tiers` 聚焦**纯语义模型档位映射与编制模板（1 tier = 1 concrete model）**：用户将底层具体模型与推荐思考强度绑定为稳定的语义代号（如 `tier/scout`、`tier/coder`、`tier/senior`、`tier/architect`、`tier/reviewer`），并可将整套映射保存为多份预设模板一键切换。
 
-> 单轮临时切模型已收敛至内核 `submitInput` 与 Web 模型选择器顶部「仅下一轮」标签（`helmx send --model ... --thinking ...`）；规划/执行双相模型编排由 [`builtin:duo`](duo.md) 独立承载。
+> 单轮临时切模型已收敛至内核 `submitInput` 与 Web 模型选择器顶部「仅下一轮」标签（`helmx send --model ... --thinking ...`）；规划/执行双相模型编排由 [`builtin:orchestrator`](orchestrator.md) 独立承载。
 
 设计严格遵循**机制与策略分离**：
 
@@ -13,7 +13,7 @@
 
 1. **命名空间、固化与符号继承**
    - `tier` 为内核保留命名空间，不可注册同名 Provider、不可设置 `disabledModels` 或逐模型 `modelThinkingLevels`，也不允许 `tier -> tier` 嵌套引用（`set` / `replace` 强校验拒绝自引与未包含 `/` 的非法引用）。
-   - **会话固化 vs 符号继承**：在具体会话上选用普通单模型档位 `tier/<id>` 或经 `subagent` / `swarm` / `fork` 派工时，内核立即将其解引用并固化为真实 `provider/modelId`；而在 `Profile.model`、`defaultModel`、`defaultCompactionModel`、`preserveRef: true` 档位（如 [`builtin:duo`](duo.md) 编排器）或编排器的 `plannerModel` / `executorModel` 中绑定 `tier/<id>` 时保留符号引用——切换模板或更新档位后，相关配置与未设覆写的会话及编排器自动对齐到新模型。
+   - **会话固化 vs 符号继承**：在具体会话上选用普通单模型档位 `tier/<id>` 或经 `subagent` / `swarm` / `fork` 派工时，内核立即将其解引用并固化为真实 `provider/modelId`；而在 `Profile.model`、`defaultModel`、`defaultCompactionModel`、`preserveRef: true` 档位（如 [`builtin:orchestrator`](orchestrator.md) 编排器）或编排器的 `plannerModel` / `executorModel` 中绑定 `tier/<id>` 时保留符号引用——切换模板或更新档位后，相关配置与未设覆写的会话及编排器自动对齐到新模型。
    - **思考强度优先级**：显式传入（如 `thinkingLevel` / `effort`）> 档位预设 `tier.thinkingLevel` > 逐模型默认 `modelThinkingLevels` > `Profile.thinkingLevel` > 全局默认，并按底层模型实际能力裁剪（clamp）。
    - **诚实失败**：引用不存在的档位返回 `404 model_tier_not_found`，目标模型被禁用返回 `409 model_disabled`，绝不静默回退到默认模型。
 
@@ -22,7 +22,7 @@
    - 删除模板（`delete_template`）不影响当前已激活的档位映射。
 
 3. **目录注入与受管技能**
-   - **动态目录（`before_turn` Hook）**：当至少存在一个可用且 `singleTurnEligible !== false` 的档位且 `autoInjectCatalog: true`（默认开启）时，向系统段注入紧凑的 `<available_model_tiers>` 列表（自动排除 [`builtin:duo`](duo.md) 编排器等仅顶层可用的 `tier/<id>`）；关闭开关或无可用单轮档位时零注入。
+   - **动态目录（`before_turn` Hook）**：当至少存在一个可用且 `singleTurnEligible !== false` 的档位且 `autoInjectCatalog: true`（默认开启）时，向系统段注入紧凑的 `<available_model_tiers>` 列表（自动排除 [`builtin:orchestrator`](orchestrator.md) 编排器等仅顶层可用的 `tier/<id>`）；关闭开关或无可用单轮档位时零注入。
    - **受管技能 `model-tiers`**：经 `ctx.host.skills.ensureSkill` 自举通用多档位分工指南，不包含硬编码档位名或具体供应商模型名。
 
 4. **引用保护与搜索**
@@ -61,5 +61,5 @@
 
 ## 相关文档
 
-- [编排器插件（`builtin:duo`）](duo.md)：Planner / Executor 编排器切换与 `tier/<id>` 协同
+- [编排器插件（`builtin:orchestrator`）](orchestrator.md)：Planner / Executor 编排器切换与 `tier/<id>` 协同
 - [CLI 命令参考](../cli/reference.md)：`helmx send --model` 单轮模型临时覆盖

@@ -1,7 +1,7 @@
 // @test-isolation: process
 /**
- * Integration tests for `builtin:duo` Orchestrator on full Helmx Kernel (`createHelmx`):
- * - Default enabled, managed `duo` skill, modular client bundles, `singleTurnEligible: false` filtering;
+ * Integration tests for `builtin:orchestrator` Orchestrator on full Helmx Kernel (`createHelmx`):
+ * - Default enabled, managed `orchestrator` skill, modular client bundles, `singleTurnEligible: false` filtering;
  * - Orchestrator CRUD (`set`/`list`/`get`/`remove`) mounted as `tier/<id>` in `ModelCatalog.modelTiers`;
  * - Top-level conversation choosing `tier/<id>` directly or via Profile:
  *   Planning Phase (read-only + `exit_plan_mode`) -> Execution Phase (budget `step 1 of 2` -> pause) ->
@@ -31,19 +31,19 @@ import {
   type DefaultChildModelCapability,
 } from '../src/contracts.js'
 import {
-  DUO_EXECUTE_SECTION_ID,
-  DUO_EXIT_PLAN_MODE_TOOL,
-  DUO_HAND_BACK_TOOL,
-  DUO_PLAN_SECTION_ID,
-  DUO_PLUGIN_ID,
-  DUO_SESSION_DOC,
-  DUO_SKILL_ID,
-  DUO_STATE_DOC,
-  DUO_STEP_LIMIT_SECTION_ID,
-  type DuoRecipeView,
-  type DuoSessionView,
-  type DuoStateDocSnapshot,
-} from '../src/duo.js'
+  ORCHESTRATOR_EXECUTE_SECTION_ID,
+  ORCHESTRATOR_EXIT_PLAN_MODE_TOOL,
+  ORCHESTRATOR_HAND_BACK_TOOL,
+  ORCHESTRATOR_PLAN_SECTION_ID,
+  ORCHESTRATOR_PLUGIN_ID,
+  ORCHESTRATOR_SESSION_DOC,
+  ORCHESTRATOR_SKILL_ID,
+  ORCHESTRATOR_STATE_DOC,
+  ORCHESTRATOR_STEP_LIMIT_SECTION_ID,
+  type OrchestratorItemView,
+  type OrchestratorSessionView,
+  type OrchestratorStateDocSnapshot,
+} from '../src/orchestrator.js'
 import { PLAN_MODE_SECTION_ID, PLAN_TOOL_PROPOSE, PLAN_TOOL_SAVE } from '../src/plan.js'
 import { TIERS_PLUGIN_ID } from '../src/tiers.js'
 import { renderModelTiersCatalogSection } from '../src/tiers/validation.js'
@@ -57,8 +57,8 @@ import {
 
 const TIMEOUT = { timeout: 60_000 } as const
 
-async function openDuoEnv(options: { defaultModel?: string } = {}) {
-  const dataDir = await makeTempDir('helmx-duo-it-')
+async function openOrchestratorEnv(options: { defaultModel?: string } = {}) {
+  const dataDir = await makeTempDir('helmx-orch-it-')
   const faux = makeFauxProvider({
     models: [
       { id: 'fast', name: 'Fast', reasoning: true },
@@ -117,34 +117,34 @@ function captureStep(
   }
 }
 
-test('registration, modular client bundles, catalog filtering, and recipe-driven dual-phase loop with budget pause', TIMEOUT, async () => {
-  const env = await openDuoEnv()
+test('registration, modular client bundles, catalog filtering, and orchestrator-driven dual-phase loop with budget pause', TIMEOUT, async () => {
+  const env = await openOrchestratorEnv()
   try {
     const { kernel } = env.app
-    const summary = kernel.plugins.list().find((p) => p.id === DUO_PLUGIN_ID)
+    const summary = kernel.plugins.list().find((p) => p.id === ORCHESTRATOR_PLUGIN_ID)
     assert.ok(summary && summary.enabled)
     const skills = await kernel.skills.list()
-    assert.ok(skills.some((s) => s.id === DUO_SKILL_ID && s.managedByPlugin === DUO_PLUGIN_ID))
+    assert.ok(skills.some((s) => s.id === ORCHESTRATOR_SKILL_ID && s.managedByPlugin === ORCHESTRATOR_PLUGIN_ID))
 
-    const indexMod = await kernel.plugins.getClientModule(DUO_PLUGIN_ID, 'index.tsx')
-    assert.match(indexMod.code, /DuoToolbarPill/)
-    assert.match(indexMod.code, /DuoTransitionToolRow/)
-    const managerMod = await kernel.plugins.getClientModule(DUO_PLUGIN_ID, 'manager.tsx')
-    assert.match(managerMod.code, /DuoManagerScreen/)
-    assert.doesNotMatch(managerMod.code, /DuoSettingsPanel/)
-    const settingsMod = await kernel.plugins.getClientModule(DUO_PLUGIN_ID, 'settings.tsx')
-    assert.match(settingsMod.code, /DuoSettingsPanel/)
-    assert.doesNotMatch(settingsMod.code, /DuoManagerScreen/)
+    const indexMod = await kernel.plugins.getClientModule(ORCHESTRATOR_PLUGIN_ID, 'index.tsx')
+    assert.match(indexMod.code, /OrchestratorStatusPill/)
+    assert.match(indexMod.code, /OrchestratorTransitionToolRow/)
+    const managerMod = await kernel.plugins.getClientModule(ORCHESTRATOR_PLUGIN_ID, 'manager.tsx')
+    assert.match(managerMod.code, /OrchestratorManagerScreen/)
+    assert.doesNotMatch(managerMod.code, /OrchestratorSettingsPanel/)
+    const settingsMod = await kernel.plugins.getClientModule(ORCHESTRATOR_PLUGIN_ID, 'settings.tsx')
+    assert.match(settingsMod.code, /OrchestratorSettingsPanel/)
+    assert.doesNotMatch(settingsMod.code, /OrchestratorManagerScreen/)
 
-    const initialState = kernel.plugins.getPublicDoc(DUO_PLUGIN_ID, DUO_STATE_DOC).value as DuoStateDocSnapshot
-    assert.deepEqual(initialState, { recipes: {} })
+    const initialState = kernel.plugins.getPublicDoc(ORCHESTRATOR_PLUGIN_ID, ORCHESTRATOR_STATE_DOC).value as OrchestratorStateDocSnapshot
+    assert.deepEqual(initialState, { items: {} })
 
     await kernel.plugins.invokeAction(TIERS_PLUGIN_ID, 'set', {
       id: 'scout',
       model: 'faux/fast',
       description: 'Quick lookup',
     })
-    await kernel.plugins.invokeAction(DUO_PLUGIN_ID, 'set', {
+    await kernel.plugins.invokeAction(ORCHESTRATOR_PLUGIN_ID, 'set', {
       id: 'arch_coder',
       name: 'Arch -> Coder',
       description: 'Read-only architect paired with coder',
@@ -155,20 +155,20 @@ test('registration, modular client bundles, catalog filtering, and recipe-driven
     })
 
     const catalog = await kernel.models.listModels()
-    const duoEntry = catalog.modelTiers?.find((t) => t.id === 'arch_coder')
-    assert.ok(duoEntry, 'Orchestrator must be mounted in ModelCatalog.modelTiers')
-    assert.equal(duoEntry.displayGroup, 'duo')
-    assert.equal(duoEntry.displayLabel, 'Arch -> Coder')
-    assert.equal(duoEntry.displayDetail, 'flagship → coder')
-    assert.equal(duoEntry.preserveRef, true)
-    assert.equal(duoEntry.singleTurnEligible, false)
+    const orchEntry = catalog.modelTiers?.find((t) => t.id === 'arch_coder')
+    assert.ok(orchEntry, 'Orchestrator must be mounted in ModelCatalog.modelTiers')
+    assert.equal(orchEntry.displayGroup, 'orchestrator')
+    assert.equal(orchEntry.displayLabel, 'Arch -> Coder')
+    assert.equal(orchEntry.displayDetail, 'flagship → coder')
+    assert.equal(orchEntry.preserveRef, true)
+    assert.equal(orchEntry.singleTurnEligible, false)
 
     const renderedTiers = renderModelTiersCatalogSection(catalog.modelTiers ?? [])
     assert.ok(renderedTiers?.includes('tier/scout'))
     assert.equal(renderedTiers?.includes('tier/arch_coder'), false)
 
     const conv = await kernel.conversations.createConversation({
-      title: 'Recipe Conv',
+      title: 'Orchestrator Conv',
       model: 'tier/arch_coder',
     })
     assert.equal(conv.effectiveModelRef, 'tier/arch_coder')
@@ -178,7 +178,7 @@ test('registration, modular client bundles, catalog filtering, and recipe-driven
     env.faux.setResponses([
       captureStep(
         observed,
-        fauxAssistantMessage([fauxToolCall(DUO_EXIT_PLAN_MODE_TOOL, { plan: 'Edit readme cleanly.' })], {
+        fauxAssistantMessage([fauxToolCall(ORCHESTRATOR_EXIT_PLAN_MODE_TOOL, { plan: 'Edit readme cleanly.' })], {
           stopReason: 'toolUse',
         }),
       ),
@@ -194,7 +194,7 @@ test('registration, modular client bundles, catalog filtering, and recipe-driven
         observed,
         fauxAssistantMessage(
           [
-            fauxToolCall(DUO_HAND_BACK_TOOL, {
+            fauxToolCall(ORCHESTRATOR_HAND_BACK_TOOL, {
               reason: 'step_budget_reached',
               summary: 'Checked files and paused at limit.',
             }),
@@ -210,36 +210,36 @@ test('registration, modular client bundles, catalog filtering, and recipe-driven
 
     assert.equal(observed.length, 5)
     assert.equal(observed[0]!.modelId, 'faux/flagship')
-    assert.ok(observed[0]!.toolNames.includes(DUO_EXIT_PLAN_MODE_TOOL))
+    assert.ok(observed[0]!.toolNames.includes(ORCHESTRATOR_EXIT_PLAN_MODE_TOOL))
     assert.equal(observed[0]!.toolNames.includes('write'), false)
-    assert.ok(typeof observed[0]!.sectionsById[DUO_PLAN_SECTION_ID] === 'string')
+    assert.ok(typeof observed[0]!.sectionsById[ORCHESTRATOR_PLAN_SECTION_ID] === 'string')
 
     assert.equal(observed[1]!.modelId, 'faux/coder')
     assert.ok(observed[1]!.toolNames.includes('write'))
-    assert.ok(observed[1]!.sectionsById[DUO_EXECUTE_SECTION_ID]?.includes('step 1 of 2'))
+    assert.ok(observed[1]!.sectionsById[ORCHESTRATOR_EXECUTE_SECTION_ID]?.includes('step 1 of 2'))
     assert.equal(observed[2]!.modelId, 'faux/coder')
-    assert.ok(observed[2]!.sectionsById[DUO_EXECUTE_SECTION_ID]?.includes('step 2 of 2'))
+    assert.ok(observed[2]!.sectionsById[ORCHESTRATOR_EXECUTE_SECTION_ID]?.includes('step 2 of 2'))
 
     assert.equal(observed[3]!.modelId, 'faux/coder')
-    assert.deepEqual(observed[3]!.toolNames, [DUO_HAND_BACK_TOOL])
-    assert.ok(typeof observed[3]!.sectionsById[DUO_STEP_LIMIT_SECTION_ID] === 'string')
+    assert.deepEqual(observed[3]!.toolNames, [ORCHESTRATOR_HAND_BACK_TOOL])
+    assert.ok(typeof observed[3]!.sectionsById[ORCHESTRATOR_STEP_LIMIT_SECTION_ID] === 'string')
 
     assert.equal(observed[4]!.modelId, 'faux/flagship')
-    assert.ok(observed[4]!.toolNames.includes(DUO_EXIT_PLAN_MODE_TOOL))
+    assert.ok(observed[4]!.toolNames.includes(ORCHESTRATOR_EXIT_PLAN_MODE_TOOL))
     assert.equal(kernel.conversations.getConversation(conv.id).model, 'faux/flagship')
 
-    const status = (await kernel.plugins.invokeAction(DUO_PLUGIN_ID, 'status', {
+    const status = (await kernel.plugins.invokeAction(ORCHESTRATOR_PLUGIN_ID, 'status', {
       conversationId: conv.id,
-    })) as DuoSessionView
+    })) as OrchestratorSessionView
     assert.equal(status.phase, 'planning')
-    assert.equal(status.recipeId, 'arch_coder')
+    assert.equal(status.orchestratorId, 'arch_coder')
   } finally {
     await env.close()
   }
 })
 
-test('Profile binding, builtin:tiers preset cascade, override_executor & stale override cleanup on recipe switch', TIMEOUT, async () => {
-  const env = await openDuoEnv()
+test('Profile binding, builtin:tiers preset cascade, override_executor & stale override cleanup on orchestrator switch', TIMEOUT, async () => {
+  const env = await openOrchestratorEnv()
   try {
     const { kernel } = env.app
     await kernel.plugins.invokeAction(TIERS_PLUGIN_ID, 'set', {
@@ -268,24 +268,24 @@ test('Profile binding, builtin:tiers preset cascade, override_executor & stale o
     })
     await kernel.plugins.invokeAction(TIERS_PLUGIN_ID, 'apply_template', { id: 'v1' })
 
-    await kernel.plugins.invokeAction(DUO_PLUGIN_ID, 'set', {
-      id: 'team_duo',
-      name: 'Team Duo',
+    await kernel.plugins.invokeAction(ORCHESTRATOR_PLUGIN_ID, 'set', {
+      id: 'team_orch',
+      name: 'Team Orchestrator',
       plannerModel: 'tier/architect',
       executorModel: 'tier/coder',
     })
     await kernel.profiles.save({
       id: 'architect-role',
       name: 'Architect Role',
-      model: 'tier/team_duo',
+      model: 'tier/team_orch',
       system: 'Plan and implement.',
     })
 
     const conv = await kernel.conversations.createConversation({
-      title: 'Profile Recipe Conv',
+      title: 'Profile Orchestrator Conv',
       profileId: 'architect-role',
     })
-    assert.equal(conv.effectiveModelRef, 'tier/team_duo')
+    assert.equal(conv.effectiveModelRef, 'tier/team_orch')
     assert.equal(conv.model, 'faux/flagship')
 
     await kernel.plugins.invokeAction(TIERS_PLUGIN_ID, 'apply_template', { id: 'v2' })
@@ -293,28 +293,28 @@ test('Profile binding, builtin:tiers preset cascade, override_executor & stale o
       () => kernel.conversations.getConversation(conv.id).model === 'faux/flagship-v2',
       { message: 'planner upgraded via tiers template' },
     )
-    const upgradedView = (await kernel.plugins.invokeAction(DUO_PLUGIN_ID, 'get', {
-      id: 'team_duo',
-    })) as DuoRecipeView
+    const upgradedView = (await kernel.plugins.invokeAction(ORCHESTRATOR_PLUGIN_ID, 'get', {
+      id: 'team_orch',
+    })) as OrchestratorItemView
     assert.equal(upgradedView.resolvedPlannerModel, 'faux/flagship-v2')
     assert.equal(upgradedView.resolvedExecutorModel, 'faux/coder-v2')
 
-    const statusBeforeOverride = kernel.plugins.getPublicSessionDoc(DUO_PLUGIN_ID, DUO_SESSION_DOC, conv.id)
-      .value as DuoSessionView
+    const statusBeforeOverride = kernel.plugins.getPublicSessionDoc(ORCHESTRATOR_PLUGIN_ID, ORCHESTRATOR_SESSION_DOC, conv.id)
+      .value as OrchestratorSessionView
     assert.equal(statusBeforeOverride.executorModel, 'faux/coder-v2')
     assert.equal(statusBeforeOverride.hasExecutorOverride, false)
 
-    const overridden = (await kernel.plugins.invokeAction(DUO_PLUGIN_ID, 'override_executor', {
+    const overridden = (await kernel.plugins.invokeAction(ORCHESTRATOR_PLUGIN_ID, 'override_executor', {
       conversationId: conv.id,
       executorModel: 'faux/fast',
       maxExecutionSteps: 7,
-    })) as DuoSessionView
+    })) as OrchestratorSessionView
     assert.equal(overridden.executorModel, 'faux/fast')
     assert.equal(overridden.hasExecutorOverride, true)
 
     await kernel.conversations.updateConversation(conv.id, { model: 'faux/fast' })
     await waitFor(
-      () => kernel.plugins.getPublicSessionDoc(DUO_PLUGIN_ID, DUO_SESSION_DOC, conv.id).value === null,
+      () => kernel.plugins.getPublicSessionDoc(ORCHESTRATOR_PLUGIN_ID, ORCHESTRATOR_SESSION_DOC, conv.id).value === null,
       { message: 'sessionDoc cleared after leaving Orchestrator' },
     )
 
@@ -322,13 +322,13 @@ test('Profile binding, builtin:tiers preset cascade, override_executor & stale o
     await waitFor(
       () =>
         (
-          kernel.plugins.getPublicSessionDoc(DUO_PLUGIN_ID, DUO_SESSION_DOC, conv.id)
-            .value as DuoSessionView | null
-        )?.recipeId === 'team_duo',
-      { message: 'sessionDoc restored when returning to recipe' },
+          kernel.plugins.getPublicSessionDoc(ORCHESTRATOR_PLUGIN_ID, ORCHESTRATOR_SESSION_DOC, conv.id)
+            .value as OrchestratorSessionView | null
+        )?.orchestratorId === 'team_orch',
+      { message: 'sessionDoc restored when returning to orchestrator' },
     )
-    const afterReturn = kernel.plugins.getPublicSessionDoc(DUO_PLUGIN_ID, DUO_SESSION_DOC, conv.id)
-      .value as DuoSessionView
+    const afterReturn = kernel.plugins.getPublicSessionDoc(ORCHESTRATOR_PLUGIN_ID, ORCHESTRATOR_SESSION_DOC, conv.id)
+      .value as OrchestratorSessionView
     assert.equal(afterReturn.hasExecutorOverride, false)
     assert.equal(afterReturn.executorModel, 'faux/coder-v2')
   } finally {
@@ -336,18 +336,18 @@ test('Profile binding, builtin:tiers preset cascade, override_executor & stale o
   }
 })
 
-test('/plan interop: /plan yields during planning, plan.approved bridges into Duo execution (modelSwitched false & true)', TIMEOUT, async () => {
-  const env = await openDuoEnv()
+test('/plan interop: /plan yields during planning, plan.approved bridges into Orchestrator execution (modelSwitched false & true)', TIMEOUT, async () => {
+  const env = await openOrchestratorEnv()
   try {
     const { kernel } = env.app
-    await kernel.plugins.invokeAction(DUO_PLUGIN_ID, 'set', {
+    await kernel.plugins.invokeAction(ORCHESTRATOR_PLUGIN_ID, 'set', {
       id: 'plan_pair',
       name: 'Plan Pair',
       plannerModel: 'faux/flagship',
       executorModel: 'faux/coder',
     })
     const conv = await kernel.conversations.createConversation({
-      title: '/plan + duo',
+      title: '/plan + orchestrator',
       model: 'tier/plan_pair',
     })
 
@@ -375,7 +375,7 @@ test('/plan interop: /plan yields during planning, plan.approved bridges into Du
     )
     const askDoc = kernel.asks.listAsks('pending').find((a) => a.conversationId === conv.id)!
     assert.ok(obs[0]!.sectionsById[PLAN_MODE_SECTION_ID] !== undefined)
-    assert.equal(obs[0]!.sectionsById[DUO_PLAN_SECTION_ID], undefined)
+    assert.equal(obs[0]!.sectionsById[ORCHESTRATOR_PLAN_SECTION_ID], undefined)
 
     await kernel.asks.answerAsk(
       askDoc.id,
@@ -385,7 +385,7 @@ test('/plan interop: /plan yields during planning, plan.approved bridges into Du
     await kernel.conversations.waitForIdle(conv.id)
     assert.equal(obs.length, 3)
     assert.equal(obs[2]!.modelId, 'faux/coder')
-    assert.ok(obs[2]!.sectionsById[DUO_EXECUTE_SECTION_ID] !== undefined)
+    assert.ok(obs[2]!.sectionsById[ORCHESTRATOR_EXECUTE_SECTION_ID] !== undefined)
 
     const obs2: ObservedStep[] = []
     env.faux.setResponses([
@@ -417,7 +417,7 @@ test('/plan interop: /plan yields during planning, plan.approved bridges into Du
     await kernel.conversations.waitForIdle(conv.id)
     assert.equal(obs2.length, 3)
     assert.equal(obs2[2]!.modelId, 'faux/fast')
-    assert.ok(obs2[2]!.sectionsById[DUO_EXECUTE_SECTION_ID] !== undefined)
+    assert.ok(obs2[2]!.sectionsById[ORCHESTRATOR_EXECUTE_SECTION_ID] !== undefined)
     await waitFor(() => kernel.conversations.getConversation(conv.id).model === 'faux/flagship', {
       message: 'planner restored after turn',
     })
@@ -426,11 +426,11 @@ test('/plan interop: /plan yields during planning, plan.approved bridges into Du
   }
 })
 
-test('subagent/Profile Duo unwrapping and swarm-coordinator posture suppression', TIMEOUT, async () => {
-  const env = await openDuoEnv()
+test('subagent/Profile Orchestrator unwrapping and swarm-coordinator posture suppression', TIMEOUT, async () => {
+  const env = await openOrchestratorEnv()
   try {
     const { kernel } = env.app
-    await kernel.plugins.invokeAction(DUO_PLUGIN_ID, 'set', {
+    await kernel.plugins.invokeAction(ORCHESTRATOR_PLUGIN_ID, 'set', {
       id: 'sub_pair',
       name: 'Sub Pair',
       plannerModel: 'faux/flagship',
@@ -438,19 +438,19 @@ test('subagent/Profile Duo unwrapping and swarm-coordinator posture suppression'
       executorThinkingLevel: 'medium',
     })
     await kernel.profiles.save({
-      id: 'duo-coder',
-      name: 'Duo Coder Profile',
+      id: 'orch-coder',
+      name: 'Orchestrator Coder Profile',
       model: 'tier/sub_pair',
     })
 
     const parent = await kernel.conversations.createConversation({
-      title: 'Parent Duo',
+      title: 'Parent Orchestrator',
       model: 'tier/sub_pair',
     })
 
     const defaultChildCap = kernel.plugins
       .consumeCapability<DefaultChildModelCapability>(DEFAULT_CHILD_MODEL_CAPABILITY_ID)
-      .find((c) => c.pluginId === DUO_PLUGIN_ID)?.impl
+      .find((c) => c.pluginId === ORCHESTRATOR_PLUGIN_ID)?.impl
     assert.deepEqual(defaultChildCap?.resolveDefaultChildModel(parent.id), {
       model: 'faux/coder',
       thinkingLevel: 'medium',
@@ -464,7 +464,7 @@ test('subagent/Profile Duo unwrapping and swarm-coordinator posture suppression'
     env.faux.setResponses([
       captureStep(
         obsChild,
-        fauxAssistantMessage([fauxToolCall('subagent', { prompt: 'do work', agentType: 'duo-coder' })], {
+        fauxAssistantMessage([fauxToolCall('subagent', { prompt: 'do work', agentType: 'orch-coder', background: false })], {
           stopReason: 'toolUse',
         }),
       ),
@@ -475,7 +475,7 @@ test('subagent/Profile Duo unwrapping and swarm-coordinator posture suppression'
     await kernel.conversations.waitForIdle(plainParent.id)
     assert.equal(obsChild.length, 3)
     assert.equal(obsChild[1]!.modelId, 'faux/coder')
-    assert.equal(obsChild[1]!.sectionsById[DUO_PLAN_SECTION_ID], undefined)
+    assert.equal(obsChild[1]!.sectionsById[ORCHESTRATOR_PLAN_SECTION_ID], undefined)
 
     await kernel.conversations.updateConversation(parent.id, { tags: ['swarm-coordinator'] })
     const obsCoord: ObservedStep[] = []
@@ -483,11 +483,11 @@ test('subagent/Profile Duo unwrapping and swarm-coordinator posture suppression'
     await kernel.conversations.submitInput(parent.id, 'coordinate')
     await kernel.conversations.waitForIdle(parent.id)
     assert.equal(obsCoord.length, 1)
-    assert.equal(obsCoord[0]!.sectionsById[DUO_PLAN_SECTION_ID], undefined)
-    assert.equal(obsCoord[0]!.sectionsById[DUO_EXECUTE_SECTION_ID], undefined)
-    assert.equal(obsCoord[0]!.toolNames.includes(DUO_EXIT_PLAN_MODE_TOOL), false)
-    const coordView = kernel.plugins.getPublicSessionDoc(DUO_PLUGIN_ID, DUO_SESSION_DOC, parent.id)
-      .value as DuoSessionView
+    assert.equal(obsCoord[0]!.sectionsById[ORCHESTRATOR_PLAN_SECTION_ID], undefined)
+    assert.equal(obsCoord[0]!.sectionsById[ORCHESTRATOR_EXECUTE_SECTION_ID], undefined)
+    assert.equal(obsCoord[0]!.toolNames.includes(ORCHESTRATOR_EXIT_PLAN_MODE_TOOL), false)
+    const coordView = kernel.plugins.getPublicSessionDoc(ORCHESTRATOR_PLUGIN_ID, ORCHESTRATOR_SESSION_DOC, parent.id)
+      .value as OrchestratorSessionView
     assert.equal(coordView.suppressedByCoordinator, true)
     assert.deepEqual(defaultChildCap?.resolveDefaultChildModel(parent.id), {
       model: 'faux/coder',
@@ -499,44 +499,44 @@ test('subagent/Profile Duo unwrapping and swarm-coordinator posture suppression'
 })
 
 test('lifecycle safety: reference protection on remove & disable unless --force, and runtime restore', TIMEOUT, async () => {
-  const env = await openDuoEnv()
+  const env = await openOrchestratorEnv()
   try {
     const { kernel } = env.app
-    await kernel.plugins.invokeAction(DUO_PLUGIN_ID, 'set', {
+    await kernel.plugins.invokeAction(ORCHESTRATOR_PLUGIN_ID, 'set', {
       id: 'life_pair',
       name: 'Life Pair',
       plannerModel: 'faux/flagship',
       executorModel: 'faux/coder',
     })
     const conv = await kernel.conversations.createConversation({
-      title: 'Lifecycle Duo',
+      title: 'Lifecycle Orchestrator',
       model: 'tier/life_pair',
     })
 
     await assert.rejects(
-      () => kernel.plugins.invokeAction(DUO_PLUGIN_ID, 'remove', { id: 'life_pair' }),
+      () => kernel.plugins.invokeAction(ORCHESTRATOR_PLUGIN_ID, 'remove', { id: 'life_pair' }),
       (err: unknown) => err instanceof HelmxError && err.code === 'model_tier_in_use' && err.status === 409,
     )
 
     await assert.rejects(
-      () => kernel.plugins.disable(DUO_PLUGIN_ID),
+      () => kernel.plugins.disable(ORCHESTRATOR_PLUGIN_ID),
       (err: unknown) => err instanceof HelmxError && err.code === 'plugin_in_use' && err.status === 409,
     )
 
-    await kernel.plugins.disable(DUO_PLUGIN_ID, { force: true })
+    await kernel.plugins.disable(ORCHESTRATOR_PLUGIN_ID, { force: true })
     assert.equal(
       kernel.plugins
         .consumeCapability<ModelTiersCapability>('helmx.model-tiers')
-        .some((c) => c.pluginId === DUO_PLUGIN_ID),
+        .some((c) => c.pluginId === ORCHESTRATOR_PLUGIN_ID),
       false,
     )
     assert.throws(
-      () => kernel.plugins.getPublicSessionDoc(DUO_PLUGIN_ID, DUO_SESSION_DOC, conv.id),
+      () => kernel.plugins.getPublicSessionDoc(ORCHESTRATOR_PLUGIN_ID, ORCHESTRATOR_SESSION_DOC, conv.id),
       (err: unknown) => err instanceof HelmxError && err.code === 'plugin_doc_not_found',
     )
 
-    await kernel.plugins.enable(DUO_PLUGIN_ID)
-    const forceRemoved = (await kernel.plugins.invokeAction(DUO_PLUGIN_ID, 'remove', {
+    await kernel.plugins.enable(ORCHESTRATOR_PLUGIN_ID)
+    const forceRemoved = (await kernel.plugins.invokeAction(ORCHESTRATOR_PLUGIN_ID, 'remove', {
       id: 'life_pair',
       force: true,
     })) as { removed: boolean }
