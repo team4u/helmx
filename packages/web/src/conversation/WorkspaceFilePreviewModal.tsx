@@ -67,7 +67,7 @@ export function WorkspaceFilePreviewModal({
 
   const { markdownOutline, activeMarkdownHeading, jumpToMarkdownHeading } = useMarkdownOutlineSync({
     markdown,
-    active: view === 'rich',
+    view,
     text,
     modalBodyRef,
     markdownPreviewRef,
@@ -119,13 +119,6 @@ export function WorkspaceFilePreviewModal({
       headerActions={
         markdown ? (
           <>
-            {view === 'rich' && markdownOutline.length > 0 ? (
-              <MarkdownOutlinePopover
-                text={text ?? ''}
-                activeHeadingIndex={activeMarkdownHeading}
-                onSelectHeading={jumpToMarkdownHeading}
-              />
-            ) : null}
             <SegmentedControl<'rich' | 'source'>
               size="sm"
               value={view}
@@ -136,6 +129,13 @@ export function WorkspaceFilePreviewModal({
                 { value: 'source', label: t('conv.artifact.viewSource') },
               ]}
             />
+            {markdownOutline.length > 0 ? (
+              <MarkdownOutlinePopover
+                text={text ?? ''}
+                activeHeadingIndex={activeMarkdownHeading}
+                onSelectHeading={jumpToMarkdownHeading}
+              />
+            ) : null}
           </>
         ) : null
       }

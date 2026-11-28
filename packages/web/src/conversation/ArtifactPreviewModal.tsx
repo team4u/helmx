@@ -62,7 +62,7 @@ export function ArtifactPreviewModal({ artifactId, conversationId, onClose, inli
 
   const { markdownOutline, activeMarkdownHeading, jumpToMarkdownHeading } = useMarkdownOutlineSync({
     markdown,
-    active: view === 'rich',
+    view,
     text,
     modalBodyRef,
     markdownPreviewRef,
@@ -87,15 +87,8 @@ export function ArtifactPreviewModal({ artifactId, conversationId, onClose, inli
       copyText={markdown ? text : undefined}
       modalBodyRef={modalBodyRef}
       headerActions={
-        <>
-          {markdown && view === 'rich' && markdownOutline.length > 0 ? (
-            <MarkdownOutlinePopover
-              text={text ?? ''}
-              activeHeadingIndex={activeMarkdownHeading}
-              onSelectHeading={jumpToMarkdownHeading}
-            />
-          ) : null}
-          {markdown ? (
+        markdown ? (
+          <>
             <SegmentedControl<'rich' | 'source'>
               size="sm"
               value={view}
@@ -106,8 +99,15 @@ export function ArtifactPreviewModal({ artifactId, conversationId, onClose, inli
                 { value: 'source', label: t('conv.artifact.viewSource') },
               ]}
             />
-          ) : null}
-        </>
+            {markdownOutline.length > 0 ? (
+              <MarkdownOutlinePopover
+                text={text ?? ''}
+                activeHeadingIndex={activeMarkdownHeading}
+                onSelectHeading={jumpToMarkdownHeading}
+              />
+            ) : null}
+          </>
+        ) : null
       }
     >
       {state.phase === 'loaded' ? (
@@ -123,6 +123,7 @@ export function ArtifactPreviewModal({ artifactId, conversationId, onClose, inli
           language={language}
           conversationId={conversationId}
           markdownPreviewRef={markdownPreviewRef}
+          showLineNumbers={text !== null}
         />
       ) : null}
     </PreviewModalShell>

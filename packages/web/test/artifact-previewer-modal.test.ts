@@ -185,12 +185,17 @@ test('Markdown 富文本预览复用会话大纲：显示章节数量并精确�
   const root = mount(host, store, 'art-outline', 7)
   await flush()
 
+  const seg = document.querySelector<HTMLElement>('.helmx-tabs-segmented.helmx-tabs-sm')
   assert.ok(
-    document.querySelector('.helmx-tabs-segmented.helmx-tabs-sm') !== null,
+    seg !== null,
     'Markdown 产物预览视图切换器必须使用 size="sm"',
   )
   const trigger = document.querySelector<HTMLButtonElement>('.conversation-outline-trigger')
   assert.ok(trigger !== null, 'Markdown 预览应显示大纲按钮')
+  assert.ok(
+    (seg.compareDocumentPosition(trigger) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0,
+    '大纲按钮在 DOM 顺序中必须位于视图切换器之后',
+  )
   assert.match(trigger.textContent ?? '', /3/, '大纲角标应显示章节数量')
 
   await act(async () => { trigger.click() })
@@ -210,6 +215,39 @@ test('Markdown 富文本预览复用会话大纲：显示章节数量并精确�
     assert.ok(lastScrolled !== undefined, '点击章节应触发滚动')
     assert.equal(lastScrolled.tagName.toLowerCase(), 'h2')
     assert.equal(lastScrolled.dataset.headingIndex, '1')
+
+    const sourceTab = [...document.querySelectorAll<HTMLButtonElement>('[role="tab"]')].find((el) =>
+      el.textContent?.includes('Source'),
+    )
+    assert.ok(sourceTab !== undefined, 'Markdown 预览应提供源码切换按钮')
+    await act(async () => {
+      sourceTab.dispatchEvent(new MouseEvent('mousedown', { button: 0, bubbles: true }))
+      sourceTab.click()
+    })
+    await flush()
+
+    const sourceSeg = document.querySelector<HTMLElement>('.helmx-tabs-segmented')
+    const sourceTrigger = document.querySelector<HTMLButtonElement>('.conversation-outline-trigger')
+    assert.ok(sourceSeg !== null && sourceTrigger !== null, '切至源码视图后大纲按钮保持常驻')
+    assert.ok(
+      (sourceSeg.compareDocumentPosition(sourceTrigger) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0,
+      '源码视图下大纲按钮仍在视图切换器之后',
+    )
+
+    const line5 = document.querySelector<HTMLElement>('.code-line[data-line="5"]')
+    assert.ok(line5 !== null, '源码视图应渲染行号容器 .code-line[data-line="5"]')
+
+    await act(async () => { sourceTrigger.click() })
+    await flush()
+    const sourceInstallOption = [...document.querySelectorAll<HTMLButtonElement>('.conversation-outline-item')].find(
+      (option) => (option.textContent ?? '').includes('安装'),
+    )
+    assert.ok(sourceInstallOption !== undefined, '源码视图大纲应包含安装章节')
+    await act(async () => { sourceInstallOption.click() })
+    await flush()
+
+    const lastSourceScrolled = scrolled.at(-1)
+    assert.ok(lastSourceScrolled === line5, '源码视图点击「安装」应滚动定位至 .code-line[data-line="5"]')
   } finally {
     HTMLElement.prototype.scrollIntoView = originalScrollIntoView
   }

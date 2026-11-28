@@ -3,7 +3,12 @@
  */
 import { useEffect, useMemo, useState, type RefObject } from 'react'
 import { decodePreviewText, shouldDecodeText } from './artifact-preview-text.js'
-import { buildMarkdownOutline, resolveActiveOutlineEntryId, type OutlineHeadingNode } from './outline-model.js'
+import {
+  buildMarkdownOutline,
+  extractMarkdownHeadingLines,
+  resolveActiveOutlineEntryId,
+  type OutlineHeadingNode,
+} from './outline-model.js'
 
 export type FilePreviewLoadState =
   | { phase: 'loading' }
@@ -60,7 +65,7 @@ export function useFilePreviewText(
 
 export function useMarkdownOutlineSync(opts: {
   markdown: boolean
-  active: boolean
+  view: 'rich' | 'source'
   text: string | null
   modalBodyRef: RefObject<HTMLDivElement | null>
   markdownPreviewRef: RefObject<HTMLDivElement | null>
@@ -70,11 +75,15 @@ export function useMarkdownOutlineSync(opts: {
   activeMarkdownHeading: number | undefined
   jumpToMarkdownHeading: (headingIndex: number) => void
 } {
-  const { markdown, active, text, modalBodyRef, markdownPreviewRef, resetKey } = opts
+  const { markdown, view, text, modalBodyRef, markdownPreviewRef, resetKey } = opts
   const [activeMarkdownHeading, setActiveMarkdownHeading] = useState<number | undefined>(undefined)
 
   const markdownOutline = useMemo(
     () => (markdown && text !== null ? buildMarkdownOutline(text) : []),
+    [markdown, text],
+  )
+  const headingLines = useMemo(
+    () => (markdown && text !== null ? extractMarkdownHeadingLines(text) : []),
     [markdown, text],
   )
 
@@ -83,18 +92,29 @@ export function useMarkdownOutlineSync(opts: {
   }, [resetKey, text])
 
   useEffect(() => {
-    if (!markdown || !active || markdownOutline.length === 0) return
+    if (!markdown || markdownOutline.length === 0) return
     const scrollContainer = modalBodyRef.current
-    const content = markdownPreviewRef.current
-    if (scrollContainer === null || content === null) return
+    if (scrollContainer === null) return
+    const richContent = view === 'rich' ? markdownPreviewRef.current : null
+    if (view === 'rich' && richContent === null) return
 
     const syncActiveHeading = (): void => {
       const containerTop = scrollContainer.getBoundingClientRect().top
       const offsets: Array<{ entryId: string; top: number }> = []
-      for (const heading of content.querySelectorAll<HTMLElement>('[data-heading-index]')) {
-        const index = heading.dataset.headingIndex
-        if (index !== undefined) {
-          offsets.push({ entryId: index, top: heading.getBoundingClientRect().top - containerTop })
+      if (view === 'rich') {
+        for (const heading of richContent!.querySelectorAll<HTMLElement>('[data-heading-index]')) {
+          const index = heading.dataset.headingIndex
+          if (index !== undefined) {
+            offsets.push({ entryId: index, top: heading.getBoundingClientRect().top - containerTop })
+          }
+        }
+      } else {
+        for (let headingIndex = 0; headingIndex < headingLines.length; headingIndex++) {
+          const lineNum = headingLines[headingIndex]!
+          const el = scrollContainer.querySelector<HTMLElement>(`.code-line[data-line="${lineNum}"]`)
+          if (el !== null) {
+            offsets.push({ entryId: String(headingIndex), top: el.getBoundingClientRect().top - containerTop })
+          }
         }
       }
       const activeId = resolveActiveOutlineEntryId(offsets, 48)
@@ -116,10 +136,19 @@ export function useMarkdownOutlineSync(opts: {
       if (frameId !== 0) cancelAnimationFrame(frameId)
       scrollContainer.removeEventListener('scroll', onScroll)
     }
-  }, [markdown, active, markdownOutline.length, text, modalBodyRef, markdownPreviewRef])
+  }, [markdown, view, markdownOutline.length, headingLines, text, modalBodyRef, markdownPreviewRef])
 
   const jumpToMarkdownHeading = (headingIndex: number): void => {
-    const target = markdownPreviewRef.current?.querySelector<HTMLElement>(`[data-heading-index="${headingIndex}"]`)
+    let target: HTMLElement | null | undefined = null
+    if (view === 'rich') {
+      target = markdownPreviewRef.current?.querySelector<HTMLElement>(`[data-heading-index="${headingIndex}"]`)
+    } else {
+      const lineNum = headingLines[headingIndex]
+      target =
+        lineNum !== undefined
+          ? modalBodyRef.current?.querySelector<HTMLElement>(`.code-line[data-line="${lineNum}"]`)
+          : null
+    }
     if (target === null || target === undefined) return
     target.scrollIntoView({ behavior: 'smooth', block: 'start' })
     setActiveMarkdownHeading(headingIndex)

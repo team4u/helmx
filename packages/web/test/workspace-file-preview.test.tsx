@@ -886,6 +886,38 @@ describe('WorkspaceFilePreviewModal', { timeout: 60_000 }, () => {
       assert.equal(line3.getAttribute('data-highlighted'), 'true')
       assert.equal(line1?.getAttribute('data-highlighted') ?? null, null)
 
+      const sourceSeg = document.querySelector<HTMLElement>('.helmx-tabs-segmented')
+      const sourceOutlineTrigger = document.querySelector<HTMLButtonElement>('.conversation-outline-trigger')
+      assert.ok(sourceSeg !== null && sourceOutlineTrigger !== null, 'outline trigger stays visible in source view')
+      assert.ok(
+        (sourceSeg.compareDocumentPosition(sourceOutlineTrigger) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0,
+        'outline trigger follows segmented control in source view',
+      )
+
+      const scrolledInSource: HTMLElement[] = []
+      const origScrollIntoView = HTMLElement.prototype.scrollIntoView
+      HTMLElement.prototype.scrollIntoView = function () {
+        scrolledInSource.push(this)
+      }
+      try {
+        await act(async () => {
+          sourceOutlineTrigger.click()
+        })
+        await flush()
+        const v060Option = [...document.querySelectorAll<HTMLButtonElement>('.conversation-outline-item')].find((btn) =>
+          (btn.textContent ?? '').includes('v0.6.0'),
+        )
+        assert.ok(v060Option !== undefined, 'source outline lists v0.6.0 heading')
+        await act(async () => {
+          v060Option.click()
+        })
+        await flush()
+        const lastScrolled = scrolledInSource.at(-1)
+        assert.ok(lastScrolled === line3, 'clicking v0.6.0 in source view scrolls to .code-line[data-line="3"]')
+      } finally {
+        HTMLElement.prototype.scrollIntoView = origScrollIntoView
+      }
+
       const richTab = [...document.querySelectorAll<HTMLButtonElement>('[role="tab"]')].find((el) =>
         el.textContent?.includes('Rich text'),
       )
@@ -899,6 +931,13 @@ describe('WorkspaceFilePreviewModal', { timeout: 60_000 }, () => {
       assert.ok(document.querySelector('.artifact-markdown-preview') !== null, 'switches to rich Markdown preview')
       assert.ok(document.querySelector('.preview-modal-code') === null)
       assert.equal(document.querySelector('.artifact-markdown-preview h2')?.textContent, 'v0.6.0')
+      const richSeg = document.querySelector<HTMLElement>('.helmx-tabs-segmented')
+      const richOutlineTrigger = document.querySelector<HTMLButtonElement>('.conversation-outline-trigger')
+      assert.ok(richSeg !== null && richOutlineTrigger !== null, 'outline trigger remains visible in rich view')
+      assert.ok(
+        (richSeg.compareDocumentPosition(richOutlineTrigger) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0,
+        'outline trigger stays after segmented control in rich view',
+      )
     } finally {
       mounted.unmount()
       shim.restore()

@@ -204,10 +204,12 @@ function scanHeadingsFromMarkdown(
   markdown: string,
   state: { activeFence: string | null },
   out: ExtractedHeading[],
+  linesOut?: number[],
 ): void {
   if (typeof markdown !== 'string' || markdown === '') return
   const lines = markdown.split(/\r?\n/)
-  for (const rawLine of lines) {
+  for (let lineIdx = 0; lineIdx < lines.length; lineIdx++) {
+    const rawLine = lines[lineIdx]!
     const trimmedStart = rawLine.trimStart().replace(/^(?:>\s*)+/, '')
     const fenceMatch = /^(`{3,}|~{3,})/.exec(trimmedStart)
     if (fenceMatch !== null) {
@@ -232,6 +234,7 @@ function scanHeadingsFromMarkdown(
       level,
       text: truncateLabel(text, HEADING_MAX_CHARS),
     })
+    linesOut?.push(lineIdx + 1)
   }
 }
 
@@ -239,6 +242,14 @@ export function extractMarkdownHeadings(markdown: string): ExtractedHeading[] {
   const headings: ExtractedHeading[] = []
   scanHeadingsFromMarkdown(markdown, { activeFence: null }, headings)
   return headings
+}
+
+/** Return 1-indexed source line numbers corresponding 1:1 to `buildMarkdownOutline(markdown)`. */
+export function extractMarkdownHeadingLines(markdown: string): number[] {
+  const headings: ExtractedHeading[] = []
+  const lines: number[] = []
+  scanHeadingsFromMarkdown(markdown, { activeFence: null }, headings, lines)
+  return lines
 }
 
 // ---------------------------------------------------------------------------

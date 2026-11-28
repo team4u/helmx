@@ -10,6 +10,7 @@ import {
   buildConversationOutline,
   buildMarkdownOutline,
   countOutlineTurns,
+  extractMarkdownHeadingLines,
   extractMarkdownHeadings,
   filterOutlineNodes,
   resolveActiveOutlineEntryId,
@@ -89,6 +90,8 @@ describe("conversation-outline", () => {
       { level: 3, text: '1. 状态机设计' },
       { level: 3, text: '引用中的章节' },
     ])
+    assert.deepEqual(extractMarkdownHeadingLines(md), [1, 7, 11, 12])
+    assert.deepEqual(extractMarkdownHeadingLines(''), [])
   })
 
   test('buildConversationOutline 与 filterOutlineNodes：构建完整树、支持关键词过滤与父提问保留', { timeout: 60_000 }, () => {
