@@ -14,7 +14,7 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, readFileSync, rmSync, existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { test, type TestContext } from 'node:test'
+import { describe, test, type TestContext } from 'node:test'
 import { HelmxError } from '@helmx/protocol'
 import { deferred } from '@helmx/test-kit'
 import { setImmediate as nextTurn } from 'node:timers/promises'
@@ -431,107 +431,109 @@ test('agent 失败分支保留 executionInfo 与 gate 回报（不丢弃 Worktre
   assert.equal(out.gate?.output, '门禁输出')
 })
 
-test('agent timeoutMs：超时守卫中止子会话并返回 [agent_timeout]（保留 executionInfo；signal.reason 为 TimeoutError；timedOut=true）', timeout, async (t) => {
-  let observedReason: unknown
-  const custom = makeEnv(t, (proto: unknown) => {
-    const request = proto as { onResolved?: (info: unknown) => void; signal?: AbortSignal }
-    request.onResolved?.({ conversationId: 9, effectiveCwd: '/hang/dir' })
-    request.signal?.addEventListener('abort', () => {
-      observedReason = request.signal?.reason
-    })
-    return new Promise((_resolve, reject) => {
-      request.signal?.addEventListener('abort', () => reject(new HelmxError('aborted', '回合中止', 409)), { once: true })
-    })
-  })
-  const run = await custom.service.run({
-    conversationId: 5,
-    script: 'export const meta = { name: "timeout-test", description: "d" }\nreturn await agent.withMeta("p", { label: "hang", timeoutMs: 1000, maxAttempts: 1 })',
-  })
-  const result = (await custom.service.wait(run.id)) as {
-    ok: boolean
-    error?: string
-    timedOut?: boolean
-    execution?: { conversationId?: number }
-  }
-  assert.equal(result.ok, false)
-  assert.ok(result.error!.includes('[agent_timeout]'), `错误应含超时锚点：${result.error}`)
-  assert.equal(result.timedOut, true)
-  assert.equal(result.execution?.conversationId, 9)
-  assert.deepEqual(custom.guardedAborts, [9])
-  const reason = observedReason as { name?: string } | undefined
-  assert.equal(reason?.name, 'TimeoutError')
-})
-
-test('agent 超时：返回前等完自己触发的守卫中止（后续 resume 不撞在途 abort）', timeout, async (t) => {
-  const abortEntered = deferred()
-  const abortGate = deferred()
-  let attemptCount = 0
-  let abortCompletedBeforeAttempt2 = false
-  let abortDone = false
-  const custom = makeEnv(
-    t,
-    (proto: unknown) => {
-      attemptCount++
+describe('agent timeoutMs 并发验证', { concurrency: 3 }, () => {
+  test('agent timeoutMs：超时守卫中止子会话并返回 [agent_timeout]（保留 executionInfo；signal.reason 为 TimeoutError；timedOut=true）', timeout, async (t) => {
+    let observedReason: unknown
+    const custom = makeEnv(t, (proto: unknown) => {
       const request = proto as { onResolved?: (info: unknown) => void; signal?: AbortSignal }
-      if (attemptCount === 1) {
-        request.onResolved?.({ conversationId: 12 })
-        return new Promise((_resolve, reject) => {
-          request.signal?.addEventListener('abort', () => reject(new HelmxError('aborted', '回合中止', 409)), { once: true })
-        })
-      }
-      abortCompletedBeforeAttempt2 = abortDone
-      return Promise.resolve('recovered-on-attempt-2')
-    },
-    {
-      abortConversationGuarded: async (id: number) => {
-        custom.guardedAborts.push(id)
-        abortEntered.resolve()
-        await abortGate.promise
-        abortDone = true
-      },
-    },
-  )
-  const run = await custom.service.run({
-    conversationId: 5,
-    script: 'export const meta = { name: "slow-abort", description: "d" }\nreturn await agent("p", { label: "slow", timeoutMs: 1000, maxAttempts: 2 })',
-  })
-  await abortEntered.promise
-  await nextTurn()
-  assert.equal(attemptCount, 1, '守卫中止未完成前不得进入第 2 次尝试')
-  abortGate.resolve()
-  const val = await custom.service.wait(run.id)
-  assert.equal(val, 'recovered-on-attempt-2')
-  assert.equal(abortCompletedBeforeAttempt2, true)
-  assert.deepEqual(custom.guardedAborts, [12])
-})
-
-test('外部回合超时保留执行方诊断，不宣称底层进程已停止', timeout, async (t) => {
-  const custom = makeEnv(t, (proto: unknown) => {
-    const request = proto as { onResolved?: (info: unknown) => void; signal?: AbortSignal }
-    request.onResolved?.({ nodeId: 'local', executionId: 'pane-timeout' })
-    return new Promise((_resolve, reject) => {
-      request.signal?.addEventListener('abort', () => reject(new HelmxError(
-        'agent_timeout', '底层 CLI 可能仍在执行\n终端最后 40 行（脱敏）：\nworking at task', 408,
-      )), { once: true })
+      request.onResolved?.({ conversationId: 9, effectiveCwd: '/hang/dir' })
+      request.signal?.addEventListener('abort', () => {
+        observedReason = request.signal?.reason
+      })
+      return new Promise((_resolve, reject) => {
+        request.signal?.addEventListener('abort', () => reject(new HelmxError('aborted', '回合中止', 409)), { once: true })
+      })
     })
+    const run = await custom.service.run({
+      conversationId: 5,
+      script: 'export const meta = { name: "timeout-test", description: "d" }\nreturn await agent.withMeta("p", { label: "hang", timeoutMs: 1000, maxAttempts: 1 })',
+    })
+    const result = (await custom.service.wait(run.id)) as {
+      ok: boolean
+      error?: string
+      timedOut?: boolean
+      execution?: { conversationId?: number }
+    }
+    assert.equal(result.ok, false)
+    assert.ok(result.error!.includes('[agent_timeout]'), `错误应含超时锚点：${result.error}`)
+    assert.equal(result.timedOut, true)
+    assert.equal(result.execution?.conversationId, 9)
+    assert.deepEqual(custom.guardedAborts, [9])
+    const reason = observedReason as { name?: string } | undefined
+    assert.equal(reason?.name, 'TimeoutError')
   })
-  const run = await custom.service.run({
-    conversationId: 5,
-    script: 'export const meta = { name: "ext-timeout", description: "d" }\nreturn await agent.withMeta("p", { label: "external", timeoutMs: 1000, maxAttempts: 1 })',
+
+  test('agent 超时：返回前等完自己触发的守卫中止（后续 resume 不撞在途 abort）', timeout, async (t) => {
+    const abortEntered = deferred()
+    const abortGate = deferred()
+    let attemptCount = 0
+    let abortCompletedBeforeAttempt2 = false
+    let abortDone = false
+    const custom = makeEnv(
+      t,
+      (proto: unknown) => {
+        attemptCount++
+        const request = proto as { onResolved?: (info: unknown) => void; signal?: AbortSignal }
+        if (attemptCount === 1) {
+          request.onResolved?.({ conversationId: 12 })
+          return new Promise((_resolve, reject) => {
+            request.signal?.addEventListener('abort', () => reject(new HelmxError('aborted', '回合中止', 409)), { once: true })
+          })
+        }
+        abortCompletedBeforeAttempt2 = abortDone
+        return Promise.resolve('recovered-on-attempt-2')
+      },
+      {
+        abortConversationGuarded: async (id: number) => {
+          custom.guardedAborts.push(id)
+          abortEntered.resolve()
+          await abortGate.promise
+          abortDone = true
+        },
+      },
+    )
+    const run = await custom.service.run({
+      conversationId: 5,
+      script: 'export const meta = { name: "slow-abort", description: "d" }\nreturn await agent("p", { label: "slow", timeoutMs: 1000, maxAttempts: 2 })',
+    })
+    await abortEntered.promise
+    await nextTurn()
+    assert.equal(attemptCount, 1, '守卫中止未完成前不得进入第 2 次尝试')
+    abortGate.resolve()
+    const val = await custom.service.wait(run.id)
+    assert.equal(val, 'recovered-on-attempt-2')
+    assert.equal(abortCompletedBeforeAttempt2, true)
+    assert.deepEqual(custom.guardedAborts, [12])
   })
-  const result = (await custom.service.wait(run.id)) as {
-    ok: boolean
-    timedOut?: boolean
-    error?: string
-    execution?: { executionId?: string }
-  }
-  assert.equal(result.ok, false)
-  assert.equal(result.timedOut, true)
-  assert.equal(result.execution?.executionId, 'pane-timeout')
-  assert.match(result.error ?? '', /底层 CLI 可能仍在执行/)
-  assert.match(result.error ?? '', /终端最后 40 行/)
-  assert.doesNotMatch(result.error ?? '', /已中止子会话/)
-  assert.deepEqual(custom.guardedAborts, [])
+
+  test('外部回合超时保留执行方诊断，不宣称底层进程已停止', timeout, async (t) => {
+    const custom = makeEnv(t, (proto: unknown) => {
+      const request = proto as { onResolved?: (info: unknown) => void; signal?: AbortSignal }
+      request.onResolved?.({ nodeId: 'local', executionId: 'pane-timeout' })
+      return new Promise((_resolve, reject) => {
+        request.signal?.addEventListener('abort', () => reject(new HelmxError(
+          'agent_timeout', '底层 CLI 可能仍在执行\n终端最后 40 行（脱敏）：\nworking at task', 408,
+        )), { once: true })
+      })
+    })
+    const run = await custom.service.run({
+      conversationId: 5,
+      script: 'export const meta = { name: "ext-timeout", description: "d" }\nreturn await agent.withMeta("p", { label: "external", timeoutMs: 1000, maxAttempts: 1 })',
+    })
+    const result = (await custom.service.wait(run.id)) as {
+      ok: boolean
+      timedOut?: boolean
+      error?: string
+      execution?: { executionId?: string }
+    }
+    assert.equal(result.ok, false)
+    assert.equal(result.timedOut, true)
+    assert.equal(result.execution?.executionId, 'pane-timeout')
+    assert.match(result.error ?? '', /底层 CLI 可能仍在执行/)
+    assert.match(result.error ?? '', /终端最后 40 行/)
+    assert.doesNotMatch(result.error ?? '', /已中止子会话/)
+    assert.deepEqual(custom.guardedAborts, [])
+  })
 })
 
 test('agent timeoutMs 非法值在边界显式拒绝（1_000..3_600_000）且 resumeAgent 透传 requestId', timeout, async (t) => {
@@ -1188,18 +1190,16 @@ test('停机结算排空：active 已移除但 onRunSettled 仍在途时，suspe
   assert.equal(await waitPromise, 99)
 })
 
-test('onRunSettled 失败先脱敏再写入 process.stderr.write，绝不向 stderr 泄漏原始秘钥', timeout, async (t) => {
+test('onRunSettled 失败先脱敏再写入 stderr sink，绝不向 stderr 泄漏原始秘钥', timeout, async (t) => {
   const dir = mkdtempSync(join(tmpdir(), 'helmx-wf-stderr-redact-'))
   const stderrChunks: string[] = []
-  const origWrite = process.stderr.write.bind(process.stderr)
-  process.stderr.write = ((chunk: string | Uint8Array, ...rest: unknown[]) => {
-    stderrChunks.push(typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString('utf8'))
-    return (origWrite as (...args: unknown[]) => boolean)(chunk, ...rest)
-  }) as typeof process.stderr.write
 
   const svc = new WorkflowService({
     dataDir: dir,
     redact: (text) => text.replaceAll('SUPER_SECRET_TOKEN', '[REDACTED]'),
+    writeStderr: (chunk) => {
+      stderrChunks.push(chunk)
+    },
     host: {
       spawnAgent: async () => 'ok',
       invokeAction: async () => ({}),
@@ -1213,7 +1213,6 @@ test('onRunSettled 失败先脱敏再写入 process.stderr.write，绝不向 std
     },
   })
   t.after(async () => {
-    process.stderr.write = origWrite
     await svc.close()
     rmSync(dir, { recursive: true, force: true })
   }, { timeout: 60_000 })

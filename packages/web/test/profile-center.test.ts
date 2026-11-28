@@ -16,7 +16,6 @@ import {
   resolveEffectiveProfileModel,
   resolveProfileModel,
   summarizeProfileActivity,
-  summarizeProfiles,
 } from '../src/profiles/profile-center-model.js'
 import { ProfileCard } from '../src/profiles/ProfileCard.js'
 import { ProfileDetailDrawer } from '../src/profiles/ProfileDetailDrawer.js'
@@ -213,17 +212,10 @@ test('profile-center-model: filterProfiles multi-dimension fuzzy search', { time
   assert.equal(resCross.length, 0, 'searching a custom profile under the system tab must not match')
 })
 
-test('profile-center-model: buildProfileCategoryCounts and summarizeProfiles', { timeout: 60_000 }, () => {
+test('profile-center-model: buildProfileCategoryCounts', { timeout: 60_000 }, () => {
   const baseCounts = buildProfileCategoryCounts(mockProfiles)
   assert.deepEqual(baseCounts, {
     all: 5,
-    system: 3,
-    custom: 2,
-  })
-
-  const summary = summarizeProfiles(mockProfiles)
-  assert.deepEqual(summary, {
-    total: 5,
     system: 3,
     custom: 2,
   })

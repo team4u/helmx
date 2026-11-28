@@ -107,3 +107,21 @@ export function resolveOverviewDescendantChipTiming(
   if (anchor === undefined) return undefined
   return { kind: anchor.kind, elapsedMs: Math.max(0, nowMs - anchor.since) }
 }
+
+export const DEFAULT_OVERVIEW_SEARCH_DEBOUNCE_MS = 180
+let overviewSearchDebounceMs = DEFAULT_OVERVIEW_SEARCH_DEBOUNCE_MS
+
+/** 读取总览搜索框 URL 参数同步防抖时间（生产默认 180ms；测试可缩短）。 */
+export function getOverviewSearchDebounceMs(): number {
+  return overviewSearchDebounceMs
+}
+
+/** 临时覆盖总览搜索框防抖时间（供测试加速）。 */
+export function patchOverviewSearchDebounceMs(ms: number): void {
+  overviewSearchDebounceMs = ms
+}
+
+/** 恢复总览搜索框默认防抖时间（180ms）。 */
+export function resetOverviewSearchDebounceMs(): void {
+  overviewSearchDebounceMs = DEFAULT_OVERVIEW_SEARCH_DEBOUNCE_MS
+}

@@ -32,8 +32,6 @@ export const nodesMessages = {
   'nodes.resetFilters': { en: 'Reset filters', 'zh-CN': '重置筛选条件' },
 
   // Node card
-  'nodes.statusOnlineTitle': { en: 'Node online and running', 'zh-CN': '节点在线运行中' },
-  'nodes.statusOfflineTitle': { en: 'Node offline', 'zh-CN': '节点离线' },
   'nodes.localTitle': { en: 'Microkernel local node', 'zh-CN': '微内核本机节点' },
   'nodes.versionTitle': { en: 'Version {version}', 'zh-CN': '版本 {version}' },
   'nodes.platformTitle': { en: 'Platform and architecture', 'zh-CN': '平台与架构' },
@@ -105,7 +103,6 @@ export const nodesMessages = {
     'zh-CN': '接入令牌（一次性展示）：',
   },
   'nodes.drawer.copyToken': { en: 'Copy token', 'zh-CN': '复制令牌' },
-  'nodes.drawer.copied': { en: 'Copied', 'zh-CN': '已复制' },
   'nodes.drawer.installLabel': {
     en: '1. Install node daemon (first time only, requires Node.js >= 24.12):',
     'zh-CN': '1. 安装节点客户端（首次需要，需 Node.js >= 24.12）：',
@@ -149,7 +146,6 @@ export const nodesMessages = {
     en: 'Loopback address is selected (local testing only). For remote machines, pick a LAN, VPN, or hostname address above.',
     'zh-CN': '当前所选为本机回环地址（仅限本机测试）；远端机器请切换为上方局域网、VPN 或主机名地址。',
   },
-  'nodes.drawer.copyCommandTitle': { en: 'Copy command line', 'zh-CN': '复制命令行' },
   'nodes.drawer.copyCommand': { en: 'Copy command', 'zh-CN': '复制命令' },
   'nodes.drawer.maintenanceLabel': {
     en: 'Common maintenance commands:',

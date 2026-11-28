@@ -19,7 +19,6 @@ import type { ModelCatalogDefaults, ModelDescriptor } from './api.js'
 import { isPluginSummaryActive } from './live-state.js'
 import type {
   AuthSlice,
-  CatalogSlice,
   ConversationBackgroundSlice,
   HelmxExternalStore,
   HelmxStoreActions,
@@ -94,16 +93,6 @@ function readLoadErrorKey(store: HelmxExternalStore, key: string): string | unde
 
 function subscribePluginDocKey(store: HelmxExternalStore, docKey: string, listener: () => void): () => void {
   return store.subscribePluginDoc(docKey, listener)
-}
-function readPluginDocKey(store: HelmxExternalStore, docKey: string): unknown {
-  return store.getPluginDoc(docKey)
-}
-
-function subscribePluginById(store: HelmxExternalStore, pluginId: string, listener: () => void): () => void {
-  return store.subscribePlugin(pluginId, listener)
-}
-function readPluginById(store: HelmxExternalStore, pluginId: string): PluginSummary | undefined {
-  return store.getPluginSummary(pluginId)
 }
 
 function useDomainSlice<T>(
@@ -197,10 +186,6 @@ export function useOptionalProfiles(): Profile[] | undefined {
   return useDomainSlice('profiles', (s) => s.getProfilesSlice().profiles, () => undefined)
 }
 
-export function useCatalogAssets(): CatalogSlice {
-  return useDomainSlice('catalog', (s) => s.getCatalogSlice())
-}
-
 export function useModels(): ModelDescriptor[] {
   return useDomainSlice('models', (s) => s.getModels())
 }
@@ -286,20 +271,21 @@ export function useOptionalNodes(): NodeInfo[] | undefined {
   return useDomainSlice('nodes', (s) => s.getNodes(), () => undefined)
 }
 
-export function useLoadErrorsMap(): Record<string, string> {
-  return useDomainSlice('loadErrorsMap', (s) => s.getLoadErrorsMap())
-}
-
-export function usePluginDocsState(): Record<string, unknown> {
-  return useDomainSlice('pluginDocsMap', (s) => s.getPluginDocsMap())
-}
-
 const EMPTY_PLUGIN_DOCS_SUBSET: Readonly<Record<string, unknown>> = Object.freeze({})
 const EMPTY_LOAD_ERRORS_SUBSET: Readonly<Record<string, string>> = Object.freeze({})
 
 interface KeyedSubsetCache<T> {
   keys: string
   map: Readonly<Record<string, T>>
+}
+
+function cacheSame(prev: Record<string, unknown>, next: Record<string, unknown>): boolean {
+  const prevKeys = Object.keys(prev)
+  if (prevKeys.length !== Object.keys(next).length) return false
+  for (const key of prevKeys) {
+    if (!Object.hasOwn(next, key) || prev[key] !== next[key]) return false
+  }
+  return true
 }
 
 /**
@@ -406,10 +392,6 @@ export function useHighlightedEntry(): { conversationId: number; entryId: string
   return useDomainSlice('highlightedEntry', (s) => s.getHighlightedEntry())
 }
 
-export function useSearchFocusAnchor(): SearchFocusAnchor | null {
-  return useDomainSlice('searchFocusAnchor', (s) => s.getSearchFocusAnchor())
-}
-
 export function useOptionalSearchFocusAnchor(): SearchFocusAnchor | null {
   return useDomainSlice('searchFocusAnchor', (s) => s.getSearchFocusAnchor(), () => null)
 }
@@ -506,15 +488,6 @@ export function useLoadError(key: string | undefined): string | undefined {
   return useKeyedSlice(subscribeLoadErrorKey, readLoadErrorKey, key, undefined)
 }
 
-export function usePluginDoc(pluginId: string | undefined, docName: string | undefined): unknown {
-  const docKey = pluginId && docName ? `${pluginId}/${docName}` : undefined
-  return useKeyedSlice(subscribePluginDocKey, readPluginDocKey, docKey, undefined)
-}
-
-export function usePluginSummary(pluginId: string | undefined): PluginSummary | undefined {
-  return useKeyedSlice(subscribePluginById, readPluginById, pluginId, undefined)
-}
-
 /**
  * Selective subscription to only a single plugin module's active `clientHashes[moduleRef]`:
  * avoids re-rendering mounted plugin views when unrelated plugins update OR when the same
@@ -543,81 +516,9 @@ export function usePluginClientHash(
   throw new Error('useHelmxStore must be called inside <HelmxStoreProvider>')
 }
 
-// ---------------------------------------------------------------------------
-// Batch conversation-scoped plugin document (sessionDoc) subscription hooks
-// (host-only): single-value / diagnostics subscriptions live in
-// @helmx/plugin-client as usePluginSessionDocValue / usePluginSessionDocDiagnostics
-// (port-driven; plugins and the host share one implementation).
-// Ref-counted dedicated SSE streams connect only while mounted refs exist;
-// see lib/session-docs.ts.
-// ---------------------------------------------------------------------------
-
-/**
- * Batch-subscribe multiple conversation-scoped docs of one plugin in one
- * conversation, returning `{ [docName]: value }`. A failing doc omits its key
- * and surfaces the error honestly on the snapshot (never a silent empty map).
- */
-export function usePluginSessionDocsMap(
-  pluginId: string | undefined,
-  docNames: string[] | undefined,
-  conversationId: number | undefined,
-): Record<string, unknown> {
-  const { subscribeSessionDoc, getSessionDocState } = useStoreActions()
-  const namesKey = JSON.stringify(docNames ?? [])
-  const subscribe = useCallback(
-    (listener: () => void) => {
-      if (!pluginId || conversationId === undefined) return () => {}
-      const unsubs = (JSON.parse(namesKey) as string[]).map((name) =>
-        subscribeSessionDoc({ pluginId, docName: name, conversationId }, listener))
-      return () => { for (const off of unsubs) off() }
-    },
-    [pluginId, namesKey, conversationId, subscribeSessionDoc],
-  )
-  const state = useSyncExternalStore(
-    subscribe,
-    () => {
-      if (!pluginId || conversationId === undefined) return EMPTY_SESSION_DOCS_MAP
-      const names = JSON.parse(namesKey) as string[]
-      if (names.length === 0) return EMPTY_SESSION_DOCS_MAP
-      const map: Record<string, unknown> = {}
-      let error: string | undefined
-      for (const name of names) {
-        const s = getSessionDocState({ pluginId, docName: name, conversationId })
-        if (s.error !== undefined) error = s.error
-        else if (s.hasValue) map[name] = s.value
-      }
-      const cached = snapshotCache.get(subscribe)
-      if (
-        cached !== undefined && cached.pluginId === pluginId && cached.conversationId === conversationId &&
-        cached.error === error && cacheSame(cached.map, map)
-      ) {
-        return cached.result
-      }
-      snapshotCache.set(subscribe, { pluginId, conversationId, map, error, result: map })
-      return map
-    },
-    () => EMPTY_SESSION_DOCS_MAP,
-  )
-  return state
-}
-
-const EMPTY_SESSION_DOCS_MAP: Record<string, unknown> = {}
-interface SessionDocsMapCache { pluginId?: string; conversationId?: number; map: Record<string, unknown>; error?: string; result: Record<string, unknown> }
-const snapshotCache = new WeakMap<(listener: () => void) => () => void, SessionDocsMapCache>()
-
-function cacheSame(prev: Record<string, unknown>, next: Record<string, unknown>): boolean {
-  const prevKeys = Object.keys(prev)
-  if (prevKeys.length !== Object.keys(next).length) return false
-  for (const key of prevKeys) {
-    if (!Object.hasOwn(next, key) || prev[key] !== next[key]) return false
-  }
-  return true
-}
-
 export type { SessionDocKey }
 export type {
   AuthSlice,
-  CatalogSlice,
   ConversationBackgroundSlice,
   HelmxExternalStore,
   HelmxStoreActions,

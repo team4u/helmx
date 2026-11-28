@@ -1,11 +1,7 @@
 /** builtin:workflow managed skill asset loader. */
 import type { PluginSkillAsset } from '@helmx/protocol'
-import { loadManagedSkillAsset, resolvePluginAssetDir } from '../asset-paths.js'
+import { loadManagedSkillAsset } from '../asset-paths.js'
 import { WORKFLOW_PLUGIN_ID, WORKFLOW_SKILL_ID } from '../contracts.js'
-
-export function resolveWorkflowSkillDir(): string {
-  return resolvePluginAssetDir(WORKFLOW_PLUGIN_ID, 'workflow/skill', 'workflow_skill_asset_missing')
-}
 
 export function readWorkflowSkillAsset(): PluginSkillAsset {
   return loadManagedSkillAsset({

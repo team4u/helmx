@@ -29,40 +29,6 @@ export interface ManagedSkillAssetSpec {
 }
 
 /**
- * Strict `{{KEY}}` template interpolation for built-in skill/profile markdown assets.
- * Throws `HelmxError('unreplaced_skill_placeholder')` on undefined keys or leftover placeholders.
- */
-export function renderSkillTemplate(
-  template: string,
-  vars: Readonly<Record<string, string>>,
-): string {
-  const rendered = template.replace(/\{\{\s*([A-Za-z0-9_]+)\s*\}\}/g, (_match, key: string) => {
-    const val = vars[key]
-    if (val === undefined) {
-      throw new HelmxError(
-        'unreplaced_skill_placeholder',
-        `技能模板存在未定义占位符: {{${key}}}`,
-        500,
-        { key },
-      )
-    }
-    return val
-  })
-
-  const remaining = rendered.match(/\{\{[^}]*\}\}/)
-  if (remaining !== null) {
-    throw new HelmxError(
-      'unreplaced_skill_placeholder',
-      `技能模板渲染后仍残留未替换占位符: ${remaining[0]}`,
-      500,
-      { placeholder: remaining[0] },
-    )
-  }
-
-  return rendered
-}
-
-/**
  * Resolve a built-in plugin static asset directory across both tsx-source (`src/`) and built (`dist/`)
  * layouts, failing explicitly with `missingErrorCode` if neither candidate exists.
  */

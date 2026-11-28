@@ -4,7 +4,7 @@
  * 覆盖：
  * 1. 安装来源识别：npm spec / git ref / HTTPS Git URL / 本地绝对与相对路径 / 未识别；
  * 2. 受管来源徽章与展示文本；
- * 3. doctor 结构化检查结果的条目化与结论文案；
+ * 3. doctor 结构化检查结果的条目化；
  * 4. HTTP 错误诊断文案（409 在途任务、普通错误、非 Error 值）。
  */
 import assert from 'node:assert/strict'
@@ -12,7 +12,6 @@ import { test } from 'node:test'
 import type { PluginDoctorReport, PluginPackageSource, PluginSummary, PluginUpdateResult } from '@helmx/protocol'
 import {
   buildDoctorCheckItems,
-  buildDoctorConclusion,
   detectPluginSourceKind,
   extractDoctorReport,
   formatBatchUpdateSummary,
@@ -134,20 +133,6 @@ test('buildDoctorCheckItems：逐项条目化并保持服务端顺序', { timeou
   assert.equal(items[1]?.errorText, 'entry_missing: dist/index.js 不存在')
 })
 
-test('buildDoctorConclusion：失败项汇总与全部通过文案', { timeout: 60_000 }, () => {
-  const conclusion = buildDoctorConclusion(doctorReport, enT)
-  assert.match(conclusion, /2 failures/)
-  assert.match(conclusion, /entry_missing/)
-  assert.match(conclusion, /define_invalid/)
-
-  const okReport: PluginDoctorReport = {
-    dir: '/plugins/foo',
-    ok: true,
-    checks: [{ id: 'manifest', label: '清单检查' }],
-  }
-  assert.equal(buildDoctorConclusion(okReport, enT), 'Pre-install doctor passed')
-})
-
 // ---------------------------------------------------------------------------
 // 4. HTTP 错误诊断文案
 // ---------------------------------------------------------------------------
@@ -232,7 +217,7 @@ test('extractDoctorReport：形状不合法时返回 null，绝不伪造', { tim
   assert.equal(extractDoctorReport(new ApiClientError('x', 'x', 422, { report: [1, 2] })), null)
 })
 
-test('plugin-package-model：zh-CN 翻译器生成中文来源标签、doctor 结论与包错误提示', { timeout: 60_000 }, () => {
+test('plugin-package-model：zh-CN 翻译器生成中文来源标签与包错误提示', { timeout: 60_000 }, () => {
   const zh = createWebTranslator('zh-CN')
 
   assert.deepEqual(detectPluginSourceKind('npm:pkg@1.0.0', zh), { kind: 'npm', label: 'npm 包' })
@@ -240,14 +225,6 @@ test('plugin-package-model：zh-CN 翻译器生成中文来源标签、doctor �
   assert.deepEqual(detectPluginSourceKind('/abs/path', zh), { kind: 'local', label: '本地路径' })
   assert.deepEqual(detectPluginSourceKind('bad', zh), { kind: 'unknown', label: '无法识别' })
   assert.equal(pluginSourceBadgeLabel(localSource, zh), '本地')
-
-  assert.equal(
-    buildDoctorConclusion({ dir: '/plugins/foo', ok: true, checks: [{ id: 'manifest', label: '清单检查' }] }, zh),
-    '安装前自检通过',
-  )
-  const zhFailed = buildDoctorConclusion(doctorReport, zh)
-  assert.match(zhFailed, /安装前自检未通过，共 2 项失败/)
-  assert.match(zhFailed, /entry_missing/)
 
   const err409 = new ApiClientError('plugin_has_live_tasks', 'Plugin has live tasks', 409)
   assert.match(pluginPackageErrorText(err409, '卸载', zh), /卸载失败：插件存在在途任务（plugin_has_live_tasks）/)

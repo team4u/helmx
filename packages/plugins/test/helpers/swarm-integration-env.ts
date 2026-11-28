@@ -15,6 +15,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 
 import { getCurrentTools } from '@earendil-works/pi-ai/utils/transcript'
 
+import { HelmxError } from '@helmx/protocol'
 import { KernelRuntime } from '@helmx/kernel'
 import { createPluginBuildProvider } from '@helmx/plugin-build'
 import { createHelmx } from '../../../hub/src/app.js'
@@ -199,6 +200,25 @@ export interface OpenSwarmRuntimeOptions {
 
 export async function openSwarmRuntime(options: OpenSwarmRuntimeOptions): Promise<SwarmRuntimeApp> {
   const { dataDir, cwd, faux, autoStart = true, hubPlatform, fullHub = false } = options
+  const installFastLocalPathUsage = (kernel: KernelRuntime): void => {
+    if (hubPlatform !== undefined || process.platform !== 'linux') return
+    const origInspect = kernel.envFabric.inspectPathUsage.bind(kernel.envFabric)
+    kernel.envFabric.inspectPathUsage = async (nodeId, targetPath, signal) => {
+      if (nodeId === 'local') {
+        if (signal?.aborted) throw new HelmxError('aborted', 'path usage scan cancelled', 499, { nodeId })
+        return {
+          path: targetPath,
+          processes: [],
+          matchedTotal: 0,
+          processesTruncated: false,
+          complete: true,
+          unobservable: 0,
+          diagnostics: [],
+        }
+      }
+      return origInspect(nodeId, targetPath, signal)
+    }
+  }
   if (fullHub) {
     const app = await createHelmx({
       buildProvider: createPluginBuildProvider(),
@@ -209,6 +229,7 @@ export async function openSwarmRuntime(options: OpenSwarmRuntimeOptions): Promis
       autoStart,
       ...(hubPlatform !== undefined ? { hubPlatform } : {}),
     })
+    installFastLocalPathUsage(app.kernel)
     if (app.kernel.plugins.get('builtin:title')?.enabled) {
       await app.kernel.plugins.setConfig('builtin:title', { autoTitle: false })
     }
@@ -223,6 +244,7 @@ export async function openSwarmRuntime(options: OpenSwarmRuntimeOptions): Promis
     autoResume: false,
     ...(hubPlatform !== undefined ? { hubPlatform } : {}),
   })
+  installFastLocalPathUsage(kernel)
   try {
     await kernel.plugins.register(createMentionsPlugin())
     await kernel.plugins.register(createWorkflowPlugin())

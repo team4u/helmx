@@ -72,20 +72,12 @@ import {
   shouldReloadNow,
   versionUpdatePending,
   type VersionDeferReason,
+  versionWatchTimings,
   type VersionReloadLocation,
   type VersionWatchState,
 } from './version-watch-model.js'
 
-/** 时序参数（集中定义；对象引用共享，测试可临时改写后复原，与 sseClientTimings 同约定）。 */
-export const versionWatchTimings = {
-  /** visibilitychange / window.focus 触发探测的节流窗口（毫秒）。 */
-  visibilityThrottleMs: 5_000,
-  /** 页面可见期间的周期探测间隔（毫秒）；hidden 期间跳过。 */
-  pollIntervalMs: 60_000,
-  /** 刷新升级重试延迟（毫秒）：同址 replace 后页面仍存活视为导航被吞，
-   *  升级为带 cache-buster 的重试。 */
-  reloadEscalateMs: 2_000,
-}
+export { versionWatchTimings }
 
 /** 安全读取 sessionStorage（隐私模式 getter 抛错 / 无 window 环境均返回 null）。 */
 function safeSessionStorage(): Storage | null {

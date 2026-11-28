@@ -6,21 +6,12 @@ import { act } from 'react'
 import type { Root } from 'react-dom/client'
 import { renderToString } from 'react-dom/server'
 import type { ArtifactMetadata, ConversationSummary, PluginSummary, PluginUiContribution } from '@helmx/protocol'
-import { buildTimelineItems, findLatestProcessTurnKey, type TimelineItem } from '../src/conversation/timeline-model.js'
-import {
-  artifactFormatLabel,
-  artifactMimeRedundant,
-  artifactKindLabel,
-  buildWorkbenchFooter,
-  buildWorkbenchTabs,
-  countDeliverableArtifacts,
-  partitionArtifactsByKind,
-} from '../src/conversation/workbench-model.js'
+import { type TimelineItem } from '../src/conversation/timeline-model.js'
 import { createWebTranslator } from '../src/i18n/catalog.js'
 import { groupUiContributions } from '../src/lib/types.js'
 import type { HelmxExternalStore } from '../src/lib/helmx-store.js'
 import { jsonResponse } from '@helmx/test-kit'
-import { waitForCondition } from './helpers/dom-harness.js'
+import { flushMicrotasks, waitForCondition } from './helpers/dom-harness.js'
 import { seedPluginClientModule, resetPluginClientCache } from '../src/lib/plugin-client.js'
 import { resetSessionDocSubscriptions } from '../src/lib/session-docs.js'
 import { makeTestStore } from './helpers/store.js'
@@ -57,7 +48,7 @@ describe("timeline-workbench-ux", () => {
     URL.revokeObjectURL = origRevokeObjectUrl
     resetSessionDocSubscriptions()
     resetPluginClientCache()
-  })
+  }, { timeout: 60_000 })
 
   function mountNode() {
     const host = document.createElement('div')
@@ -188,13 +179,6 @@ describe("timeline-workbench-ux", () => {
       },
     ]
   }
-
-  test('timeline-model findLatestProcessTurnKey 选中最新一条含过程步骤的助手回合', { timeout: 60_000 }, () => {
-    const items = makeTimelineWithProcessTurns('model')
-    assert.equal(findLatestProcessTurnKey(items), 'model:turn:2')
-    assert.equal(findLatestProcessTurnKey([items[2]!]), undefined)
-    assert.equal(findLatestProcessTurnKey([]), undefined)
-  })
 
   test('ConversationTimeline Ctrl+O 仅作用于目标面板最新含过程回合且与手动点击不冲突', { timeout: 60_000 }, async () => {
     const convPrimary = makeConversation(1)
@@ -423,50 +407,11 @@ describe("timeline-workbench-ux", () => {
     assert.deepEqual(store.getPrimaryTarget(), { kind: 'conversation', conversationId: 41 })
   })
 
-  test('workbench-model 与 ArtifactsTab 严格分离正式产物与 spill、去重计数并支持预览下载与插件工作台', { timeout: 60_000 }, async () => {
+  test('ArtifactsTab 分离正式产物与 spill、支持预览下载与插件工作台', { timeout: 60_000 }, async () => {
     const registered = makeArtifact('art-reg', 'registered', 'summary-report.md', 'text/markdown', 2048)
     const uploaded = makeArtifact('art-up', 'upload', 'diagram.png', 'image/png', 4096)
     const spill1 = makeArtifact('art-spill-1', 'spill', 'bash-stdout-001.log', 'text/plain', 65_536)
     const spill2 = makeArtifact('art-spill-2', 'spill', 'bash-stdout-002.log', 'text/plain', 32_768)
-
-    const partitioned = partitionArtifactsByKind([registered, uploaded, spill1, spill2])
-    assert.equal(partitioned.deliverables.length, 2)
-    assert.equal(partitioned.spills.length, 2)
-    assert.equal(countDeliverableArtifacts([registered, uploaded, spill1, spill2]), 2)
-    assert.equal(countDeliverableArtifacts([spill1, spill2]), 0)
-
-    const tabs = buildWorkbenchTabs({
-      groupedUi: groupUiContributions([]),
-      pluginDocs: {},
-      artifactCount: countDeliverableArtifacts([registered, uploaded, spill1]),
-      conversationId: 1,
-      locale: 'en',
-    })
-    assert.equal(tabs[0]?.label, 'Artifacts')
-    assert.equal(tabs[0]?.count, 2)
-    assert.deepEqual(buildWorkbenchFooter(tabs), [])
-
-    // 面板 label 属 LocalizedText 显示元数据：按 locale 解析（纯字符串透传）
-    const localizedPanels = [
-      { pluginId: 'builtin:superagent', surface: 'workbench.panel' as const, spec: { id: 'runs', label: { en: 'Workflow runs', 'zh-CN': '工作流运行' } } },
-      { pluginId: 'community:logger', surface: 'workbench.panel' as const, spec: { id: 'logs', label: 'Logger panels' } },
-    ]
-    assert.equal(
-      buildWorkbenchTabs({ groupedUi: groupUiContributions(localizedPanels), pluginDocs: {}, artifactCount: 0, conversationId: undefined, locale: 'zh-CN' })
-        .find((tab) => tab.id === 'plugin:builtin:superagent/runs')?.label,
-      '工作流运行',
-    )
-    assert.equal(
-      buildWorkbenchTabs({ groupedUi: groupUiContributions(localizedPanels), pluginDocs: {}, artifactCount: 0, conversationId: undefined, locale: 'en' })
-        .find((tab) => tab.id === 'plugin:builtin:superagent/runs')?.label,
-      'Workflow runs',
-    )
-    assert.equal(
-      buildWorkbenchTabs({ groupedUi: groupUiContributions(localizedPanels), pluginDocs: {}, artifactCount: 0, conversationId: undefined, locale: 'zh-CN' })
-        .find((tab) => tab.id === 'plugin:community:logger/logs')?.label,
-      'Logger panels',
-      '纯字符串 label 任意 locale 原样',
-    )
 
     const fetchedUrls: string[] = []
     let failDownload = false
@@ -574,17 +519,19 @@ describe("timeline-workbench-ux", () => {
     const downloadRegBtn = ui.host.querySelector('button[aria-label="Download summary-report.md"]') as HTMLButtonElement
     await act(async () => {
       downloadRegBtn.click()
-      await new Promise((r) => setTimeout(r, 20))
     })
+    await waitForCondition(() => storeMixed.getNotices().length === 1)
     assert.equal(storeMixed.getNotices().length, 1)
     assert.ok(fetchedUrls.includes('/api/artifacts/art-up/content?inline=1'), '图片产物应懒加载缩略图')
     assert.ok(fetchedUrls.includes('/api/artifacts/art-reg/content'))
 
     failDownload = false
+    const fetchesBeforeOk = fetchedUrls.length
     await act(async () => {
       downloadRegBtn.click()
-      await new Promise((r) => setTimeout(r, 20))
     })
+    await waitForCondition(() => fetchedUrls.length > fetchesBeforeOk)
+    await flushMicrotasks()
     assert.equal(storeMixed.getNotices().length, 1, '下载成功不应新增错误通知')
 
     // 仅存在 spill（无正式产物）的另一会话（id=2）时：页签不展示虚假交付计数徽章，
@@ -619,36 +566,9 @@ describe("timeline-workbench-ux", () => {
     assert.match(ui.host.textContent ?? '', /工作流任务树面板 #1/)
     const inactiveArtifactsTab = [...ui.host.querySelectorAll('.tab-btn')].find((el) => el.textContent?.includes('Artifacts'))
     assert.equal(inactiveArtifactsTab?.textContent?.trim(), 'Artifacts2', '切换至其他页签时产物计数亦不可重复')
-
-    // buildTimelineItems 保持向后导出完整性
-    assert.deepEqual(buildTimelineItems([]), [])
   })
 
-  test('WorkbenchDrawer and workbench-model support en and zh-CN localization', { timeout: 60_000 }, async () => {
-    const zh = createWebTranslator('zh-CN')
-    assert.equal(artifactKindLabel('registered', zh), '注册产物')
-    assert.equal(artifactKindLabel('upload', zh), '上传附件')
-    assert.equal(artifactKindLabel('spill', zh), '输出快照')
-    assert.equal(artifactFormatLabel('image/png', 'diagram.png', zh), '图片')
-    assert.equal(artifactFormatLabel('text/plain', 'notes.txt', zh), '文本')
-    assert.equal(artifactFormatLabel('application/octet-stream', 'data', zh), '文件')
-    // MIME 去重判定：格式标签已由 MIME 推导时原始 MIME 串不再重复展示；扩展名推导保留 MIME。
-    assert.equal(artifactMimeRedundant('image/png', 'diagram.png'), true)
-    assert.equal(artifactMimeRedundant('text/markdown', 'summary-report.md'), true)
-    assert.equal(artifactMimeRedundant('application/pdf', 'doc.pdf'), true)
-    assert.equal(artifactMimeRedundant('application/octet-stream', 'data.bin'), false)
-    assert.equal(artifactMimeRedundant('application/x-custom', 'model-onnx'), false)
-
-    const zhTabs = buildWorkbenchTabs({
-      groupedUi: groupUiContributions([]),
-      pluginDocs: {},
-      artifactCount: 1,
-      conversationId: 1,
-      locale: 'zh-CN',
-      t: zh,
-    })
-    assert.equal(zhTabs[0]?.label, '产物')
-
+  test('WorkbenchDrawer supports en and zh-CN localization', { timeout: 60_000 }, async () => {
     const conv = makeConversation(1)
     const registered: ArtifactMetadata = {
       id: 'art-zh-reg',

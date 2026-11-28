@@ -1,13 +1,10 @@
 import './helpers/register-happy-dom.js'
 import assert from 'node:assert/strict'
 import { describe, before, afterEach, test } from 'node:test'
-import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
 import * as React from 'react'
 import { act } from 'react'
 import { createRoot } from 'react-dom/client'
-import { compilePluginClientModule } from '@helmx/plugin-build'
+import { usePluginContext } from '@helmx/plugin-client'
 import { PluginUiView } from '../src/ui/PluginUiView.js'
 import {
   getCachedClientComponent,
@@ -32,32 +29,31 @@ describe("plugin-client-runtime", () => {
     mountSharedPluginNamespaces({ realHooks: true })
   })
 
-  afterEach(() => { globalThis.fetch = originalFetch; resetPluginClientCache() })
+  afterEach(() => { globalThis.fetch = originalFetch; resetPluginClientCache() }, { timeout: 60_000 })
 
   test('同步缓存按 plugin/module/export 隔离，组件复用时不在新上下文渲染旧导出', { timeout: 60_000 }, async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'helmx-client-identity-'))
     const renders: string[] = []
-    Object.assign(globalThis, { __clientTestRenders: renders })
-    const compile = async (pluginId: string, moduleRef: string, marker: string) => {
-      const root = join(dir, marker)
-      await mkdir(root)
-      await writeFile(join(root, moduleRef), `
-        import { usePluginContext } from '@helmx/plugin-client'
-        export function First() { const ctx = usePluginContext(); globalThis.__clientTestRenders.push(ctx.pluginId + ':${marker}:first'); return <div>${marker}:first</div> }
-        export function Second() { const ctx = usePluginContext(); globalThis.__clientTestRenders.push(ctx.pluginId + ':${marker}:second'); return <div>${marker}:second</div> }
-      `)
-      const { code, contentHash } = await compilePluginClientModule(pluginId, root, moduleRef, dir)
-      const mod = await import(`data:text/javascript;base64,${Buffer.from(code).toString('base64')}`) as Record<string, unknown>
-      seedPluginClientModule(pluginId, moduleRef, mod, contentHash)
+    const seedTestModule = (pluginId: string, moduleRef: string, marker: string, contentHash: string) => {
+      function First() {
+        const ctx = usePluginContext()
+        renders.push(`${ctx.pluginId}:${marker}:first`)
+        return e('div', null, `${marker}:first`)
+      }
+      function Second() {
+        const ctx = usePluginContext()
+        renders.push(`${ctx.pluginId}:${marker}:second`)
+        return e('div', null, `${marker}:second`)
+      }
+      seedPluginClientModule(pluginId, moduleRef, { First, Second }, contentHash)
       return contentHash
     }
     const host = document.createElement('div')
     const root = createRoot(host)
     try {
       const hashes = new Map([
-        ['/api/plugins/alpha/client.mjs?module=index.tsx', await compile('alpha', 'index.tsx', 'a')],
-        ['/api/plugins/alpha/client.mjs?module=other.tsx', await compile('alpha', 'other.tsx', 'b')],
-        ['/api/plugins/beta/client.mjs?module=index.tsx', await compile('beta', 'index.tsx', 'c')],
+        ['/api/plugins/alpha/client.mjs?module=index.tsx', seedTestModule('alpha', 'index.tsx', 'a', 'hash-a')],
+        ['/api/plugins/alpha/client.mjs?module=other.tsx', seedTestModule('alpha', 'other.tsx', 'b', 'hash-b')],
+        ['/api/plugins/beta/client.mjs?module=index.tsx', seedTestModule('beta', 'index.tsx', 'c', 'hash-c')],
       ])
       globalThis.fetch = async (url) => {
         const hash = hashes.get(String(url))
@@ -96,27 +92,18 @@ describe("plugin-client-runtime", () => {
       assert.doesNotMatch(host.textContent!, /加载失败/)
     } finally {
       await act(async () => root.unmount())
-      delete (globalThis as Record<string, unknown>).__clientTestRenders
-      await rm(dir, { recursive: true, force: true })
     }
   })
 
-  test('停用仅清目标插件缓存，不误清具有相似 ID 的插件；重新挂载不能复用旧组件', { timeout: 60_000 }, async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'helmx-client-evict-'))
-    try {
-      await writeFile(join(dir, 'index.tsx'), 'export function Panel() { return <div>有效组件</div> }')
-      const { code } = await compilePluginClientModule('p', dir, 'index.tsx', join(dir, 'cache'))
-      const mod = await import(`data:text/javascript;base64,${Buffer.from(code).toString('base64')}`) as Record<string, unknown>
-      seedPluginClientModule('p', 'index.tsx', mod)
-      seedPluginClientModule('p::nested', 'index.tsx', mod)
-      evictPluginClientCache('p')
-      assert.equal(getCachedClientComponent('p', 'index.tsx', 'Panel'), undefined)
-      assert.equal(getCachedClientComponent('p::nested', 'index.tsx', 'Panel'), mod.Panel)
-      resetPluginClientCache()
-      assert.equal(getCachedClientComponent('p::nested', 'index.tsx', 'Panel'), undefined)
-    } finally {
-      await rm(dir, { recursive: true, force: true })
-    }
+  test('停用仅清目标插件缓存，不误清具有相似 ID 的插件；重新挂载不能复用旧组件', { timeout: 60_000 }, () => {
+    const mod = { Panel: () => e('div', null, '有效组件') }
+    seedPluginClientModule('p', 'index.tsx', mod)
+    seedPluginClientModule('p::nested', 'index.tsx', mod)
+    evictPluginClientCache('p')
+    assert.equal(getCachedClientComponent('p', 'index.tsx', 'Panel'), undefined)
+    assert.equal(getCachedClientComponent('p::nested', 'index.tsx', 'Panel'), mod.Panel)
+    resetPluginClientCache()
+    assert.equal(getCachedClientComponent('p::nested', 'index.tsx', 'Panel'), undefined)
   })
 
   test('停用或重建快照后，在途下载不得重新填回插件缓存', { timeout: 60_000 }, async () => {

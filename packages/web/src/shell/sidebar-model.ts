@@ -61,11 +61,6 @@ export function partitionSidebarUi(
   return { pinnedProfileIds, pinnedConversationIds }
 }
 
-/** 按标签过滤会话列表。 */
-export function filterConversationsByTag(conversations: ConversationSummary[], tag: string): ConversationSummary[] {
-  return conversations.filter((c) => c.tags.includes(tag))
-}
-
 // ---------------------------------------------------------------------------
 // 人工归档（Web 宿主策略）：宿主命名空间 tag + 现有会话 PATCH
 // ---------------------------------------------------------------------------
@@ -102,13 +97,6 @@ export function isConversationBulkDeletable(
 /** 批量管理勾选口径：可归档（人类）或可批量删除（含空闲自动化历史会话）的并集。 */
 export function isConversationBulkSelectable(conv: ConversationSummary): boolean {
   return isConversationArchivable(conv) || isConversationBulkDeletable(conv)
-}
-
-/** 过滤出批量管理可勾选的会话列表（勾选边界，非删除边界）。 */
-export function filterBulkSelectableConversations(
-  conversations: ConversationSummary[],
-): ConversationSummary[] {
-  return conversations.filter(isConversationBulkSelectable)
 }
 
 // ---------------------------------------------------------------------------
@@ -467,37 +455,9 @@ export function sidebarBadgeCountLabel(count: number): string {
   return count > 99 ? '99+' : String(count)
 }
 
-/** 徽标 tone -> 宿主 badge 语义类（badge-err / badge-warn / badge-accent / badge-ok / badge-neutral）。 */
-export function sidebarBadgeToneClass(tone: SidebarBadgeTone): string {
-  return tone === 'error' ? 'badge-err' : `badge-${tone}`
-}
-
 /** 视图项 label 与徽标 summary 的合成 tooltip/aria 文案（summary 为空时原样返回 label）。 */
 export function composeSidebarBadgeLabel(label: string, badge: ResolvedSidebarBadge | null | undefined): string {
   return badge !== null && badge !== undefined && badge.summary !== '' ? `${label} · ${badge.summary}` : label
-}
-
-/** 按标题或 #id 模糊过滤会话（供命令面板快速跳转）。 */
-export function fuzzyMatchConversations(
-  conversations: ConversationSummary[],
-  query: string,
-): ConversationSummary[] {
-  const q = query.trim().toLowerCase()
-  if (!q) return []
-  const numeric = /^\d+$/.test(q) ? Number(q) : null
-  return conversations.filter(
-    (c) =>
-      c.title.toLowerCase().includes(q) ||
-      c.profileId.toLowerCase().includes(q) ||
-      (numeric !== null && c.id === numeric),
-  )
-}
-
-/** Whether a top-level conversation is an automated session (`ownedBy === 'helmx'` without parent). */
-export function isAutomatedRootConversation(
-  conv: Pick<ConversationSummary, 'parentConversationId' | 'ownedBy'>,
-): boolean {
-  return conv.parentConversationId === undefined && conv.ownedBy === 'helmx'
 }
 
 /**
@@ -511,11 +471,6 @@ export function isConversationDeletable(
 ): boolean {
   if ((conv.ownedBy ?? 'human') === 'human') return true
   return conv.status !== undefined && conv.status !== 'working' && conv.status !== 'blocked'
-}
-
-/** 过滤出允许人类删除的会话列表。 */
-export function filterDeletableConversations(conversations: ConversationSummary[]): ConversationSummary[] {
-  return conversations.filter(isConversationDeletable)
 }
 
 // ---------------------------------------------------------------------------

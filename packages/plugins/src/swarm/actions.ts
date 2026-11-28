@@ -21,11 +21,8 @@ import {
 } from './actions-group.js'
 import { createWorkerHandlers, type DispatchInput, type InspectWorkerResult } from './actions-worker.js'
 import { createBoardHandlers } from './actions-board.js'
-import { assertWorkerConversationId, assertWorkerCwd } from '../entry-text.js'
 
 export {
-  assertWorkerConversationId,
-  assertWorkerCwd,
   checkCoordinatorEligibility,
   ensureCoordinatorGroup,
   type DispatchInput,

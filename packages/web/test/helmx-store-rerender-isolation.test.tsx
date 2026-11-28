@@ -12,14 +12,12 @@ import { HelmxExternalStore } from '../src/lib/helmx-store.js'
 import { StoreRequestManager } from '../src/lib/request-manager.js'
 import {
   HelmxExternalStoreContext,
-  useCatalogAssets,
   useConversationArtifacts,
   useConversationDetail,
   useConversationLive,
   useConversationSummary,
   useLocationTargets,
   useModels,
-  usePluginSummary,
 } from '../src/lib/store-context.js'
 import { PluginClientHostBridge } from '../src/lib/plugin-host-bridge.js'
 import { PluginUiView } from '../src/ui/PluginUiView.js'
@@ -714,13 +712,26 @@ describe("helmx-store-rerender-isolation", () => {
     let pluginBRenders = 0
     const seenContexts: unknown[] = []
 
+    const usePluginSummaryProbe = (pluginId: string) => {
+      const external = React.useContext(HelmxExternalStoreContext)
+      if (!external) throw new Error('missing HelmxExternalStoreContext')
+      const subscribe = React.useCallback(
+        (listener: () => void) => external.subscribePlugin(pluginId, listener),
+        [external, pluginId],
+      )
+      return React.useSyncExternalStore(
+        subscribe,
+        () => external.getPluginSummary(pluginId),
+        () => external.getPluginSummary(pluginId),
+      )
+    }
     const PluginAProbe = (): React.ReactNode => {
-      const summary = usePluginSummary('test:plugin')
+      const summary = usePluginSummaryProbe('test:plugin')
       pluginARenders++
       return <div data-testid="plugin-a-summary">{typeof summary?.name === 'string' ? summary.name : ''}</div>
     }
     const PluginBProbe = (): React.ReactNode => {
-      const summary = usePluginSummary('builtin:mentions')
+      const summary = usePluginSummaryProbe('builtin:mentions')
       pluginBRenders++
       return <div data-testid="plugin-b-summary">{typeof summary?.name === 'string' ? summary.name : ''}</div>
     }

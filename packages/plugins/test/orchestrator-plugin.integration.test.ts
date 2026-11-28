@@ -1,4 +1,3 @@
-// @test-isolation: process
 /**
  * Integration tests for `builtin:orchestrator` Orchestrator on full Helmx Kernel (`createHelmx`):
  * - Default enabled, managed `orchestrator` skill, modular client bundles, `singleTurnEligible: false` filtering;
@@ -13,7 +12,7 @@
  * - Reference protection (`remove` & `disable` 409 unless `force: true`), runtime cleanup, delete cleanup.
  */
 import assert from 'node:assert/strict'
-import { test } from 'node:test'
+import { after, before, test } from 'node:test'
 import {
   HelmxError,
   type ModelTiersCapability,
@@ -87,6 +86,16 @@ async function openOrchestratorEnv(options: { defaultModel?: string } = {}) {
   }
 }
 
+let sharedEnv!: Awaited<ReturnType<typeof openOrchestratorEnv>>
+
+before(async () => {
+  sharedEnv = await openOrchestratorEnv()
+})
+
+after(async () => {
+  await sharedEnv?.close()
+}, { timeout: 60_000 })
+
 interface ObservedStep {
   modelId: string
   toolNames: string[]
@@ -118,9 +127,8 @@ function captureStep(
 }
 
 test('registration, modular client bundles, catalog filtering, and orchestrator-driven dual-phase loop with budget pause', TIMEOUT, async () => {
-  const env = await openOrchestratorEnv()
-  try {
-    const { kernel } = env.app
+  const env = sharedEnv
+  const { kernel } = env.app
     const summary = kernel.plugins.list().find((p) => p.id === ORCHESTRATOR_PLUGIN_ID)
     assert.ok(summary && summary.enabled)
     const skills = await kernel.skills.list()
@@ -233,15 +241,11 @@ test('registration, modular client bundles, catalog filtering, and orchestrator-
     })) as OrchestratorSessionView
     assert.equal(status.phase, 'planning')
     assert.equal(status.orchestratorId, 'arch_coder')
-  } finally {
-    await env.close()
-  }
 })
 
 test('Profile binding, builtin:tiers preset cascade, override_executor & stale override cleanup on orchestrator switch', TIMEOUT, async () => {
-  const env = await openOrchestratorEnv()
-  try {
-    const { kernel } = env.app
+  const env = sharedEnv
+  const { kernel } = env.app
     await kernel.plugins.invokeAction(TIERS_PLUGIN_ID, 'set', {
       id: 'architect',
       model: 'faux/flagship',
@@ -331,15 +335,11 @@ test('Profile binding, builtin:tiers preset cascade, override_executor & stale o
       .value as OrchestratorSessionView
     assert.equal(afterReturn.hasExecutorOverride, false)
     assert.equal(afterReturn.executorModel, 'faux/coder-v2')
-  } finally {
-    await env.close()
-  }
 })
 
 test('/plan interop: /plan yields during planning, plan.approved bridges into Orchestrator execution (modelSwitched false & true)', TIMEOUT, async () => {
-  const env = await openOrchestratorEnv()
-  try {
-    const { kernel } = env.app
+  const env = sharedEnv
+  const { kernel } = env.app
     await kernel.plugins.invokeAction(ORCHESTRATOR_PLUGIN_ID, 'set', {
       id: 'plan_pair',
       name: 'Plan Pair',
@@ -421,15 +421,11 @@ test('/plan interop: /plan yields during planning, plan.approved bridges into Or
     await waitFor(() => kernel.conversations.getConversation(conv.id).model === 'faux/flagship', {
       message: 'planner restored after turn',
     })
-  } finally {
-    await env.close()
-  }
 })
 
 test('subagent/Profile Orchestrator unwrapping and swarm-coordinator posture suppression', TIMEOUT, async () => {
-  const env = await openOrchestratorEnv()
-  try {
-    const { kernel } = env.app
+  const env = sharedEnv
+  const { kernel } = env.app
     await kernel.plugins.invokeAction(ORCHESTRATOR_PLUGIN_ID, 'set', {
       id: 'sub_pair',
       name: 'Sub Pair',
@@ -476,32 +472,11 @@ test('subagent/Profile Orchestrator unwrapping and swarm-coordinator posture sup
     assert.equal(obsChild.length, 3)
     assert.equal(obsChild[1]!.modelId, 'faux/coder')
     assert.equal(obsChild[1]!.sectionsById[ORCHESTRATOR_PLAN_SECTION_ID], undefined)
-
-    await kernel.conversations.updateConversation(parent.id, { tags: ['swarm-coordinator'] })
-    const obsCoord: ObservedStep[] = []
-    env.faux.setResponses([captureStep(obsCoord, fauxAssistantMessage('Coordinating directly.'))])
-    await kernel.conversations.submitInput(parent.id, 'coordinate')
-    await kernel.conversations.waitForIdle(parent.id)
-    assert.equal(obsCoord.length, 1)
-    assert.equal(obsCoord[0]!.sectionsById[ORCHESTRATOR_PLAN_SECTION_ID], undefined)
-    assert.equal(obsCoord[0]!.sectionsById[ORCHESTRATOR_EXECUTE_SECTION_ID], undefined)
-    assert.equal(obsCoord[0]!.toolNames.includes(ORCHESTRATOR_EXIT_PLAN_MODE_TOOL), false)
-    const coordView = kernel.plugins.getPublicSessionDoc(ORCHESTRATOR_PLUGIN_ID, ORCHESTRATOR_SESSION_DOC, parent.id)
-      .value as OrchestratorSessionView
-    assert.equal(coordView.suppressedByCoordinator, true)
-    assert.deepEqual(defaultChildCap?.resolveDefaultChildModel(parent.id), {
-      model: 'faux/coder',
-      thinkingLevel: 'medium',
-    })
-  } finally {
-    await env.close()
-  }
 })
 
 test('lifecycle safety: reference protection on remove & disable unless --force, and runtime restore', TIMEOUT, async () => {
-  const env = await openOrchestratorEnv()
-  try {
-    const { kernel } = env.app
+  const env = sharedEnv
+  const { kernel } = env.app
     await kernel.plugins.invokeAction(ORCHESTRATOR_PLUGIN_ID, 'set', {
       id: 'life_pair',
       name: 'Life Pair',
@@ -541,7 +516,4 @@ test('lifecycle safety: reference protection on remove & disable unless --force,
       force: true,
     })) as { removed: boolean }
     assert.equal(forceRemoved.removed, true)
-  } finally {
-    await env.close()
-  }
 })

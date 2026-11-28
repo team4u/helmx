@@ -11,7 +11,7 @@
  *
  * runner: tsx --test；每项显式 timeout: 60_000 防死锁；命令加总超时。
  */
-import { test } from 'node:test'
+import { after, before, test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createHmac } from 'node:crypto'
 import { mkdtempSync, rmSync, readFileSync, statSync, existsSync } from 'node:fs'
@@ -24,11 +24,13 @@ import { fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux'
 
 import { HelmxError, type ConversationSummary, type ExternalTriggerEnvelope } from '@helmx/protocol'
 import { createHelmx } from '../../hub/src/app.js'
-import { AuthService, createHubHandler } from '@helmx/kernel'
+import { createHubHandler } from '@helmx/kernel'
 import { createDeliveryDispatch } from '../src/triggers/delivery.js'
+import { createTriggersPlugin } from '../src/triggers.js'
 import { createPluginBuildProvider } from '@helmx/plugin-build'
 import {
   makeFauxProvider,
+  openMinimalRuntime,
   useTempDir,
   waitFor as baseWaitFor,
   type FauxProviderHandle,
@@ -75,6 +77,16 @@ async function makeEnv(): Promise<TestEnv> {
   }
   return env
 }
+
+let sharedEnv!: TestEnv
+
+before(async () => {
+  sharedEnv = await makeEnv()
+})
+
+after(async () => {
+  await sharedEnv?.close()
+}, { timeout: 60_000 })
 
 /** 组合层默认注册并启用插件。 */
 function requireTriggersRegistered(env: TestEnv): void {
@@ -125,31 +137,26 @@ const sign = (secret: string, body: Uint8Array | string): string =>
 // ---------------------------------------------------------------------------
 
 test('triggers1: createHelmx 默认启用注册；动作、路由、UI 与公开 doc 就绪', { timeout: 60_000 }, async () => {
-  const env = await makeEnv()
-  try {
-    requireTriggersRegistered(env)
-    const host = env.app.kernel.plugins
-    const summary = host.list().find((p) => p.id === TRIGGERS)!
-    assert.ok(summary.actions.length > 0, '默认启用即暴露动作清单')
-    assert.ok(host.listUi().some((u) => u.pluginId === TRIGGERS), '默认启用即挂载 UI 贡献')
-    assert.ok(
-      host.listRoutes().some((r) => r.pluginId === TRIGGERS),
-      '默认启用即挂载 webhook 公开路由',
-    )
-    const doc = host.getPublicDoc(TRIGGERS, 'crons')
-    assert.deepEqual(doc.value, { version: 1, jobs: [] })
-    // 启用态动作直接可调（空任务清单形状合法）
-    const listed = (await host.invokeAction(TRIGGERS, 'cron_list', {})) as { jobs: unknown[] }
-    assert.deepEqual(listed, { jobs: [] })
-  } finally {
-    await env.close()
-  }
+  const env = sharedEnv
+  requireTriggersRegistered(env)
+  const host = env.app.kernel.plugins
+  const summary = host.list().find((p) => p.id === TRIGGERS)!
+  assert.ok(summary.actions.length > 0, '默认启用即暴露动作清单')
+  assert.ok(host.listUi().some((u) => u.pluginId === TRIGGERS), '默认启用即挂载 UI 贡献')
+  assert.ok(
+    host.listRoutes().some((r) => r.pluginId === TRIGGERS),
+    '默认启用即挂载 webhook 公开路由',
+  )
+  const doc = host.getPublicDoc(TRIGGERS, 'crons')
+  assert.deepEqual(doc.value, { version: 1, jobs: [] })
+  // 启用态动作直接可调（空任务清单形状合法）
+  const listed = (await host.invokeAction(TRIGGERS, 'cron_list', {})) as { jobs: unknown[] }
+  assert.deepEqual(listed, { jobs: [] })
 })
 
 test('triggers2: 九个动作注册、schema 边界与 cli.command 声明', { timeout: 60_000 }, async () => {
-  const env = await makeEnv()
-  try {
-    requireTriggersRegistered(env)
+  const env = sharedEnv
+  requireTriggersRegistered(env)
     const host = env.app.kernel.plugins
     const summary = host.list().find((p) => p.id === TRIGGERS)!
     assert.equal(summary.enabled, true)
@@ -205,15 +212,11 @@ test('triggers2: 九个动作注册、schema 边界与 cli.command 声明', { ti
       () => host.invokeAction(TRIGGERS, 'webhook_create', { id: 'h1' }),
       (err: unknown) => err instanceof HelmxError && err.code === 'validation_error',
     )
-  } finally {
-    await env.close()
-  }
 })
 
 test('triggers3: cron CRUD 契约——默认值、重复创建拒绝、list/delete/trigger 形状', { timeout: 60_000 }, async () => {
-  const env = await makeEnv()
-  try {
-    requireTriggersRegistered(env)
+  const env = sharedEnv
+  requireTriggersRegistered(env)
     const host = env.app.kernel.plugins
 
     const empty = (await host.invokeAction(TRIGGERS, 'cron_list', {})) as { jobs: unknown[] }
@@ -282,9 +285,6 @@ test('triggers3: cron CRUD 契约——默认值、重复创建拒绝、list/del
     assert.deepEqual(deleted, { deleted: true })
     const after = (await host.invokeAction(TRIGGERS, 'cron_list', {})) as { jobs: unknown[] }
     assert.deepEqual(after.jobs, [])
-  } finally {
-    await env.close()
-  }
 })
 
 // ---------------------------------------------------------------------------
@@ -292,9 +292,8 @@ test('triggers3: cron CRUD 契约——默认值、重复创建拒绝、list/del
 // ---------------------------------------------------------------------------
 
 test('triggers4: cron_trigger 默认 isolated 自动化会话——不污染 #1、ownedBy=helmx、origin=trigger、defang 防逃逸', { timeout: 60_000 }, async () => {
-  const env = await makeEnv()
-  try {
-    requireTriggersRegistered(env)
+  const env = sharedEnv
+  requireTriggersRegistered(env)
     const kernel = env.app.kernel
 
     await kernel.plugins.invokeAction(TRIGGERS, 'cron_create', {
@@ -343,15 +342,11 @@ test('triggers4: cron_trigger 默认 isolated 自动化会话——不污染 #1�
       () => kernel.plugins.invokeAction(TRIGGERS, 'cron_trigger', { id: 'ghost' }),
       (err: unknown) => err instanceof HelmxError && err.status === 404,
     )
-  } finally {
-    await env.close()
-  }
 })
 
 test('triggers5: cron 目标路由——显式会话直投 / dedicated 复用专属 helmx 会话 / isolated keepLast 结算后自动淘汰', { timeout: 60_000 }, async () => {
-  const env = await makeEnv()
-  try {
-    requireTriggersRegistered(env)
+  const env = sharedEnv
+  requireTriggersRegistered(env)
     const kernel = env.app.kernel
 
     // 5a. 显式 targetConversationId：直投目标会话（followUp）
@@ -423,9 +418,6 @@ test('triggers5: cron 目标路由——显式会话直投 / dedicated 复用专
       .sort((a, b) => a - b)
     assert.deepEqual(surviving, runIds.slice(-2), '仅保留最近 keepLast=2 条已结算运行')
     assert.equal(kernel.conversations.getConversation(ROOT_CONVERSATION_ID).id, ROOT_CONVERSATION_ID, '人类会话不受清理影响')
-  } finally {
-    await env.close()
-  }
 })
 
 // ---------------------------------------------------------------------------
@@ -433,9 +425,8 @@ test('triggers5: cron 目标路由——显式会话直投 / dedicated 复用专
 // ---------------------------------------------------------------------------
 
 test('triggers6: webhook CRUD——元数据不含 secret、重复拒绝、公开 doc hasSecret', { timeout: 60_000 }, async () => {
-  const env = await makeEnv()
-  try {
-    requireTriggersRegistered(env)
+  const env = sharedEnv
+  requireTriggersRegistered(env)
     const host = env.app.kernel.plugins
     const SECRET = 'whsec_meta_no_leak_9527'
 
@@ -492,15 +483,11 @@ test('triggers6: webhook CRUD——元数据不含 secret、重复拒绝、公�
     assert.deepEqual(deleted, { deleted: true })
     const after = (await host.invokeAction(TRIGGERS, 'webhook_list', {})) as { webhooks: unknown[] }
     assert.deepEqual(after.webhooks, [])
-  } finally {
-    await env.close()
-  }
 })
 
 test('triggers7: webhook HTTP 验签——raw 精确字节、成功 202、无签名/错签 401、未知 404', { timeout: 60_000 }, async () => {
-  const env = await makeEnv()
-  try {
-    requireTriggersRegistered(env)
+  const env = sharedEnv
+  requireTriggersRegistered(env)
     const kernel = env.app.kernel
     const SECRET = 'whsec_raw_bytes_3f09'
     await kernel.plugins.invokeAction(TRIGGERS, 'webhook_create', { id: 'ci', secret: SECRET })
@@ -548,15 +535,11 @@ test('triggers7: webhook HTTP 验签——raw 精确字节、成功 202、无签
       'x-helmx-signature': sign(SECRET, 'x'),
     })
     assert.equal(ghost.status, 404)
-  } finally {
-    await env.close()
-  }
 })
 
 test('triggers8: webhook defang 注入防护与 UTF-8 边界', { timeout: 60_000 }, async () => {
-  const env = await makeEnv()
-  try {
-    requireTriggersRegistered(env)
+  const env = sharedEnv
+  requireTriggersRegistered(env)
     const kernel = env.app.kernel
     const SECRET = 'whsec_inject'
     await kernel.plugins.invokeAction(TRIGGERS, 'webhook_create', { id: 'evil', secret: SECRET })
@@ -579,15 +562,11 @@ test('triggers8: webhook defang 注入防护与 UTF-8 边界', { timeout: 60_000
     // UTF-8 多字节内容原样保留
     assert.match(json, /中文与表情边界/)
     assert.match(json, /webhook:evil/)
-  } finally {
-    await env.close()
-  }
 })
 
 test('triggers9: secret 落 credentials.json 0600、不进 docs/SQLite、删除只删本 hook', { timeout: 60_000 }, async () => {
-  const env = await makeEnv()
-  try {
-    requireTriggersRegistered(env)
+  const env = sharedEnv
+  requireTriggersRegistered(env)
     const kernel = env.app.kernel
     const S1 = 'whsec_keep_me_111'
     const S2 = 'whsec_remove_me_222'
@@ -634,52 +613,48 @@ test('triggers9: secret 落 credentials.json 0600、不进 docs/SQLite、删除�
       const raw = readFileSync(credPath, 'utf8')
       return !raw.includes(S2) && raw.includes(S1)
     })
-  } finally {
-    await env.close()
-  }
 })
 
 test('triggers10: 重启后签名仍生效（secret 从 credentials.json 恢复）；GET 配置不泄漏动态 secret', { timeout: 60_000 }, async (t) => {
   const dataDir = useTempDir(t, 'helmx-triggers-restart-')
   const SECRET = 'whsec_restart_roundtrip'
-  // 第一进程：setup 鉴权 + 启用 + 建 webhook（secret 落 credentials.json）
-  const first = makeFauxProvider()
-  const app1 = await createHelmx({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', providers: [first.provider] })
+  // 第一进程：启用 + 建 webhook（secret 落 credentials.json）
+  const rt1 = await openMinimalRuntime([createTriggersPlugin()], { dataDir })
   try {
-    const auth = new AuthService(dataDir)
-    await auth.setup('setup-pw-triggers-1234')
-    await app1.kernel.plugins.enable(TRIGGERS)
-    await app1.kernel.plugins.invokeAction(TRIGGERS, 'webhook_create', { id: 'persist', secret: SECRET })
+    await rt1.kernel.plugins.enable(TRIGGERS)
+    await rt1.kernel.plugins.invokeAction(TRIGGERS, 'webhook_create', { id: 'persist', secret: SECRET })
     // webhook 端点为持久占用（inUse）：知情后 force 停用（secret 仍落盘供重启恢复）。
-    await app1.kernel.plugins.disable(TRIGGERS, { force: true })
+    await rt1.kernel.plugins.disable(TRIGGERS, { force: true })
   } finally {
-    await app1.close()
+    await rt1.close()
   }
 
   // 第二进程（同 dataDir 重启）：启用沿用，secret 从凭据文件恢复
-  const second = makeFauxProvider()
-  const app2 = await createHelmx({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', providers: [second.provider] })
+  const rt2 = await openMinimalRuntime([createTriggersPlugin()], { dataDir })
   try {
-    const summary = app2.kernel.plugins.list().find((p) => p.id === TRIGGERS)!
+    const summary = rt2.kernel.plugins.list().find((p) => p.id === TRIGGERS)!
     assert.equal(summary.enabled, false, '重启后沿用持久化停用状态')
-    await app2.kernel.plugins.enable(TRIGGERS)
+    await rt2.kernel.plugins.enable(TRIGGERS)
 
     // 配置命名空间泄漏回归：动态写入的 pluginSecrets['builtin:triggers'][...]
     // 不得混入 GET /api/plugins/:id/config 的 values 输出（secret 也不得出现）。
-    const auth2 = new AuthService(dataDir)
-    const { token } = await auth2.login('setup-pw-triggers-1234')
-    const handler2 = createHubHandler(app2.kernel)
-    const cfgRes = await handler2(
-      new Request('http://127.0.0.1:3202/api/plugins/builtin%3Atriggers/config', {
-        headers: { authorization: `Bearer ${token}` },
-      }),
-    )
-    assert.equal(cfgRes.status, 200)
-    const cfgText = await cfgRes.text()
-    assert.equal(cfgText.includes(SECRET), false, 'GET config 不得泄漏 webhook secret')
-    assert.equal(cfgText.includes('webhook:persist'), false, 'GET config 不得输出未声明的动态 pluginSecrets 键')
+    const cred = rt2.kernel.auth.createProcessToken()
+    const handler2 = createHubHandler(rt2.kernel)
+    try {
+      const cfgRes = await handler2(
+        new Request('http://127.0.0.1:3202/api/plugins/builtin%3Atriggers/config', {
+          headers: { authorization: `Bearer ${cred.token}` },
+        }),
+      )
+      assert.equal(cfgRes.status, 200)
+      const cfgText = await cfgRes.text()
+      assert.equal(cfgText.includes(SECRET), false, 'GET config 不得泄漏 webhook secret')
+      assert.equal(cfgText.includes('webhook:persist'), false, 'GET config 不得输出未声明的动态 pluginSecrets 键')
+    } finally {
+      cred.dispose()
+    }
 
-    const handler = createHubHandler(app2.kernel)
+    const handler = createHubHandler(rt2.kernel)
     const post = async (body: string, sig: string): Promise<number> => {
       const res = await handler(
         new Request(`http://127.0.0.1:3202${WEBHOOK_BASE}/persist`, {
@@ -695,18 +670,18 @@ test('triggers10: 重启后签名仍生效（secret 从 credentials.json 恢复�
     // 错误签名拒绝 → 证明验签在用恢复后的 secret
     assert.equal(await post(payload, sign('whsec_wrong_after_restart', payload)), 401)
     // 正确签名接受 → secret 跨重启恢复且事件进入独立 helmx 自动化会话
-    second.setResponses([fauxAssistantMessage('重启后收到')])
+    rt2.faux.setResponses([fauxAssistantMessage('重启后收到')])
     assert.equal(await post(payload, sign(SECRET, payload)), 202)
-    const persistRun = app2.kernel.conversations.listConversations({ tag: 'webhook:persist' })[0]!
+    const persistRun = rt2.kernel.conversations.listConversations({ tag: 'webhook:persist' })[0]!
     assert.equal(persistRun.ownedBy, 'helmx')
-    await app2.kernel.conversations.waitForIdle(persistRun.id)
-    const detail = await app2.kernel.conversations.getConversationDetail(persistRun.id, { limit: 20 })
+    await rt2.kernel.conversations.waitForIdle(persistRun.id)
+    const detail = await rt2.kernel.conversations.getConversationDetail(persistRun.id, { limit: 20 })
     const input = detail.entries.filter((e) => e.kind === 'helmx.input').at(-1)
     const json = JSON.stringify(input?.data ?? null)
     assert.match(json, /webhook:persist/)
     assert.match(json, /restart-verify/)
   } finally {
-    await app2.close()
+    await rt2.close()
   }
 })
 
@@ -715,39 +690,36 @@ test('triggers10: 重启后签名仍生效（secret 从 credentials.json 恢复�
 // ---------------------------------------------------------------------------
 
 test('triggers11: disable 后路由撤下、动作拒绝；doc 404', { timeout: 60_000 }, async () => {
-  const env = await makeEnv()
-  try {
-    requireTriggersRegistered(env)
-    await env.app.kernel.plugins.invokeAction(TRIGGERS, 'webhook_create', { id: 'bye', secret: 'whsec_bye' })
-    // webhook 端点为持久占用：先验证默认 409 拦截，再 force 停用。
-    await assert.rejects(
-      () => env.app.kernel.plugins.disable(TRIGGERS),
-      (err: unknown) => err instanceof HelmxError && err.code === 'plugin_in_use' && err.status === 409,
-    )
-    await env.app.kernel.plugins.disable(TRIGGERS, { force: true })
+  const env = sharedEnv
+  requireTriggersRegistered(env)
+  await env.app.kernel.plugins.invokeAction(TRIGGERS, 'webhook_create', { id: 'bye', secret: 'whsec_bye' })
+  // webhook 端点为持久占用：先验证默认 409 拦截，再 force 停用。
+  await assert.rejects(
+    () => env.app.kernel.plugins.disable(TRIGGERS),
+    (err: unknown) => err instanceof HelmxError && err.code === 'plugin_in_use' && err.status === 409,
+  )
+  await env.app.kernel.plugins.disable(TRIGGERS, { force: true })
 
-    const host = env.app.kernel.plugins
-    assert.deepEqual(host.listRoutes().filter((r) => r.pluginId === TRIGGERS), [])
-    await assert.rejects(
-      () => host.invokeAction(TRIGGERS, 'cron_list', {}),
-      (err: unknown) => err instanceof HelmxError && err.code === 'plugin_disabled',
-    )
-    assert.throws(
-      () => host.getPublicDoc(TRIGGERS, 'crons'),
-      (err: unknown) => err instanceof HelmxError && err.code === 'plugin_doc_not_found',
-    )
-    // 路由撤下后匿名请求回到 Hub 鉴权；携带有效 Token 才观察到路由 404。
-    const anonymous = await postRaw(env, `${WEBHOOK_BASE}/bye`, 'x', { 'x-helmx-signature': 'sha256=deadbeef' })
-    assert.equal(anonymous.status, 401)
-    const credential = env.app.kernel.auth.createProcessToken()
-    try {
-      const res = await postRaw(env, `${WEBHOOK_BASE}/bye`, 'x', { authorization: `Bearer ${credential.token}` })
-      assert.equal(res.status, 404)
-    } finally {
-      credential.dispose()
-    }
+  const host = env.app.kernel.plugins
+  assert.deepEqual(host.listRoutes().filter((r) => r.pluginId === TRIGGERS), [])
+  await assert.rejects(
+    () => host.invokeAction(TRIGGERS, 'cron_list', {}),
+    (err: unknown) => err instanceof HelmxError && err.code === 'plugin_disabled',
+  )
+  assert.throws(
+    () => host.getPublicDoc(TRIGGERS, 'crons'),
+    (err: unknown) => err instanceof HelmxError && err.code === 'plugin_doc_not_found',
+  )
+  // 路由撤下后匿名请求回到 Hub 鉴权；携带有效 Token 才观察到路由 404。
+  const anonymous = await postRaw(env, `${WEBHOOK_BASE}/bye`, 'x', { 'x-helmx-signature': 'sha256=deadbeef' })
+  assert.equal(anonymous.status, 401)
+  const credential = env.app.kernel.auth.createProcessToken()
+  try {
+    const res = await postRaw(env, `${WEBHOOK_BASE}/bye`, 'x', { authorization: `Bearer ${credential.token}` })
+    assert.equal(res.status, 404)
   } finally {
-    await env.close()
+    credential.dispose()
+    await host.enable(TRIGGERS)
   }
 })
 
@@ -756,33 +728,29 @@ test('triggers11: disable 后路由撤下、动作拒绝；doc 404', { timeout: 
 // ---------------------------------------------------------------------------
 
 test('triggers12: UI 贡献——管理视图与设置面板为 client 单轨', { timeout: 60_000 }, async () => {
-  const env = await makeEnv()
-  try {
-    const ui = env.app.kernel.plugins.listUi().filter((u) => u.pluginId === TRIGGERS)
-    const surfaces = ui.map((u) => u.surface).sort()
-    assert.deepEqual(surfaces, ['commandPalette', 'screen', 'settings.panel', 'sidebar.item'], '四个 UI 贡献面')
-    const expectedClientRefs: Record<string, { module: string; export: string }> = {
-      screen: { module: 'manager.tsx', export: 'TriggersManagerScreen' },
-      'settings.panel': { module: 'settings.tsx', export: 'TriggersSettingsPanel' },
+  const env = sharedEnv
+  const ui = env.app.kernel.plugins.listUi().filter((u) => u.pluginId === TRIGGERS)
+  const surfaces = ui.map((u) => u.surface).sort()
+  assert.deepEqual(surfaces, ['commandPalette', 'screen', 'settings.panel', 'sidebar.item'], '四个 UI 贡献面')
+  const expectedClientRefs: Record<string, { module: string; export: string }> = {
+    screen: { module: 'manager.tsx', export: 'TriggersManagerScreen' },
+    'settings.panel': { module: 'settings.tsx', export: 'TriggersSettingsPanel' },
+  }
+  for (const [surface, expectedRef] of Object.entries(expectedClientRefs)) {
+    const spec = ui.find((u) => u.surface === surface)!.spec as {
+      json?: unknown
+      docs?: unknown
+      client?: { module: string; export: string }
     }
-    for (const [surface, expectedRef] of Object.entries(expectedClientRefs)) {
-      const spec = ui.find((u) => u.surface === surface)!.spec as {
-        json?: unknown
-        docs?: unknown
-        client?: { module: string; export: string }
-      }
-      assert.equal(spec.json, undefined, `${surface} 不再声明 JSON Spec（单轨 client）`)
-      assert.equal(spec.docs, undefined, `${surface} 不再声明 docs（组件 usePluginDoc 自主订阅）`)
-      assert.deepEqual(spec.client, expectedRef, `${surface} client 引用`)
-    }
-    const screen = ui.find((u) => u.surface === 'screen')!.spec as { id: string }
-    assert.equal(screen.id, 'manager')
-    const emoji = /\p{Extended_Pictographic}/u
-    for (const item of ui) {
-      assert.equal(emoji.test(JSON.stringify(item.spec)), false, `UI ${item.surface} 不得含 Emoji`)
-    }
-  } finally {
-    await env.close()
+    assert.equal(spec.json, undefined, `${surface} 不再声明 JSON Spec（单轨 client）`)
+    assert.equal(spec.docs, undefined, `${surface} 不再声明 docs（组件 usePluginDoc 自主订阅）`)
+    assert.deepEqual(spec.client, expectedRef, `${surface} client 引用`)
+  }
+  const screen = ui.find((u) => u.surface === 'screen')!.spec as { id: string }
+  assert.equal(screen.id, 'manager')
+  const emoji = /\p{Extended_Pictographic}/u
+  for (const item of ui) {
+    assert.equal(emoji.test(JSON.stringify(item.spec)), false, `UI ${item.surface} 不得含 Emoji`)
   }
 })
 

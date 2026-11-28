@@ -6,7 +6,7 @@ import { act } from 'react'
 import type { Root } from 'react-dom/client'
 import type { ConversationEntry, ConversationSummary } from '@helmx/protocol'
 import { hangingEventStream, type SseFrameSender } from './helpers/sse-stream.js'
-import { typeIntoControl } from './helpers/dom-harness.js'
+import { flushMicrotasks, typeIntoControl } from './helpers/dom-harness.js'
 import type { HelmxExternalStore } from '../src/lib/helmx-store.js'
 import type { ResolvedTarget } from '../src/lib/types.js'
 
@@ -27,7 +27,7 @@ const { ConversationPane } = await import('../src/conversation/ConversationPane.
 const { ConversationWindowStage } = await import('../src/conversation/ConversationWindowStage.js')
 const { HelmxStoreProvider } = await import('../src/lib/HelmxStoreProvider.js')
 const { HelmxExternalStoreContext, useHelmxStore } = await import('../src/lib/store-context.js')
-const { composerDirty } = await import('../src/conversation/composer-dirty.js')
+const { getComposerDirtySummary } = await import('../src/conversation/composer-dirty.js')
 const { App: HelmxApp } = await import('../src/App.js')
 const e = React.createElement
 const originalFetch = globalThis.fetch
@@ -135,8 +135,7 @@ async function mount(hash: string, options: { strictMode?: boolean; limit?: numb
 }
 
 async function settle(): Promise<void> {
-  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
-  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
+  await flushMicrotasks()
 }
 
 function findPane(conversationId: number): HTMLElement | null {
@@ -233,7 +232,7 @@ describe("conversation-window-keepalive", () => {
 
   afterEach(() => {
     reset()
-  })
+  }, { timeout: 60_000 })
 
   test('keeps timeline scroller instance, reading offset and composer draft across A -> B -> A', { timeout: 60_000 }, async () => {
     await mount('#/c/1')
@@ -247,14 +246,14 @@ describe("conversation-window-keepalive", () => {
     const textareaA = paneTextarea(paneA)
     await act(async () => { typeIntoControl(textareaA, 'keep-alive draft') })
     assert.ok(textareaA.value === 'keep-alive draft')
-    assert.ok(composerDirty() === true, '草稿存在时版本刷新挂起判定应为脏')
+    assert.ok(getComposerDirtySummary().anyDirty === true, '草稿存在时版本刷新挂起判定应为脏')
     const detailFetchesForABefore = detailFetchLog.filter((id) => id === 1).length
 
     await openConversation(2)
     assert.ok(paneA.style.display === 'none', '切走后 A 窗口应被 Activity 隐藏（display:none）')
     assert.ok(windowCount() === 2, '舞台应缓存 A 与 B 两个窗口')
     assert.ok(findPane(2) !== null && findPane(2)!.style.display !== 'none', 'B 窗口应可见')
-    assert.ok(composerDirty() === true, '隐藏期间脏草稿应经窗口帧桥接保持')
+    assert.ok(getComposerDirtySummary().anyDirty === true, '隐藏期间脏草稿应经窗口帧桥接保持')
 
     // 模拟真实浏览器行为：display:none 子树的 scrollTop 被丢弃为 0。
     scrollerA.scrollTop = 0
@@ -274,7 +273,7 @@ describe("conversation-window-keepalive", () => {
     assert.ok(detailFetchesForAAfter > detailFetchesForABefore, '唤醒应静默刷新会话详情（隐藏窗口不在可见集内）')
 
     await act(async () => { typeIntoControl(textareaA, '') })
-    assert.ok(composerDirty() === false, '清空草稿后脏判定应恢复干净')
+    assert.ok(getComposerDirtySummary().anyDirty === false, '清空草稿后脏判定应恢复干净')
   })
 
   test('evicts the least-recently-used window beyond the limit and reopens fresh', { timeout: 60_000 }, async () => {
@@ -286,13 +285,13 @@ describe("conversation-window-keepalive", () => {
     scrollUpTo(scrollerA, 300)
     const textareaA = paneTextarea(paneA)
     await act(async () => { typeIntoControl(textareaA, 'doomed draft') })
-    assert.ok(composerDirty() === true)
+    assert.ok(getComposerDirtySummary().anyDirty === true)
 
     await openConversation(2)
     await openConversation(3)
     assert.ok(windowCount() === 2, '上限 2 时舞台只保留 B 与 C')
     assert.ok(paneA.isConnected === false, '最旧的 A 窗口应被真实卸载')
-    assert.ok(composerDirty() === false, '淘汰卸载后脏报告应清空')
+    assert.ok(getComposerDirtySummary().anyDirty === false, '淘汰卸载后脏报告应清空')
     assert.ok(findPane(2) !== null && findPane(3) !== null, 'B 与 C 窗口仍在舞台上')
 
     await openConversation(1)
@@ -383,7 +382,7 @@ describe("conversation-window-keepalive", () => {
 
     await openConversation(2)
     assert.ok(paneA.isConnected === true, '隐藏窗口在删除前仍在缓存中')
-    assert.ok(composerDirty() === true)
+    assert.ok(getComposerDirtySummary().anyDirty === true)
 
     assert.ok(sendEvent)
     await act(async () => {
@@ -391,7 +390,7 @@ describe("conversation-window-keepalive", () => {
     })
     await settle()
     assert.ok(!paneA.isConnected, '会话删除后其隐藏窗口应被卸载')
-    const dirtyAfterDelete = composerDirty()
+    const dirtyAfterDelete = getComposerDirtySummary().anyDirty
     assert.ok(dirtyAfterDelete === false, '删除清理后脏报告应清空')
     assert.ok(windowCount() === 1, '窗口池只剩 B')
   })
@@ -404,7 +403,7 @@ describe("conversation-window-keepalive", () => {
     await act(async () => { typeIntoControl(textareaA, 'logout draft') })
     await openConversation(2)
     assert.ok(windowCount() === 2)
-    assert.ok(composerDirty() === true)
+    assert.ok(getComposerDirtySummary().anyDirty === true)
 
     // 登出走 store 的单一重置管道（helmx:unauthorized / 用户登出共用），live 被清空为空列表。
     await act(async () => {
@@ -413,7 +412,7 @@ describe("conversation-window-keepalive", () => {
     await settle()
     assert.ok(windowCount() === 0, '登出清空 live 后窗口池应整体卸载')
     assert.ok(paneA.isConnected === false, '隐藏窗口不应残留内存')
-    assert.ok(composerDirty() === false, '登出后脏报告应清空')
+    assert.ok(getComposerDirtySummary().anyDirty === false, '登出后脏报告应清空')
   })
 
   test('typing then switching in the same tick keeps the dirty guard (render-phase sink mirror)', { timeout: 60_000 }, async () => {
@@ -428,7 +427,7 @@ describe("conversation-window-keepalive", () => {
       navigateTo!({ kind: 'conversation', conversationId: 2 })
     })
     await settle()
-    assert.ok(composerDirty() === true, '同拍切换也应经渲染期镜像保住脏判定')
+    assert.ok(getComposerDirtySummary().anyDirty === true, '同拍切换也应经渲染期镜像保住脏判定')
 
     await openConversation(1)
     assert.ok(textareaA.value === 'instant switch', '同拍切换不丢草稿')
@@ -554,28 +553,28 @@ describe("conversation-window-keepalive", () => {
     await act(async () => { typeIntoControl(textareaA, 'in-flight ok') })
     await act(async () => { sendBtnA.click() })
     await openConversation(2)
-    assert.equal(composerDirty(), true, '发送在途切走期间应保持挂起保护')
+    assert.equal(getComposerDirtySummary().anyDirty, true, '发送在途切走期间应保持挂起保护')
 
     await act(async () => {
       resolveSubmit()
       await Promise.resolve()
     })
     await settle()
-    assert.equal(composerDirty(), false, '后台发送完成后无需切回原会话，脏判定应自动解除')
+    assert.equal(getComposerDirtySummary().anyDirty, false, '后台发送完成后无需切回原会话，脏判定应自动解除')
 
     // 2. Send fails while conversation 1 is hidden -> restored draft must keep dirty guard active.
     await openConversation(1)
     await act(async () => { typeIntoControl(textareaA, 'in-flight fail') })
     await act(async () => { sendBtnA.click() })
     await openConversation(2)
-    assert.equal(composerDirty(), true)
+    assert.equal(getComposerDirtySummary().anyDirty, true)
 
     await act(async () => {
       rejectSubmit(new Error('network timeout'))
       await Promise.resolve()
     })
     await settle()
-    assert.equal(composerDirty(), true, '后台发送失败回滚草稿后，仍应保持脏保护不丢失草稿')
+    assert.equal(getComposerDirtySummary().anyDirty, true, '后台发送失败回滚草稿后，仍应保持脏保护不丢失草稿')
   })
 
   test('window eviction prunes store details & artifacts while split protection preserves until closed', { timeout: 60_000 }, async () => {

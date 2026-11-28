@@ -58,13 +58,11 @@ export const profilesMessages = {
   'profiles.card.defaultCwd': { en: '{nodeId} · default working directory', 'zh-CN': '{nodeId} · 默认工作目录' },
   'profiles.card.systemPillTitle': { en: 'Built-in system profile', 'zh-CN': '系统内置角色' },
   'profiles.card.systemPill': { en: 'System', 'zh-CN': '系统' },
-  'profiles.card.activityTitle': { en: 'Activity: {label}', 'zh-CN': '激活状态：{label}' },
   'profiles.card.noDescription': { en: 'No description', 'zh-CN': '暂无描述' },
   'profiles.card.locationTitle': { en: 'Node and directory: {location}', 'zh-CN': '节点与目录：{location}' },
   'profiles.card.followGlobalDefault': { en: 'Follow global default', 'zh-CN': '跟随全局默认' },
   'profiles.card.globalDefault': { en: 'Global default', 'zh-CN': '全局默认' },
   'profiles.card.skillsTitle': { en: 'Skills: {label}', 'zh-CN': '技能配置：{label}' },
-  'profiles.card.runtimeTitle': { en: 'External runtime: {label}', 'zh-CN': '外部运行时：{label}' },
   'profiles.card.linkedConversations': {
     en: 'Linked to {count} conversations',
     'zh-CN': '关联 {count} 个会话',
@@ -108,7 +106,6 @@ export const profilesMessages = {
     en: 'Built-in system profile; protected',
     'zh-CN': '系统内置角色，受保护',
   },
-  'profiles.drawer.closeAria': { en: 'Close drawer', 'zh-CN': '关闭抽屉' },
   'profiles.drawer.unboundNode': {
     en: 'Unbound (local node)',
     'zh-CN': '未绑定（本机 local）',
@@ -123,53 +120,6 @@ export const profilesMessages = {
     en: 'Starter {index}: {error}',
     'zh-CN': '引导词 {index}：{error}',
   },
-  'profiles.drawer.error.runtimeAgentRequired': {
-    en: 'Enter an external runtime agent',
-    'zh-CN': '请填写外部运行时 Agent',
-  },
-  'profiles.drawer.runtime.unmanagedNotice': {
-    en: 'Saved external runtime config ({kind}); its owning plugin is disabled or not managed here, kept as-is on save',
-    'zh-CN': '已保存外部运行时配置（{kind}），所属插件未启用或不由本编辑器管理，保存时原样保留',
-  },
-  'profiles.drawer.runtime.clear': { en: 'Clear', 'zh-CN': '清除' },
-  'profiles.drawer.runtime.clearTitle': {
-    en: 'Clear saved external runtime config',
-    'zh-CN': '清除已保存的外部运行时配置',
-  },
-  'profiles.drawer.runtime.kind': { en: 'Runtime type', 'zh-CN': '运行时类型' },
-  'profiles.drawer.runtime.agent': { en: 'Agent', 'zh-CN': 'Agent' },
-  'profiles.drawer.runtime.agentPlaceholder': { en: 'CLI agent kind', 'zh-CN': 'CLI 类型' },
-  'profiles.drawer.runtime.node': { en: 'Runtime node', 'zh-CN': '运行时节点' },
-  'profiles.drawer.runtime.workspace': { en: 'Workspace', 'zh-CN': 'Workspace' },
-  'profiles.drawer.runtime.workspacePlaceholder': {
-    en: 'Absolute working directory path',
-    'zh-CN': '绑定工作目录绝对路径',
-  },
-  'profiles.drawer.runtime.args': { en: 'Args', 'zh-CN': '参数' },
-  'profiles.drawer.runtime.argsPlaceholder': {
-    en: 'One argument per line (spaces inside an argument are preserved), e.g.\n--prompt\n--title Weekly Draft',
-    'zh-CN': '每行一个参数，参数内的空格会原样保留，如：\n--prompt\n--title 周报 草稿',
-  },
-  'profiles.drawer.runtime.envTitle': {
-    en: 'Environment variables (non-secret only; use Credentials for API keys)',
-    'zh-CN': '环境变量（仅非机密项；API Key 请使用凭据库）',
-  },
-  'profiles.drawer.runtime.envKeyPlaceholder': { en: 'KEY', 'zh-CN': 'KEY' },
-  'profiles.drawer.runtime.envValuePlaceholder': { en: 'VALUE', 'zh-CN': 'VALUE' },
-  'profiles.drawer.runtime.envKeyAria': {
-    en: 'Environment variable {index} key',
-    'zh-CN': '环境变量 {index} 键名',
-  },
-  'profiles.drawer.runtime.envValueAria': {
-    en: 'Environment variable {index} value',
-    'zh-CN': '环境变量 {index} 值',
-  },
-  'profiles.drawer.runtime.envDeleteAria': {
-    en: 'Delete environment variable {name}',
-    'zh-CN': '删除环境变量 {name}',
-  },
-  'profiles.drawer.runtime.envDeleteTitle': { en: 'Delete variable', 'zh-CN': '删除该变量' },
-  'profiles.drawer.runtime.envAdd': { en: 'Add variable', 'zh-CN': '添加变量' },
   'profiles.drawer.field.id': { en: 'Profile ID', 'zh-CN': '角色 ID' },
   'profiles.drawer.field.idPlaceholder': {
     en: 'Letters, digits and hyphens, e.g. code-reviewer',
@@ -179,11 +129,6 @@ export const profilesMessages = {
   'profiles.drawer.field.namePlaceholder': {
     en: 'e.g. Code Reviewer, Software Architect',
     'zh-CN': '例如：代码评审员、技术架构师',
-  },
-  'profiles.drawer.field.description': { en: 'Profile description', 'zh-CN': '角色描述' },
-  'profiles.drawer.field.descriptionPlaceholder': {
-    en: 'Briefly describe the duties, background and strengths of this profile...',
-    'zh-CN': '简要描述该角色的职责、背景与能力专长...',
   },
   'profiles.drawer.field.defaultModel': { en: 'Default model', 'zh-CN': '默认模型' },
   'profiles.drawer.modelHint': {

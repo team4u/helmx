@@ -1,28 +1,21 @@
 /**
- * Tarball security and nested-dependency golden tests for the Hub launcher staging:
+ * Tarball security tests for the Hub launcher staging:
  *
- * - `unpackPayloadTarball` policy: only regular files/directories under `package/` are allowed;
- *   links, path escapes, absolute members, foreign roots, backslashes, empty archives, missing
- *   `package/package.json`, and corrupt archives are rejected explicitly (crafted raw ustar
- *   archives — node-tar's list mode happily emits escaping paths, so the launcher's own policy is
- *   the gate);
- * - golden staging with a REAL npm-pack payload that embeds its dependency closure as
- *   `file:./<dep>.tgz` (the #88 reproduction shape): the launcher unpacks first and the real
- *   `npm install` resolves the nested archive — through both the registry channel (fake registry
- *   metadata + real SHA512 verification) and the local `--tarball` channel.
+ * `unpackPayloadTarball` policy: only regular files/directories under `package/` are allowed;
+ * links, path escapes, absolute members, foreign roots, backslashes, empty archives, missing
+ * `package/package.json`, and corrupt archives are rejected explicitly (crafted raw ustar
+ * archives — node-tar's list mode happily emits escaping paths, so the launcher's own policy is
+ * the gate). Nested-dependency golden staging tests live in `update-flow.test.ts`.
  */
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { test } from 'node:test';
-import { useTempDir, sanitizedHostEnv } from '@helmx/test-kit/node';
-import { stageHubRelease, unpackPayloadTarball } from '@helmx/env-io/hub-payload';
+import { useTempDir } from '@helmx/test-kit/node';
+import { unpackPayloadTarball } from '@helmx/env-io/hub-payload';
 import {
-  captureIo,
-  createFakeRegistry,
   fixtureTarballPacker,
-  prepareNestedDepPayload,
   writeFakePayload,
 } from './fixtures.js';
 
@@ -173,47 +166,4 @@ test('unpack refuses corrupt archives instead of partial extraction', { timeout:
   const before = await fsp.readdir(dest);
   await assert.rejects(unpackPayloadTarball(flipped, dest), /refused|unreadable|failed to extract/);
   assert.deepEqual(await fsp.readdir(dest), before, 'no partial extraction may land on disk');
-});
-
-test('golden: registry payload embedding file: tgz dependencies stages with a real npm install', { timeout: 120_000 }, async (t) => {
-  const root = useTempDir(t, 'helmx-launcher-goldennested-');
-  const tarballPath = await prepareNestedDepPayload(root, '1.0.0', PKG);
-  const registry = await createFakeRegistry(PKG, '1.0.0');
-  await registry.serve('1.0.0', tarballPath);
-  const { io } = captureIo(sanitizedHostEnv({ HELMX_PAYLOAD_PACKAGE: PKG }));
-
-  const staged = await stageHubRelease({
-    env: sanitizedHostEnv({ HELMX_PAYLOAD_PACKAGE: PKG }),
-    root,
-    version: '1.0.0',
-    pkgName: PKG,
-    dataDir: path.join(path.dirname(root), `${path.basename(root)}-user-data`),
-    registryUrl: registry.registryUrl,
-    fetchFn: registry.fetchImpl,
-  });
-  assert.equal(staged.version, '1.0.0');
-  assert.match(path.relative(root, staged.entryPath), /^releases[/\\]1\.0\.0[/\\][^/]+[/\\]start\.mjs$/);
-  // The nested file: dependency resolved through the real npm install (the #88 ENOENT shape).
-  const depEntry = path.join(staged.releaseDir, 'node_modules', '@fake', 'dep', 'index.js');
-  assert.ok(existsSync(depEntry), `nested dependency must be installed at ${depEntry}`);
-  assert.match(readFileSync(depEntry, 'utf8'), /dep-of-1\.0\.0/);
-  // The launcher-owned download copy is cleaned up after unpacking.
-  assert.equal(existsSync(path.join(staged.releaseDir, '.downloads')), false);
-});
-
-test('golden: local --tarball payload embedding file: tgz dependencies installs and self-checks', { timeout: 120_000 }, async (t) => {
-  const root = useTempDir(t, 'helmx-launcher-goldennestedtgz-');
-  const tarballPath = await prepareNestedDepPayload(root, '2.0.0', PKG);
-  const { io } = captureIo(sanitizedHostEnv({ HELMX_PAYLOAD_PACKAGE: PKG }));
-
-  const staged = await stageHubRelease({
-    env: sanitizedHostEnv({ HELMX_PAYLOAD_PACKAGE: PKG }),
-    root,
-    version: '2.0.0',
-    pkgName: PKG,
-    dataDir: path.join(path.dirname(root), `${path.basename(root)}-user-data`),
-    tarballPath,
-  });
-  assert.equal(staged.version, '2.0.0');
-  assert.ok(existsSync(path.join(staged.releaseDir, 'node_modules', '@fake', 'dep', 'index.js')));
 });

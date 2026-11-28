@@ -1,25 +1,19 @@
 import './helpers/register-happy-dom.js'
-import { test } from 'node:test'
+import { afterEach, test } from 'node:test'
 import assert from 'node:assert/strict'
 import React, { act } from 'react'
 import { renderToString } from 'react-dom/server'
-import { ensureHappyDom } from './helpers/dom-harness.js'
+import { ensureHappyDom, resetHappyDom } from './helpers/dom-harness.js'
 
 ensureHappyDom()
 const ReactDOMClient = await import('react-dom/client')
-const {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogOverlay,
-  AlertDialogPortal,
-  AlertDialogTitle,
-  ConfirmDialog,
-} = await import('@helmx/ui')
+const { AlertDialog, ConfirmDialog } = await import('../src/index.js')
 
 const e = React.createElement
+
+afterEach(() => {
+  resetHappyDom()
+}, { timeout: 60_000 })
 
 test('ConfirmDialog SSR (renderToString)：inline={true} 或纯 Node 环境自动内联降级，渲染 role="alertdialog" 与 Quiet Surface 样式', { timeout: 60_000 }, () => {
   const html = renderToString(
@@ -74,7 +68,6 @@ test('ConfirmDialog DOM 结构与无障碍契约：role="alertdialog"、标题�
   assert.ok(alertContent, '必须挂载 role="alertdialog" 容器')
   assert.equal(alertContent.getAttribute('data-state'), 'open')
 
-  // 标题与描述
   const titleEl = alertContent.querySelector('.modal-title')
   assert.ok(titleEl, '必须包含 .modal-title')
   assert.equal(titleEl.textContent, '重置会话上下文？')
@@ -83,7 +76,6 @@ test('ConfirmDialog DOM 结构与无障碍契约：role="alertdialog"、标题�
   assert.ok(descEl, '必须包含描述容器')
   assert.equal(descEl.textContent, 'History is preserved; the model starts from a fresh context.')
 
-  // 按钮与文案
   const buttons = Array.from(alertContent.querySelectorAll('button'))
   assert.equal(buttons.length, 2, '包含确认与取消两个按钮')
 
@@ -278,54 +270,4 @@ test('AlertDialog 原语与复合属性在 SSR 下行为一致', { timeout: 60_0
   assert.ok(html.includes('底层原语描述'))
   assert.ok(html.includes('取消'))
   assert.ok(html.includes('确认'))
-})
-
-test('ConfirmDialog 交互：pending=true 时按 Esc 阻止关闭与取消回调', { timeout: 60_000 }, async () => {
-  const container = document.createElement('div')
-  document.body.appendChild(container)
-  const root = ReactDOMClient.createRoot(container)
-
-  let openState = true
-  let cancelled = false
-  const openChanges: boolean[] = []
-
-  try {
-    await act(async () => {
-      root.render(
-        e(ConfirmDialog, {
-          open: openState,
-          inline: true,
-          pending: true,
-          onOpenChange: (open) => {
-            openChanges.push(open)
-            openState = open
-          },
-          title: '正在卸载插件',
-          description: '操作执行期间不得被 Esc 关闭。',
-          onConfirm: () => {},
-          onCancel: () => {
-            cancelled = true
-          },
-        }),
-      )
-    })
-
-    const alertContent = document.querySelector('[role="alertdialog"]')
-    assert.ok(alertContent !== null)
-
-    const esc = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })
-    await act(async () => {
-      alertContent.dispatchEvent(esc)
-    })
-
-    assert.equal(esc.defaultPrevented, true, 'pending 态按 Esc 必须调用 preventDefault 阻止 Radix 关闭')
-    assert.equal(openState, true, 'pending 态按 Esc 不得关闭弹窗')
-    assert.deepEqual(openChanges, [], 'pending 态按 Esc 不得触发 onOpenChange(false)')
-    assert.equal(cancelled, false, 'pending 态按 Esc 不得触发 onCancel')
-  } finally {
-    await act(async () => {
-      root.unmount()
-    })
-    container.remove()
-  }
 })

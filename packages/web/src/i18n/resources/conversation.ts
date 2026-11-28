@@ -49,14 +49,9 @@ export const conversationMessages = {
   'conv.divider.expand': { en: 'Expand {label}', 'zh-CN': '展开{label}' },
 
   // --- Resolved asks & ask_user tool body -------------------------------------
-  'conv.ask.approved': { en: 'Approved', 'zh-CN': '已批准' },
   'conv.ask.replied': { en: 'Replied', 'zh-CN': '已回复' },
-  'conv.ask.cancelled': { en: 'Cancelled', 'zh-CN': '已取消' },
   'conv.ask.skipped': { en: 'Skipped', 'zh-CN': '已跳过' },
-  'conv.ask.superseded': { en: 'Handled by terminal (superseded)', 'zh-CN': '已由终端处理 (superseded)' },
-  'conv.ask.rowTitle': { en: 'Approval', 'zh-CN': '审批' },
   'conv.ask.questionRowTitle': { en: 'Question', 'zh-CN': '问题' },
-  'conv.ask.toolTitle': { en: 'Ask user', 'zh-CN': '向用户提问' },
   'conv.ask.toolQuestionSingle': { en: '1 question', 'zh-CN': '1 个问题' },
   'conv.ask.toolQuestionsCount': { en: '{count} questions', 'zh-CN': '{count} 个问题' },
   'conv.ask.outcomeAnswered': { en: 'Answered', 'zh-CN': '已回答' },
@@ -196,7 +191,6 @@ export const conversationMessages = {
   'conv.pane.deleteFailed': { en: 'Failed to delete conversation', 'zh-CN': '删除会话失败' },
 
   // --- Child conversation & stacked inspection drawer ---------------------------------
-  'conv.drawer.closeChild': { en: 'Close child conversation drawer', 'zh-CN': '关闭子会话抽屉' },
   'conv.drawer.title': { en: 'Child conversation #{id} drawer', 'zh-CN': '子会话 #{id} 抽屉' },
   'conv.drawer.titleWithName': {
     en: 'Child conversation #{id} · {title} drawer',
@@ -210,7 +204,6 @@ export const conversationMessages = {
   'conv.drawer.splitLabel': { en: 'Split', 'zh-CN': '分屏' },
   'conv.drawer.closeAll': { en: 'Close drawer', 'zh-CN': '关闭抽屉' },
   'conv.drawer.workbenchLabel': { en: 'Workbench', 'zh-CN': '工作台' },
-  'conv.drawer.workbenchForConv': { en: 'Workbench · #{id}', 'zh-CN': '工作台 · #{id}' },
   'conv.drawer.convLabel': { en: '#{id}', 'zh-CN': '#{id}' },
   'conv.drawer.convLabelWithName': { en: '#{id} {title}', 'zh-CN': '#{id} {title}' },
 
@@ -444,8 +437,6 @@ export const conversationMessages = {
 
   // --- Composer chrome (Composer.tsx) ---------------------------------------------------------------------
   'conv.composer.abortFailed': { en: 'Failed to abort turn', 'zh-CN': '中止回合失败' },
-  'conv.composer.widgetLabel': { en: 'Widget {id}', 'zh-CN': '组件 {id}' },
-  'conv.composer.pillLabel': { en: 'Pill {id}', 'zh-CN': '胶囊 {id}' },
   'conv.composer.editingWorking': {
     en: 'Editing a history message · resending overwrites this message and everything after it, and stops the current execution',
     'zh-CN': '正在编辑历史消息 · 重新发送将覆盖此条及后续对话，并停止当前执行',
@@ -456,18 +447,10 @@ export const conversationMessages = {
   },
   'conv.composer.cancelEditTitle': { en: 'Cancel editing (Esc)', 'zh-CN': '取消编辑 (Esc)' },
   'conv.composer.inputAria': { en: 'Type a message', 'zh-CN': '输入消息' },
-  'conv.composer.uploadAttachment': { en: 'Uploaded attachment', 'zh-CN': '上传附件' },
-  'conv.composer.toolsLabel': { en: 'Conversation tools', 'zh-CN': '会话工具' },
-  'conv.composer.panels': { en: 'Conversation panels', 'zh-CN': '会话面板' },
-  'conv.composer.panelsCount': { en: 'Conversation panels ({count})', 'zh-CN': '会话面板 ({count})' },
-  'conv.composer.collapsePanels': { en: 'Collapse {target}', 'zh-CN': '收起{target}' },
-  'conv.composer.viewPanels': { en: 'View {target}', 'zh-CN': '查看{target}' },
 
   // --- Artifact preview modal -----------------------------------------------------------------------------
   'conv.artifact.downloadFailed': { en: 'Download failed', 'zh-CN': '下载失败' },
   'conv.artifact.previewAria': { en: 'Artifact preview: {name}', 'zh-CN': '产物预览：{name}' },
-  'conv.artifact.previewModeAria': { en: 'Preview mode', 'zh-CN': '预览方式' },
-  'conv.artifact.defaultPreview': { en: 'Default preview', 'zh-CN': '默认预览' },
   'conv.artifact.viewModeAria': { en: 'View mode', 'zh-CN': '视图模式' },
   'conv.artifact.viewRich': { en: 'Rich text', 'zh-CN': '富文本' },
   'conv.artifact.viewSource': { en: 'Source', 'zh-CN': '源码' },
@@ -475,15 +458,9 @@ export const conversationMessages = {
   'conv.artifact.fullscreenTitle': { en: 'Fullscreen preview', 'zh-CN': '全屏预览' },
   'conv.artifact.windowLabel': { en: 'Window', 'zh-CN': '窗口' },
   'conv.artifact.copy': { en: 'Copy', 'zh-CN': '复制' },
-  'conv.artifact.closeTitle': { en: 'Close (Esc)', 'zh-CN': '关闭 (Esc)' },
   'conv.artifact.closeAria': { en: 'Close preview', 'zh-CN': '关闭预览' },
   'conv.artifact.loading': { en: 'Loading artifact…', 'zh-CN': '正在加载产物…' },
   'conv.artifact.loadFailed': { en: 'Artifact failed to load: {message}', 'zh-CN': '产物加载失败：{message}' },
-  'conv.artifact.textExceededPlugin': {
-    en: 'Text exceeds the {limit} preview limit; decoding stopped and text is null. Download the file for the full content.',
-    'zh-CN': '文本内容超过 {limit} 预览上限，已停止解码，text 为 null。请下载文件查看完整内容。',
-  },
-  'conv.artifact.switchDefaultTitle': { en: 'Switch back to the host default preview', 'zh-CN': '切回宿主默认预览' },
   'conv.artifact.noInlinePreview': {
     en: 'This file type has no inline preview; download it to view.',
     'zh-CN': '此文件类型暂不支持在线预览，请下载后查看。',
@@ -522,7 +499,6 @@ export const conversationMessages = {
   },
   'conv.workbench.spillTitle': { en: 'Oversized tool output snapshot', 'zh-CN': '超长工具输出快照' },
   'conv.workbench.clickToExpand': { en: 'Click to expand', 'zh-CN': '点击展开' },
-  'conv.workbench.close': { en: 'Close workbench', 'zh-CN': '关闭工作台' },
   'conv.workbench.drawerAria': { en: 'Workbench drawer', 'zh-CN': '工作台抽屉' },
   'conv.workbench.noActiveConversation': { en: 'No active conversation context', 'zh-CN': '无活跃会话上下文' },
   'conv.workbench.panelLabel': { en: 'Workbench {label}', 'zh-CN': '工作台 {label}' },
@@ -554,9 +530,4 @@ export const conversationMessages = {
     en: 'Restore to the original agent conversation list',
     'zh-CN': '恢复到原智能体的会话列表',
   },
-
-  // --- Plugin micro action --------------------------------------------------------------------------------
-  'conv.microAction.label': { en: 'Micro action {id}', 'zh-CN': '微操作 {id}' },
-  'conv.microAction.executed': { en: 'Executed: {label}', 'zh-CN': '已执行：{label}' },
-  'conv.microAction.executionFailed': { en: 'Execution failed: {label}', 'zh-CN': '执行失败：{label}' },
 } satisfies MessageTable

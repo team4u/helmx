@@ -36,9 +36,11 @@ import {
 const testDir = dirname(fileURLToPath(import.meta.url))
 const ROOT_CONVERSATION_ID = 1 as const
 const repoRoot = join(testDir, '..', '..', '..')
+const distCliEntry = join(repoRoot, 'packages', 'cli', 'dist', 'index.js')
 const cliEntry = join(repoRoot, 'packages', 'cli', 'src', 'index.ts')
+const cliUseDist = existsSync(distCliEntry) && existsSync(join(repoRoot, 'packages', 'protocol', 'dist', 'index.js'))
 const require = createRequire(import.meta.url)
-const tsxCli = require.resolve('tsx/cli')
+const tsxCli = cliUseDist ? '' : require.resolve('tsx/cli')
 
 interface CliRunResult {
   code: number | null
@@ -49,10 +51,14 @@ interface CliRunResult {
 
 function runCliChild(args: string[], env: NodeJS.ProcessEnv, timeoutMs = 25_000): Promise<CliRunResult> {
   return new Promise((resolve) => {
-    const child = spawn(process.execPath, [tsxCli, cliEntry, ...args], {
-      env,
-      stdio: ['ignore', 'pipe', 'pipe'],
-    })
+    const child = spawn(
+      process.execPath,
+      cliUseDist ? [distCliEntry, ...args] : [tsxCli, cliEntry, ...args],
+      {
+        env,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      },
+    )
     let out = ''
     let err = ''
     let timedOut = false
@@ -571,10 +577,11 @@ test('核心闭环 1 & 2：受管 bash HELMX_TOKEN 免磁盘登录直连 CLI 且
 
   // 2. 真实 bash 工具子进程执行 helmx conversations get --current --json
   const bashCliDir = join(mainEnv.dataDir, 'cli-isolated')
+  const cliInv = cliUseDist ? `"${process.execPath}" "${distCliEntry}"` : `"${process.execPath}" "${tsxCli}" "${cliEntry}"`
   const cmd = [
     `export HELMX_DATA_DIR="${bashCliDir}"`,
     `export HELMX_CONVERSATION_ID=${ROOT_CONVERSATION_ID}`,
-    `"${process.execPath}" "${tsxCli}" "${cliEntry}" conversations get --current --json`,
+    `${cliInv} conversations get --current --json`,
     'echo CLI_OK',
   ].join(' && ')
   const toolResults: string[] = []
@@ -848,13 +855,8 @@ test('核心闭环 5：agent_spawn 外部后端 handled 接管（onResolved / on
   }
 })
 
-// ---------------------------------------------------------------------------
-// 独立 HTTP + CLI 真实鉴权闭环（覆盖匿名 401、scrypt setup/login、cli-token、真实子进程 CLI 与出站脱敏）
-// ---------------------------------------------------------------------------
-
-test('HTTP 与 CLI 真实鉴权往返闭环：setup/login、cli-token、?wait=1、出站脱敏、公开路由、真实子进程 CLI 与删除初始会话后工作流路由', { timeout: 60_000 }, async (t) => {
-  const dataDir = join(useTempDir(t, 'helmx-core-http-cli-'), 'hub')
-  const { app, kernel, faux } = await createHubTestApp({ dataDir, cwd: dataDir })
+test('核心 HTTP / CLI 动作与流式检查（复用 mainEnv）：202/?wait=1、动作校验、出站脱敏、SSE snapshot、公开路由与 --current', { timeout: 60_000 }, async (t) => {
+  const { kernel, faux, hubUrl, token, dataDir, call } = mainEnv
   const SECRET_TRICKY = ['quote"', 'line'].join('\n')
   const probeState = { secret: SECRET_TRICKY, placeholder: '' }
 
@@ -885,6 +887,77 @@ test('HTTP 与 CLI 真实鉴权往返闭环：setup/login、cli-token、?wait=1�
       })
     },
   })
+
+  try {
+    const cliEnv = { HELMX_HUB_URL: hubUrl, HELMX_DATA_DIR: useTempDir(t, 'helmx-main-probe-cli-'), HELMX_TOKEN: token }
+    const run = (argv: string[], extra: NodeJS.ProcessEnv = {}) => runCliInProcess(argv, { ...cliEnv, ...extra })
+
+    // HTTP 提交（202 异步 + ?wait=1 同步等待）、动作校验、出站脱敏、SSE 首帧与公开插件路由
+    const convId = ((await call('POST', '/api/conversations', { title: 'http-conv', profileId: 'assistant' })).body as { id: number }).id
+    faux.setResponses([fauxAssistantMessage('HTTP async ok')])
+    assert.equal((await call('POST', `/api/conversations/${convId}/input`, { text: 'hi' })).status, 202)
+    await kernel.conversations.waitForIdle(convId)
+
+    faux.setResponses([fauxAssistantMessage('HTTP wait answer')])
+    const waited = await call('POST', `/api/conversations/${convId}/input?wait=1`, { text: 'wait check' })
+    assert.equal(waited.status, 200)
+    assert.equal((waited.body as { text: string }).text, 'HTTP wait answer')
+
+    assert.equal((await call('POST', '/api/actions/builtin:memory/get', { input: {} })).status, 400)
+    assert.equal((await call('POST', '/api/actions/builtin:memory/get', { input: {}, conversationId: convId })).body.profileId, 'assistant')
+    assert.equal((await call('POST', '/api/actions/builtin:memory/get', { input: { profileId: 'missing' }, conversationId: convId })).status, 404)
+    assert.equal((await call('POST', '/api/actions/builtin:memory/get', { input: { profileId: '../outside' }, conversationId: convId })).status, 400)
+    assert.equal((await call('POST', '/api/actions/test:probe/echo', { input: { text: 123 } })).status, 400)
+
+    probeState.placeholder = '[REDACTED]'
+    kernel.services.stash.addRedaction(SECRET_TRICKY)
+    const echoRes = await fetch(`${hubUrl}/api/actions/test:probe/echo`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ input: { text: 'prefix' } }),
+    })
+    const echoRaw = await echoRes.text()
+    assert.ok(!echoRaw.includes(SECRET_TRICKY) && !echoRaw.includes('quote\\"') && echoRaw.includes(probeState.placeholder))
+
+    const sseRes = await fetch(`${hubUrl}/api/events`, { headers: { authorization: `Bearer ${token}` } })
+    const sseReader = sseRes.body!.getReader()
+    assert.ok(new TextDecoder().decode((await sseReader.read()).value).includes('event: snapshot'))
+    await sseReader.cancel().catch(() => {})
+
+    const pubRoute = await fetch(`${hubUrl}/api/plugins/${encodeURIComponent('test:probe')}/routes/ping`)
+    assert.equal(pubRoute.status, 200)
+    assert.equal(((await pubRoute.json()) as { via: string }).via, 'plugin-route')
+
+    // CLI memory --current 与动态 probe 命令校验
+    await kernel.services.profiles.save({ id: 'coder-probe', name: 'CoderProbe', tags: [] })
+    const coderConv = await kernel.conversations.createConversation({ profileId: 'coder-probe' })
+    const curEnv = { HELMX_CONVERSATION_ID: String(coderConv.id) }
+    assert.equal((await run(['memory', 'set', '--current', '--text', '# Coder memory', '--json'], curEnv)).code, 0)
+    assert.equal(JSON.parse((await run(['memory', 'get', '--current', '--json'], curEnv)).out).content, '# Coder memory')
+    assert.equal(JSON.parse((await run(['memory', 'configure', '--current', '--enabled=false', '--json'], curEnv)).out).enabled, false)
+    assert.equal(JSON.parse((await run(['memory', 'get', '--profile-id', 'assistant', '--current', '--json'], curEnv)).out).profileId, 'assistant')
+    assert.notEqual((await run(['memory', 'get', '--json'])).code, 0)
+
+    assert.equal(JSON.parse((await run(['probe', 'double', '--n', '21', '--json'])).out).doubled, 42)
+    assert.notEqual((await run(['probe', 'double', '--n', 'abc', '--json'])).code, 0)
+    assert.notEqual((await run(['probe', 'double', '--input', '{"n":"bad"}', '--json'])).code, 0)
+
+    // cleanup test conversation created in mainEnv without deleting #1
+    await call('DELETE', `/api/conversations/${coderConv.id}`)
+    await call('DELETE', `/api/conversations/${convId}`)
+    assert.ok(dataDir.length > 0)
+  } finally {
+    await kernel.plugins.disable('test:probe')
+  }
+})
+
+// ---------------------------------------------------------------------------
+// 独立 HTTP + CLI 真实鉴权闭环（覆盖匿名 401、scrypt setup/login、cli-token、真实子进程 CLI 与删除初始会话）
+// ---------------------------------------------------------------------------
+
+test('HTTP 与 CLI 真实鉴权往返闭环：setup/login、cli-token、真实子进程 CLI 与删除初始会话后工作流路由', { timeout: 60_000 }, async (t) => {
+  const dataDir = join(useTempDir(t, 'helmx-core-http-cli-'), 'hub')
+  const { app, kernel } = await createHubTestApp({ dataDir, cwd: dataDir })
 
   const hub = await startHub({ kernel: kernel as never, port: 0 })
   const rootPassword = 'integration testRootpassword eight'
@@ -922,55 +995,13 @@ test('HTTP 与 CLI 真实鉴权往返闭环：setup/login、cli-token、?wait=1�
       return { status: res.status, raw: await res.text() }
     }
 
-    // 3. HTTP 提交（202 异步 + ?wait=1 同步等待）、动作校验、出站脱敏、SSE 首帧与公开插件路由
     const convId = (JSON.parse((await call('POST', '/api/conversations', { title: 'http-conv', profileId: 'assistant' })).raw) as { id: number }).id
-    faux.setResponses([fauxAssistantMessage('HTTP async ok')])
-    assert.equal((await call('POST', `/api/conversations/${convId}/input`, { text: 'hi' })).status, 202)
-    await kernel.conversations.waitForIdle(convId)
 
-    faux.setResponses([fauxAssistantMessage('HTTP wait answer')])
-    const waited = await call('POST', `/api/conversations/${convId}/input?wait=1`, { text: 'wait check' })
-    assert.equal(waited.status, 200)
-    assert.equal((JSON.parse(waited.raw) as { text: string }).text, 'HTTP wait answer')
-
-    assert.equal((await call('POST', '/api/actions/builtin:memory/get', { input: {} })).status, 400)
-    assert.equal(JSON.parse((await call('POST', '/api/actions/builtin:memory/get', { input: {}, conversationId: convId })).raw).profileId, 'assistant')
-    assert.equal((await call('POST', '/api/actions/builtin:memory/get', { input: { profileId: 'missing' }, conversationId: convId })).status, 404)
-    assert.equal((await call('POST', '/api/actions/builtin:memory/get', { input: { profileId: '../outside' }, conversationId: convId })).status, 400)
-    assert.equal((await call('POST', '/api/actions/test:probe/echo', { input: { text: 123 } })).status, 400)
-
-    probeState.placeholder = '[REDACTED]'
-    kernel.services.stash.addRedaction(SECRET_TRICKY)
-    const echoRes = await call('POST', '/api/actions/test:probe/echo', { input: { text: 'prefix' } })
-    assert.ok(!echoRes.raw.includes(SECRET_TRICKY) && !echoRes.raw.includes('quote\\"') && echoRes.raw.includes(probeState.placeholder))
-
-    const sseRes = await fetch(`${hub.url}/api/events`, { headers: { authorization: `Bearer ${token}` } })
-    const sseReader = sseRes.body!.getReader()
-    assert.ok(new TextDecoder().decode((await sseReader.read()).value).includes('event: snapshot'))
-    await sseReader.cancel().catch(() => {})
-
-    const pubRoute = await fetch(`${hub.url}/api/plugins/${encodeURIComponent('test:probe')}/routes/ping`)
-    assert.equal(pubRoute.status, 200)
-    assert.equal(((await pubRoute.json()) as { via: string }).via, 'plugin-route')
-
-    // 4. CLI memory --current、动态命令、真实 OS 子进程 CLI 与删除初始会话后 workflow 目标约束
-    await kernel.services.profiles.save({ id: 'coder', name: 'Coder', tags: [] })
-    const coderConv = await kernel.conversations.createConversation({ profileId: 'coder' })
-    const curEnv = { HELMX_CONVERSATION_ID: String(coderConv.id) }
-    assert.equal((await run(['memory', 'set', '--current', '--text', '# Coder memory', '--json'], curEnv)).code, 0)
-    assert.equal(JSON.parse((await run(['memory', 'get', '--current', '--json'], curEnv)).out).content, '# Coder memory')
-    assert.equal(JSON.parse((await run(['memory', 'configure', '--current', '--enabled=false', '--json'], curEnv)).out).enabled, false)
-    assert.equal(JSON.parse((await run(['memory', 'get', '--profile-id', 'assistant', '--current', '--json'], curEnv)).out).profileId, 'assistant')
-    assert.notEqual((await run(['memory', 'get', '--json'])).code, 0)
-
-    assert.equal(JSON.parse((await run(['probe', 'double', '--n', '21', '--json'])).out).doubled, 42)
-    assert.notEqual((await run(['probe', 'double', '--n', 'abc', '--json'])).code, 0)
-    assert.notEqual((await run(['probe', 'double', '--input', '{"n":"bad"}', '--json'])).code, 0)
-
+    // 3. 1 条真实 OS CLI 子进程 smoke + 并发 in-process CLI 校验 cli-token
     const [childStatus, childGet, childAuth] = await Promise.all([
       runCliChild(['status', '--json'], { ...process.env, ...cliEnv, HELMX_TOKEN: '' }),
-      runCliChild(['conversations', 'get', String(convId), '--json'], { ...process.env, ...cliEnv, HELMX_TOKEN: '' }),
-      runCliChild(['conversations', 'list', '--json'], { ...process.env, ...cliEnv, HELMX_TOKEN: '' }),
+      run(['conversations', 'get', String(convId), '--json'], { HELMX_TOKEN: '' }),
+      run(['conversations', 'list', '--json'], { HELMX_TOKEN: '' }),
     ])
     assert.equal(childStatus.code, 0, childStatus.err)
     assert.equal(childGet.code, 0, childGet.err)

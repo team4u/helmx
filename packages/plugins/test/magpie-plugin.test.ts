@@ -1228,15 +1228,13 @@ test('magpie25: onlyIfChanged 目录变化仅请求一次 /v1/models、turn_sett
 
     // 4) auto-refresh.ts coordinator 在 unmount 后精确移除同一个 visibilitychange 监听器引用
     const { createMagpieAutoRefreshCoordinator } = await import('../src/magpie/client/auto-refresh.js')
-    const coordinator = createMagpieAutoRefreshCoordinator()
-    const added: EventListener[] = []
-    const removed: EventListener[] = []
-    const origDoc = (globalThis as Record<string, unknown>)['document']
-    ;(globalThis as Record<string, unknown>)['document'] = {
+    const added: Array<() => void> = []
+    const removed: Array<() => void> = []
+    const coordinator = createMagpieAutoRefreshCoordinator({
       visibilityState: 'visible',
-      addEventListener: (_ev: string, fn: EventListener) => added.push(fn),
-      removeEventListener: (_ev: string, fn: EventListener) => removed.push(fn),
-    }
+      addEventListener: (_ev, fn) => added.push(fn),
+      removeEventListener: (_ev, fn) => removed.push(fn),
+    })
     try {
       const release = coordinator.subscribe({ intervalMs: 60_000, run: async () => {} })
       assert.equal(added.length, 1)
@@ -1245,8 +1243,6 @@ test('magpie25: onlyIfChanged 目录变化仅请求一次 /v1/models、turn_sett
       assert.ok(added[0] === removed[0], 'removeEventListener 必须移除实际注册的同一个监听器引用')
     } finally {
       coordinator.dispose()
-      if (origDoc === undefined) delete (globalThis as Record<string, unknown>)['document']
-      else (globalThis as Record<string, unknown>)['document'] = origDoc
     }
   } finally {
     await env.close()

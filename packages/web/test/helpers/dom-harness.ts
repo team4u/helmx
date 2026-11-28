@@ -10,7 +10,20 @@ import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import { resetDomEnvironment } from '@helmx/test-kit'
 import type { Root } from 'react-dom/client'
 import { resetServerClock } from '../../src/lib/server-clock.js'
+import { resetSseClientTimings } from '../../src/lib/live-state.js'
+import { resetSessionDocTimings } from '../../src/lib/session-docs.js'
+import { resetVersionWatchTimings } from '../../src/shell/version-watch-model.js'
 import { testResetCallbacks } from './store-reset-registry.js'
+
+function resetSharedTimings(): void {
+  resetSseClientTimings()
+  resetSessionDocTimings()
+  resetVersionWatchTimings()
+}
+
+testResetCallbacks.add(resetSharedTimings)
+const domPreloadResetCallbacks = (globalThis as { __helmxDomResetCallbacks?: Set<() => void> }).__helmxDomResetCallbacks
+domPreloadResetCallbacks?.add(resetSharedTimings)
 
 let registered = false
 
@@ -161,13 +174,16 @@ export async function flushMacrotask(ms = 0): Promise<void> {
 }
 
 /**
- * 轮询等待条件成立（默认 5s 超时、2ms 步长），每轮等待包裹在 act 中以便捕获异步 React 更新。
+ * 轮询等待条件成立（默认 5s 超时、5ms 步长），先检查并冲刷一轮微任务再进入定时器轮询，
+ * 每轮等待包裹在 act 中以便捕获异步 React 更新。
  */
 export async function waitForCondition(
   pred: () => boolean | Promise<boolean>,
   timeoutMs = 5_000,
-  intervalMs = 2,
+  intervalMs = 5,
 ): Promise<void> {
+  if (await pred()) return
+  await flushMicrotasks()
   const deadline = Date.now() + timeoutMs
   while (!(await pred())) {
     if (Date.now() >= deadline) {

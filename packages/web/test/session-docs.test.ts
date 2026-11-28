@@ -22,7 +22,9 @@ import {
   evictSessionDocSubscriptions,
   evictSessionDocsOfConversation,
   getSessionDocState,
+  patchSessionDocTimings,
   resetSessionDocSubscriptions,
+  resetSessionDocTimings,
   restoreSessionDocSubscriptions,
   retrySessionDoc,
   sessionDocTimings,
@@ -30,12 +32,12 @@ import {
   type SessionDocKey,
 } from '../src/lib/session-docs.js'
 
-const originalSessionDocTimings = { ...sessionDocTimings }
+const defaultSessionDocTimings = { ...sessionDocTimings }
 describe("session-docs", () => {
 
 
   before(() => {
-    Object.assign(sessionDocTimings, {
+    patchSessionDocTimings({
       reconnectBaseMs: 10,
       reconnectCapMs: 40,
       subscribeDebounceMs: 0,
@@ -44,8 +46,8 @@ describe("session-docs", () => {
   })
 
   after(() => {
-    Object.assign(sessionDocTimings, originalSessionDocTimings)
-  })
+    resetSessionDocTimings()
+  }, { timeout: 60_000 })
 
   interface RecordedRequest {
     path: string
@@ -175,9 +177,9 @@ describe("session-docs", () => {
 
   test('多元组聚合防抖与单流多路复用：同窗口多订阅合并为单条请求且按 tuple 隔离 seq/错误', { timeout: 60_000 }, async () => {
     resetSessionDocSubscriptions()
-    assert.equal(originalSessionDocTimings.subscribeDebounceMs, 50, '生产默认聚合防抖应约为 50ms')
-    assert.equal(originalSessionDocTimings.idleTimeoutMs, 30_000, '默认空闲超时应为 30_000ms')
-    sessionDocTimings.subscribeDebounceMs = 20
+    assert.equal(defaultSessionDocTimings.subscribeDebounceMs, 50, '生产默认聚合防抖应约为 50ms')
+    assert.equal(defaultSessionDocTimings.idleTimeoutMs, 30_000, '默认空闲超时应为 30_000ms')
+    patchSessionDocTimings({ subscribeDebounceMs: 20 })
 
     const requests: string[] = []
     let activeStream: ReturnType<typeof openStream> | undefined
@@ -241,7 +243,7 @@ describe("session-docs", () => {
       await new Promise((resolve) => setTimeout(resolve, 40))
       assert.ok(activeStream!.closed(), '所有订阅退订后关闭流')
     } finally {
-      sessionDocTimings.subscribeDebounceMs = 0
+      patchSessionDocTimings({ subscribeDebounceMs: 0 })
       restore()
       resetSessionDocSubscriptions()
     }
@@ -334,7 +336,7 @@ describe("session-docs", () => {
 
   test('空闲看门狗（30s 对齐）：半开挂起流超时中断并指数退避重连对齐', { timeout: 60_000 }, async () => {
     resetSessionDocSubscriptions()
-    sessionDocTimings.idleTimeoutMs = 30
+    patchSessionDocTimings({ idleTimeoutMs: 30 })
     let attempt = 0
     const hanging = openStream(snapshotFrame(1, { pluginId: key.pluginId, name: key.docName, conversationId: 42, value: 'stale' }))
     const restore = bindSessionDocRuntime(async () => {
@@ -352,7 +354,7 @@ describe("session-docs", () => {
       assert.ok(hanging.closed(), '旧挂起流必须被取消释放')
       off()
     } finally {
-      sessionDocTimings.idleTimeoutMs = 30_000
+      patchSessionDocTimings({ idleTimeoutMs: 30_000 })
       restore()
       resetSessionDocSubscriptions()
     }
@@ -393,44 +395,29 @@ describe("session-docs", () => {
 
     // 401：浏览器环境派发 helmx:unauthorized（Node 无 window 直接短路）
     calls = 0
-    let unauthorized = 0
     const events: string[] = []
-    const originalWindowDesc = Object.getOwnPropertyDescriptor(globalThis, 'window')
-    const onUnauthorized = (e: Event) => {
-      events.push(e.type)
-    }
-    const hasExistingWindow = typeof globalThis.window !== 'undefined' && typeof globalThis.window.addEventListener === 'function'
-    if (hasExistingWindow) {
-      globalThis.window.addEventListener('helmx:unauthorized', onUnauthorized)
-    } else {
-      ;(globalThis as Record<string, unknown>).window = {
-        dispatchEvent: (e: Event) => {
-          events.push(e.type)
-          return true
+    const restore2 = bindSessionDocRuntime(
+      async () => {
+        calls++
+        return new Response(null, { status: 401 })
+      },
+      undefined,
+      {
+        onUnauthorized: () => {
+          events.push('helmx:unauthorized')
         },
-      }
-    }
-    const restore2 = bindSessionDocRuntime(async () => {
-      calls++
-      return new Response(null, { status: 401 })
-    })
+      },
+    )
     try {
       const off2 = subscribeSessionDoc(key, () => {})
       await until(() => events.length > 0)
-      unauthorized = events.filter((t) => t === 'helmx:unauthorized').length
+      const unauthorized = events.filter((t) => t === 'helmx:unauthorized').length
       assert.equal(unauthorized, 1, '401 派发 helmx:unauthorized 一次')
       assert.equal(getSessionDocState(key).error, undefined, '401 不置订阅错误（由宿主统一登出处理）')
       await new Promise((resolve) => setTimeout(resolve, 45))
       assert.equal(calls, 1, '401 后不再重连')
       off2()
     } finally {
-      if (hasExistingWindow) {
-        globalThis.window.removeEventListener('helmx:unauthorized', onUnauthorized)
-      } else if (originalWindowDesc !== undefined) {
-        Object.defineProperty(globalThis, 'window', originalWindowDesc)
-      } else {
-        delete (globalThis as Record<string, unknown>).window
-      }
       restore2()
     }
   })
@@ -701,23 +688,20 @@ describe("session-docs", () => {
   test('多路复用 4xx 探针遇 401 发 helmx:unauthorized；遇 5xx 转瞬态退避重连恢复', { timeout: 60_000 }, async () => {
     resetSessionDocSubscriptions()
     const events: string[] = []
-    const originalWindowDesc = Object.getOwnPropertyDescriptor(globalThis, 'window')
-    const onUnauthorized = (ev: Event) => { events.push(ev.type) }
-    const hasExistingWindow = typeof globalThis.window !== 'undefined' && typeof globalThis.window.addEventListener === 'function'
-    if (hasExistingWindow) {
-      globalThis.window.addEventListener('helmx:unauthorized', onUnauthorized)
-    } else {
-      ;(globalThis as Record<string, unknown>).window = {
-        dispatchEvent: (ev: Event) => { events.push(ev.type); return true },
-      }
-    }
-
     let step = 0
-    const restore401 = bindSessionDocRuntime(async () => {
-      step++
-      if (step === 1) return new Response(JSON.stringify({ error: { message: 'missing' } }), { status: 404 })
-      return new Response(null, { status: 401 })
-    })
+    const restore401 = bindSessionDocRuntime(
+      async () => {
+        step++
+        if (step === 1) return new Response(JSON.stringify({ error: { message: 'missing' } }), { status: 404 })
+        return new Response(null, { status: 401 })
+      },
+      undefined,
+      {
+        onUnauthorized: () => {
+          events.push('helmx:unauthorized')
+        },
+      },
+    )
     try {
       const offA = subscribeSessionDoc(key, () => {})
       const offB = subscribeSessionDoc(statsKey, () => {})
@@ -728,13 +712,6 @@ describe("session-docs", () => {
       offB()
     } finally {
       restore401()
-      if (hasExistingWindow) {
-        globalThis.window.removeEventListener('helmx:unauthorized', onUnauthorized)
-      } else if (originalWindowDesc !== undefined) {
-        Object.defineProperty(globalThis, 'window', originalWindowDesc)
-      } else {
-        delete (globalThis as Record<string, unknown>).window
-      }
       resetSessionDocSubscriptions()
     }
 

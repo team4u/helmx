@@ -1,9 +1,9 @@
 import './helpers/register-happy-dom.js'
-import test from 'node:test'
+import { afterEach, test } from 'node:test'
 import assert from 'node:assert/strict'
 import React, { act } from 'react'
 import { renderToString } from 'react-dom/server'
-import { ensureHappyDom } from './helpers/dom-harness.js'
+import { ensureHappyDom, resetHappyDom } from './helpers/dom-harness.js'
 
 ensureHappyDom()
 const { createRoot } = await import('react-dom/client')
@@ -17,7 +17,11 @@ const {
   TabsContent,
   TabsList,
   TabsTrigger,
-} = await import('@helmx/ui')
+} = await import('../src/index.js')
+
+afterEach(() => {
+  resetHappyDom()
+}, { timeout: 60_000 })
 
 // ---------------------------------------------------------------------------
 // 1. SSR 渲染与数据属性（data-state="active"）契约测试

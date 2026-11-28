@@ -23,7 +23,6 @@ export { assertDistTag, assertInstallIsolation, resolveBlockedCooldownMs };
 export const resolveRegistryUrl = resolveRegistryUrlForEnv;
 
 export const DEFAULT_PAYLOAD_PACKAGE = '@helmx/hub';
-export const DEFAULT_NPM_REGISTRY = 'https://registry.npmjs.org';
 
 /** Timeouts and cooldowns; every one is injectable/overridable so tests never rely on wall-clock luck. */
 export const DEFAULTS = {

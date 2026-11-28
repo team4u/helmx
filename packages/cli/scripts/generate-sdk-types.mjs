@@ -1030,7 +1030,6 @@ function emitPluginClientDeclarations(repoRoot, uiEmitted) {
     baseUrl: pkgDir,
     paths: {
       '@helmx/ui': ['./.virtual-ui-dts/index.d.ts'],
-      '@helmx/ui/pure': ['./.virtual-ui-dts/pure.d.ts'],
     },
     outDir: virtualOutDir,
   });

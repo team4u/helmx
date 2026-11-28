@@ -23,11 +23,11 @@ import {
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import type { QualifiedUiSpec } from '../lib/types.js'
 import {
-  COMPLETION_QUERY_DEBOUNCE_MS,
   buildCompletionActionCall,
   completersForTrigger,
   extractCompletionItems,
   filterByQuery,
+  getCompletionQueryDebounceMs,
   mergeCompletionItems,
   parseCompletionActionResult,
   verifyCompletionActionManifest,
@@ -259,7 +259,7 @@ export function useComposerCompletionSources(input: UseComposerCompletionSources
         })
         setActionState({ loading: false, contextKey, results, errors })
       })
-    }, COMPLETION_QUERY_DEBOUNCE_MS)
+    }, getCompletionQueryDebounceMs())
     return () => {
       clearTimeout(timer)
       // The generation has already been advanced by the next effect run; this

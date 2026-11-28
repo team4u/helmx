@@ -38,10 +38,25 @@ import { openHelmxDatabase } from '../src/runtime/sqlite.js'
 
 const require = createRequire(import.meta.url)
 const KERNEL_DIR = new URL('../', import.meta.url).pathname
+const REPO_ROOT = join(KERNEL_DIR, '..', '..')
+const SEEDER_USE_DIST =
+  existsSync(join(REPO_ROOT, 'packages/protocol/dist/index.js')) &&
+  existsSync(join(REPO_ROOT, 'packages/env-io/dist/index.js')) &&
+  existsSync(join(KERNEL_DIR, 'dist/index.js'))
 const PI_AI_DIR = join(KERNEL_DIR, 'node_modules/@earendil-works/pi-ai')
-const KERNEL_RUNTIME_SRC = pathToFileURL(join(KERNEL_DIR, 'src/runtime/index.ts')).href
+const KERNEL_RUNTIME_SRC = pathToFileURL(
+  join(KERNEL_DIR, SEEDER_USE_DIST ? 'dist/index.js' : 'src/runtime/index.ts'),
+).href
 const PI_AI_MODELS_URL = pathToFileURL(join(PI_AI_DIR, 'dist/models.js')).href
 const PI_AI_FAUX_URL = pathToFileURL(join(PI_AI_DIR, 'dist/providers/faux.js')).href
+
+let cachedTsxLoaderArgs: readonly string[] | undefined
+function tsxDirectArgs(): readonly string[] {
+  if (cachedTsxLoaderArgs === undefined) {
+    cachedTsxLoaderArgs = ['--require', require.resolve('tsx/preflight'), '--import', pathToFileURL(require.resolve('tsx')).href]
+  }
+  return cachedTsxLoaderArgs
+}
 
 function createFaux(opts?: Parameters<typeof fauxProvider>[0]) {
   const models = createModels()
@@ -98,12 +113,11 @@ async function runSeederUntilSigkill(
   script: string,
   waitForReady: (stdout: string) => boolean,
 ): Promise<void> {
-  const seederPath = join(seedDir, 'seeder.mts')
+  const seederPath = join(seedDir, SEEDER_USE_DIST ? 'seeder.mjs' : 'seeder.mts')
   writeFileSync(seederPath, script, 'utf8')
-  const tsxCli = require.resolve('tsx/cli')
-  const child = spawn(process.execPath, [tsxCli, seederPath], {
+  const spawnArgs = SEEDER_USE_DIST ? [seederPath] : [...tsxDirectArgs(), seederPath]
+  const child = spawn(process.execPath, spawnArgs, {
     cwd: KERNEL_DIR,
-    detached: true,
     env: {
       PATH: process.env.PATH ?? '',
       HOME: seedDir,
@@ -144,10 +158,9 @@ async function runSeederUntilSigkill(
   } finally {
     if (child.pid !== undefined) {
       try {
-        if (process.platform !== 'win32') process.kill(-child.pid, 'SIGKILL')
-        else child.kill('SIGKILL')
+        child.kill('SIGKILL')
       } catch {
-        // process group already exited
+        // process already exited
       }
     }
     child.stdout?.destroy()
@@ -184,7 +197,7 @@ test('runtime.close() during streaming preserves continuity: GenerationTask retu
   const dataDir = mkdtempSync(join(tmpdir(), 'helmx-graceful-gen-'))
   t.after(() => rmSync(dataDir, { recursive: true, force: true }))
 
-  const { models: models1, faux: faux1 } = createFaux({ tokensPerSecond: 2, tokenSize: { min: 1, max: 1 } })
+  const { models: models1, faux: faux1 } = createFaux({ tokensPerSecond: 20, tokenSize: { min: 1, max: 1 } })
   const runtime1 = await KernelRuntime.open({
     dataDir,
     cwd: dataDir,
@@ -219,14 +232,28 @@ test('runtime.close() during streaming preserves continuity: GenerationTask retu
   assert.deepEqual(lifecycleOrder, ['plugin.prepare', 'plugin.start', 'plugin.reconcile'])
 
   // Slow streaming generation: verify conversation enters working and emits partial tokens before graceful close.
+  let resolveLiveToken: (() => void) | undefined
+  const liveTokenEmitted = new Promise<void>((resolve) => {
+    resolveLiveToken = resolve
+  })
+  const unsubLive = runtime1.events.subscribeTransientLive((frame) => {
+    if (frame.live.conversationId === 1 && frame.live.text.length > 0) {
+      resolveLiveToken?.()
+    }
+  })
   faux1.setResponses([fauxAssistantMessage('long slow streaming output text used to ensure turn stays mid-generation on graceful shutdown')])
   void runtime1.conversations.submitInput(1, 'please generate a long reply').catch(() => {})
-  const deadline = Date.now() + 15_000
-  while (runtime1.conversations.getConversation(1).status !== 'working' && Date.now() < deadline) {
-    await delay(30)
+  try {
+    await Promise.race([
+      liveTokenEmitted,
+      delay(15_000).then(() => {
+        throw new Error('timed out waiting for transient live streaming token within 15s')
+      }),
+    ])
+  } finally {
+    unsubLive()
   }
-  assert.equal(runtime1.conversations.getConversation(1).status, 'working', 'conversation must enter working within 15s')
-  await delay(600)
+  assert.equal(runtime1.conversations.getConversation(1).status, 'working', 'conversation must remain working while streaming')
 
   await runtime1.close()
 
@@ -472,7 +499,7 @@ const dataDir = process.env.HELMX_DATA_DIR
 const faux = fauxProvider()
 const models = createModels()
 models.setProvider(faux.provider)
-faux.setResponses([fauxAssistantMessage([fauxToolCall('bash', { command: 'printf x >> run_count.txt; echo BASH_RUNNING; sleep 60' })], { stopReason: 'toolUse' })])
+faux.setResponses([fauxAssistantMessage([fauxToolCall('bash', { command: 'printf x >> run_count.txt; echo BASH_RUNNING; sleep 10' })], { stopReason: 'toolUse' })])
 const runtime = await KernelRuntime.open({ dataDir, cwd: dataDir, model: 'faux/faux-1', models, autoResume: true })
 void runtime.conversations.submitInput(1, 'execute external command').catch(() => {})
 const deadline = Date.now() + 15000

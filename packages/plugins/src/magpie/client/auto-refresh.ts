@@ -19,14 +19,22 @@ export interface MagpieAutoRefreshCoordinator {
   dispose(): void
 }
 
-const AUTO_REFRESH_KEY = Symbol.for('helmx:builtin:magpie:auto-refresh-coordinator')
-
-function isDocumentVisible(): boolean {
-  if (typeof document === 'undefined') return true
-  return document.visibilityState !== 'hidden'
+export interface MagpieVisibilityDocument {
+  readonly visibilityState?: string
+  addEventListener(type: 'visibilitychange', listener: () => void): void
+  removeEventListener(type: 'visibilitychange', listener: () => void): void
 }
 
-export function createMagpieAutoRefreshCoordinator(): MagpieAutoRefreshCoordinator {
+const AUTO_REFRESH_KEY = Symbol.for('helmx:builtin:magpie:auto-refresh-coordinator')
+
+function isDocumentVisible(doc: MagpieVisibilityDocument | undefined): boolean {
+  if (doc === undefined) return true
+  return doc.visibilityState !== 'hidden'
+}
+
+export function createMagpieAutoRefreshCoordinator(
+  doc: MagpieVisibilityDocument | undefined = typeof document !== 'undefined' ? document : undefined,
+): MagpieAutoRefreshCoordinator {
   const subscribers = new Set<MagpieAutoRefreshSubscription>()
   let timer: ReturnType<typeof setInterval> | undefined
   let activeIntervalMs = 0
@@ -50,7 +58,7 @@ export function createMagpieAutoRefreshCoordinator(): MagpieAutoRefreshCoordinat
   }
 
   const triggerOnce = (): void => {
-    if (subscribers.size === 0 || !isDocumentVisible() || inFlight !== null) return
+    if (subscribers.size === 0 || !isDocumentVisible(doc) || inFlight !== null) return
     const runner = subscribers.values().next().value
     if (!runner) return
     lastAttemptAt = Date.now()
@@ -69,7 +77,7 @@ export function createMagpieAutoRefreshCoordinator(): MagpieAutoRefreshCoordinat
   }
 
   const onVisibilityChange = (): void => {
-    if (!isDocumentVisible()) return
+    if (!isDocumentVisible(doc)) return
     const interval = effectiveIntervalMs()
     if (interval <= 0) return
     if (Date.now() - lastAttemptAt >= interval) {
@@ -83,8 +91,8 @@ export function createMagpieAutoRefreshCoordinator(): MagpieAutoRefreshCoordinat
       timer = undefined
       activeIntervalMs = 0
     }
-    if (visibilityBound && typeof document !== 'undefined') {
-      document.removeEventListener('visibilitychange', onVisibilityChange)
+    if (visibilityBound && doc !== undefined) {
+      doc.removeEventListener('visibilitychange', onVisibilityChange)
       visibilityBound = false
     }
   }
@@ -95,8 +103,8 @@ export function createMagpieAutoRefreshCoordinator(): MagpieAutoRefreshCoordinat
       clearTimerAndListener()
       return
     }
-    if (!visibilityBound && typeof document !== 'undefined') {
-      document.addEventListener('visibilitychange', onVisibilityChange)
+    if (!visibilityBound && doc !== undefined) {
+      doc.addEventListener('visibilitychange', onVisibilityChange)
       visibilityBound = true
     }
     if (timer === undefined || activeIntervalMs !== nextInterval) {

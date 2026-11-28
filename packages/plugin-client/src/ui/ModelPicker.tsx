@@ -1020,6 +1020,13 @@ export function ModelPickerControl({
               }
               if (onReturnFocus?.() === true) {
                 event.preventDefault()
+                return
+              }
+              // Radix FocusScope defers close auto-focus via setTimeout(0); if another
+              // control or overlay already claimed focus, never steal focus back and dismiss it.
+              const active = typeof document !== 'undefined' ? document.activeElement : null
+              if (active !== null && active !== document.body && active !== document.documentElement) {
+                event.preventDefault()
               }
             }}
             onInteractOutside={() => {

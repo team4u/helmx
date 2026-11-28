@@ -89,15 +89,6 @@ export interface EditTextPair {
   newText: string
 }
 
-export function editInputTexts(input: unknown): { oldText?: string; newText?: string } {
-  if (input === null || typeof input !== 'object' || Array.isArray(input)) return {}
-  const record = input as Record<string, unknown>
-  return {
-    ...(typeof record.oldText === 'string' ? { oldText: record.oldText } : {}),
-    ...(typeof record.newText === 'string' ? { newText: record.newText } : {}),
-  }
-}
-
 export function editInputPairs(input: unknown): EditTextPair[] {
   if (input === null || typeof input !== 'object' || Array.isArray(input)) return []
   const record = input as Record<string, unknown>

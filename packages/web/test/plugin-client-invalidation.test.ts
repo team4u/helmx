@@ -1,13 +1,9 @@
 import './helpers/register-happy-dom.js'
 import assert from 'node:assert/strict'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
 import { test } from 'node:test'
 import * as React from 'react'
 import { act } from 'react'
 import { createRoot } from 'react-dom/client'
-import { compilePluginClientModule } from '@helmx/plugin-build'
 import { evictPluginClientCache, resetPluginClientCache } from '../src/lib/plugin-client.js'
 import { PluginUiView } from '../src/ui/PluginUiView.js'
 import { makeTestStore } from './helpers/store.js'
@@ -17,7 +13,6 @@ import { mountSharedPluginNamespaces } from './helpers/builtin-clients.js'
 test('已挂载插件视图在快照重建后重载模块与样式，无关插件失效不重建视图', { timeout: 60_000 }, async () => {
   Object.assign(globalThis, { React, IS_REACT_ACT_ENVIRONMENT: true })
   mountSharedPluginNamespaces({ realHooks: true })
-  const dir = await mkdtemp(join(tmpdir(), 'helmx-client-snapshot-'))
   const originalFetch = globalThis.fetch
   const originalCreateObjectURL = URL.createObjectURL
   const originalRevokeObjectURL = URL.revokeObjectURL
@@ -27,18 +22,15 @@ test('已挂载插件视图在快照重建后重载模块与样式，无关插�
   document.body.appendChild(host)
   const root = createRoot(host)
   try {
-    await writeFile(join(dir, 'base.css'), '.revision-card { color: #cc0000; border: 1px solid #007700; }')
-    await writeFile(join(dir, 'styles.css'), '.revision-card { color: #008800; }')
-    await writeFile(join(dir, 'index.tsx'), `
-      import { useState } from 'react'
-      import './base.css'
-      import './styles.css'
-      export function Panel() {
-        const [generation] = useState(() => ++globalThis.__helmxCssViewGeneration)
-        return <div className="revision-card" data-generation={generation}>持续挂载的插件视图</div>
-      }
-    `)
-    const { code, contentHash } = await compilePluginClientModule('snapshot-plugin', dir, 'index.tsx', join(dir, 'cache'))
+    const contentHash = 'snapshot-inline-h1'
+    const code = [
+      'export const __helmxClientCss = ".revision-card { color: #cc0000; border: 1px solid #007700; }\\n.revision-card { color: #008800; }\\n";',
+      'export function Panel() {',
+      '  const { useState, createElement } = globalThis.__helmx_shared_react;',
+      '  const [generation] = useState(() => ++globalThis.__helmxCssViewGeneration);',
+      '  return createElement("div", { className: "revision-card", "data-generation": generation }, "持续挂载的插件视图");',
+      '}',
+    ].join('\n')
     let fetches = 0
     let imports = 0
     let onImport: ((url: string) => void) | undefined
@@ -108,6 +100,5 @@ test('已挂载插件视图在快照重建后重载模块与样式，无关插�
     resetPluginClientCache()
     host.remove()
     delete globals.__helmxCssViewGeneration
-    await rm(dir, { recursive: true, force: true })
   }
 })

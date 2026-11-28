@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { cp } from 'node:fs/promises';
 import path from 'node:path';
-import { test } from 'node:test';
+import { describe, test } from 'node:test';
 import { useTempDir, sanitizedHostEnv } from '@helmx/test-kit/node';
 import { writeCurrentRelease } from '@helmx/env-io';
 import { readLaunchConfig, readPidRecord, writePidRecord } from '../../src/launcher/records.js';
@@ -54,6 +54,7 @@ async function setupInstalledRelease(
   return { root, payloadDir, port: await freePort() };
 }
 
+describe('launcher lifecycle', { concurrency: 4, timeout: 60_000 }, () => {
 test('start refuses when no release is installed', { timeout: 60_000 }, async (t) => {
   const root = useTempDir(t, 'helmx-launcher-norel-');
   const { io } = captureIo(sanitizedHostEnv());
@@ -67,7 +68,7 @@ test('start refuses when no release is installed', { timeout: 60_000 }, async (t
 test('start becomes ready via the listen banner, persists pid + launch config, and refuses double starts', { timeout: 60_000 }, async (t) => {
   const h = await setupInstalledRelease(t, useTempDir(t, 'helmx-launcher-life-'));
   const { io } = captureIo(sanitizedHostEnv());
-  const started = await startHub(h.root, io, { flags: { port: h.port, dataDir: '/tmp/helmx-launcher-data' }, pollMs: 100 });
+  const started = await startHub(h.root, io, { flags: { port: h.port, dataDir: '/tmp/helmx-launcher-data' }, pollMs: 25 });
   t.after(() => cleanupPid(started.pid));
   assert.equal(started.version, '1.0.0');
   assert.equal(started.url, `http://127.0.0.1:${h.port}`);
@@ -108,7 +109,7 @@ test('a stale banner from a previous run in hub.log never satisfies readiness', 
   const logPath = path.join(h.root, 'logs', 'hub.log');
   mkdirSync(path.join(h.root, 'logs'), { recursive: true });
   appendFileSync(logPath, `[old run] Helmx Hub: http://127.0.0.1:${h.port}\n[old run] shutting down\n`);
-  const started = await startHub(h.root, io, { flags: { port: h.port }, pollMs: 100 });
+  const started = await startHub(h.root, io, { flags: { port: h.port }, pollMs: 25 });
   t.after(() => cleanupPid(started.pid));
   // The server is genuinely up (a false-ready off the stale line would leave this unanswered).
   assert.deepEqual(await getJson(h.port, '/__version'), { version: '1.0.0' });
@@ -120,7 +121,7 @@ test('a banner naming a different port is not this candidate readiness', { timeo
   const h = await setupInstalledRelease(t, useTempDir(t, 'helmx-launcher-life-'), { mode: 'wrong-port-banner' });
   const { io } = captureIo(sanitizedHostEnv());
   await assert.rejects(
-    startHub(h.root, io, { flags: { port: h.port }, healthTimeoutMs: 1_500, pollMs: 100 }),
+    startHub(h.root, io, { flags: { port: h.port }, healthTimeoutMs: 400, pollMs: 25 }),
     /readiness timed out.*no "Helmx Hub: " listen line/s,
   );
   assert.equal(await readPidRecord(h.root), null);
@@ -198,7 +199,7 @@ test('stop refuses a live pid whose recorded start time no longer matches (pid r
 }, async (t) => {
   const h = await setupInstalledRelease(t, useTempDir(t, 'helmx-launcher-reuse-'));
   const { io } = captureIo(sanitizedHostEnv());
-  const started = await startHub(h.root, io, { flags: { port: h.port }, pollMs: 100 });
+  const started = await startHub(h.root, io, { flags: { port: h.port }, pollMs: 25 });
   t.after(() => cleanupPid(started.pid));
   const record = await readPidRecord(h.root);
   assert.ok(record !== null);
@@ -226,9 +227,9 @@ test('stop refuses a live pid whose recorded start time no longer matches (pid r
 test('stop escalates to process-tree termination when SIGTERM is ignored', { timeout: 60_000 }, async (t) => {
   const h = await setupInstalledRelease(t, useTempDir(t, 'helmx-launcher-life-'), { mode: 'ignore-signal' });
   const { io } = captureIo(sanitizedHostEnv());
-  const started = await startHub(h.root, io, { flags: { port: h.port }, pollMs: 100 });
+  const started = await startHub(h.root, io, { flags: { port: h.port }, pollMs: 25 });
   t.after(() => cleanupPid(started.pid));
-  const stopped = await stopHub(h.root, io, { stopTimeoutMs: 800, escalationWaitMs: 5_000 });
+  const stopped = await stopHub(h.root, io, { stopTimeoutMs: 250, escalationWaitMs: 5_000 });
   assert.equal(stopped.wasRunning, true);
   assert.equal(stopped.escalated, true);
   await waitUntilDead(started.pid);
@@ -239,7 +240,7 @@ test('start failure paths never leave a pid record and surface hub log tails', {
   const neverReady = await setupInstalledRelease(t, useTempDir(t, 'helmx-launcher-life-'), { mode: 'never-ready' });
   const ioNever = captureIo(sanitizedHostEnv());
   await assert.rejects(
-    startHub(neverReady.root, ioNever.io, { flags: { port: neverReady.port }, healthTimeoutMs: 1_500, pollMs: 100 }),
+    startHub(neverReady.root, ioNever.io, { flags: { port: neverReady.port }, healthTimeoutMs: 400, pollMs: 25 }),
     /hub failed to become ready:.*readiness timed out.*last 40 lines/s,
   );
   assert.equal(await readPidRecord(neverReady.root), null);
@@ -249,7 +250,7 @@ test('start failure paths never leave a pid record and surface hub log tails', {
   const crash = await setupInstalledRelease(t, useTempDir(t, 'helmx-launcher-life-'), { mode: 'crash' });
   const ioCrash = captureIo(sanitizedHostEnv());
   await assert.rejects(
-    startHub(crash.root, ioCrash.io, { flags: { port: crash.port }, healthTimeoutMs: 3_000, pollMs: 100 }),
+    startHub(crash.root, ioCrash.io, { flags: { port: crash.port }, healthTimeoutMs: 3_000, pollMs: 25 }),
     /exited before reporting readiness.*code=3/s,
   );
   assert.equal(await readPidRecord(crash.root), null);
@@ -276,7 +277,7 @@ test('status snapshot distinguishes healthy, dead, and absent states', { timeout
   const { io } = captureIo(sanitizedHostEnv());
   assert.equal(await readRunningHub(h.root, io), null);
 
-  const started = await startHub(h.root, io, { flags: { port: h.port }, pollMs: 100 });
+  const started = await startHub(h.root, io, { flags: { port: h.port }, pollMs: 25 });
   t.after(() => cleanupPid(started.pid));
   const running = await readRunningHub(h.root, io);
   assert.ok(running !== null);
@@ -307,8 +308,9 @@ test('lifecycle lock excludes concurrent lifecycle operations', { timeout: 60_00
     });
   });
   // Lock released afterwards: start works again.
-  const started = await startHub(h.root, io, { flags: { port: h.port }, pollMs: 100 });
+  const started = await startHub(h.root, io, { flags: { port: h.port }, pollMs: 25 });
   t.after(() => cleanupPid(started.pid));
   await stopHub(h.root, io);
   await waitUntilDead(started.pid);
+});
 });

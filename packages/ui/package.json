@@ -8,10 +8,6 @@
       "types": "./src/index.ts",
       "default": "./src/index.ts"
     },
-    "./pure": {
-      "types": "./src/pure.ts",
-      "default": "./src/pure.ts"
-    },
     "./tokens.css": "./src/tokens.css",
     "./base.css": "./src/base.css",
     "./styles.css": "./src/styles.css"

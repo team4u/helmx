@@ -504,18 +504,3 @@ export function computeMultiEditDiff(
   )
   return { rows: rendered.rows, ...counts, truncated: rendered.truncated }
 }
-
-/**
- * Compute `ToolEditDiff` for a single replacement span (delegates to {@link computeMultiEditDiff}).
- */
-export function computeEditDiff(
-  original: string,
-  updated: string,
-  matchOffset: number,
-  replacedLength: number,
-  redact: (text: string) => string,
-): ToolEditDiff {
-  assertReplacedSpanInBounds(original, matchOffset, replacedLength)
-  const insertedLength = updated.length - original.length + replacedLength
-  return computeMultiEditDiff(original, updated, [{ matchOffset, replacedLength, insertedLength }], redact)
-}

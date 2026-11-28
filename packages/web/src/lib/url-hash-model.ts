@@ -8,6 +8,24 @@ import {
 } from './drawer-stack-model.js'
 import { isSameResolvedTarget, isPrototypeParamKey, SCREEN_PARAM_KEY_PATTERN, type ActiveModal, type ResolvedTarget } from './types.js'
 
+export const DEFAULT_SYMMETRIC_BACK_FALLBACK_MS = 120
+let symmetricBackFallbackMs = DEFAULT_SYMMETRIC_BACK_FALLBACK_MS
+
+/** Read active symmetric history.back() fallback timeout (120ms in production; overridable in tests). */
+export function getSymmetricBackFallbackMs(): number {
+  return symmetricBackFallbackMs
+}
+
+/** Override symmetric history.back() fallback timeout for tests. */
+export function patchSymmetricBackFallbackMs(ms: number): void {
+  symmetricBackFallbackMs = ms
+}
+
+/** Reset symmetric history.back() fallback timeout to the production default (120ms). */
+export function resetSymmetricBackFallbackMs(): void {
+  symmetricBackFallbackMs = DEFAULT_SYMMETRIC_BACK_FALLBACK_MS
+}
+
 /**
  * The workspace location expressed by the address-bar hash: primary target,
  * right split, ordered right-hand drawer stack, and top-level modal.

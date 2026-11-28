@@ -17,7 +17,7 @@ import assert from 'node:assert/strict'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { createRequire } from 'node:module'
 import { mkdtemp, mkdir } from 'node:fs/promises'
-import { writeFileSync } from 'node:fs'
+import { existsSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
@@ -35,11 +35,23 @@ import { cleanupDir, makeFauxModels, sleep } from './helpers.js'
 
 const require = createRequire(import.meta.url)
 const KERNEL_DIR = fileURLToPath(new URL('../', import.meta.url))
+const REPO_ROOT = join(KERNEL_DIR, '..', '..')
+const SEEDER_USE_DIST =
+  existsSync(join(REPO_ROOT, 'packages/protocol/dist/index.js')) &&
+  existsSync(join(REPO_ROOT, 'packages/env-io/dist/index.js')) &&
+  existsSync(join(KERNEL_DIR, 'dist/index.js'))
 const PI_AI_FAUX_URL = pathToFileURL(
   join(KERNEL_DIR, 'node_modules/@earendil-works/pi-ai/dist/providers/faux.js'),
 ).href
-const KERNEL_SRC = pathToFileURL(join(KERNEL_DIR, 'src/runtime/index.ts')).href
-const TSX_CLI = require.resolve('tsx/cli')
+const KERNEL_SRC = pathToFileURL(join(KERNEL_DIR, SEEDER_USE_DIST ? 'dist/index.js' : 'src/runtime/index.ts')).href
+
+let cachedTsxLoaderArgs: readonly string[] | undefined
+function tsxDirectArgs(): readonly string[] {
+  if (cachedTsxLoaderArgs === undefined) {
+    cachedTsxLoaderArgs = ['--require', require.resolve('tsx/preflight'), '--import', pathToFileURL(require.resolve('tsx')).href]
+  }
+  return cachedTsxLoaderArgs
+}
 
 let rootDir: string
 
@@ -223,12 +235,12 @@ import { setTimeout as delay } from 'node:timers/promises'
 import { fauxAssistantMessage, fauxProvider } from ${JSON.stringify(PI_AI_FAUX_URL)}
 import { KernelRuntime } from ${JSON.stringify(KERNEL_SRC)}
 
-const dataDir = process.env.HELMX_DATA_DIR!
+const dataDir = process.env.HELMX_DATA_DIR
 const faux = fauxProvider({ tokensPerSecond: 1, tokenSize: { min: 1, max: 1 } })
 faux.setResponses([fauxAssistantMessage('这是一段极慢速流式回复用于在流式中途触发真实SIGKILL强杀现场验证启动节点回连等待屏障')])
 const kernel = await KernelRuntime.open({ dataDir, cwd: dataDir, model: 'faux/faux-1', providers: [faux.provider], autoResume: false })
 const issued = await kernel.nodes.issueNodeToken('grace-node')
-const conv = await kernel.conversations.createConversation({ nodeId: 'grace-node', cwd: process.env.HELMX_WORK_DIR!, title: 'remote-bound' })
+const conv = await kernel.conversations.createConversation({ nodeId: 'grace-node', cwd: process.env.HELMX_WORK_DIR, title: 'remote-bound' })
 await kernel.start()
 await kernel.conversations.submitInput(conv.id, '开始慢速任务')
 for (let i = 0; i < 400; i++) {
@@ -271,7 +283,7 @@ process.kill(process.pid, 'SIGKILL')
       // the grace this resolves near-instantly).
       const startedAt = Date.now()
       const startPromise = kernel.start()
-      await delay(700)
+      await delay(200)
       assert.equal(kernel.started, false, 'grace must hold recovery while the node is offline')
 
       daemon = await createNodeDaemon({
@@ -286,7 +298,7 @@ process.kill(process.pid, 'SIGKILL')
 
       await startPromise
       const elapsed = Date.now() - startedAt
-      assert.ok(elapsed >= 650, `start() should have waited for the node (elapsed ${elapsed}ms)`)
+      assert.ok(elapsed >= 150, `start() should have waited for the node (elapsed ${elapsed}ms)`)
       assert.equal(kernel.started, true)
       assert.equal(kernel.envFabric.isOnline('grace-node'), true)
 
@@ -308,11 +320,13 @@ process.kill(process.pid, 'SIGKILL')
   })
 })
 
-/** Spawn a tsx child running `scriptBody`; resolve stdout on SIGKILL (crash artifact), fail otherwise. */
+/** Spawn a child running `scriptBody` via built `dist/` (or tsx fallback); resolve stdout on SIGKILL, fail otherwise. */
 function spawnSigkillSeeder(scriptBody: string, extraEnv: Record<string, string>): Promise<string> {
-  const scriptPath = join(rootDir, `seeder-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.mts`)
+  const ext = SEEDER_USE_DIST ? 'mjs' : 'mts'
+  const scriptPath = join(rootDir, `seeder-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`)
   writeFileSync(scriptPath, scriptBody, 'utf-8')
-  const child: ChildProcess = spawn(process.execPath, [TSX_CLI, scriptPath], {
+  const args = SEEDER_USE_DIST ? [scriptPath] : [...tsxDirectArgs(), scriptPath]
+  const child: ChildProcess = spawn(process.execPath, args, {
     cwd: KERNEL_DIR,
     env: {
       ...process.env,

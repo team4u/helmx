@@ -24,13 +24,12 @@ import {
 } from './store-context.js'
 import { registerBrowserNotificationNavigator } from './browser-notification.js'
 import { applyDocumentLocale } from './theme-preferences.js'
-import { formatLocationHash, isSameLocationState, parseLocationHash, readBootLocation, shouldPushLocationHistory } from './url-hash-model.js'
+import { formatLocationHash, getSymmetricBackFallbackMs, isSameLocationState, parseLocationHash, readBootLocation, shouldPushLocationHistory } from './url-hash-model.js'
 import { useGlobalShortcuts } from './use-global-shortcuts.js'
 import { useSseEvents } from './use-sse-events.js'
 import { useUnreadSync } from './use-unread-sync.js'
 
 const HELMX_PREV_HASH_KEY = '__helmxPrevHash'
-const SYMMETRIC_BACK_FALLBACK_MS = 120
 
 interface PendingSymmetricBack {
   expectedHash: string
@@ -267,7 +266,7 @@ function HelmxStoreEffects({ store, boot }: { store: HelmxExternalStore; boot: S
         if (pendingSymmetricBackRef.current !== pending) return
         pendingSymmetricBackRef.current = null
         flushLatestLocationToHistory()
-      }, SYMMETRIC_BACK_FALLBACK_MS)
+      }, getSymmetricBackFallbackMs())
       window.history.back()
     }
   }, [authenticated, flushLatestLocationToHistory, locationState, store])

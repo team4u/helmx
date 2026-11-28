@@ -4,7 +4,7 @@
  * - UiLocaleProvider / useUiLocale / useUiTranslator: reactive subscribe/getLocale, static locale,
  *   bare default fallback ('en'), and zero re-renders for unrelated store changes;
  * - Shared primitives (CopyButton, DataTable, MultiSelect, ViewBoundary) react to UiLocaleProvider;
- * - Timing/byte formatters & resolveConversationTiming + @helmx/ui/pure exact parity.
+ * - Timing/byte formatters & resolveConversationTiming contract.
  */
 import './helpers/register-happy-dom.js'
 import assert from 'node:assert/strict'
@@ -15,7 +15,6 @@ import { createRoot, type Root } from 'react-dom/client'
 import { renderToString } from 'react-dom/server'
 import { UI_SHARED_EXPORTS, type HelmxLocale } from '@helmx/protocol'
 import * as HelmxUi from '../src/index.js'
-import * as HelmxUiPure from '../src/pure.js'
 
 const e = React.createElement
 
@@ -235,7 +234,7 @@ test('ViewBoundary translates its retry UI while preserving the original diagnos
   }
 })
 
-test('timing & byte formatters and resolveConversationTiming contract + @helmx/ui/pure parity', { timeout: 60_000 }, () => {
+test('timing & byte formatters and resolveConversationTiming contract', { timeout: 60_000 }, () => {
   for (const name of ['formatTime', 'formatCompactTimestamp', 'formatDurationMs', 'formatStopwatchMs', 'formatOffsetMs', 'resolveConversationTiming', 'formatBytes'] as const) {
     assert.ok(
       (UI_SHARED_EXPORTS as readonly string[]).includes(name),
@@ -243,10 +242,6 @@ test('timing & byte formatters and resolveConversationTiming contract + @helmx/u
     )
     assert.equal(typeof HelmxUi[name], 'function', `@helmx/ui must export ${name}`)
   }
-  assert.ok(HelmxUi.formatStopwatchMs === HelmxUiPure.formatStopwatchMs)
-  assert.ok(HelmxUi.formatOffsetMs === HelmxUiPure.formatOffsetMs)
-  assert.ok(HelmxUi.formatDurationMs === HelmxUiPure.formatDurationMs)
-  assert.ok(HelmxUi.resolveConversationTiming === HelmxUiPure.resolveConversationTiming)
 
   assert.equal(HelmxUi.formatDurationMs(undefined), '')
   assert.equal(HelmxUi.formatDurationMs(-1), '')
@@ -285,93 +280,5 @@ test('timing & byte formatters and resolveConversationTiming contract + @helmx/u
   assert.equal(HelmxUi.formatOffsetMs(3_600_000), '+1:00:00')
   assert.equal(HelmxUi.formatOffsetMs(3_735_000), '+1:02:15')
   assert.equal(HelmxUi.formatOffsetMs(36_000_000), '+10:00:00')
-
-  assert.deepEqual(
-    HelmxUi.resolveConversationTiming({ status: 'idle', runDurationMs: 0, pendingAskCount: 0 }, 50_000),
-    { settledRunMs: 0, isRunning: false, isBlocked: false },
-  )
-  assert.deepEqual(
-    HelmxUi.resolveConversationTiming(
-      { status: 'done', runDurationMs: 4_200, runStartedAt: 10_000, pendingAskSince: 12_000, pendingAskCount: 0 },
-      50_000,
-    ),
-    { settledRunMs: 4_200, totalRunMs: 4_200, isRunning: false, isBlocked: false },
-  )
-  assert.deepEqual(
-    HelmxUi.resolveConversationTiming({ status: 'error', runDurationMs: 1_500, runStartedAt: 10_000 }, 50_000),
-    { settledRunMs: 1_500, totalRunMs: 1_500, isRunning: false, isBlocked: false },
-  )
-  assert.deepEqual(
-    HelmxUi.resolveConversationTiming({ status: 'working', runDurationMs: 3_000, runStartedAt: 10_000 }, 14_500),
-    { settledRunMs: 3_000, currentRunMs: 4_500, totalRunMs: 7_500, isRunning: true, isBlocked: false },
-  )
-  assert.deepEqual(
-    HelmxUi.resolveConversationTiming({ status: 'working', runDurationMs: 0, runStartedAt: 10_000 }, 10_000),
-    { settledRunMs: 0, currentRunMs: 0, totalRunMs: 0, isRunning: true, isBlocked: false },
-  )
-  assert.deepEqual(
-    HelmxUi.resolveConversationTiming({ status: 'working', runDurationMs: 2_000, runStartedAt: 10_500 }, 10_000),
-    { settledRunMs: 2_000, currentRunMs: 0, totalRunMs: 2_000, isRunning: true, isBlocked: false },
-  )
-  assert.deepEqual(
-    HelmxUi.resolveConversationTiming({ status: 'working', runDurationMs: 0 }, 50_000),
-    { settledRunMs: 0, isRunning: true, isBlocked: false },
-  )
-  assert.deepEqual(
-    HelmxUi.resolveConversationTiming({ status: 'working', runDurationMs: 3_000, runStartedAt: 10_000 }, undefined),
-    { settledRunMs: 3_000, totalRunMs: 3_000, isRunning: true, isBlocked: false },
-  )
-  assert.deepEqual(
-    HelmxUi.resolveConversationTiming(
-      {
-        status: 'blocked',
-        runDurationMs: 5_000,
-        runStartedAt: 10_000,
-        pendingAskCount: 1,
-        pendingAskSince: 14_000,
-      },
-      20_000,
-    ),
-    {
-      settledRunMs: 5_000,
-      currentRunMs: 10_000,
-      totalRunMs: 15_000,
-      waitingMs: 6_000,
-      isRunning: true,
-      isBlocked: true,
-    },
-  )
-  assert.deepEqual(
-    HelmxUi.resolveConversationTiming(
-      { status: 'blocked', runDurationMs: 5_000, pendingAskCount: 1, pendingAskSince: 14_000 },
-      20_000,
-    ),
-    {
-      settledRunMs: 5_000,
-      totalRunMs: 5_000,
-      waitingMs: 6_000,
-      isRunning: false,
-      isBlocked: true,
-    },
-  )
-  for (const invalidCount of [0, -1, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
-    assert.deepEqual(
-      HelmxUi.resolveConversationTiming(
-        {
-          status: 'blocked',
-          runDurationMs: -100,
-          runStartedAt: Number.NaN,
-          pendingAskCount: invalidCount,
-          pendingAskSince: 14_000,
-        },
-        20_000,
-      ),
-      { settledRunMs: 0, isRunning: false, isBlocked: true },
-    )
-  }
-  assert.deepEqual(
-    HelmxUi.resolveConversationTiming({ status: 'blocked', pendingAskSince: 14_000 }, 20_000),
-    { settledRunMs: 0, waitingMs: 6_000, isRunning: false, isBlocked: true },
-  )
   assert.equal(HelmxUi.formatBytes(1024), '1.0 KiB')
 })

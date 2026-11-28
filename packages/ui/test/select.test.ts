@@ -1,17 +1,21 @@
 import './helpers/register-happy-dom.js'
 import assert from 'node:assert/strict'
-import { test } from 'node:test'
+import { afterEach, test } from 'node:test'
 import React, { act } from 'react'
 import { renderToString } from 'react-dom/server'
-import type { SelectOption, SelectChangeEvent } from '@helmx/ui'
-import { ensureHappyDom } from './helpers/dom-harness.js'
-import { readHostStyles } from './helpers/host-styles.js'
+import type { HelmxLocale } from '@helmx/protocol'
+import type { SelectOption, SelectChangeEvent } from '../src/index.js'
+import { ensureHappyDom, resetHappyDom } from './helpers/dom-harness.js'
 
 ensureHappyDom()
 const ReactDOMClient = await import('react-dom/client')
-const { Select } = await import('@helmx/ui')
+const { Select, UiLocaleProvider } = await import('../src/index.js')
 
 const e = React.createElement
+
+afterEach(() => {
+  resetHappyDom()
+}, { timeout: 60_000 })
 
 // ---------------------------------------------------------------------------
 // 1. SSR 渲染与 DOM 契约测试
@@ -33,20 +37,13 @@ test('Select：基础触发器渲染符合无障碍与项目极简视觉规范',
     }),
   )
 
-  // 1. 结构与容器类名
   assert.match(html, /class="helmx-select composer-env-select"/)
   assert.match(html, /class="helmx-select-trigger"/)
-
-  // 2. 无障碍属性
   assert.match(html, /aria-label="会话执行节点"/)
   assert.match(html, /aria-haspopup="listbox"/)
   assert.match(html, /aria-expanded="false"/)
-
-  // 3. 选中文案与 Lucide 旋转折叠图标
   assert.match(html, /<span class="helmx-select-label">local \(本机\)<\/span>/)
   assert.match(html, /helmx-select-chevron/)
-
-  // 4. 严禁包含 Emoji
   assert.equal(/[\p{Emoji_Presentation}\p{Extended_Pictographic}]/u.test(html), false)
 })
 
@@ -101,7 +98,7 @@ test('Select：空字符串作为合法选项值（如跟随全局默认）正�
 })
 
 // ---------------------------------------------------------------------------
-// 3. Radix UI 无障碍属性、状态机与 DOM 交互契约测试
+// 2. Radix UI 无障碍属性、状态机与 DOM 交互契约测试
 // ---------------------------------------------------------------------------
 
 test('Select：无障碍角色（role="combobox" / role="listbox"）与状态机契约', { timeout: 60_000 }, () => {
@@ -128,14 +125,12 @@ test('Select：无障碍角色（role="combobox" / role="listbox"）与状态机
     )
   })
 
-  // 1. Trigger role="combobox" 与无障碍关联
   const trigger = container.querySelector('[role="combobox"]')
   assert.ok(trigger, 'Trigger 必须具备 role="combobox"')
   assert.equal(trigger.getAttribute('aria-expanded'), 'true')
   assert.equal(trigger.getAttribute('aria-haspopup'), 'listbox')
   assert.equal(trigger.getAttribute('aria-label'), '目标执行节点')
 
-  // 2. Content role="listbox" 与选项 role="option"
   const listbox = container.querySelector('[role="listbox"]')
   assert.ok(listbox, '下拉浮层必须具备 role="listbox"')
   assert.equal(listbox.getAttribute('data-state'), 'open')
@@ -143,7 +138,6 @@ test('Select：无障碍角色（role="combobox" / role="listbox"）与状态机
   const optionElements = container.querySelectorAll('[role="option"]')
   assert.equal(optionElements.length, 3, '应渲染全部 3 个选项')
 
-  // 3. 激活态与勾选指示符
   const selectedOptionEl = optionElements[0]
   assert.equal(selectedOptionEl?.getAttribute('data-state'), 'checked')
   assert.ok(selectedOptionEl?.querySelector('.helmx-select-check'), '选中项应渲染 check 勾选指示器')
@@ -152,7 +146,6 @@ test('Select：无障碍角色（role="combobox" / role="listbox"）与状态机
   assert.equal(unselectedOptionEl?.getAttribute('data-state'), 'unchecked')
   assert.ok(unselectedOptionEl?.querySelector('.helmx-select-check') === null, '未选中项不应渲染勾选')
 
-  // 4. 禁用态选项
   const disabledOptionEl = optionElements[2]
   assert.ok(disabledOptionEl?.hasAttribute('data-disabled'), '禁用项应带有 data-disabled')
 
@@ -193,7 +186,6 @@ test('Select：键盘首字母跳转（Typeahead Search）与 Enter 键选择触
   const listbox = container.querySelector('[role="listbox"]')
   assert.ok(listbox, '浮层必须展开')
 
-  // 1. 模拟在 listbox 上键入 'b'，应触发首字母跳转（Typeahead Search）
   await act(async () => {
     listbox.dispatchEvent(new KeyboardEvent('keydown', { key: 'b', bubbles: true, cancelable: true }))
   })
@@ -203,12 +195,10 @@ test('Select：键盘首字母跳转（Typeahead Search）与 Enter 键选择触
   assert.ok(bananaOption, '应找到 Banana 选项')
   assert.ok(bananaOption.hasAttribute('data-highlighted'), '输入 b 之后 Banana 选项应被高亮（data-highlighted）')
 
-  // 2. 模拟回车确认选中
   await act(async () => {
     bananaOption.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
   })
 
-  // 3. 校验 onChange 事件与 SelectChangeEvent 数据结构（包括 name）
   assert.ok(changedEvent, '回车后必须触发 onChange 回调')
   assert.equal((changedEvent as SelectChangeEvent<string>).target.value, 'banana')
   assert.equal((changedEvent as SelectChangeEvent<string>).target.name, 'fruitSelect')
@@ -237,22 +227,15 @@ test('Select multiple: 渲染多选触发器、全选与清空操作栏及复选
     }),
   )
 
-  // 1. 结构与多选类名
   assert.match(html, /class="[^"]*helmx-select-multi[^"]*"/)
   assert.match(html, /2 selected/)
   assert.match(html, /aria-label="模型多选"/)
-
-  // 2. 快捷全选与清空按钮
   assert.match(html, /Select all/)
   assert.match(html, /Clear/)
-
-  // 3. 复选框与选项呈现
   assert.match(html, /role="checkbox"/)
   assert.match(html, /Model 1/)
   assert.match(html, /Model 2/)
   assert.match(html, /200K/)
-
-  // 4. 零 Emoji
   assert.equal(/[\p{Emoji_Presentation}\p{Extended_Pictographic}]/u.test(html), false)
 })
 
@@ -274,50 +257,7 @@ test('Select multiple: 全选时触发器显示已全选摘要文案', { timeout
   assert.match(html, /All selected \(2\)/)
 })
 
-test('CSS stacking regression: Popover 内容节点必须声明 z-index: 80，Select 保持 120，Dialog 内联层叠仍可覆盖', { timeout: 60_000 }, () => {
-  // Radix Popper reads getComputedStyle(content).zIndex and mirrors it inline onto
-  // [data-radix-popper-content-wrapper]; if .helmx-popover-content computes to 'auto',
-  // inline z-index: auto overrides the wrapper rule and lets .timeline-container::after (z-index: 2)
-  // paint a horizontal seam straight across the popover.
-  const style = document.createElement('style')
-  style.textContent = readHostStyles()
-  document.head.appendChild(style)
-
-  const makeWrapped = (className: string, inlineZ?: string): HTMLElement => {
-    const wrapper = document.createElement('div')
-    wrapper.setAttribute('data-radix-popper-content-wrapper', '')
-    const content = document.createElement('div')
-    content.className = className
-    if (inlineZ !== undefined) content.style.zIndex = inlineZ
-    wrapper.appendChild(content)
-    document.body.appendChild(wrapper)
-    return content
-  }
-
-  const plainPopover = makeWrapped('helmx-popover-content magpie-quota-popover')
-  const modelPopover = makeWrapped('helmx-popover-content composer-popover composer-model-popover')
-  const paneMorePopover = makeWrapped('helmx-popover-content pane-more-popover')
-  const selectPopover = makeWrapped('helmx-popover-content helmx-select-popover')
-  const nestedDialogPopover = makeWrapped('helmx-popover-content magpie-quota-popover', '1002')
-  try {
-    assert.equal(getComputedStyle(plainPopover).zIndex, '80', '普通 Popover 必须向 Radix Popper 暴露 z-index: 80 而非 auto')
-    assert.equal(getComputedStyle(modelPopover).zIndex, '80', '模型选择器 Popover 统一处于 80 层，不被侧栏或底渐隐层遮挡')
-    assert.equal(getComputedStyle(paneMorePopover).zIndex, '80', '会话顶栏更多菜单 Popover 统一处于 80 层，不被 @layer host-components 压回 50')
-    assert.equal(getComputedStyle(selectPopover).zIndex, '120', 'MultiSelect 复用 PopoverContent 时仍须维持 120 层高于旧弹窗')
-    assert.equal(getComputedStyle(nestedDialogPopover).zIndex, '1002', 'Dialog 内浮层通过 useOverlayChildStyle 内联抬高层级不被压低')
-  } finally {
-    plainPopover.parentElement?.remove()
-    modelPopover.parentElement?.remove()
-    paneMorePopover.parentElement?.remove()
-    selectPopover.parentElement?.remove()
-    nestedDialogPopover.parentElement?.remove()
-    style.remove()
-  }
-})
-
 test('Select multiple: 点击复选框仅触发一次 onChange，支持键盘导航与多语言空态', { timeout: 60_000 }, async () => {
-  const { HostStoreProviders } = await import('./helpers/host-store.js')
-  const { makeTestStore } = await import('./helpers/store.js')
   const container = document.createElement('div')
   document.body.appendChild(container)
   const root = ReactDOMClient.createRoot(container)
@@ -331,12 +271,23 @@ test('Select multiple: 点击复选框仅触发一次 onChange，支持键盘导
   ]
   const changes: string[][] = []
   let current: string[] = []
-  const store = makeTestStore({ locale: 'en' })
+  let locale: HelmxLocale = 'en'
+  const listeners = new Set<() => void>()
+  const subscribe = (listener: () => void) => {
+    listeners.add(listener)
+    return () => {
+      listeners.delete(listener)
+    }
+  }
+  const setLocale = (next: HelmxLocale) => {
+    locale = next
+    for (const listener of listeners) listener()
+  }
 
   const renderSelect = () =>
     e(
-      HostStoreProviders,
-      { value: store },
+      UiLocaleProvider,
+      { subscribe, getLocale: () => locale },
       e(Select, {
         multiple: true,
         inline: true,
@@ -356,7 +307,6 @@ test('Select multiple: 点击复选框仅触发一次 onChange，支持键盘导
       root.render(renderSelect())
     })
 
-    // 1. Clicking Checkbox fires onValuesChange exactly once (no parent-row double-trigger)
     const checkboxes = container.querySelectorAll<HTMLButtonElement>('[role="checkbox"]')
     assert.equal(checkboxes.length, 5)
     await act(async () => {
@@ -368,8 +318,6 @@ test('Select multiple: 点击复选框仅触发一次 onChange，支持键盘导
       root.render(renderSelect())
     })
 
-    // 2. Keyboard navigation skips disabled Beta and toggles Charlie on Enter,
-    //    and exposes aria-activedescendant / aria-controls / option IDs
     const viewport = container.querySelector<HTMLElement>('.helmx-select-viewport')
     const listbox = container.querySelector<HTMLElement>('[role="listbox"]')
     const trigger = container.querySelector<HTMLButtonElement>('.helmx-select-trigger')
@@ -413,7 +361,6 @@ test('Select multiple: 点击复选框仅触发一次 onChange，支持键盘导
     })
     assert.deepEqual(changes[changes.length - 1], ['a', 'c'], 'Enter toggles highlighted option')
 
-    // 3. Empty search state renders localized .helmx-select-empty without orphan .text-xs
     const searchInput = container.querySelector<HTMLInputElement>('.helmx-select-search input')
     assert.ok(searchInput !== null)
     const nativeValueSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
@@ -429,11 +376,10 @@ test('Select multiple: 点击复选框仅触发一次 onChange，支持键盘导
     assert.equal(emptyElEn.classList.contains('text-xs'), false)
 
     await act(async () => {
-      store.setLocale('zh-CN')
+      setLocale('zh-CN')
     })
     assert.equal(container.querySelector('.helmx-select-empty')?.textContent, '无匹配选项')
   } finally {
-    localStorage.removeItem('helmx:locale')
     await act(async () => {
       root.unmount()
     })

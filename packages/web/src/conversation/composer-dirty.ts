@@ -80,11 +80,6 @@ function syncSummaryAndNotify(): void {
   for (const listener of listeners) listener()
 }
 
-/** Aggregate verdict: any mounted Composer carries unsubmitted local state. */
-export function composerDirty(): boolean {
-  return cachedSummary.anyDirty
-}
-
 /** Referentially stable summary of dirty Composer instances (for useSyncExternalStore). */
 export function getComposerDirtySummary(): ComposerDirtySummary {
   return cachedSummary
@@ -108,7 +103,7 @@ export function clearComposerDirty(key: string): void {
   syncSummaryAndNotify()
 }
 
-/** Subscribe to aggregated dirty-state changes (getSnapshot uses composerDirty). */
+/** Subscribe to aggregated dirty-state changes (getSnapshot uses getComposerDirtySummary). */
 export function subscribeComposerDirty(listener: () => void): () => void {
   listeners.add(listener)
   return () => {

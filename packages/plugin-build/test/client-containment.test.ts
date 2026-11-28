@@ -15,7 +15,7 @@
  *   an ancestor workspace `package.json`).
  */
 import assert from 'node:assert/strict'
-import { afterEach, beforeEach, test } from 'node:test'
+import { after, describe, test } from 'node:test'
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -26,17 +26,20 @@ import {
   findPackageDirOf,
 } from '../src/client-compiler.js'
 
-let workDir: string
-
-beforeEach(() => {
+after(() => {
   clearClientCompilerMemoryCache()
-  workDir = realpathSync(mkdtempSync(join(tmpdir(), 'helmx-client-containment-')))
 })
 
-afterEach(() => {
-  clearClientCompilerMemoryCache()
-  rmSync(workDir, { recursive: true, force: true })
-})
+function withWorkDir(fn: (workDir: string) => Promise<void> | void): () => Promise<void> {
+  return async () => {
+    const workDir = realpathSync(mkdtempSync(join(tmpdir(), 'helmx-client-containment-')))
+    try {
+      await fn(workDir)
+    } finally {
+      rmSync(workDir, { recursive: true, force: true })
+    }
+  }
+}
 
 function writeJson(filePath: string, value: unknown): void {
   writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, 'utf8')
@@ -70,7 +73,8 @@ async function evalBundle(code: string): Promise<Record<string, unknown>> {
   return (await import(url)) as Record<string, unknown>
 }
 
-test('unauthorized absolute imports are rejected across POSIX, Windows/UNC, in-root, node_modules, dynamic import, and CSS @import', { timeout: 60_000 }, async () => {
+describe('client-containment security boundaries', { concurrency: 4, timeout: 60_000 }, () => {
+test('unauthorized absolute imports are rejected across POSIX, Windows/UNC, in-root, node_modules, dynamic import, and CSS @import', { timeout: 60_000 }, withWorkDir(async (workDir) => {
   const outsideDir = join(workDir, 'outside')
   const outsideNmDir = join(outsideDir, 'node_modules')
   mkdirSync(outsideDir, { recursive: true })
@@ -151,26 +155,28 @@ test('unauthorized absolute imports are rejected across POSIX, Windows/UNC, in-r
     },
   ]
 
-  for (const tc of cases) {
-    const clientRoot = join(workDir, `abs-case-${tc.name}`)
-    mkdirSync(clientRoot, { recursive: true })
-    if (tc.extraFiles) {
-      for (const [rel, content] of Object.entries(tc.extraFiles)) {
-        writeFileSync(join(clientRoot, rel), content, 'utf8')
+  await Promise.all(
+    cases.map(async (tc) => {
+      const clientRoot = join(workDir, `abs-case-${tc.name}`)
+      mkdirSync(clientRoot, { recursive: true })
+      if (tc.extraFiles) {
+        for (const [rel, content] of Object.entries(tc.extraFiles)) {
+          writeFileSync(join(clientRoot, rel), content, 'utf8')
+        }
       }
-    }
-    writeFileSync(join(clientRoot, 'index.tsx'), tc.source, 'utf8')
-    await assert.rejects(
-      compilePluginClientModule(`test:abs-${tc.name}`, clientRoot, 'index.tsx', join(workDir, 'cache'), {
-        npmRoots: tc.roots ?? [],
-      }),
-      (err: unknown) =>
-        err instanceof HelmxError &&
-        err.code === 'client_compile_failed' &&
-        tc.expectPattern.test(err.message),
-      `case ${tc.name} must be explicitly rejected`,
-    )
-  }
+      writeFileSync(join(clientRoot, 'index.tsx'), tc.source, 'utf8')
+      await assert.rejects(
+        compilePluginClientModule(`test:abs-${tc.name}`, clientRoot, 'index.tsx', join(workDir, 'cache'), {
+          npmRoots: tc.roots ?? [],
+        }),
+        (err: unknown) =>
+          err instanceof HelmxError &&
+          err.code === 'client_compile_failed' &&
+          tc.expectPattern.test(err.message),
+        `case ${tc.name} must be explicitly rejected`,
+      )
+    }),
+  )
 
   // Absolute path even when pointing inside clientRoot itself must also be rejected (portable relative imports only).
   const inRootClient = join(workDir, 'abs-case-in-root')
@@ -189,9 +195,9 @@ test('unauthorized absolute imports are rejected across POSIX, Windows/UNC, in-r
       err.code === 'client_compile_failed' &&
       /unauthorized absolute/i.test(err.message),
   )
-})
+}))
 
-test('empty npmRoots forbids all node_modules access (bare, relative, extensionless, nested ./node_modules, symlink, absolute)', { timeout: 60_000 }, async () => {
+test('empty npmRoots forbids all node_modules access (bare, relative, extensionless, nested ./node_modules, symlink, absolute)', { timeout: 60_000 }, withWorkDir(async (workDir) => {
   const pluginDir = join(workDir, 'empty-roots-plugin')
   const clientRoot = join(pluginDir, 'client')
   mkdirSync(clientRoot, { recursive: true })
@@ -246,23 +252,25 @@ test('empty npmRoots forbids all node_modules access (bare, relative, extensionl
     },
   ]
 
-  for (const vec of vectors) {
-    const entryName = `entry-${vec.name}.tsx`
-    writeFileSync(join(clientRoot, entryName), vec.source, 'utf8')
-    await assert.rejects(
-      compilePluginClientModule(`test:empty-roots-${vec.name}`, clientRoot, entryName, join(workDir, 'cache'), {
-        npmRoots: [],
-      }),
-      (err: unknown) =>
-        err instanceof HelmxError &&
-        err.code === 'client_compile_failed' &&
-        vec.expectPattern.test(err.message),
-      `empty npmRoots vector ${vec.name} must be rejected without auto-authorizing node_modules`,
-    )
-  }
-})
+  await Promise.all(
+    vectors.map(async (vec) => {
+      const entryName = `entry-${vec.name}.tsx`
+      writeFileSync(join(clientRoot, entryName), vec.source, 'utf8')
+      await assert.rejects(
+        compilePluginClientModule(`test:empty-roots-${vec.name}`, clientRoot, entryName, join(workDir, 'cache'), {
+          npmRoots: [],
+        }),
+        (err: unknown) =>
+          err instanceof HelmxError &&
+          err.code === 'client_compile_failed' &&
+          vec.expectPattern.test(err.message),
+        `empty npmRoots vector ${vec.name} must be rejected without auto-authorizing node_modules`,
+      )
+    }),
+  )
+}))
 
-test('symlink boundaries: rejects escapes from clientRoot, into declared npm, inside declared npm, and via package.json main; permits valid internal and pnpm-style symlinks', { timeout: 60_000 }, async () => {
+test('symlink boundaries: rejects escapes from clientRoot, into declared npm, inside declared npm, and via package.json main; permits valid internal and pnpm-style symlinks', { timeout: 60_000 }, withWorkDir(async (workDir) => {
   const outsideDir = join(workDir, 'sym-outside')
   mkdirSync(outsideDir, { recursive: true })
   const outsideFile = join(outsideDir, 'secret.ts')
@@ -357,9 +365,9 @@ test('symlink boundaries: rejects escapes from clientRoot, into declared npm, in
     }),
     (err: unknown) => err instanceof HelmxError && err.code === 'client_compile_failed' && /cannot parse declared frontend dependency/.test(err.message),
   )
-})
+}))
 
-test('transitive dependencies: allows declared package transitive chains (multi-hop, scoped, pnpm symlink, #imports) while blocking direct undeclared imports, sibling traversal, symlink escapes, and orphan dirs', { timeout: 60_000 }, async () => {
+test('transitive dependencies: allows declared package transitive chains (multi-hop, scoped, pnpm symlink, #imports) while blocking direct undeclared imports, sibling traversal, symlink escapes, and orphan dirs', { timeout: 60_000 }, withWorkDir(async (workDir) => {
   const outsideDir = join(workDir, 'trans-outside')
   mkdirSync(outsideDir, { recursive: true })
   const outsideSecret = join(outsideDir, 'secret.js')
@@ -577,9 +585,9 @@ test('transitive dependencies: allows declared package transitive chains (multi-
     compilePluginClientModule('test:tsconfig-paths-escape', tsClient, 'index.tsx', join(workDir, 'cache')),
     (err: unknown) => err instanceof HelmxError && err.code === 'client_compile_failed' && /reject bare dependency "secret-alias"/.test(err.message),
   )
-})
+}))
 
-test('symlink-free fast-path safety: authorized package containing a relative symlink escape still rejects out of bounds', { timeout: 60_000 }, async () => {
+test('symlink-free fast-path safety: authorized package containing a relative symlink escape still rejects out of bounds', { timeout: 60_000 }, withWorkDir(async (workDir) => {
   const outsideDir = join(workDir, 'pkg-rel-sym-outside')
   mkdirSync(outsideDir, { recursive: true })
   const outsideSecret = join(outsideDir, 'secret.js')
@@ -603,9 +611,9 @@ test('symlink-free fast-path safety: authorized package containing a relative sy
     }),
     (err: unknown) => err instanceof HelmxError && err.code === 'client_compile_failed' && /out of bounds/.test(err.message),
   )
-})
+}))
 
-test('findPackageDirOf: resolves package root across normal/scoped/pnpm/sub-package.json layouts and returns null instead of fileReal or climbing past node_modules', { timeout: 60_000 }, () => {
+test('findPackageDirOf: resolves package root across normal/scoped/pnpm/sub-package.json layouts and returns null instead of fileReal or climbing past node_modules', { timeout: 60_000 }, withWorkDir((workDir) => {
   const repoDir = join(workDir, 'repo')
   const nmDir = join(repoDir, 'node_modules')
   mkdirSync(nmDir, { recursive: true })
@@ -666,9 +674,9 @@ test('findPackageDirOf: resolves package root across normal/scoped/pnpm/sub-pack
   const found = findPackageDirOf(noPkgFile)
   assert.notEqual(found, noPkgFile, 'findPackageDirOf must never return the input file path itself')
   assert.equal(found, null)
-})
+}))
 
-test('assertEntryInsideRoot rejects nested node_modules entrypoints and preserves non-ENOENT errors', { timeout: 60_000 }, async () => {
+test('assertEntryInsideRoot rejects nested node_modules entrypoints and preserves non-ENOENT errors', { timeout: 60_000 }, withWorkDir(async (workDir) => {
   const { assertEntryInsideRoot, realpathOrNull } = await import('../src/client-paths.js')
   const pluginDir = join(workDir, 'entry-nm')
   mkdirSync(join(pluginDir, 'node_modules', 'pkg'), { recursive: true })
@@ -693,4 +701,5 @@ test('assertEntryInsideRoot rejects nested node_modules entrypoints and preserve
       (err: unknown) => (err as NodeJS.ErrnoException).code === 'ELOOP',
     )
   }
+}))
 })

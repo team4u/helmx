@@ -18,9 +18,9 @@ import { dirname, join } from 'node:path'
 import { fauxAssistantMessage, fauxToolCall, type FauxResponseStep } from '@earendil-works/pi-ai/providers/faux'
 
 import { HelmxError } from '@helmx/protocol'
+import { KernelRuntime } from '@helmx/kernel'
 import { createPluginBuildProvider } from '@helmx/plugin-build'
 import { actionToolResult } from '@helmx/kernel/testing'
-import { createHelmx } from '../../hub/src/app.js'
 import {
   PLANNING_ORCHESTRATION_TOOLS_CAPABILITY_ID,
   type PlanningOrchestrationToolsCapability,
@@ -49,13 +49,17 @@ import {
   ORCHESTRATOR_EXECUTE_SECTION_ID,
   ORCHESTRATOR_PLAN_SECTION_ID,
   ORCHESTRATOR_PLUGIN_ID,
+  createOrchestratorPlugin,
 } from '../src/orchestrator.js'
-import { TIERS_PLUGIN_ID } from '../src/tiers.js'
-import { TITLE_PLUGIN_ID } from '../src/title.js'
+import { createMentionsPlugin } from '../src/mentions.js'
+import { TIERS_PLUGIN_ID, createTiersPlugin } from '../src/tiers.js'
+import { createWorkflowPlugin } from '../src/workflow.js'
+import { createWorktreePlugin } from '../src/worktree.js'
 import {
   SWARM_PLUGIN_ID,
   SWARM_TOOL_NAMES,
   WORKER_TAG,
+  createSwarmPlugin,
   resolveSwarmConfig,
   type BoardPost,
   type BoardViewDoc,
@@ -1048,7 +1052,7 @@ describe('builtin:swarm board routing, settlement & self-healing', { concurrency
 
       await betaSecondRoundEntered.promise
       // Hold longer than COORDINATOR_BATCH_WINDOW_MS (50ms) while beta is still mid-turn!
-      await new Promise((r) => setTimeout(r, 90))
+      await new Promise((r) => setTimeout(r, 60))
       const midTurnReports = (await kernel.conversations.getConversationDetail(coord.id, { limit: 20 })).entries.filter(
         (e) => e.kind === 'helmx.input' && JSON.stringify(e.data ?? '').includes('swarm_board_report'),
       )
@@ -1587,20 +1591,26 @@ describe('builtin:swarm board routing, settlement & self-healing', { concurrency
         { id: 'fast', name: 'Fast', reasoning: true },
       ],
     })
-    const app = await createHelmx({
+    const kernel = await KernelRuntime.open({
       buildProvider: createPluginBuildProvider(),
       dataDir,
       cwd: repoDir,
       model: 'faux/flagship',
       providers: [faux.provider],
+      autoResume: false,
     })
     t.after(async () => {
-      await app.close().catch(() => {})
+      await kernel.close().catch(() => {})
       rmSync(root, { recursive: true, force: true })
     }, { timeout: 60_000 })
 
-    const { kernel } = app
-    await kernel.plugins.setConfig(TITLE_PLUGIN_ID, { autoTitle: false })
+    await kernel.plugins.register(createMentionsPlugin())
+    await kernel.plugins.register(createWorkflowPlugin())
+    await kernel.plugins.register(createWorktreePlugin())
+    await kernel.plugins.register(createTiersPlugin())
+    await kernel.plugins.register(createOrchestratorPlugin())
+    await kernel.plugins.register(createSwarmPlugin())
+    await kernel.start()
 
     // Verify builtin:swarm exposes all SWARM_TOOL_NAMES via PLANNING_ORCHESTRATION_TOOLS_CAPABILITY_ID
     const planningCaps = kernel.plugins.consumeCapability<PlanningOrchestrationToolsCapability>(

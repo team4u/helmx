@@ -13,8 +13,9 @@ import {
   type FauxProviderHandle,
   type RegisterFauxProviderOptions,
 } from '@earendil-works/pi-ai/providers/faux'
-import type { PluginKvHandle, PluginKvListOptions, PluginKvListResult } from '@helmx/protocol'
-import type { PluginConfigStore, PluginDocStore, PluginKvRawEntry, PluginKvStore } from '@helmx/kernel'
+import type { PluginDefinition, PluginKvHandle, PluginKvListOptions, PluginKvListResult } from '@helmx/protocol'
+import { KernelRuntime, type KernelRuntimeOptions, type PluginConfigStore, type PluginDocStore, type PluginKvRawEntry, type PluginKvStore } from '@helmx/kernel'
+import { createPluginBuildProvider } from '@helmx/plugin-build'
 import {
   AGENT_BINDINGS_KV_NAMESPACE,
   LEASES_KV_NAMESPACE,
@@ -37,7 +38,7 @@ export {
   type WaitForOptions,
 } from '@helmx/test-kit'
 
-export {
+import {
   assertRejectsCode,
   cleanupDir,
   HOST_MANAGED_HELMX_ENV_NAMES,
@@ -46,6 +47,16 @@ export {
   useTempDir,
   type CleanupRegistrar,
 } from '@helmx/test-kit/node'
+
+export {
+  assertRejectsCode,
+  cleanupDir,
+  HOST_MANAGED_HELMX_ENV_NAMES,
+  makeTempDir,
+  sanitizedHostEnv,
+  useTempDir,
+  type CleanupRegistrar,
+}
 
 export {
   createGitTemplate,
@@ -331,6 +342,66 @@ export function makeFauxModels(options?: RegisterFauxProviderOptions): {
   const faux = fauxProvider(options)
   models.setProvider(faux.provider)
   return { models, faux }
+}
+
+export interface OpenMinimalRuntimeOptions {
+  dataDir?: string
+  prefix?: string
+  cwd?: string
+  model?: string
+  fauxOptions?: RegisterFauxProviderOptions
+  autoResume?: boolean
+  providers?: KernelRuntimeOptions['providers']
+  /** Optional hook before `start()` (e.g., to disable `builtin:title` autoTitle if registered). */
+  beforeStart?: (kernel: KernelRuntime) => Promise<void> | void
+}
+
+/**
+ * 启动仅装配指定插件子集的极简 `KernelRuntime`（跳过其余内置插件初始化与技能复制），
+ * 用于无需 17 插件全量 `createHelmx()` 的集成测试。
+ */
+export async function openMinimalRuntime(
+  plugins: readonly PluginDefinition[],
+  options: OpenMinimalRuntimeOptions = {},
+): Promise<{
+  dataDir: string
+  kernel: KernelRuntime
+  faux: FauxProviderHandle
+  close: () => Promise<void>
+}> {
+  const ownedTempDir = options.dataDir === undefined
+  const dataDir = options.dataDir ?? await makeTempDir(options.prefix ?? 'helmx-min-rt-')
+  const faux = fauxProvider(options.fauxOptions)
+  const runtime = await KernelRuntime.open({
+    buildProvider: createPluginBuildProvider(),
+    dataDir,
+    cwd: options.cwd ?? dataDir,
+    model: options.model ?? 'faux/faux-1',
+    providers: options.providers ?? [faux.provider],
+    autoResume: options.autoResume ?? false,
+  })
+  try {
+    for (const plugin of plugins) {
+      await runtime.plugins.register(plugin)
+    }
+    if (options.beforeStart !== undefined) {
+      await options.beforeStart(runtime)
+    }
+    await runtime.start()
+  } catch (error) {
+    await runtime.close().catch(() => {})
+    if (ownedTempDir) await cleanupDir(dataDir)
+    throw error
+  }
+  return {
+    dataDir,
+    kernel: runtime,
+    faux,
+    close: async () => {
+      await runtime.close().catch(() => {})
+      if (ownedTempDir) await cleanupDir(dataDir)
+    },
+  }
 }
 
 /** 断言异步过程不会产生逃逸 `unhandledRejection`（观察面故障须就地诊断）。 */
