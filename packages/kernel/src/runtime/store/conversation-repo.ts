@@ -260,6 +260,7 @@ export interface ConversationSummaryInput {
   lastError?: string
   lastEntryId?: number
   pendingAskSince?: number
+  effectiveModelRef?: string
   runtimeModelOverride?: boolean
 }
 
@@ -271,6 +272,7 @@ export function summaryOf({
   lastError,
   lastEntryId,
   pendingAskSince,
+  effectiveModelRef,
   runtimeModelOverride,
 }: ConversationSummaryInput): ConversationSummary {
   return {
@@ -287,6 +289,7 @@ export function summaryOf({
     cwd: meta.cwd,
     model: meta.model,
     ...(meta.modelOverride !== undefined && meta.modelOverride !== '' ? { modelOverride: meta.modelOverride } : {}),
+    ...(effectiveModelRef !== undefined && effectiveModelRef.startsWith('tier/') ? { effectiveModelRef } : {}),
     ...(runtimeModelOverride === true ? { runtimeModelOverride: true } : {}),
     thinkingLevel: meta.thinkingLevel,
     ...(meta.thinkingLevelOverride !== undefined ? { thinkingLevelOverride: meta.thinkingLevelOverride } : {}),

@@ -200,7 +200,17 @@ export class ConversationContextOps {
       }
     }
     const { meta: sourceMeta, conversation: sourceConv } = await this.conversationForContextOp(id)
-    const forkedModelOverride = sourceMeta.modelOverride
+    const effectiveParentId = explicitParentId ?? id
+    const effectiveOwnedBy: ConversationOwnership =
+      explicitOwnedBy ?? (sourceMeta.ownedBy === 'helmx' ? 'helmx' : 'human')
+    const rawForkedModelOverride = sourceMeta.modelOverride
+    // Child / `'helmx'`-owned forks freeze symbolic `'tier/<id>'` overrides to the concrete parent model.
+    const forkedModelOverride =
+      rawForkedModelOverride !== undefined &&
+      rawForkedModelOverride.startsWith('tier/') &&
+      (effectiveParentId !== undefined || effectiveOwnedBy === 'helmx')
+        ? (sourceMeta.model !== '' ? sourceMeta.model : undefined)
+        : rawForkedModelOverride
     const forkedThinkingLevelOverride = sourceMeta.thinkingLevelOverride
     let entryId: number
     if (explicitEntryId !== undefined) {
@@ -228,14 +238,12 @@ export class ConversationContextOps {
       opts?.title !== undefined && opts.title.trim() !== ''
         ? this.host.stash.redact(opts.title.trim())
         : `${baseTitle} (fork)`
-    const effectiveOwnedBy: ConversationOwnership =
-      explicitOwnedBy ?? (sourceMeta.ownedBy === 'helmx' ? 'helmx' : 'human')
     this.host.store.upsertConv({
       id: newId,
       title,
       profileId: sourceMeta.profileId,
       tags: [...sourceMeta.tags],
-      parentConversationId: explicitParentId ?? id,
+      parentConversationId: effectiveParentId,
       ownedBy: effectiveOwnedBy,
       nodeId: sourceMeta.nodeId ?? 'local',
       cwd: sourceMeta.cwd,

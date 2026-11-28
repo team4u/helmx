@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from 'react'
+import { Fragment, useCallback, useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from 'react'
 import { MODEL_TIER_PREFIX, type HostModelEntry, type ModelTierCatalogEntry } from '@helmx/protocol/browser'
 import {
   Button,
@@ -189,7 +189,13 @@ function ModelPickerTierRow({
       ? resolveEffectiveThinkingLevel(effectiveTierLevels ?? [rawTierLevel], rawTierLevel)
       : ''
   const titleModel = tier.model
-  const subtitle = tier.description || titleModel
+  const hasDisplayLabel = tier.displayLabel !== undefined && tier.displayLabel !== ''
+  const primaryLabel = hasDisplayLabel ? tier.displayLabel! : tierRef
+  const detailText =
+    tier.displayDetail !== undefined && tier.displayDetail !== '' ? tier.displayDetail : `· ${targetShort}`
+  const iconName = tier.displayGroup === 'duo' ? 'git-pull-request' : 'layers'
+  const hasDisplayGroup = tier.displayGroup !== undefined && tier.displayGroup !== ''
+  const subtitle = tier.description || (hasDisplayGroup ? tierRef : titleModel)
 
   return (
     <div
@@ -207,9 +213,11 @@ function ModelPickerTierRow({
         onClick={() => onSelect(tierRef, null)}
       >
         <span className="composer-model-row-name-line">
-          <HelmxIcon name="layers" size={12} className="composer-model-tier-icon" />
-          <span className="mono composer-model-row-name">{tierRef}</span>
-          <span className="popover-item-meta">· {targetShort}</span>
+          <HelmxIcon name={iconName} size={12} className="composer-model-tier-icon" />
+          <span className={hasDisplayLabel ? 'composer-model-row-name' : 'mono composer-model-row-name'}>
+            {primaryLabel}
+          </span>
+          <span className="popover-item-meta">{detailText}</span>
           {isCurrent ? <HelmxIcon name="check" size={12} className="composer-model-row-check" /> : null}
         </span>
         <span className="popover-item-meta composer-model-row-source">{subtitle}</span>
@@ -476,6 +484,8 @@ export interface ModelPickerControlProps {
   showThinkingLevels?: boolean
   /** Include mounted runtime model tiers (`tier/<id>`) at the top of the picker (default `true`; pass `false` when selecting concrete models only). */
   allowTiers?: boolean
+  /** Include symbolic `preserveRef` tiers (e.g. dual-phase recipes; default `true`, pass `false` for child/compaction pickers). */
+  allowPreserveRefTiers?: boolean
   disabled?: boolean
   pending?: boolean
   /**
@@ -523,6 +533,7 @@ export function ModelPickerControl({
   initialMode,
   showThinkingLevels = true,
   allowTiers = true,
+  allowPreserveRefTiers = true,
   disabled = false,
   pending = false,
   onNotice,
@@ -633,10 +644,29 @@ export function ModelPickerControl({
     }
   }, [nextTurnMode, isNextTurnDisabled, pickerScope])
 
-  const rawTiers = allowTiers ? (catalog?.modelTiers ?? EMPTY_TIERS) : EMPTY_TIERS
-  const { filteredTiers, filteredModels, navItems, syncKey, initialActiveIndex, allUnavailable } = useMemo(() => {
+  const rawTiers = useMemo(() => {
+    if (!allowTiers) return EMPTY_TIERS
+    return (catalog?.modelTiers ?? EMPTY_TIERS).filter(
+      (tier) =>
+        (allowPreserveRefTiers || tier.preserveRef !== true) &&
+        (!activeNextTurnTab || tier.singleTurnEligible !== false),
+    )
+  }, [allowTiers, allowPreserveRefTiers, activeNextTurnTab, catalog?.modelTiers])
+
+  const {
+    groupedTiers,
+    ungroupedTiers,
+    filteredTiers,
+    filteredModels,
+    navItems,
+    syncKey,
+    initialActiveIndex,
+    allUnavailable,
+  } = useMemo(() => {
     if (!open) {
       return {
+        groupedTiers: [] as Array<{ group: string; tiers: typeof EMPTY_TIERS }>,
+        ungroupedTiers: EMPTY_TIERS,
         filteredTiers: EMPTY_TIERS,
         filteredModels: EMPTY_MODELS,
         navItems: EMPTY_NAV_ITEMS,
@@ -653,14 +683,30 @@ export function ModelPickerControl({
       return (
         tierRef.toLowerCase().includes(queryLower) ||
         tier.model.toLowerCase().includes(queryLower) ||
+        (tier.displayLabel?.toLowerCase().includes(queryLower) ?? false) ||
+        (tier.displayDetail?.toLowerCase().includes(queryLower) ?? false) ||
         (tier.description?.toLowerCase().includes(queryLower) ?? false)
       )
     })
+    const groupMap = new Map<string, Array<(typeof nextTiers)[number]>>()
+    const nextUngrouped: Array<(typeof nextTiers)[number]> = []
+    for (const tier of nextTiers) {
+      const group = tier.displayGroup?.trim()
+      if (group !== undefined && group !== '') {
+        const list = groupMap.get(group)
+        if (list !== undefined) list.push(tier)
+        else groupMap.set(group, [tier])
+      } else {
+        nextUngrouped.push(tier)
+      }
+    }
+    const nextGrouped = [...groupMap.entries()].map(([group, tiers]) => ({ group, tiers }))
+    const orderedTiers = [...nextGrouped.flatMap((entry) => entry.tiers), ...nextUngrouped]
     const nextModels = models.filter(
       (model) => model.available && model.disabled !== true && model.id.toLowerCase().includes(queryLower),
     )
     const nextNavItems: Array<{ id: string }> = [
-      ...nextTiers.map((tier) => ({ id: `${MODEL_TIER_PREFIX}/${tier.id}` })),
+      ...orderedTiers.map((tier) => ({ id: `${MODEL_TIER_PREFIX}/${tier.id}` })),
       ...nextModels.map((model) => ({ id: model.id })),
     ]
     const nextUnavailable =
@@ -668,7 +714,9 @@ export function ModelPickerControl({
       rawTiers.every((tier) => !tier.available || tier.disabled === true)
     const filteredKeys = nextNavItems.map((item) => item.id).join('|')
     return {
-      filteredTiers: nextTiers,
+      groupedTiers: nextGrouped,
+      ungroupedTiers: nextUngrouped,
+      filteredTiers: orderedTiers,
       filteredModels: nextModels,
       navItems: nextNavItems,
       syncKey: `${query}\0${filteredKeys}`,
@@ -780,13 +828,16 @@ export function ModelPickerControl({
   const triggerThinkingInput = hasStagedNextTurn
     ? (stagedNextTurnThinking ?? (stagedNextTurnModel !== undefined ? '' : activeThinkingLevel))
     : activeThinkingLevel
-  const rawShortName = formatModelShortName(triggerModel)
-  const shortName = rawShortName !== '' ? rawShortName : (placeholderLabel ?? copy.defaultLabel)
   const currentModel = triggerModel !== undefined && triggerModel !== '' ? models.find((model) => model.id === triggerModel) : undefined
   const currentTier =
     triggerModel !== undefined && triggerModel.startsWith(`${MODEL_TIER_PREFIX}/`)
       ? (catalog?.modelTiers ?? EMPTY_TIERS).find((tier) => `${MODEL_TIER_PREFIX}/${tier.id}` === triggerModel)
       : undefined
+  const rawShortName =
+    currentTier?.displayLabel !== undefined && currentTier.displayLabel !== ''
+      ? currentTier.displayLabel
+      : formatModelShortName(triggerModel)
+  const shortName = rawShortName !== '' ? rawShortName : (placeholderLabel ?? copy.defaultLabel)
   const currentLevels = currentModel?.thinkingLevels ?? currentTier?.thinkingLevels ?? ['off']
   const supportsThinking = showThinkingLevels && currentLevels.some((level) => level !== 'off')
   // Effective level display: the caller's level, or a selected tier's own preset when
@@ -859,6 +910,9 @@ export function ModelPickerControl({
   const triggerBody = (
     <>
       {pending ? <HelmxIcon name="loader" size={12} className="spin-slow" /> : null}
+      {!pending && currentTier?.displayGroup === 'duo' ? (
+        <HelmxIcon name="git-pull-request" size={11.5} className="composer-model-tier-trigger-icon" />
+      ) : null}
       <span className={labelClassName}>{shortName}</span>
       {showLevel ? <span className="composer-model-level">· {effectiveLevel}</span> : null}
       {hasStagedNextTurn ? (
@@ -993,27 +1047,67 @@ export function ModelPickerControl({
               }}
             />
             <div className="composer-model-scroll" onMouseLeave={() => setActiveIndex(-1)}>
-              {filteredTiers.length > 0 ? (
+              {(() => {
+                let runningTierIndex = 0
+                return groupedTiers.map(({ group, tiers }) => {
+                  const groupOffset = runningTierIndex
+                  runningTierIndex += tiers.length
+                  const groupLabel =
+                    copy.tierGroupLabels?.[group] ??
+                    DEFAULT_MODEL_PICKER_COPY.tierGroupLabels?.[group] ??
+                    group
+                  return (
+                    <Fragment key={`tier-group-${group}`}>
+                      <PopoverHeader>
+                        <span>{groupLabel}</span>
+                      </PopoverHeader>
+                      {tiers.map((tier, tierIdx) => {
+                        const idx = groupOffset + tierIdx
+                        return (
+                          <ModelPickerTierRow
+                            key={`${MODEL_TIER_PREFIX}/${tier.id}`}
+                            tier={tier}
+                            index={idx}
+                            isActive={idx === activeIndex}
+                            isCurrent={`${MODEL_TIER_PREFIX}/${tier.id}` === listEffectiveModel}
+                            disabled={disabled}
+                            perModelThinkingLevel={catalog?.modelThinkingLevels?.[tier.model]}
+                            targetModelLevels={models.find((m) => m.id === tier.model)?.thinkingLevels}
+                            copy={copy}
+                            setItemRef={setItemRef}
+                            onHover={setActiveIndex}
+                            onSelect={applySelection}
+                          />
+                        )
+                      })}
+                    </Fragment>
+                  )
+                })
+              })()}
+              {ungroupedTiers.length > 0 ? (
                 <>
                   <PopoverHeader>
                     <span>{copy.tiersHeader}</span>
                   </PopoverHeader>
-                  {filteredTiers.map((tier, idx) => (
-                    <ModelPickerTierRow
-                      key={`${MODEL_TIER_PREFIX}/${tier.id}`}
-                      tier={tier}
-                      index={idx}
-                      isActive={idx === activeIndex}
-                      isCurrent={`${MODEL_TIER_PREFIX}/${tier.id}` === listEffectiveModel}
-                      disabled={disabled}
-                      perModelThinkingLevel={catalog?.modelThinkingLevels?.[tier.model]}
-                      targetModelLevels={models.find((m) => m.id === tier.model)?.thinkingLevels}
-                      copy={copy}
-                      setItemRef={setItemRef}
-                      onHover={setActiveIndex}
-                      onSelect={applySelection}
-                    />
-                  ))}
+                  {ungroupedTiers.map((tier, idx) => {
+                    const navIndex = filteredTiers.length - ungroupedTiers.length + idx
+                    return (
+                      <ModelPickerTierRow
+                        key={`${MODEL_TIER_PREFIX}/${tier.id}`}
+                        tier={tier}
+                        index={navIndex}
+                        isActive={navIndex === activeIndex}
+                        isCurrent={`${MODEL_TIER_PREFIX}/${tier.id}` === listEffectiveModel}
+                        disabled={disabled}
+                        perModelThinkingLevel={catalog?.modelThinkingLevels?.[tier.model]}
+                        targetModelLevels={models.find((m) => m.id === tier.model)?.thinkingLevels}
+                        copy={copy}
+                        setItemRef={setItemRef}
+                        onHover={setActiveIndex}
+                        onSelect={applySelection}
+                      />
+                    )
+                  })}
                 </>
               ) : null}
               <PopoverHeader>

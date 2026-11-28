@@ -262,6 +262,7 @@ export class TrackerSettlement {
           pendingAskCount: 0,
           lastError: settledStatus === 'error' ? lastErrorOf(this.core.mirrors.get(conversationId)?.live, this.core.redactError) : undefined,
           lastEntryId: this.core.lastEntryIds.get(conversationId) ?? updated.lastEntryId ?? 0,
+          effectiveModelRef: this.core.effectiveModelRefOf?.(conversationId),
           runtimeModelOverride: this.core.hasRuntimeModelOverride?.(conversationId),
         })
         const cachedUsage = this.summary.peekUsage(conversationId)

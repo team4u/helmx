@@ -89,6 +89,7 @@ export class TrackerSummary {
       lastError,
       lastEntryId,
       pendingAskSince,
+      effectiveModelRef: this.core.effectiveModelRefOf?.(conversationId),
       runtimeModelOverride: this.core.hasRuntimeModelOverride?.(conversationId),
     })
     const usage = this.usage.cachedOrSchedule(conversationId)

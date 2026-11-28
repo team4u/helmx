@@ -69,6 +69,8 @@ export interface TrackerCoreOptions {
   readonly isClosed?: () => boolean
   /** Transient runtime model override lookup (attached to derived ConversationSummary frames). */
   readonly hasRuntimeModelOverride?: (conversationId: number) => boolean
+  /** Derived symbolic tier reference lookup (attached to derived ConversationSummary frames). */
+  readonly effectiveModelRefOf?: (conversationId: number) => string | undefined
   /** Diagnostic channel sink (defaults to defaultDiagnosticSink). */
   readonly onDiagnostic?: KernelDiagnosticSink
 }
@@ -85,6 +87,8 @@ export class TrackerCore {
   readonly modelsOf: (() => Models) | undefined
   /** Transient runtime model override lookup (if omitted, treated as false). */
   readonly hasRuntimeModelOverride: ((conversationId: number) => boolean) | undefined
+  /** Derived symbolic tier reference lookup (if omitted, treated as undefined). */
+  readonly effectiveModelRefOf: ((conversationId: number) => string | undefined) | undefined
   /** conversation -> per-conversation aggregate mirror (created on observe or first write; deleted wholesale on stopObserving). */
   readonly mirrors = new Map<number, ConversationMirror>()
   /** conversation -> latest visible timeline entry ID (`0` when none; excludes `pi.system` and rewound intervals). */
@@ -104,6 +108,7 @@ export class TrackerCore {
     this.ownershipOf = options.ownershipOf
     this.modelsOf = options.models
     this.hasRuntimeModelOverride = options.hasRuntimeModelOverride
+    this.effectiveModelRefOf = options.effectiveModelRefOf
     this.isClosedFn = options.isClosed
     this.diagnosticSink = options.onDiagnostic
   }

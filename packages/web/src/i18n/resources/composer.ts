@@ -184,6 +184,7 @@ export const composerMessages = {
   'composer.model.searchPlaceholder': { en: 'Search models…', 'zh-CN': '搜索模型…' },
   'composer.model.refreshCatalog': { en: 'Refresh dynamic model catalog', 'zh-CN': '刷新动态模型目录' },
   'composer.model.tiersHeader': { en: 'Model tiers', 'zh-CN': '模型档位' },
+  'composer.model.duoGroupHeader': { en: 'Dual-phase recipes', 'zh-CN': '双相配方' },
   'composer.model.tierRowTitle': { en: 'Use {tier} ({model})', 'zh-CN': '使用 {tier}（{model}）' },
   'composer.model.listHeader': { en: 'Model list', 'zh-CN': '模型列表' },
   'composer.model.emptyCatalog': {

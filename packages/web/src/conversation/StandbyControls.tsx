@@ -135,6 +135,7 @@ export function StandbyModelPicker({
     <ModelPickerControl
       effectiveModel={effectiveModel}
       activeThinkingLevel={effectiveThinkingLevel}
+      allowPreserveRefTiers={true}
       fallbackPanel={isSplit ? 'split' : 'primary'}
       nextTurnMode={{
         model: draft.nextTurnModel,

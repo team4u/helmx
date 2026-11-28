@@ -100,6 +100,7 @@ function checkConversationSummary(v: unknown): string | null {
     reqArray(v, 'tags') ??
     reqString(v, 'cwd') ??
     strAllowEmpty(v, 'model') ??
+    optString(v, 'effectiveModelRef') ??
     (v.runtimeModelOverride === undefined || typeof v.runtimeModelOverride === 'boolean'
       ? null
       : 'field runtimeModelOverride must be a boolean if present') ??

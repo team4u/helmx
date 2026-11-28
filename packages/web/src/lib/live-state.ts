@@ -259,16 +259,29 @@ function queueOnlyLive(live: ConversationLive): ConversationLive {
   return { conversationId: live.conversationId, text: '', tools: [], ...(live.queuedInputs !== undefined ? { queuedInputs: live.queuedInputs } : {}), updatedAt: live.updatedAt }
 }
 
-function withAuthoritativeRuntimeOverride(
+/**
+ * runtimeModelOverride 与 effectiveModelRef 为派生瞬态字段，后端会在失效/取消时省去。
+ * detail 与 summary 合并时不能留旧值，必须以最新摘要为权威（有则同步，无则显式剥离）。
+ */
+function withAuthoritativeSummaryFlags(
   detail: ConversationDetail,
-  summary: Pick<ConversationSummary, 'runtimeModelOverride'>,
+  summary: Pick<ConversationSummary, 'runtimeModelOverride' | 'effectiveModelRef'>,
 ): ConversationDetail {
+  let next = detail
   if (summary.runtimeModelOverride === true) {
-    return detail.runtimeModelOverride === true ? detail : { ...detail, runtimeModelOverride: true }
+    if (next.runtimeModelOverride !== true) next = { ...next, runtimeModelOverride: true }
+  } else if (Object.hasOwn(next, 'runtimeModelOverride')) {
+    const { runtimeModelOverride: _droppedRuntime, ...rest } = next
+    next = rest
   }
-  if (!Object.hasOwn(detail, 'runtimeModelOverride')) return detail
-  const next = { ...detail }
-  delete next.runtimeModelOverride
+  if (typeof summary.effectiveModelRef === 'string' && summary.effectiveModelRef !== '') {
+    if (next.effectiveModelRef !== summary.effectiveModelRef) {
+      next = { ...next, effectiveModelRef: summary.effectiveModelRef }
+    }
+  } else if (Object.hasOwn(next, 'effectiveModelRef')) {
+    const { effectiveModelRef: _droppedRef, ...rest } = next
+    next = rest
+  }
   return next
 }
 
@@ -291,7 +304,7 @@ export function applySnapshot(previous: LiveState, snapshot: HelmxSnapshot): Liv
   for (const conv of snapshot.conversations) {
     const prevDetail = previous.conversationDetails[conv.id]
     if (prevDetail !== undefined) {
-      conversationDetails[conv.id] = withAuthoritativeRuntimeOverride({
+      conversationDetails[conv.id] = withAuthoritativeSummaryFlags({
         ...prevDetail,
         ...conv,
         // 保留 prevDetail 已实际同步的条目水位，避免后台静默刷新失败后误以为详情已追平。
@@ -353,7 +366,7 @@ export function mergeConversationDetail(state: LiveState, detail: ConversationDe
     pendingEntries: omit(state.pendingEntries, String(detail.id)),
     conversationDetails: {
       ...state.conversationDetails,
-      [detail.id]: withAuthoritativeRuntimeOverride({
+      [detail.id]: withAuthoritativeSummaryFlags({
         ...detail,
         ...(summary ?? {}),
         stateChangeSeq: olderPage && current ? current.stateChangeSeq : detail.stateChangeSeq,
@@ -530,7 +543,7 @@ export function applyEventFrame(state: LiveState, frame: HelmxEventFrame, opts?:
           const existingDetail = state.conversationDetails[conv.id]!
           next.conversationDetails = {
             ...state.conversationDetails,
-            [conv.id]: withAuthoritativeRuntimeOverride({
+            [conv.id]: withAuthoritativeSummaryFlags({
               ...existingDetail,
               ...conv,
               stateChangeSeq: existingDetail.stateChangeSeq,

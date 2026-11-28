@@ -570,6 +570,17 @@ export function normalizeModelCatalogInfo(raw: unknown): ModelCatalogInfo {
         ...(typeof entry.description === 'string' && entry.description !== ''
           ? { description: entry.description }
           : {}),
+        ...(typeof entry.displayGroup === 'string' && entry.displayGroup !== ''
+          ? { displayGroup: entry.displayGroup }
+          : {}),
+        ...(typeof entry.displayLabel === 'string' && entry.displayLabel !== ''
+          ? { displayLabel: entry.displayLabel }
+          : {}),
+        ...(typeof entry.displayDetail === 'string' && entry.displayDetail !== ''
+          ? { displayDetail: entry.displayDetail }
+          : {}),
+        ...(entry.preserveRef === true ? { preserveRef: true } : {}),
+        ...(entry.singleTurnEligible === false ? { singleTurnEligible: false } : {}),
         ...(Array.isArray(entry.thinkingLevels) && entry.thinkingLevels.every((l) => typeof l === 'string')
           ? { thinkingLevels: entry.thinkingLevels }
           : {}),

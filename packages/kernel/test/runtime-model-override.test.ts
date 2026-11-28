@@ -512,3 +512,265 @@ describe('transient setConversationRuntimeModel & one-turn submitInput overrides
     assert.equal(agent.thinkingLevel, 'low')
   })
 })
+
+describe('symbolic effectiveModelRef, preserveRef tiers & ModelTierSpec metadata', { timeout: 60_000 }, () => {
+  it('sanitizes and forwards displayGroup/displayLabel/displayDetail/preserveRef/singleTurnEligible into /api/models', { timeout: 60_000 }, async (t) => {
+    const dir = await makeTempDir('helmx-tier-meta-')
+    const { models } = buildFauxCatalog()
+    const kernel = await KernelRuntime.open({ dataDir: dir, cwd: dir, model: 'faux/base', models: models as never })
+    t.after(async () => {
+      await kernel.close()
+      await cleanupDir(dir)
+    }, { timeout: 60_000 })
+
+    await kernel.plugins.register({
+      id: 'test:rich-tiers',
+      definePlugin(ctx) {
+        ctx.provide<ModelTiersCapability>('helmx.model-tiers', {
+          getTiers: () => ({
+            duo: {
+              model: 'faux/base',
+              thinkingLevel: 'medium',
+              description: 'Plan then verify',
+              displayGroup: '  duo  ',
+              displayLabel: '  Faux Duo  ',
+              displayDetail: '  base -> alt  ',
+              preserveRef: true,
+              singleTurnEligible: false,
+            },
+            oversized: {
+              model: 'faux/alt',
+              displayGroup: 'g'.repeat(33),
+              displayLabel: 'l'.repeat(81),
+              displayDetail: 'd'.repeat(121),
+              preserveRef: false,
+              singleTurnEligible: true,
+            },
+          }),
+        })
+      },
+    })
+
+    const res = await apiCall(kernel, 'GET', '/api/models')
+    assert.equal(res.status, 200)
+    const tiers = res.body.modelTiers as Array<Record<string, unknown>>
+    const duo = tiers.find((entry) => entry.id === 'duo')
+    assert.deepEqual(duo, {
+      id: 'duo',
+      model: 'faux/base',
+      thinkingLevel: 'medium',
+      description: 'Plan then verify',
+      displayGroup: 'duo',
+      displayLabel: 'Faux Duo',
+      displayDetail: 'base -> alt',
+      preserveRef: true,
+      singleTurnEligible: false,
+      available: true,
+      thinkingLevels: ['minimal', 'low', 'medium', 'high'],
+    })
+    const oversized = tiers.find((entry) => entry.id === 'oversized')
+    assert.deepEqual(oversized, {
+      id: 'oversized',
+      model: 'faux/alt',
+      available: true,
+      thinkingLevels: ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'],
+    })
+  })
+
+  it('preserves symbolic ref for top-level human conversations while freezing children, helmx-owned, forks & propagating Profile effectiveModelRef', { timeout: 60_000 }, async (t) => {
+    const dir = await makeTempDir('helmx-preserve-ref-')
+    const { models, core } = buildFauxCatalog()
+    const kernel = await KernelRuntime.open({ dataDir: dir, cwd: dir, model: 'faux/base', models: models as never })
+    t.after(async () => {
+      await kernel.close()
+      await cleanupDir(dir)
+    }, { timeout: 60_000 })
+
+    let duoThinking = 'medium'
+    await kernel.plugins.register({
+      id: 'test:duo-tier',
+      definePlugin(ctx) {
+        ctx.provide<ModelTiersCapability>('helmx.model-tiers', {
+          getTiers: () => ({
+            duo: {
+              model: 'faux/base',
+              thinkingLevel: duoThinking,
+              displayGroup: 'duo',
+              displayLabel: 'Faux Duo',
+              preserveRef: true,
+              singleTurnEligible: false,
+            },
+            plain: {
+              model: 'faux/alt',
+              thinkingLevel: 'high',
+            },
+          }),
+        })
+      },
+    })
+
+    // 1. Top-level human create keeps symbolic ref without freezing thinkingLevelOverride
+    const humanTop = await kernel.conversations.createConversation({
+      title: 'human-duo',
+      model: 'tier/duo',
+    }) as ConversationSummary & { thinkingLevelOverride?: string }
+    assert.equal(humanTop.model, 'faux/base')
+    assert.equal(humanTop.modelOverride, 'tier/duo')
+    assert.equal(humanTop.effectiveModelRef, 'tier/duo')
+    assert.equal(humanTop.thinkingLevel, 'medium')
+    assert.equal(humanTop.thinkingLevelOverride, undefined)
+
+    // Tier thinking update remains live for preserveRef top-level human conversation
+    duoThinking = 'high'
+    await kernel.conversations.alignAllConversations()
+    assert.equal(kernel.conversations.getConversation(humanTop.id).thinkingLevel, 'high')
+
+    // Non-preserve tier still freezes to concrete canonicalRef
+    const nonPreserve = await kernel.conversations.createConversation({
+      title: 'human-plain',
+      model: 'tier/plain',
+    }) as ConversationSummary & { thinkingLevelOverride?: string }
+    assert.equal(nonPreserve.model, 'faux/alt')
+    assert.equal(nonPreserve.modelOverride, 'faux/alt')
+    assert.equal(nonPreserve.effectiveModelRef, undefined)
+    assert.equal(nonPreserve.thinkingLevelOverride, 'high')
+
+    // 2. Switching between concrete 'faux/base' (thinking=low) and 'tier/duo' (target 'faux/base', thinking=high)
+    const patchedToConcrete = await kernel.conversations.updateConversation(humanTop.id, {
+      model: 'faux/base',
+      thinkingLevel: 'low',
+    }) as ConversationSummary & { thinkingLevelOverride?: string }
+    assert.equal(patchedToConcrete.model, 'faux/base')
+    assert.equal(patchedToConcrete.modelOverride, 'faux/base')
+    assert.equal(patchedToConcrete.effectiveModelRef, undefined)
+    assert.equal(patchedToConcrete.thinkingLevel, 'low')
+    assert.equal(patchedToConcrete.thinkingLevelOverride, 'low')
+
+    const patchedBackToDuo = await kernel.conversations.updateConversation(humanTop.id, {
+      model: 'tier/duo',
+    }) as ConversationSummary & { thinkingLevelOverride?: string }
+    assert.equal(patchedBackToDuo.model, 'faux/base')
+    assert.equal(patchedBackToDuo.modelOverride, 'tier/duo')
+    assert.equal(patchedBackToDuo.effectiveModelRef, 'tier/duo')
+    assert.equal(patchedBackToDuo.thinkingLevel, 'high')
+    assert.equal(patchedBackToDuo.thinkingLevelOverride, undefined)
+
+    // 3. Child conversation, helmx-owned conversation, and fork ALL freeze symbolic 'tier/duo' -> concrete 'faux/base'
+    const child = await kernel.conversations.createConversation({
+      title: 'child',
+      parentConversationId: humanTop.id,
+      model: 'tier/duo',
+    })
+    assert.equal(child.modelOverride, 'faux/base')
+    assert.equal(child.effectiveModelRef, undefined)
+
+    const helmxTop = await kernel.conversations.createConversation({
+      title: 'helmx-top',
+      ownedBy: 'helmx',
+      model: 'tier/duo',
+    })
+    assert.equal(helmxTop.modelOverride, 'faux/base')
+    assert.equal(helmxTop.effectiveModelRef, undefined)
+
+    core.setResponses([fauxAssistantMessage('seed reply')])
+    await kernel.conversations.submitInput(humanTop.id, 'seed turn')
+    await kernel.conversations.waitForIdle(humanTop.id)
+    const forked = await kernel.conversations.forkConversation(humanTop.id)
+    assert.equal(forked.model, 'faux/base')
+    assert.equal(forked.modelOverride, 'faux/base')
+    assert.equal(forked.effectiveModelRef, undefined)
+
+    core.setResponses([fauxAssistantMessage('child reply')])
+    await kernel.agentSpawn.spawnAgent({
+      parentConversationId: humanTop.id,
+      prompt: 'subtask',
+      fork: true,
+    })
+    const spawnedSummary = kernel.conversations
+      .listConversations()
+      .find((c) => c.parentConversationId === humanTop.id && c.ownedBy === 'helmx')
+    assert.ok(spawnedSummary !== undefined, 'spawned forked child must exist')
+    assert.equal(spawnedSummary.model, 'faux/base')
+    assert.equal(spawnedSummary.modelOverride, 'faux/base')
+    assert.equal(spawnedSummary.effectiveModelRef, undefined)
+
+    // 4. Profile model switches between 'faux/base' and 'tier/duo' (same target) propagate effectiveModelRef & emit upsert
+    await kernel.services.profiles.save({ id: 'duo-prof', name: 'Duo Profile', model: 'faux/base' })
+    const inherited = await kernel.conversations.createConversation({ title: 'inherited', profileId: 'duo-prof' })
+    assert.equal(inherited.effectiveModelRef, undefined)
+
+    const upserts: ConversationSummary[] = []
+    const unsub = kernel.events.subscribe((frame) => {
+      if (frame.event.type === 'conversation.upsert' && 'conversation' in frame.event && frame.event.conversation.id === inherited.id) {
+        upserts.push(frame.event.conversation)
+      }
+    })
+    t.after(unsub, { timeout: 60_000 })
+
+    await kernel.services.profiles.save({ id: 'duo-prof', name: 'Duo Profile', model: 'tier/duo' })
+    await kernel.conversations.alignProfileConversations('duo-prof')
+    const afterProfileTier = kernel.conversations.getConversation(inherited.id)
+    assert.equal(afterProfileTier.modelOverride, undefined)
+    assert.equal(afterProfileTier.model, 'faux/base')
+    assert.equal(afterProfileTier.effectiveModelRef, 'tier/duo')
+    assert.equal(upserts.at(-1)?.effectiveModelRef, 'tier/duo')
+
+    await kernel.services.profiles.save({ id: 'duo-prof', name: 'Duo Profile', model: 'faux/base' })
+    await kernel.conversations.alignProfileConversations('duo-prof')
+    const afterProfileConcrete = kernel.conversations.getConversation(inherited.id)
+    assert.equal(afterProfileConcrete.effectiveModelRef, undefined)
+    assert.equal(upserts.at(-1)?.effectiveModelRef, undefined)
+  })
+
+  it('repopulates effectiveModelRef on cold restart without bumping stateChangeSeq when model matches SDK', { timeout: 60_000 }, async (t) => {
+    const dir = await makeTempDir('helmx-effective-ref-boot-')
+    t.after(async () => {
+      await cleanupDir(dir)
+    }, { timeout: 60_000 })
+
+    const registerTiers = async (kernel: KernelRuntime) => {
+      await kernel.plugins.register({
+        id: 'test:boot-tiers',
+        definePlugin(ctx) {
+          ctx.provide<ModelTiersCapability>('helmx.model-tiers', {
+            getTiers: () => ({
+              duo: { model: 'faux/base', preserveRef: true },
+            }),
+          })
+        },
+      })
+    }
+
+    const first = buildFauxCatalog()
+    const kernel1 = await KernelRuntime.open({ dataDir: dir, cwd: dir, model: 'faux/base', models: first.models as never })
+    await registerTiers(kernel1)
+    await kernel1.services.profiles.save({ id: 'boot-prof', name: 'Boot Profile', model: 'tier/duo' })
+    const direct = await kernel1.conversations.createConversation({ title: 'direct-duo', model: 'tier/duo' })
+    const fromProfile = await kernel1.conversations.createConversation({ title: 'profile-duo', profileId: 'boot-prof' })
+    const directSeq = direct.stateChangeSeq
+    const profileSeq = fromProfile.stateChangeSeq
+    await kernel1.close()
+
+    const second = buildFauxCatalog()
+    const kernel2 = await KernelRuntime.open({
+      dataDir: dir,
+      cwd: dir,
+      model: 'faux/base',
+      models: second.models as never,
+      autoResume: false,
+    })
+    t.after(async () => {
+      await kernel2.close()
+    }, { timeout: 60_000 })
+    await registerTiers(kernel2)
+    await kernel2.start()
+
+    const recoveredDirect = kernel2.conversations.getConversation(direct.id)
+    const recoveredProfile = kernel2.conversations.getConversation(fromProfile.id)
+    assert.equal(recoveredDirect.modelOverride, 'tier/duo')
+    assert.equal(recoveredDirect.effectiveModelRef, 'tier/duo')
+    assert.equal(recoveredDirect.stateChangeSeq, directSeq)
+    assert.equal(recoveredProfile.effectiveModelRef, 'tier/duo')
+    assert.equal(recoveredProfile.stateChangeSeq, profileSeq)
+  })
+})

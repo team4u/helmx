@@ -43,8 +43,18 @@ interface ConversationProfileHost {
   readonly summaryWithOwnership: (id: number) => ConversationSummary
   /** Active transient runtime-override probe; prevents background inheritance alignment from clobbering transient overrides mid-run. */
   readonly hasRuntimeModelOverride?: (id: number) => boolean
+  /** Read cached derived symbolic tier ref (`'tier/<id>'`) for a conversation. */
+  readonly getEffectiveModelRef?: (id: number) => string | undefined
+  /** Update cached derived symbolic tier ref (`'tier/<id>'` or `undefined`) for a conversation. */
+  readonly setEffectiveModelRef?: (id: number, rawRef: string | undefined) => void
   /** Schedule context usage recalculation after model/thinking alignment (window/threshold may change); omitted skips. */
   readonly scheduleContextUsageRefresh?: (id: number) => void
+}
+
+/** Resolved effective model details including the winning pre-dereference symbolic or concrete ref. */
+export interface ResolvedEffectiveModelDetails extends ResolvedModelRef {
+  /** Raw symbolic `'tier/<id>'` or concrete `'provider/modelId'` string from the winning inheritance slot. */
+  readonly rawRef: string
 }
 
 export class ConversationProfileService {
@@ -96,14 +106,18 @@ export class ConversationProfileService {
     override: string | undefined,
     profileId: string,
     profileCache?: Map<string, Promise<Profile | undefined>>,
-  ): Promise<ResolvedModelRef | undefined> {
+  ): Promise<ResolvedEffectiveModelDetails | undefined> {
     const profile = await this.readProfile(profileId, profileCache)
     if (profile === undefined) {
       throw new HelmxError('profile_not_found', `Profile referenced by conversation does not exist: ${profileId}`, 404, { profileId })
     }
     const raw = override || profile.model || this.host.defaultModel()
     if (!raw) return undefined
-    return this.resolveRef(raw)
+    const resolved = this.resolveRef(raw)
+    return {
+      ...resolved,
+      rawRef: resolved.tierId !== undefined ? `tier/${resolved.tierId}` : raw,
+    }
   }
 
   /** Conversation override > Profile.model > global default (concrete `'provider/modelId'`); Profile files are read live on each lookup. */
@@ -153,6 +167,9 @@ export class ConversationProfileService {
       const meta = this.host.store.getConv(id)
       if (!meta) return
       const resolved = await this.resolveEffectiveModelDetails(meta.modelOverride, meta.profileId, batchProfiles)
+      const nextEffectiveModelRef = resolved?.rawRef?.startsWith('tier/') ? resolved.rawRef : undefined
+      const prevEffectiveModelRef = this.host.getEffectiveModelRef?.(id)
+      const effectiveRefChanged = prevEffectiveModelRef !== nextEffectiveModelRef
       const effective = resolved?.canonicalRef
       const ref = resolved ? { provider: resolved.provider, modelId: resolved.modelId } : undefined
       // Also persist the clamped result of an explicit override; otherwise SDK/summary converge while the mirror keeps
@@ -176,25 +193,30 @@ export class ConversationProfileService {
       }
       const sdkChanged = Object.keys(change).length > 0
       if (sdkChanged) await conversation.configure(change, BACKGROUND_CONTEXT)
-      if (
-        !sdkChanged &&
-        meta.model === (effective ?? '') &&
-        meta.thinkingLevel === (thinking ?? '') &&
-        meta.thinkingLevelOverride === clampedOverride
-      ) return
-      const latest = this.host.store.getConv(id)
-      if (!latest) return
-      this.host.store.upsertConv({
-        ...latest,
-        model: effective ?? '',
-        thinkingLevel: thinking ?? '',
-        thinkingLevelOverride: clampedOverride,
-        stateChangeSeq: latest.stateChangeSeq + 1,
-        updatedAt: Date.now(),
-      })
-      // Effective model changes also change context window/thresholds: trigger usage recalculation (deduplicated;
-      // covers forks and profile cascade refreshes, while initial observe uses adoptInitial as backstop).
-      this.host.scheduleContextUsageRefresh?.(id)
+      const metaChanged =
+        sdkChanged ||
+        meta.model !== (effective ?? '') ||
+        meta.thinkingLevel !== (thinking ?? '') ||
+        meta.thinkingLevelOverride !== clampedOverride
+      if (!metaChanged && !effectiveRefChanged) return
+      if (effectiveRefChanged) {
+        this.host.setEffectiveModelRef?.(id, nextEffectiveModelRef)
+      }
+      if (metaChanged) {
+        const latest = this.host.store.getConv(id)
+        if (!latest) return
+        this.host.store.upsertConv({
+          ...latest,
+          model: effective ?? '',
+          thinkingLevel: thinking ?? '',
+          thinkingLevelOverride: clampedOverride,
+          stateChangeSeq: latest.stateChangeSeq + 1,
+          updatedAt: Date.now(),
+        })
+        // Effective model changes also change context window/thresholds: trigger usage recalculation (deduplicated;
+        // covers forks and profile cascade refreshes, while initial observe uses adoptInitial as backstop).
+        this.host.scheduleContextUsageRefresh?.(id)
+      }
       if (emitEvent) this.host.events.publish('conversation.upsert', this.host.summaryWithOwnership(id))
     })
   }

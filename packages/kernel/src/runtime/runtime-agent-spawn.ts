@@ -446,11 +446,16 @@ export class RuntimeAgentSpawn {
         // the child conversation's prompt cache or break resume/reattach.
         const explicitModelOverride =
           finalRequest.model !== undefined && finalRequest.model !== '' ? modelMirror : undefined
-        const inheritedModelOverride = resolveInheritedModelOverride(
+        const rawInheritedOverride = resolveInheritedModelOverride(
           explicitModelOverride,
           forkSameProfile,
           parentMeta?.modelOverride,
         )
+        // Child conversations never retain symbolic `'tier/<id>'` in `modelOverride`: freeze to concrete `modelMirror`.
+        const inheritedModelOverride =
+          rawInheritedOverride !== undefined && rawInheritedOverride.startsWith('tier/')
+            ? (modelMirror !== '' ? modelMirror : undefined)
+            : rawInheritedOverride
         const now = Date.now()
         const normalizedTitle = normalizeSpawnTitle(
           title ?? finalRequest.title,
@@ -484,6 +489,10 @@ export class RuntimeAgentSpawn {
           createdAt: now,
           updatedAt: now,
         })
+        const rawBaselineRef =
+          inheritedModelOverride ??
+          (profile?.model && profile.model !== '' ? profile.model : this.deps.models.defaultModel)
+        this.deps.conversations.setEffectiveModelRef?.(childId, rawBaselineRef)
         await this.deps.store.flushPublic()
         await this.deps.tracker.observe(childId)
         if (this.deps.store.getConv(childId) !== undefined && !this.deps.store.isDeleted(childId)) {

@@ -46,6 +46,7 @@ export interface ConversationLifecycleHost {
   readonly hasRuntimeModelOverride: (conversationId: number) => boolean
   readonly onSetRuntimeModelOverride: (conversationId: number, resetOnRunEnd: boolean) => void
   readonly onClearRuntimeModelOverride: (conversationId: number) => void
+  readonly setEffectiveModelRef?: (conversationId: number, rawRef: string | undefined) => void
   readonly managedConversations: Map<number, Set<string>>
   readonly cancelAsksByConversation: (id: number) => Promise<void>
   readonly ownershipOf: (id: number) => ConversationOwnership
@@ -105,10 +106,21 @@ export class ConversationLifecycleService {
     if (init.model !== undefined && init.model !== '') {
       const resolvedInit = this.host.profileAlignment.resolveRef(init.model)
       this.assertResolvedModelEnabled(resolvedInit)
-      // Freeze concrete `'provider/modelId'` so later tier edits or plugin disables never break
-      // in-flight conversations or bust prompt caches.
-      frozenModelOverride = resolvedInit.canonicalRef
-      initTierThinking = resolvedInit.tierThinkingLevel
+      if (
+        resolvedInit.preserveRef === true &&
+        init.parentConversationId === undefined &&
+        effectiveOwnedBy === 'human'
+      ) {
+        // Top-level human conversations opt-in to symbolic ref preservation keep `'tier/<id>'` live
+        // in `modelOverride` (and keep tier thinking level dynamic unless explicitly overridden).
+        frozenModelOverride =
+          resolvedInit.tierId !== undefined ? `tier/${resolvedInit.tierId}` : init.model.trim()
+      } else {
+        // Freeze concrete `'provider/modelId'` so later tier edits or plugin disables never break
+        // in-flight conversations or bust prompt caches.
+        frozenModelOverride = resolvedInit.canonicalRef
+        initTierThinking = resolvedInit.tierThinkingLevel
+      }
     }
     const effectiveDetails = await this.host.profileAlignment.resolveEffectiveModelDetails(
       frozenModelOverride,
@@ -175,6 +187,7 @@ export class ConversationLifecycleService {
       createdAt: now,
       updatedAt: now,
     })
+    this.host.setEffectiveModelRef?.(id, effectiveDetails?.rawRef)
     await this.host.tracker.observe(id)
     const summary = this.host.summaryWithOwnership(id)
     this.host.events.publish('conversation.upsert', summary)
@@ -229,8 +242,17 @@ export class ConversationLifecycleService {
     } else if (patch.model !== '') {
       const resolvedPatch = this.host.profileAlignment.resolveRef(patch.model)
       this.assertResolvedModelEnabled(resolvedPatch)
-      nextOverride = resolvedPatch.canonicalRef
-      patchTierThinking = resolvedPatch.tierThinkingLevel
+      if (
+        resolvedPatch.preserveRef === true &&
+        meta.parentConversationId === undefined &&
+        this.host.ownershipOf(id) === 'human'
+      ) {
+        nextOverride =
+          resolvedPatch.tierId !== undefined ? `tier/${resolvedPatch.tierId}` : patch.model.trim()
+      } else {
+        nextOverride = resolvedPatch.canonicalRef
+        patchTierThinking = resolvedPatch.tierThinkingLevel
+      }
     }
     const nextProfileId = patch.profileId ?? meta.profileId
     const effectiveDetails = await this.host.profileAlignment.resolveEffectiveModelDetails(
@@ -238,7 +260,9 @@ export class ConversationLifecycleService {
       nextProfileId,
     )
     const effectiveModel = effectiveDetails?.canonicalRef
-    const modelSwitched = patch.model !== undefined && (effectiveModel ?? '') !== meta.model
+    const modelSwitched =
+      patch.model !== undefined &&
+      ((effectiveModel ?? '') !== meta.model || (nextOverride ?? '') !== (meta.modelOverride ?? ''))
     let nextThinkingOverride: string | undefined
     if (patch.thinkingLevel === undefined) {
       if (patchTierThinking !== undefined) {
@@ -330,6 +354,7 @@ export class ConversationLifecycleService {
       this.host.onClearRuntimeModelOverride(id)
       this.host.tracker.scheduleContextUsageRefresh(id)
     }
+    this.host.setEffectiveModelRef?.(id, effectiveDetails?.rawRef)
     const summary = this.host.withOwnership(this.host.tracker.summaryOf(id))
     this.host.events.publish('conversation.upsert', summary)
     return summary
@@ -372,6 +397,7 @@ export class ConversationLifecycleService {
         BACKGROUND_CONTEXT,
       )
       this.host.onClearRuntimeModelOverride(id)
+      this.host.setEffectiveModelRef?.(id, effectiveDetails?.rawRef)
       const latest = requireConv(this.host.store, id)
       this.host.store.upsertConv({
         ...latest,
@@ -616,6 +642,7 @@ export class ConversationLifecycleService {
     assertGuarded?.()
     this.host.tracker.deleteConversation(id)
     this.host.onClearRuntimeModelOverride(id)
+    this.host.setEffectiveModelRef?.(id, undefined)
     this.host.store.deleteConv(id)
     this.host.evictConversationBase(id)
     this.host.onConversationDeleted?.(id)

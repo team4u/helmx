@@ -137,6 +137,16 @@ export interface ModelTierSpec {
   thinkingLevel?: string
   /** Optional concise routing description for humans and agents (<= 240 chars). */
   description?: string
+  /** Optional UI group key (e.g. `'duo'`); grouped tiers render ahead of ungrouped tiers. */
+  displayGroup?: string
+  /** Optional human-friendly label shown in model pickers (e.g. `'Claude 精修'`). */
+  displayLabel?: string
+  /** Optional concise secondary pairing/routing detail shown alongside the label (e.g. `'opus -> sonnet'`). */
+  displayDetail?: string
+  /** When true, top-level human conversations keep symbolic `'tier/<id>'` in `modelOverride` rather than freezing to concrete `'provider/model'`. */
+  preserveRef?: boolean
+  /** When false, excluded from single-turn "Next turn only" controls and `<available_model_tiers>` prompts; defaults to true. */
+  singleTurnEligible?: boolean
 }
 
 /** Public model tier entry exposed in `GET /api/models` (`ModelCatalog.modelTiers`). */

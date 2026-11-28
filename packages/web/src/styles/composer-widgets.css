@@ -201,7 +201,8 @@
   padding-top: 8px;
   border-top: 1px solid var(--line-2);
 }
-.composer-model-tier-icon {
+.composer-model-tier-icon,
+.composer-model-tier-trigger-icon {
   flex-shrink: 0;
   color: var(--fg-muted);
 }

@@ -77,6 +77,8 @@ export interface ConversationSummary {
   model: string
   /** Explicit model override ('provider/model' or symbolic 'tier/<id>'); inherits Profile / global default when omitted. */
   modelOverride?: string
+  /** Transient derived symbolic reference (`'tier/<id>'`) when the configured baseline resolves through a tier; never persisted as a SQLite column. */
+  effectiveModelRef?: string
   /** Transient UI/status indicator that the active runtime model/thinking is temporarily overridden relative to the configured baseline. */
   runtimeModelOverride?: boolean
   /** Current thinking level (off/minimal/low/medium/high/xhigh/max); empty string means unset. */
