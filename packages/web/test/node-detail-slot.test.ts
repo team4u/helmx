@@ -12,7 +12,6 @@
  * - slotProps carries exactly the four public protocol NodeDetailSlotProps
  *   fields — never enrollment tokens or other credentials.
  */
-import './helpers/register-happy-dom.js'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import React from 'react'
@@ -25,9 +24,6 @@ import { seedPluginClientModule } from '../src/lib/plugin-client.js'
 import { makeTestStore } from './helpers/store.js'
 import type { HelmxExternalStore } from '../src/lib/helmx-store.js'
 import { HostStoreProviders } from './helpers/host-store.js'
-
-;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
-;(globalThis as Record<string, unknown>).React = React
 
 const e = React.createElement
 const EMOJI_REGEX = /[\u{1F300}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}]/u

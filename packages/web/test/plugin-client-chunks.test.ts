@@ -9,7 +9,6 @@
  *   两插件同源同 hash 时停用一个不删另一个的共享条目；
  * - 浏览器 Blob import 真实错误显式上报（不回退 data URL 掩盖）。
  */
-import './helpers/register-happy-dom.js'
 import assert from 'node:assert/strict'
 import { describe, afterEach, test } from 'node:test'
 import {
@@ -29,9 +28,6 @@ type ImportChunk = (
 
 const importChunk: ImportChunk = (globalThis as Record<string, unknown>).__helmx_import_chunk as ImportChunk
 const originalFetch = globalThis.fetch
-const originalCreateObjectURL = URL.createObjectURL
-const originalRevokeObjectURL = URL.revokeObjectURL
-const originalBlob = globalThis.Blob
 
 const evalLogSlot = globalThis as unknown as { __chunkEvalLog?: string[] }
 
@@ -42,14 +38,14 @@ const shareKey = (pluginId: string, moduleRef: string, contentHash: string, chun
 /**
  * chunk 夹具：
  * - fetch 按 chunk 名返回注册源；并发 fetch 也不会串内容；
- * - Blob 替身为同步可读文本（Node 无法 import blob: URL，createObjectURL 返回
- *   data URL 让模块真实求值——与浏览器 ESM 求值语义一致）；
+ * - 无 DOM 的 Node 环境由 evaluateModuleCode 走 data URL 动态 import 真实求值；
  * - 每个 chunk 源尾部追加与编译器一致的 __helmx_chunk_share 注册语句，
  *   真实驱动共享表写入（隔离清理与 epoch 守卫测试依赖真实注册行为）。
  */
 function makeChunkFixture() {
   const sources = new Map<string, string>()
   const fetchLog: string[] = []
+  let evalSeq = 0
   globalThis.fetch = (async (input: RequestInfo | URL): Promise<Response> => {
     const raw = String(input)
     fetchLog.push(raw)
@@ -59,31 +55,9 @@ function makeChunkFixture() {
     // key = pluginId + chunk 名：两插件同名 chunk（同源同 hash 场景）各自注册独立的源
     const code = sources.get(`${pluginId}\0${name}`) ?? sources.get(name)
     if (code === undefined) return new Response('not found', { status: 404 })
-    return new Response(code, { status: 200, headers: { 'content-type': 'text/javascript' } })
+    return new Response(`${code}\n// eval-${++evalSeq}`, { status: 200, headers: { 'content-type': 'text/javascript' } })
   }) as typeof fetch
 
-  class SyncTextBlob {
-    readonly __text: string
-    constructor(parts: Array<string | BlobPart>) {
-      this.__text = parts.map((p) => String(p)).join('')
-    }
-    get size(): number {
-      return this.__text.length
-    }
-    get type(): string {
-      return 'text/javascript'
-    }
-    text(): Promise<string> {
-      return Promise.resolve(this.__text)
-    }
-  }
-  ;(globalThis as { Blob: unknown }).Blob = SyncTextBlob
-  let seq = 0
-  URL.createObjectURL = ((blob: Blob) => {
-    const text = (blob as unknown as { __text: string }).__text
-    return `data:text/javascript,${encodeURIComponent(text)}#eval-${++seq}`
-  }) as typeof URL.createObjectURL
-  URL.revokeObjectURL = (() => {}) as typeof URL.revokeObjectURL
   return {
     fetchLog,
     /** 注册一个 chunk：求值时记录顺序标记、写入共享表注册语句；marker 默认 chunk 名。
@@ -107,13 +81,9 @@ describe("plugin-client-chunks", () => {
 
   afterEach(() => {
     globalThis.fetch = originalFetch
-    URL.createObjectURL = originalCreateObjectURL
-    URL.revokeObjectURL = originalRevokeObjectURL
-    ;(globalThis as { Blob: unknown }).Blob = originalBlob
     delete evalLogSlot.__chunkEvalLog
-    delete (globalThis as Record<string, unknown>).__helmx_chunk_share
     resetPluginClientCache()
-  })
+  }, { timeout: 60_000 })
 
   test('preload 并发去重：同一 chunk 多次引用零重复网络请求，缓存命中不再 fetch', { timeout: 60_000 }, async () => {
     const fx = makeChunkFixture()

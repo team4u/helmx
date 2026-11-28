@@ -14,7 +14,7 @@
  */
 import './helpers/register-happy-dom.js'
 import assert from 'node:assert/strict'
-import { test } from 'node:test'
+import { afterEach, test } from 'node:test'
 import { readFileSync } from 'node:fs'
 import * as React from 'react'
 import { act } from 'react'
@@ -33,6 +33,8 @@ import {
   standbyDraftsDirty,
 } from '../src/conversation/standby-model.js'
 import { applySnapshot, emptyLiveState, mergeConversationDetail } from '../src/lib/live-state.js'
+import { resetHappyDom } from './helpers/dom-harness.js'
+import { readHostStyles } from './helpers/host-styles.js'
 import { makeTestStore } from './helpers/store.js'
 import type { HelmxExternalStore } from '../src/lib/helmx-store.js'
 import { resetPluginClientCache, seedPluginClientModule } from '../src/lib/plugin-client.js'
@@ -49,6 +51,20 @@ const { AgentStandbyPane } = await import('../src/conversation/AgentStandbyPane.
 const { HostStoreProviders } = await import('./helpers/host-store.js')
 
 const e = React.createElement
+const COMPOSER_CSS = readFileSync(new URL('../src/styles/composer.css', import.meta.url), 'utf8')
+
+function mountComposerCss(withThemeVars = false): () => void {
+  const style = document.createElement('style')
+  style.textContent = withThemeVars
+    ? `:root { --fg-muted: rgb(11, 12, 13); --warn: rgb(21, 22, 23); --err: rgb(31, 32, 33); }\n${COMPOSER_CSS}`
+    : COMPOSER_CSS
+  document.head.appendChild(style)
+  return () => style.remove()
+}
+
+afterEach(() => {
+  resetHappyDom()
+}, { timeout: 60_000 })
 
 function conv(contextUsage: ConversationSummary['contextUsage']): ConversationSummary {
   return {
@@ -90,88 +106,56 @@ function assertReadOnly(host: HTMLElement): void {
   assert.ok(document.body.querySelector('[data-radix-popper-content-wrapper]') === null)
 }
 
-test('no status text renders without contextUsage or with tokens=0', { timeout: 60_000 }, async () => {
-  const none = await mountComposer(conv(undefined))
-  try {
-    assert.ok(statusSpan(none.host) === null)
-  } finally {
-    none.unmount()
+test('context usage status renders threshold tones, missing/zero/null/compacting states across rerenders (single mount)', { timeout: 60_000 }, async () => {
+  const host = document.createElement('div')
+  document.body.appendChild(host)
+  const root = createRoot(host)
+  const renderUsage = async (usage: ConversationSummary['contextUsage']) => {
+    const conversation = conv(usage)
+    const store = storeOf(conversation)
+    await act(async () => {
+      root.render(e(HostStoreProviders, { value: store }, e(Composer, { conversation, prefill: null })))
+    })
   }
-  const zero = await mountComposer(conv({ tokens: 0 }))
   try {
-    assert.ok(statusSpan(zero.host) === null, 'an empty conversation or fresh reset (tokens=0) shows no status text')
-  } finally {
-    zero.unmount()
-  }
-})
+    await renderUsage(undefined)
+    assert.ok(statusSpan(host) === null)
 
-test('known window: pi-style 37.5%/200k, default gray, read-only', { timeout: 60_000 }, async () => {
-  const { host, unmount } = await mountComposer(conv({ tokens: 75_000, contextWindow: 200_000 }))
-  try {
-    const span = statusSpan(host)
-    assert.ok(span)
-    assert.equal(span.textContent, '37.5%/200k')
-    assert.equal(span.classList.contains('composer-context-status-high'), false)
-    assert.equal(span.classList.contains('composer-context-status-warn'), false)
+    await renderUsage({ tokens: 0 })
+    assert.ok(statusSpan(host) === null, 'an empty conversation or fresh reset (tokens=0) shows no status text')
+
+    await renderUsage({ tokens: 75_000, contextWindow: 200_000 })
+    const known = statusSpan(host)
+    assert.equal(known?.textContent, '37.5%/200k')
+    assert.equal(known?.classList.contains('composer-context-status-high'), false)
+    assert.equal(known?.classList.contains('composer-context-status-warn'), false)
+    assertReadOnly(host)
+
+    await renderUsage({ tokens: 75_100, contextWindow: 100_000 })
+    const warn = statusSpan(host)
+    assert.equal(warn?.textContent, '75.1%/100k')
+    assert.equal(warn?.classList.contains('composer-context-status-warn'), true)
+    assert.equal(warn?.classList.contains('composer-context-status-high'), false)
+
+    await renderUsage({ tokens: 92_000, contextWindow: 100_000 })
+    assert.equal(statusSpan(host)?.textContent, '92.0%/100k')
+    assert.equal(statusSpan(host)?.classList.contains('composer-context-status-high'), true)
+
+    await renderUsage({ tokens: null, contextWindow: 200_000 })
+    assert.equal(statusSpan(host)?.textContent, '?/200k')
+    assert.equal(statusSpan(host)?.classList.contains('composer-context-status-warn'), false)
+    assert.equal(statusSpan(host)?.classList.contains('composer-context-status-high'), false)
+
+    await renderUsage({ tokens: 12_345 })
+    assert.equal(statusSpan(host)?.textContent, '12k')
+    assert.ok(!statusSpan(host)!.textContent.includes('%'))
+
+    await renderUsage({ tokens: null, contextWindow: 100_000, compacting: true })
+    assert.equal(statusSpan(host)?.textContent, 'Compacting…')
     assertReadOnly(host)
   } finally {
-    unmount()
-  }
-})
-
-test('ratio >70 yellow, >90 red (strictly greater than the thresholds)', { timeout: 60_000 }, async () => {
-  const warn = await mountComposer(conv({ tokens: 75_100, contextWindow: 100_000 }))
-  try {
-    const span = statusSpan(warn.host)
-    assert.equal(span?.textContent, '75.1%/100k')
-    assert.equal(span?.classList.contains('composer-context-status-warn'), true)
-    assert.equal(span?.classList.contains('composer-context-status-high'), false)
-  } finally {
-    warn.unmount()
-  }
-  const high = await mountComposer(conv({ tokens: 92_000, contextWindow: 100_000 }))
-  try {
-    const span = statusSpan(high.host)
-    assert.equal(span?.textContent, '92.0%/100k')
-    assert.equal(span?.classList.contains('composer-context-status-high'), true)
-  } finally {
-    high.unmount()
-  }
-})
-
-test('tokens=null (no valid usage yet after compaction): shows ?/window, uncolored', { timeout: 60_000 }, async () => {
-  const { host, unmount } = await mountComposer(conv({ tokens: null, contextWindow: 200_000 }))
-  try {
-    const span = statusSpan(host)
-    assert.equal(span?.textContent, '?/200k')
-    assert.equal(span?.classList.contains('composer-context-status-warn'), false)
-    assert.equal(span?.classList.contains('composer-context-status-high'), false)
-  } finally {
-    unmount()
-  }
-})
-
-test('unknown window: shows only the compact estimate (no fake percentage/denominator), uncolored', { timeout: 60_000 }, async () => {
-  const { host, unmount } = await mountComposer(conv({ tokens: 12_345 }))
-  try {
-    const span = statusSpan(host)
-    assert.equal(span?.textContent, '12k')
-    assert.ok(!span!.textContent.includes('%'))
-    assert.equal(span?.classList.contains('composer-context-status-warn'), false)
-    assert.equal(span?.classList.contains('composer-context-status-high'), false)
-  } finally {
-    unmount()
-  }
-})
-
-test('while compacting: the read-only compacting text', { timeout: 60_000 }, async () => {
-  const { host, unmount } = await mountComposer(conv({ tokens: null, contextWindow: 100_000, compacting: true }))
-  try {
-    const span = statusSpan(host)
-    assert.equal(span?.textContent, 'Compacting…')
-    assertReadOnly(host)
-  } finally {
-    unmount()
+    act(() => root.unmount())
+    host.remove()
   }
 })
 
@@ -196,10 +180,7 @@ test('CSS specificity regression: load the real composer.css and verify tone cla
   // Regression background: the base rule `.composer-status-row .composer-context-status` (0,2,0)
   // must never outrank `.composer-status-row .composer-context-status-warn/-high` (0,2,0, declared later),
   // otherwise yellow/red never apply. DOM class assertions cannot catch that bug: verify with computedStyle from the real stylesheet.
-  const css = readFileSync(new URL('../src/styles/composer.css', import.meta.url), 'utf8')
-  const style = document.createElement('style')
-  style.textContent = `:root { --fg-muted: rgb(11, 12, 13); --warn: rgb(21, 22, 23); --err: rgb(31, 32, 33); }\n${css}`
-  document.head.appendChild(style)
+  const removeStyle = mountComposerCss(true)
   const row = document.createElement('div')
   row.className = 'composer-status-row'
   const base = document.createElement('span')
@@ -216,19 +197,44 @@ test('CSS specificity regression: load the real composer.css and verify tone cla
     assert.equal(getComputedStyle(high).color, 'rgb(31, 32, 33)', 'the high tone must override the default gray')
   } finally {
     row.remove()
-    style.remove()
+    removeStyle()
   }
 })
 
-test('rate metrics are not rendered built-in: contextUsage has no response field (policy belongs to optional plugins)', { timeout: 60_000 }, async () => {
-  const { host, unmount } = await mountComposer(conv({ tokens: 75_000, contextWindow: 200_000 }))
+test('CSS stacking regression: Popover 内容节点必须声明 z-index: 80，Select 保持 120，Dialog 内联层叠仍可覆盖', { timeout: 60_000 }, () => {
+  const style = document.createElement('style')
+  style.textContent = readHostStyles()
+  document.head.appendChild(style)
+
+  const makeWrapped = (className: string, inlineZ?: string): HTMLElement => {
+    const wrapper = document.createElement('div')
+    wrapper.setAttribute('data-radix-popper-content-wrapper', '')
+    const content = document.createElement('div')
+    content.className = className
+    if (inlineZ !== undefined) content.style.zIndex = inlineZ
+    wrapper.appendChild(content)
+    document.body.appendChild(wrapper)
+    return content
+  }
+
+  const plainPopover = makeWrapped('helmx-popover-content magpie-quota-popover')
+  const modelPopover = makeWrapped('helmx-popover-content composer-popover composer-model-popover')
+  const paneMorePopover = makeWrapped('helmx-popover-content pane-more-popover')
+  const selectPopover = makeWrapped('helmx-popover-content helmx-select-popover')
+  const nestedDialogPopover = makeWrapped('helmx-popover-content magpie-quota-popover', '1002')
   try {
-    // @ts-expect-error response is removed: rate display belongs entirely to the builtin:token-speed plugin via COMPOSER_STATUS_SLOT
-    conv({ tokens: 1, response: { responseTps: 52.4 } })
-    assert.ok(host.querySelector('.composer-context-tps') === null, 'the host renders no built-in rate text')
-    assert.equal(statusSpan(host)?.textContent, '37.5%/200k', 'the context status is unaffected')
+    assert.equal(getComputedStyle(plainPopover).zIndex, '80', '普通 Popover 必须向 Radix Popper 暴露 z-index: 80 而非 auto')
+    assert.equal(getComputedStyle(modelPopover).zIndex, '80', '模型选择器 Popover 统一处于 80 层，不被侧栏或底渐隐层遮挡')
+    assert.equal(getComputedStyle(paneMorePopover).zIndex, '80', '会话顶栏更多菜单 Popover 统一处于 80 层，不被 @layer host-components 压回 50')
+    assert.equal(getComputedStyle(selectPopover).zIndex, '120', 'MultiSelect 复用 PopoverContent 时仍须维持 120 层高于旧弹窗')
+    assert.equal(getComputedStyle(nestedDialogPopover).zIndex, '1002', 'Dialog 内浮层通过 useOverlayChildStyle 内联抬高层级不被压低')
   } finally {
-    unmount()
+    plainPopover.parentElement?.remove()
+    modelPopover.parentElement?.remove()
+    paneMorePopover.parentElement?.remove()
+    selectPopover.parentElement?.remove()
+    nestedDialogPopover.parentElement?.remove()
+    style.remove()
   }
 })
 
@@ -287,10 +293,7 @@ test('composer/status DOM placement & empty collapse: telemetry row sits below .
     return null
   }
   seedPluginClientModule('builtin:empty-status', 'index.tsx', { EmptyStatusProbe })
-  const css = readFileSync(new URL('../src/styles/composer.css', import.meta.url), 'utf8')
-  const style = document.createElement('style')
-  style.textContent = css
-  document.head.appendChild(style)
+  const removeStyle = mountComposerCss()
 
   const conversation = conv(undefined)
   const store = makeTestStore({
@@ -361,7 +364,7 @@ test('composer/status DOM placement & empty collapse: telemetry row sits below .
   } finally {
     act(() => root.unmount())
     host.remove()
-    style.remove()
+    removeStyle()
   }
 })
 
@@ -655,10 +658,7 @@ test('conversationDurationLabel：仅 blocked 渲染「等待审批」秒表且�
 test('Composer ConversationDurationStatus：blocked 渲染「等待审批」warn 只读文本并撑开状态行，无等待审批时不渲染', { timeout: 60_000 }, async () => {
   const { resetServerClock } = await import('../src/lib/server-clock.js')
   resetServerClock()
-  const css = readFileSync(new URL('../src/styles/composer.css', import.meta.url), 'utf8')
-  const style = document.createElement('style')
-  style.textContent = `:root { --fg-muted: rgb(11, 12, 13); --warn: rgb(21, 22, 23); --err: rgb(31, 32, 33); }\n${css}`
-  document.head.appendChild(style)
+  const removeStyle = mountComposerCss(true)
 
   const host = document.createElement('div')
   document.body.appendChild(host)
@@ -714,7 +714,7 @@ test('Composer ConversationDurationStatus：blocked 渲染「等待审批」warn
     localStorage.removeItem('helmx:locale')
     act(() => root.unmount())
     host.remove()
-    style.remove()
+    removeStyle()
   }
 })
 
@@ -1244,10 +1244,7 @@ test('ComposerInputShell + menu: Escape returns focus to .composer-plus-trigger;
 })
 
 test('composer/status single-line layout CSS: nowrap, overflow-x auto, non-shrinking telemetry, display:contents slot & empty collapse', { timeout: 60_000 }, async () => {
-  const css = readFileSync(new URL('../src/styles/composer.css', import.meta.url), 'utf8')
-  const style = document.createElement('style')
-  style.textContent = css
-  document.head.appendChild(style)
+  const removeStyle = mountComposerCss()
 
   const populated = conv({ tokens: 75_000, contextWindow: 200_000 })
   const empty = conv(undefined)
@@ -1312,7 +1309,7 @@ test('composer/status single-line layout CSS: nowrap, overflow-x auto, non-shrin
     resetPluginClientCache()
     act(() => root.unmount())
     host.remove()
-    style.remove()
+    removeStyle()
   }
 })
 

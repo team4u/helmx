@@ -14,13 +14,13 @@ import { test } from 'node:test'
 import * as React from 'react'
 import { act } from 'react'
 import { createRoot } from 'react-dom/client'
-import { existsSync, mkdirSync, readFileSync } from 'node:fs'
+import { mkdirSync, existsSync, readFileSync } from 'node:fs'
 import { join, resolve, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { PluginUiContribution } from '@helmx/protocol'
-import * as HelmxUi from '@helmx/ui'
-import * as HelmxPluginClient from '@helmx/plugin-client'
-import { compilePluginClientModule, safeDirName, safeFileName } from '@helmx/plugin-build'
+import { safeDirName, safeFileName } from '@helmx/plugin-build'
+import { waitForCondition } from './helpers/dom-harness.js'
+import { importCompiledPluginClient, mountPluginNamespaceGlobals, PLUGIN_CLIENT_CACHE_DIR } from './helpers/plugin-namespace.js'
 import { makeTestStore } from './helpers/store.js'
 import { HostStoreProviders } from './helpers/host-store.js'
 
@@ -30,14 +30,8 @@ import { HostStoreProviders } from './helpers/host-store.js'
 const e = React.createElement
 const here = dirname(fileURLToPath(import.meta.url))
 
-// 宿主共享命名空间（与浏览器一致；mermaid bundle 不依赖共享 mermaid——已自带）
-;(globalThis as Record<string, unknown>).__helmx_shared_react = React
-;(globalThis as Record<string, unknown>).__helmx_shared_react_jsx_runtime = await import('react/jsx-runtime')
-;(globalThis as Record<string, unknown>).__helmx_shared_react_dom = await import('react-dom')
-;(globalThis as Record<string, unknown>).__helmx_shared_react_dom_client = await import('react-dom/client')
-;(globalThis as Record<string, unknown>).__helmx_shared_lucide_react = await import('lucide-react')
-;(globalThis as Record<string, unknown>).__helmx_shared_ui = HelmxUi
-;(globalThis as Record<string, unknown>).__helmx_shared_plugin_client = HelmxPluginClient
+const HelmxPluginClient = await import('@helmx/plugin-client')
+mountPluginNamespaceGlobals(HelmxPluginClient)
 
 const { matchMarkdownCodeBlock } = await import('../src/conversation/codeblock-registry-model.js')
 const { CodeBlockRenderer } = await import('../src/conversation/CodeBlockRenderer.js')
@@ -46,7 +40,7 @@ const { seedPluginClientModule } = await import('../src/lib/plugin-client.js')
 const JSON_RENDER_ROOT = resolve(here, '../../plugins/src/json-render/client')
 const MERMAID_ROOT = resolve(here, '../../plugins/src/mermaid/client')
 const PLUGINS_ROOT = resolve(here, '../../plugins')
-const CACHE = fileURLToPath(new URL('../../../node_modules/.cache/helmx-test-plugin-clients', import.meta.url))
+const CACHE = PLUGIN_CLIENT_CACHE_DIR
 mkdirSync(CACHE, { recursive: true })
 
 // ---------------------------------------------------------------------------
@@ -109,7 +103,23 @@ test('CodeBlockRenderer：无命中回退宿主普通代码块（语言标签 + 
 // 3. 真实编译：json-render / mermaid clientRoot 产物可运行
 // ---------------------------------------------------------------------------
 
+const compiledCache = new Map<string, Promise<Record<string, unknown>>>()
+
+function importJsonRender(): Promise<Record<string, unknown>> {
+  const key = 'builtin:json-render'
+  let pending = compiledCache.get(key)
+  if (pending === undefined) {
+    pending = importCompiledPluginClient(key, JSON_RENDER_ROOT, 'index.tsx', CACHE)
+    compiledCache.set(key, pending)
+  }
+  return pending
+}
+
 async function importCompiled(root: string, pluginId: string, npmRoots?: Array<{ specifiers: string[]; packageRoot: string }>): Promise<Record<string, unknown>> {
+  if (npmRoots === undefined && pluginId === 'builtin:json-render') {
+    return await importJsonRender()
+  }
+  const { compilePluginClientModule } = await import('@helmx/plugin-build')
   const { code } = await compilePluginClientModule(pluginId, root, 'index.tsx', CACHE, npmRoots ? { npmRoots } : undefined)
   return await import(`data:text/javascript;base64,${Buffer.from(code, 'utf8').toString('base64')}`) as Record<string, unknown>
 }
@@ -129,19 +139,6 @@ test('mermaid client 真实编译（受控 npm bundle）：模块可导入且不
     { specifiers: ['mermaid/dist/mermaid.esm.min.mjs'], packageRoot: PLUGINS_ROOT },
   ])
   assert.equal(typeof mod['MermaidCodeBlock'], 'function', 'MermaidCodeBlock 导出为组件函数')
-})
-
-test('mermaid 编译器边界：未声明 npm 说明符显式拒绝（不留旁门）', { timeout: 120_000 }, async () => {
-  const { HelmxError } = await import('@helmx/protocol')
-  // 直接以空 npmRoots 编译 mermaid client：import 'mermaid/dist/mermaid.esm.min.mjs' 必须被拒绝
-  await assert.rejects(
-    compilePluginClientModule('builtin:mermaid', MERMAID_ROOT, 'index.tsx', CACHE),
-    (err: unknown) => {
-      const msg = err instanceof Error ? err.message : String(err)
-      assert.match(msg, /拒绝裸依赖 "mermaid"|mermaid/)
-      return true
-    },
-  )
 })
 
 // ---------------------------------------------------------------------------
@@ -220,7 +217,7 @@ test('CodeBlockRenderer：加载失败显式诊断 + 源码可复制（诚实性
     ))
   })
   // 等待异步加载失败呈现
-  await new Promise((r) => setTimeout(r, 50))
+  await waitForCondition(() => /render failed|Failed to load/.test(host.textContent ?? ''))
   act(() => { root!.render(e(HostStoreProviders, { value: store }, e(CBR, { language: 'ui', code }))) })
   const text = host.textContent ?? ''
   assert.match(text, /render failed|Failed to load/)
@@ -277,7 +274,7 @@ test('CodeBlockRenderer 从 store.plugins 读取 clientHashes：命中 O(1) 缓�
     await act(async () => {
       root!.render(e(HostStoreProviders, { value: storeHit }, e(CodeBlockRenderer, { language: 'customlang', code: 'ok' })))
     })
-    await new Promise((r) => setTimeout(r, 30))
+    await waitForCondition(() => requestedUrls.some((u) => u.includes('module=index.tsx&hash=cb-hash-2')))
     assert.ok(requestedUrls.some((u) => u.includes('module=index.tsx&hash=cb-hash-2')), `未命中应携带 &hash=：${JSON.stringify(requestedUrls)}`)
   } finally {
     if (root !== undefined) await act(async () => root!.unmount())

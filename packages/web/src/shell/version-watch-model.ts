@@ -266,23 +266,27 @@ export function versionDeferHint(
   }
 }
 
-// ---------------------------------------------------------------------------
-// preloadError auto-refresh loop guard (one-shot budget across reloads)
-// ---------------------------------------------------------------------------
+/** 版本监测时序参数（集中定义；对象引用共享，测试请使用 patchVersionWatchTimings/resetVersionWatchTimings）。 */
+export const versionWatchTimings = {
+  /** visibilitychange / window.focus 触发探测的节流窗口（毫秒）。 */
+  visibilityThrottleMs: 5_000,
+  /** 页面可见期间的周期探测间隔（毫秒）；hidden 期间跳过。 */
+  pollIntervalMs: 60_000,
+  /** 刷新升级重试延迟（毫秒）：同址 replace 后页面仍存活视为导航被吞，
+   *  升级为带 cache-buster 的重试。 */
+  reloadEscalateMs: 2_000,
+}
 
-/** sessionStorage marker key: this tab has consumed its preloadError-evidence auto-retry budget. */
-export const PRELOAD_RELOAD_GUARD_KEY = 'helmx:version-preload-reload'
+const DEFAULT_VERSION_WATCH_TIMINGS = { ...versionWatchTimings }
 
-/**
- * Try to claim the preloadError-evidence auto-refresh budget (once per tab).
- * Regular fingerprint-driven auto refresh does not pass through this guard.
- * Unavailable storage (read/write throwing) or an exhausted budget always
- * denies: keep the notice and allow only manual refresh, never loop across reloads.
- */
-export function claimPreloadAutoReload(storage: Storage | null): boolean {
-  const read = tryReadStorageItem(PRELOAD_RELOAD_GUARD_KEY, storage)
-  if (!read.ok || read.value !== null) return false
-  return writeStorageItem(PRELOAD_RELOAD_GUARD_KEY, '1', storage)
+/** 临时覆盖版本监测时序参数（供测试缩短节流/轮询/升级等待）。 */
+export function patchVersionWatchTimings(patch: Partial<typeof versionWatchTimings>): void {
+  Object.assign(versionWatchTimings, patch)
+}
+
+/** 恢复版本监测默认时序参数。 */
+export function resetVersionWatchTimings(): void {
+  Object.assign(versionWatchTimings, DEFAULT_VERSION_WATCH_TIMINGS)
 }
 
 // ---------------------------------------------------------------------------

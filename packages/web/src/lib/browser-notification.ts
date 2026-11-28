@@ -324,9 +324,10 @@ export function readBrowserNotificationPermission(): BrowserNotificationPermissi
  * - otherwise the page must be visible (!document.hidden) and the window
  *   focused (document.hasFocus()).
  */
-export function isPageActive(): boolean {
-  if (typeof document === 'undefined') return false
-  return !document.hidden && (typeof document.hasFocus === 'function' ? document.hasFocus() : false)
+export function isPageActive(doc?: Pick<Document, 'hidden' | 'hasFocus'> | null): boolean {
+  const target = doc === undefined ? (typeof document === 'undefined' ? null : document) : doc
+  if (target === null) return false
+  return !target.hidden && (typeof target.hasFocus === 'function' ? target.hasFocus() : false)
 }
 
 export function requestBrowserNotificationPermission(): Promise<BrowserNotificationPermission> {

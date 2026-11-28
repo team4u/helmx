@@ -2,10 +2,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import React from 'react'
 import { renderToString } from 'react-dom/server'
-
-;(globalThis as Record<string, unknown>).React = React
-const { Switch } = await import('@helmx/ui')
-const { Checkbox } = await import('@helmx/ui')
+import { Checkbox, Switch } from '../src/index.js'
 
 const e = React.createElement
 
@@ -14,7 +11,6 @@ const e = React.createElement
 // ---------------------------------------------------------------------------
 
 test('Switch：基础状态、受控 checked、WAI-ARIA 属性与零 Emoji', { timeout: 60_000 }, () => {
-  // 未激活状态
   const offHtml = renderToString(
     e(Switch, {
       checked: false,
@@ -33,10 +29,8 @@ test('Switch：基础状态、受控 checked、WAI-ARIA 属性与零 Emoji', { t
   assert.match(offHtml, /<label for="gateway-switch" class="helmx-switch-label">网关状态<\/label>/)
   assert.doesNotMatch(offHtml, /<label[^>]*>[\s\S]*<button/, 'Switch <label> must be a sibling of <button>, never wrapping it')
   assert.doesNotMatch(offHtml, /is-checked/)
-  // 零 Emoji 保证
   assert.doesNotMatch(offHtml, /[\u{1F300}-\u{1F9FF}\u{2600}-\u{26FF}]/u)
 
-  // 激活状态
   const onHtml = renderToString(
     e(Switch, {
       checked: true,
@@ -48,7 +42,6 @@ test('Switch：基础状态、受控 checked、WAI-ARIA 属性与零 Emoji', { t
   assert.match(onHtml, /aria-checked="true"/)
   assert.match(onHtml, /is-checked/)
 
-  // 禁用态
   const disabledHtml = renderToString(
     e(Switch, {
       checked: true,
@@ -61,7 +54,6 @@ test('Switch：基础状态、受控 checked、WAI-ARIA 属性与零 Emoji', { t
   assert.match(disabledHtml, /class="helmx-switch-wrap is-disabled"/)
   assert.match(disabledHtml, /disabled=""/)
 
-  // 无 label 模式直接渲染 switchButton 容器
   const noLabelHtml = renderToString(
     e(Switch, {
       checked: false,
@@ -75,11 +67,10 @@ test('Switch：基础状态、受控 checked、WAI-ARIA 属性与零 Emoji', { t
 })
 
 // ---------------------------------------------------------------------------
-// 3. Checkbox 组件 SSR 渲染与半选状态契约
+// 2. Checkbox 组件 SSR 渲染与半选状态契约
 // ---------------------------------------------------------------------------
 
 test('Checkbox：未选、勾选、半选（indeterminate）、无障碍与零 Emoji', { timeout: 60_000 }, () => {
-  // 未勾选状态
   const uncheckedHtml = renderToString(
     e(Checkbox, {
       checked: false,
@@ -100,7 +91,6 @@ test('Checkbox：未选、勾选、半选（indeterminate）、无障碍与零 E
   assert.doesNotMatch(uncheckedHtml, /is-indeterminate/)
   assert.doesNotMatch(uncheckedHtml, /[\u{1F300}-\u{1F9FF}\u{2600}-\u{26FF}]/u)
 
-  // 勾选状态：显示精细 check 图标
   const checkedHtml = renderToString(
     e(Checkbox, {
       checked: true,
@@ -111,9 +101,8 @@ test('Checkbox：未选、勾选、半选（indeterminate）、无障碍与零 E
 
   assert.match(checkedHtml, /aria-checked="true"/)
   assert.match(checkedHtml, /is-checked/)
-  assert.match(checkedHtml, /<svg/) // lucide check 图标
+  assert.match(checkedHtml, /<svg/)
 
-  // 半选（indeterminate）状态：显示 minus 图标，aria-checked="mixed"
   const indHtml = renderToString(
     e(Checkbox, {
       checked: false,
@@ -125,9 +114,8 @@ test('Checkbox：未选、勾选、半选（indeterminate）、无障碍与零 E
 
   assert.match(indHtml, /aria-checked="mixed"/)
   assert.match(indHtml, /is-indeterminate/)
-  assert.match(indHtml, /<svg/) // lucide minus 图标
+  assert.match(indHtml, /<svg/)
 
-  // 禁用态
   const disabledHtml = renderToString(
     e(Checkbox, {
       checked: true,
@@ -140,7 +128,6 @@ test('Checkbox：未选、勾选、半选（indeterminate）、无障碍与零 E
   assert.match(disabledHtml, /class="helmx-checkbox-wrap is-disabled"/)
   assert.match(disabledHtml, /disabled=""/)
 
-  // 无 label 模式（例如侧栏批量选择框）
   const noLabelHtml = renderToString(
     e(Checkbox, {
       className: 'sidebar-batch-checkbox',

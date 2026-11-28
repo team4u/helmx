@@ -6,7 +6,6 @@ import * as React from 'react'
 import * as ReactJsxRuntime from 'react/jsx-runtime'
 import * as ReactDom from 'react-dom'
 import * as ReactDomClient from 'react-dom/client'
-import * as LucideReact from 'lucide-react'
 import * as HelmxUi from '@helmx/ui'
 import { mkdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
@@ -18,22 +17,47 @@ export const PLUGIN_CLIENT_CACHE_DIR = fileURLToPath(
 mkdirSync(PLUGIN_CLIENT_CACHE_DIR, { recursive: true })
 
 let mountGen = 0
+let lastPluginClientNs: Record<string, unknown> | undefined
+let lastUiNs: Record<string, unknown> | undefined
+let cachedLucideReact: Record<string, unknown> | undefined
 
-/** 将宿主共享 React / Lucide / @helmx/ui / @helmx/plugin-client 命名空间挂载到 globalThis。 */
+function shallowRecordEqual(
+  a: Record<string, unknown> | undefined,
+  b: Record<string, unknown>,
+): boolean {
+  if (a === b) return true
+  if (a === undefined) return false
+  const keysA = Object.keys(a)
+  const keysB = Object.keys(b)
+  if (keysA.length !== keysB.length) return false
+  for (const key of keysB) {
+    if (!Object.hasOwn(a, key) || !Object.is(a[key], b[key])) return false
+  }
+  return true
+}
+
+/** 将宿主共享 React / @helmx/ui / @helmx/plugin-client 命名空间挂载到 globalThis（lucide-react 按需懒加载）。 */
 export function mountPluginNamespaceGlobals(
   pluginClientNamespace: Record<string, unknown>,
   uiNamespace: Record<string, unknown> = HelmxUi,
 ): void {
-  mountGen += 1
-  Object.assign(globalThis, {
+  if (!shallowRecordEqual(lastPluginClientNs, pluginClientNamespace) || !shallowRecordEqual(lastUiNs, uiNamespace)) {
+    mountGen += 1
+    lastPluginClientNs = pluginClientNamespace
+    lastUiNs = uiNamespace
+  }
+  const globals: Record<string, unknown> = {
     __helmx_shared_react: React,
     __helmx_shared_react_dom: ReactDom,
     __helmx_shared_react_dom_client: ReactDomClient,
     __helmx_shared_react_jsx_runtime: ReactJsxRuntime,
-    __helmx_shared_lucide_react: LucideReact,
     __helmx_shared_ui: uiNamespace,
     __helmx_shared_plugin_client: pluginClientNamespace,
-  })
+  }
+  if (cachedLucideReact !== undefined) {
+    globals.__helmx_shared_lucide_react = cachedLucideReact
+  }
+  Object.assign(globalThis, globals)
 }
 
 /** 通过 @helmx/plugin-build 编译真实插件 client 模块并以 data: URL 动态导入。 */
@@ -44,6 +68,13 @@ export async function importCompiledPluginClient(
   cacheDir = PLUGIN_CLIENT_CACHE_DIR,
 ): Promise<Record<string, unknown>> {
   const { code } = await compilePluginClientModule(pluginId, root, moduleRef, cacheDir)
+  if (code.includes('__helmx_shared_lucide_react')) {
+    const g = globalThis as Record<string, unknown>
+    if (g.__helmx_shared_lucide_react === undefined) {
+      cachedLucideReact ??= (await import('lucide-react')) as unknown as Record<string, unknown>
+      g.__helmx_shared_lucide_react = cachedLucideReact
+    }
+  }
   // Keep each mountPluginNamespaceGlobals() epoch distinct in Node's ESM module cache so
   // shared `dom-shared` shards never reuse a bundle evaluated against another file's namespace.
   return (await import(`data:text/javascript;base64,${Buffer.from(code, 'utf8').toString('base64')}#web-ns-${mountGen}`)) as Record<

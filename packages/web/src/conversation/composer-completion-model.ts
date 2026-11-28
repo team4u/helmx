@@ -37,6 +37,23 @@ export const COMPLETION_MERGE_LIMIT = 100
 /** Debounce window for action-source queries. */
 export const COMPLETION_QUERY_DEBOUNCE_MS = 150
 
+let completionQueryDebounceMs = COMPLETION_QUERY_DEBOUNCE_MS
+
+/** Read active completion action-source query debounce (150ms in production; overridable in tests). */
+export function getCompletionQueryDebounceMs(): number {
+  return completionQueryDebounceMs
+}
+
+/** Override completion action-source query debounce for tests. */
+export function patchCompletionQueryDebounceMs(ms: number): void {
+  completionQueryDebounceMs = ms
+}
+
+/** Reset completion action-source query debounce to the production default (150ms). */
+export function resetCompletionQueryDebounceMs(): void {
+  completionQueryDebounceMs = COMPLETION_QUERY_DEBOUNCE_MS
+}
+
 /** Slash command token: the existing three-source commands plus skill trigger
  * words (ASCII); the character set stays unchanged. */
 const SLASH_TOKEN_RE = /(?:^|\s)\/([a-zA-Z0-9:_-]*)$/

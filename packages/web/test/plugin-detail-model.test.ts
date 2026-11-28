@@ -3,7 +3,6 @@
  * - plugin-detail-model：标题兜底、仅活跃插件暴露 Screen 快捷入口、受管技能过滤；
  * - plugin-config-form-model：初值 secret 恒空、可重置裁决（必填无 default / 来源 / 掩码）、字段 id 与标题解析。
  */
-import './helpers/register-happy-dom.js'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import type { PluginSummary } from '@helmx/protocol'

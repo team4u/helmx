@@ -85,6 +85,7 @@ import {
   buildArchivedOverviewCards,
   buildOverviewCards,
   filterOverviewCards,
+  getOverviewSearchDebounceMs,
   groupOverviewCards,
   overviewBucketCounts,
   overviewFilterParamsRepair,
@@ -103,8 +104,6 @@ import {
   type OverviewGroupBy,
   type OverviewSourceFilter,
 } from './overview-model.js'
-
-const SEARCH_PARAM_DEBOUNCE_MS = 180
 
 export interface ConversationOverviewProps {
   isSplit?: boolean
@@ -522,7 +521,7 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
       searchTimerRef.current = setTimeout(() => {
         searchTimerRef.current = null
         applyFilterParam({ q: next.trim() === '' ? undefined : next })
-      }, SEARCH_PARAM_DEBOUNCE_MS)
+      }, getOverviewSearchDebounceMs())
     },
     [applyFilterParam],
   )

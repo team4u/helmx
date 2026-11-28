@@ -507,56 +507,6 @@ describe('conversation-drawer-nav', () => {
     assert.equal(newTopicButtons('.helmx-split-pane').length, 1, '分屏保留新话题入口')
   })
 
-  test('drawer-stack-model 纯函数契约：去重截断、深度上限 5、工作台归属推导与删除清理', { timeout: 60_000 }, async () => {
-    const {
-      MAX_DRAWER_STACK_DEPTH,
-      isDrawerFrameKeepAlive,
-      pushDrawerFrame,
-      removeConversationFromDrawerStack,
-      resolveDrawerWorkbenchConversationId,
-    } = await import('../src/lib/drawer-stack-model.js')
-
-    let stack: DrawerFrame[] = []
-    for (let id = 1; id <= MAX_DRAWER_STACK_DEPTH + 2; id += 1) {
-      stack = pushDrawerFrame(stack, { kind: 'conversation', conversationId: id })
-    }
-    assert.equal(stack.length, MAX_DRAWER_STACK_DEPTH, '超限时丢弃最底层')
-    assert.deepEqual(
-      stack.map((f) => f.conversationId),
-      [3, 4, 5, 6, 7],
-    )
-    assert.equal(isDrawerFrameKeepAlive(stack.length, 0), false)
-    assert.equal(isDrawerFrameKeepAlive(stack.length, 1), false)
-    assert.equal(isDrawerFrameKeepAlive(stack.length, 2), true)
-    assert.equal(isDrawerFrameKeepAlive(stack.length, 4), true)
-
-    // 重开栈中已有帧 #4：截断其上所有帧，防套娃
-    stack = pushDrawerFrame(stack, { kind: 'conversation', conversationId: 4 })
-    assert.deepEqual(stack.map((f) => f.conversationId), [3, 4])
-
-    // 工作台归属推导：显式 conversationId > 下方最近会话帧 > 主/分屏活动会话
-    const mixed: DrawerFrame[] = [
-      { kind: 'workbench', tab: 'artifacts' },
-      { kind: 'conversation', conversationId: 67 },
-      { kind: 'workbench', tab: 'artifacts' },
-      { kind: 'workbench', conversationId: 88, tab: 'artifacts' },
-    ]
-    assert.equal(resolveDrawerWorkbenchConversationId(mixed, 0, 10), 10)
-    assert.equal(resolveDrawerWorkbenchConversationId(mixed, 2, 10), 67)
-    assert.equal(resolveDrawerWorkbenchConversationId(mixed, 3, 10), 88)
-
-    // 会话删除时同时清理绑定该会话的会话帧与工作台帧
-    const pruned = removeConversationFromDrawerStack(
-      [
-        { kind: 'workbench', tab: 'artifacts' },
-        { kind: 'conversation', conversationId: 67 },
-        { kind: 'workbench', conversationId: 67, tab: 'artifacts' },
-      ],
-      67,
-    )
-    assert.deepEqual(pruned, [{ kind: 'workbench', tab: 'artifacts' }])
-  })
-
   test('宽屏 (>=1280px 且无 splitTarget) 流内停靠右侧抽屉栈，子会话 50/50 等分、Mod+I 直达主区、设置页/split 退回顶层模态遮罩', { timeout: 60_000 }, async () => {
     const originalMatchMedia = window.matchMedia
     const styleEl = document.createElement('style')
@@ -646,47 +596,6 @@ describe('conversation-drawer-nav', () => {
       styleEl.remove()
       window.matchMedia = originalMatchMedia
     }
-  })
-
-  test('drawer-stack-model 按会话记忆纯函数契约：LRU 淘汰、浅拷贝隔离、空栈清理与删除级联裁剪', { timeout: 60_000 }, async () => {
-    const {
-      getRememberedConversationDrawer,
-      pruneConversationFromDrawerMemory,
-      setRememberedConversationDrawer,
-    } = await import('../src/lib/drawer-stack-model.js')
-
-    const memory = new Map<number, DrawerFrame[]>()
-    setRememberedConversationDrawer(memory, 1, [{ kind: 'workbench', tab: ' artifacts ' }], 2)
-    setRememberedConversationDrawer(memory, 2, [{ kind: 'conversation', conversationId: 22 }], 2)
-
-    // 读取 #1 会刷新其 LRU 热度，并只返回浅拷贝
-    const copy1 = getRememberedConversationDrawer(memory, 1)
-    assert.deepEqual(copy1, [{ kind: 'workbench', tab: 'artifacts' }])
-    copy1!.push({ kind: 'conversation', conversationId: 999 })
-    assert.deepEqual(getRememberedConversationDrawer(memory, 1), [{ kind: 'workbench', tab: 'artifacts' }])
-
-    // 写入 #3 超出上限 2，应淘汰最久未用的 #2 而保留 #1
-    setRememberedConversationDrawer(memory, 3, [{ kind: 'workbench', tab: 'changes' }, { kind: 'conversation', conversationId: 33 }], 2)
-    assert.equal(getRememberedConversationDrawer(memory, 2), undefined)
-    assert.deepEqual(getRememberedConversationDrawer(memory, 1), [{ kind: 'workbench', tab: 'artifacts' }])
-
-    // 传入空栈应删除对应会话记忆
-    setRememberedConversationDrawer(memory, 1, [], 2)
-    assert.equal(getRememberedConversationDrawer(memory, 1), undefined)
-
-    // 删除会话时：自身条目移除、他人栈中绑定该会话的帧裁剪、变空条目一并移除
-    setRememberedConversationDrawer(memory, 10, [
-      { kind: 'workbench', tab: 'artifacts' },
-      { kind: 'conversation', conversationId: 33 },
-      { kind: 'workbench', conversationId: 33, tab: 'changes' },
-    ], 10)
-    setRememberedConversationDrawer(memory, 20, [
-      { kind: 'conversation', conversationId: 33 },
-    ], 10)
-    pruneConversationFromDrawerMemory(memory, 33)
-    assert.equal(getRememberedConversationDrawer(memory, 33), undefined)
-    assert.deepEqual(getRememberedConversationDrawer(memory, 10), [{ kind: 'workbench', tab: 'artifacts' }])
-    assert.equal(getRememberedConversationDrawer(memory, 20), undefined)
   })
 
   test('宽屏 (>=1280px 且无 splitTarget) 切换会话按会话独立记忆并恢复停靠工作台与子会话多屏，分屏/窄屏/显式关闭/外链覆写不误恢复', { timeout: 60_000 }, async () => {

@@ -16,7 +16,7 @@ import * as React from 'react'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { HelmxStoreProvider } from '../src/lib/HelmxStoreProvider.js'
-import { sseClientTimings } from '../src/lib/live-state.js'
+import { patchSseClientTimings, resetSseClientTimings } from '../src/lib/live-state.js'
 import { useHelmxStore } from '../src/lib/store-context.js'
 import { hangingEventStream } from './helpers/sse-stream.js'
 import type { ResolvedTarget } from '../src/lib/types.js'
@@ -393,8 +393,7 @@ test('App 空 Hash 且无任何角色/会话时：就绪后揭开 ProfileCenter 
 
 test('App 连接横幅防抖：1500ms 内闪断不出现，断线持续 >=1500ms 才浮现，重连即消', { timeout: 60_000 }, async (t) => {
   const originalFetch = globalThis.fetch
-  const originalTimings = { ...sseClientTimings }
-  Object.assign(sseClientTimings, {
+  patchSseClientTimings({
     reconnectBaseMs: 15,
     reconnectCapMs: 40,
     reconnectJitterMs: 0,
@@ -432,9 +431,9 @@ test('App 连接横幅防抖：1500ms 内闪断不出现，断线持续 >=1500ms
   t.after(() => {
     allowSecondConnect = true
     releaseSecondConnect?.()
-    Object.assign(sseClientTimings, originalTimings)
+    resetSseClientTimings()
     globalThis.fetch = originalFetch
-  })
+  }, { timeout: 60_000 })
 
   window.history.replaceState(null, '', '#/a/assistant')
   const host = document.createElement('div')

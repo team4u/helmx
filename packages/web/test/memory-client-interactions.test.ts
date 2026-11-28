@@ -1,42 +1,27 @@
 import './helpers/register-happy-dom.js'
 import assert from 'node:assert/strict'
-import { describe, after, before, test } from 'node:test'
-import { mkdtempSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { describe, before, test } from 'node:test'
 import { fileURLToPath } from 'node:url'
 import * as React from 'react'
-import * as ReactJsxRuntime from 'react/jsx-runtime'
-import * as LucideReact from 'lucide-react'
 import type { PluginClientContext as ClientContext, ProfileDetailSlotProps } from '@helmx/protocol'
-import * as HelmxUi from '@helmx/ui'
 import * as HelmxPluginClient from '@helmx/plugin-client'
-import { compilePluginClientModule } from '@helmx/plugin-build'
+import { importCompiledPluginClient, mountPluginNamespaceGlobals } from './helpers/plugin-namespace.js'
 
 // DOM 必须先于 react-dom/client 求值，合成 textarea 事件才会注册浏览器输入路径。
 ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
 const { createRoot } = await import('react-dom/client')
 const { act } = React
 const e = React.createElement
-const cacheDir = mkdtempSync(join(tmpdir(), 'helmx-memory-client-'))
 let MemorySection: React.ComponentType<ProfileDetailSlotProps>
 describe("memory-client-interactions", () => {
 
 
   before(async () => {
-    Object.assign(globalThis, {
-      __helmx_shared_react: React,
-      __helmx_shared_react_jsx_runtime: ReactJsxRuntime,
-      __helmx_shared_lucide_react: LucideReact,
-      __helmx_shared_ui: HelmxUi,
-      __helmx_shared_plugin_client: HelmxPluginClient,
-    })
+    mountPluginNamespaceGlobals(HelmxPluginClient)
     const clientRoot = fileURLToPath(new URL('../../plugins/src/memory/client', import.meta.url))
-    const { code } = await compilePluginClientModule('builtin:memory', clientRoot, 'index.tsx', cacheDir)
-    const compiled = await import(`data:text/javascript;base64,${Buffer.from(code).toString('base64')}`)
+    const compiled = await importCompiledPluginClient('builtin:memory', clientRoot, 'index.tsx')
     MemorySection = compiled.ProfileMemorySection as React.ComponentType<ProfileDetailSlotProps>
   })
-  after(() => rmSync(cacheDir, { recursive: true, force: true }))
 
   interface MemoryResult { profileId: string; enabled: boolean; content: string; initialized: boolean }
   function memory(profileId: string, content: string, enabled = true): MemoryResult {

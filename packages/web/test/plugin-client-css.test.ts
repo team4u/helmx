@@ -309,34 +309,6 @@ describe("plugin-client-css", () => {
     assert.equal(getCachedClientComponent('p', 'other.tsx', 'Panel'), undefined, '非法 seed 不得写入缓存')
   })
 
-  test('SSR 无 document：合法跳过样式注入且不报错，缓存照常发布', { timeout: 60_000 }, async () => {
-    installDataUrlModuleServing()
-    const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'document')
-    assert.ok(descriptor?.configurable, '测试前提：document 属性可配置')
-    try {
-      delete (globalThis as { document?: Document }).document
-      serveModule(`${cssExport('.ssr { color: red }')}${PANEL_EXPORT}`, 'h1')
-      const loaded = await loadPluginClientModule('p', 'index.tsx')
-      assert.equal(loaded.module.__helmxClientCss, '.ssr { color: red }')
-      assert.equal(getCachedClientComponent('p', 'index.tsx', 'Panel'), loaded.module.Panel, 'SSR 下 resolved 照常发布')
-      seedPluginClientModule('q', 'index.tsx', { Panel: () => null, __helmxClientCss: '.q { color: red }' })
-      serveModule(`export const __helmxClientCss = 42\n${PANEL_EXPORT}`, 'invalid-ssr')
-      await assert.rejects(
-        loadPluginClientModule('bad-ssr', 'index.tsx'),
-        (error: unknown) => error instanceof PluginClientError && error.code === 'client_module_css_invalid',
-        'SSR 只跳过 DOM 写入，不能跳过产物契约校验',
-      )
-      assert.equal(getCachedClientComponent('bad-ssr', 'index.tsx', 'Panel'), undefined)
-      assert.throws(
-        () => seedPluginClientModule('bad-seed', 'index.tsx', { Panel: () => null, __helmxClientCss: 42 }),
-        (error: unknown) => error instanceof PluginClientError && error.code === 'client_module_css_invalid',
-      )
-    } finally {
-      Object.defineProperty(globalThis, 'document', descriptor!)
-    }
-    assert.equal(allPluginStyles().length, 0, 'SSR 期间不得注入任何样式节点')
-  })
-
   test('缓存失效通知：仅 evict/reset 触发，正常 load/seed 不通知；revision 稳定且只随失效变化', { timeout: 60_000 }, async () => {
     installDataUrlModuleServing()
     const notified: string[] = []

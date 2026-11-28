@@ -28,17 +28,16 @@ import * as React from 'react'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import type { ConversationSummary } from '@helmx/protocol'
-import { sseClientTimings } from '../src/lib/live-state.js'
+import { patchSseClientTimings, resetSseClientTimings } from '../src/lib/live-state.js'
 import type { HelmxStoreValue } from '../src/lib/types.js'
 
 Object.assign(globalThis, { React, IS_REACT_ACT_ENVIRONMENT: true })
 
-const originalSseTimings = { ...sseClientTimings }
 describe("unread-visibility", () => {
 
 
   before(() => {
-    Object.assign(sseClientTimings, {
+    patchSseClientTimings({
       idleTimeoutMs: 30_000,
       reconnectBaseMs: 15,
       reconnectCapMs: 60,
@@ -47,8 +46,8 @@ describe("unread-visibility", () => {
   })
 
   after(() => {
-    Object.assign(sseClientTimings, originalSseTimings)
-  })
+    resetSseClientTimings()
+  }, { timeout: 60_000 })
 
   const encoder = new TextEncoder()
 
@@ -721,14 +720,19 @@ describe("unread-visibility", () => {
 
   test('窄屏默认拉取 turns=5 并支持向上分页，桌面保持 turns=10', { timeout: 60_000 }, async (t) => {
     const page = setVisibilityAndFocus({ hidden: false, focused: true })
-    const originalInnerWidth = window.innerWidth
+    const happyDom = (window as unknown as { happyDOM?: { setViewport?: (v: { width: number; height: number }) => void } }).happyDOM
+    const originalWidth = window.innerWidth
+    const originalHeight = window.innerHeight
+    const setViewportWidth = (width: number): void => {
+      happyDom?.setViewport?.({ width, height: originalHeight || 768 })
+    }
     t.after(() => {
-      Object.assign(window, { innerWidth: originalInnerWidth })
+      happyDom?.setViewport?.({ width: originalWidth, height: originalHeight })
       page.restore()
     })
 
     const requestedUrls: string[] = []
-    Object.assign(window, { innerWidth: 375 })
+    setViewportWidth(375)
 
     const h = await mountProvider({
       hash: '#/c/1',
@@ -808,7 +812,7 @@ describe("unread-visibility", () => {
       assert.equal(h.store().conversationDetails[1]?.nextCursor, null)
 
       // 切回桌面宽度后打开会话 2，验证默认 turns 恢复为 10
-      Object.assign(window, { innerWidth: 1024 })
+      setViewportWidth(1024)
       await act(async () => {
         h.store().openTarget({ kind: 'conversation', conversationId: 2 })
       })
@@ -825,12 +829,14 @@ describe("unread-visibility", () => {
 
   test('loadEarlierEntries 巨型回合最多补拉 1 页且 page2 失败保留 page1；仅加载过程步骤时提示且搜索跳转静默', { timeout: 60_000 }, async (t) => {
     const page = setVisibilityAndFocus({ hidden: false, focused: true })
-    const originalInnerWidth = window.innerWidth
+    const happyDom = (window as unknown as { happyDOM?: { setViewport?: (v: { width: number; height: number }) => void } }).happyDOM
+    const originalWidth = window.innerWidth
+    const originalHeight = window.innerHeight
     t.after(() => {
-      Object.assign(window, { innerWidth: originalInnerWidth })
+      happyDom?.setViewport?.({ width: originalWidth, height: originalHeight })
       page.restore()
     })
-    Object.assign(window, { innerWidth: 1024 })
+    happyDom?.setViewport?.({ width: 1024, height: originalHeight || 768 })
 
     const conv1Cursors: Array<string | null> = []
     const conv2Cursors: Array<string | null> = []

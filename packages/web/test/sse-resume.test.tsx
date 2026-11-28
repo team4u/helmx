@@ -22,7 +22,7 @@ import { describe, after, before, test } from 'node:test'
 import * as React from 'react'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
-import { isConfigOnlyPluginChange, sseClientTimings } from '../src/lib/live-state.js'
+import { isConfigOnlyPluginChange, patchSseClientTimings, resetSseClientTimings } from '../src/lib/live-state.js'
 import {
   getCachedClientComponent,
   getPluginClientCacheRevision,
@@ -34,6 +34,7 @@ import {
 import {
   bindSessionDocRuntime,
   getSessionDocState,
+  patchSessionDocTimings,
   resetSessionDocSubscriptions,
   sessionDocTimings,
   subscribeSessionDoc,
@@ -43,12 +44,11 @@ import type { HelmxStoreValue } from '../src/lib/types.js'
 
 Object.assign(globalThis, { React, IS_REACT_ACT_ENVIRONMENT: true })
 
-const originalSseTimings = { ...sseClientTimings }
 describe("sse-resume", () => {
 
 
   before(() => {
-    Object.assign(sseClientTimings, {
+    patchSseClientTimings({
       idleTimeoutMs: 150,
       reconnectBaseMs: 8,
       reconnectCapMs: 30,
@@ -57,8 +57,8 @@ describe("sse-resume", () => {
   })
 
   after(() => {
-    Object.assign(sseClientTimings, originalSseTimings)
-  })
+    resetSseClientTimings()
+  }, { timeout: 60_000 })
 
   // ---------------------------------------------------------------------------
   // Stubs: controlled SSE streams + fetch routing
@@ -2078,7 +2078,7 @@ describe("sse-resume", () => {
   test('plugin re-enable restores still-mounted sessionDoc subscriptions across plugin.changed, snapshot, and syncPlugins without resurrecting deleted conversations', { timeout: 60_000 }, async () => {
     resetSessionDocSubscriptions()
     const origDebounce = sessionDocTimings.subscribeDebounceMs
-    sessionDocTimings.subscribeDebounceMs = 0
+    patchSessionDocTimings({ subscribeDebounceMs: 0 })
     let streamRev = 0
     const restoreRuntime = bindSessionDocRuntime(async (input: RequestInfo | URL) => {
       const url = new URL(String(input), 'http://localhost')
@@ -2170,7 +2170,7 @@ describe("sse-resume", () => {
       off1()
       off2()
       restoreRuntime()
-      sessionDocTimings.subscribeDebounceMs = origDebounce
+      patchSessionDocTimings({ subscribeDebounceMs: origDebounce })
       resetSessionDocSubscriptions()
       await h.close()
     }

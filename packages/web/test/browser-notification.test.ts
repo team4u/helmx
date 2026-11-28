@@ -684,13 +684,5 @@ test('isPageActive：仅在页面可见且窗口聚焦时返回 true；无 docum
     Object.defineProperty(document, 'hasFocus', { configurable: true, writable: true, value: originalHasFocus })
   }
 
-  const originalDocDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'document')
-  try {
-    Object.defineProperty(globalThis, 'document', { configurable: true, value: undefined })
-    assert.equal(isPageActive(), false)
-  } finally {
-    if (originalDocDescriptor !== undefined) {
-      Object.defineProperty(globalThis, 'document', originalDocDescriptor)
-    }
-  }
+  assert.equal(isPageActive(null), false)
 })

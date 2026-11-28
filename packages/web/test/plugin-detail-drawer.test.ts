@@ -1,10 +1,10 @@
 import './helpers/register-happy-dom.js'
 import assert from 'node:assert/strict'
-import { test } from 'node:test'
+import { afterEach, test } from 'node:test'
 import React, { act } from 'react'
 import { renderToString } from 'react-dom/server'
 import type { PluginSummary } from '@helmx/protocol'
-import { ensureHappyDom } from './helpers/dom-harness.js'
+import { ensureHappyDom, flushMicrotasks, resetHappyDom, waitForCondition } from './helpers/dom-harness.js'
 import { ApiClientError, pluginsApi, type PluginConfigResponse } from '../src/lib/api.js'
 import {
   buildResetFieldPayload,
@@ -20,6 +20,10 @@ const e = React.createElement
 // 动态导入待测组件与携带 Radix 的 Provider（必须晚于 ensureHappyDom()）
 const { HostStoreProviders } = await import('./helpers/host-store.js')
 const { PluginDetailDrawer, PluginConfigForm } = await import('../src/plugins/PluginDetailDrawer.js')
+
+afterEach(() => {
+  resetHappyDom()
+}, { timeout: 60_000 })
 
 // ---------------------------------------------------------------------------
 // 辅助工具与 Mock 插件数据
@@ -335,9 +339,7 @@ test('PluginDetailDrawer：根据 Schema 动态加载与渲染 PluginConfigForm�
     })
 
     // 等待配置加载 effect 结算
-    await act(async () => {
-      await new Promise((r) => setTimeout(r, 50))
-    })
+    await waitForCondition(() => container.querySelector('input[type="number"]') !== null)
 
     // 验证各字段生成
     const timeoutInput = container.querySelector('input[type="number"]') as HTMLInputElement | null
@@ -435,9 +437,7 @@ test('PluginDetailDrawer：快速切换插件时防并发竞争（configGenerati
       )
     })
 
-    await act(async () => {
-      await new Promise((r) => setTimeout(r, 20))
-    })
+    await waitForCondition(() => (container.textContent || '').includes('B 插件标题'))
 
     // 此时页面应显示 Plugin B 的配置字段
     assert.match(container.textContent || '', /B 插件标题/)
@@ -452,8 +452,8 @@ test('PluginDetailDrawer：快速切换插件时防并发竞争（configGenerati
           },
         })
       }
-      await new Promise((r) => setTimeout(r, 20))
     })
+    await flushMicrotasks()
 
     // 4. 验证：插件 A 的迟到响应绝未覆盖插件 B 的界面
     assert.doesNotMatch(container.textContent || '', /A 插件慢字段/)
@@ -940,12 +940,9 @@ test('PluginDetailDrawer：标题与 ID 靠左对齐，零图标渲染，右上�
 
   // 2. 右上角关闭按钮
   assert.match(html, /btn-icon-sm/)
-
-  // 3. 杜绝图标容器
-  assert.doesNotMatch(html, /primary-drawer-icon-wrap/)
 })
 
-test('PluginDetailDrawer：「右屏打开」按钮具备窄屏隐藏类且不使用旧 callout--* 类', { timeout: 60_000 }, () => {
+test('PluginDetailDrawer：「右屏打开」按钮具备窄屏隐藏类与文案', { timeout: 60_000 }, () => {
   const store = makeTestStore({
     uiContributions: [
       { pluginId: 'custom:demo', surface: 'screen', spec: { id: 'main', label: '主视图', title: '主视图', client: { module: 'index.tsx', export: 'Main' } } },

@@ -24,7 +24,7 @@ const { createRoot } = await import('react-dom/client')
 
 import { makeTestStore, HelmxExternalStoreContext } from './helpers/store.js'
 import { hangingEventStream } from './helpers/sse-stream.js'
-import { sseClientTimings } from '../src/lib/live-state.js'
+import { patchSseClientTimings, resetSseClientTimings } from '../src/lib/live-state.js'
 import type { HelmxStoreValue } from '../src/lib/types.js'
 import type { HelmxExternalStore } from '../src/lib/helmx-store.js'
 import {
@@ -34,8 +34,9 @@ import {
 } from '../src/shell/use-version-watcher.js'
 import {
   FINGERPRINT_RELOAD_GUARD_KEY,
-  PRELOAD_RELOAD_GUARD_KEY,
+  patchVersionWatchTimings,
   RELOAD_CACHE_BUSTER_PARAM,
+  resetVersionWatchTimings,
   type VersionReloadLocation,
 } from '../src/shell/version-watch-model.js'
 import { clearComposerDirty, setComposerDirty, type ComposerDirtySnapshot } from '../src/conversation/composer-dirty.js'
@@ -199,9 +200,9 @@ const flush = async (ms = 0): Promise<void> => {
 
 function withTimings<T>(patch: Partial<typeof versionWatchTimings>, fn: () => Promise<T>): Promise<T> {
   const original = { ...versionWatchTimings }
-  Object.assign(versionWatchTimings, patch)
+  patchVersionWatchTimings(patch)
   return fn().finally(() => {
-    Object.assign(versionWatchTimings, original)
+    patchVersionWatchTimings(original)
   })
 }
 
@@ -215,11 +216,12 @@ describe("use-version-watcher", () => {
     harness = undefined
     entryCleanup?.()
     entryCleanup = undefined
+    resetVersionWatchTimings()
+    resetSseClientTimings()
     resetStandbyDrafts()
     setComposerDirty('watch-test-composer', CLEAN_COMPOSER)
     clearComposerDirty('watch-composer-instance')
     try {
-      sessionStorage.removeItem(PRELOAD_RELOAD_GUARD_KEY)
       sessionStorage.removeItem(FINGERPRINT_RELOAD_GUARD_KEY)
     } catch {
       /* happy-dom 环境恒可用；防御性兜底 */
@@ -228,7 +230,7 @@ describe("use-version-watcher", () => {
     document.body.innerHTML = ''
     document.head.innerHTML = ''
     setVisible(true)
-  })
+  }, { timeout: 60_000 })
 
   // ---------------------------------------------------------------------------
   // bootId 触发与 clean 刷新
@@ -1250,8 +1252,7 @@ describe("use-version-watcher", () => {
       factories.push(factory)
     }
 
-    const originalTimings = { ...sseClientTimings }
-    Object.assign(sseClientTimings, {
+    patchSseClientTimings({
       reconnectBaseMs: 15,
       reconnectCapMs: 60,
       reconnectJitterMs: 5,
@@ -1315,7 +1316,7 @@ describe("use-version-watcher", () => {
         root.unmount()
       })
       for (const handle of liveHandles) handle.end()
-      Object.assign(sseClientTimings, originalTimings)
+      resetSseClientTimings()
       globalThis.fetch = originalFetch
       host.remove()
     }
