@@ -81,6 +81,8 @@ const ConversationInputSchema = Type.Object(
     meta: Type.Optional(Type.Object({}, { additionalProperties: true })),
     attachments: Type.Optional(Type.Array(IdString)),
     replaceFromEntryId: Type.Optional(SafePositiveInt),
+    model: Type.Optional(Type.String({ pattern: REQUEST_SCHEMA_PATTERNS.modelRef.source })),
+    thinkingLevel: Type.Optional(ThinkingLevelSchema),
   },
   { additionalProperties: false },
 )

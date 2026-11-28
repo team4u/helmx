@@ -804,7 +804,7 @@ export interface PluginClientContext {
  *      useToolActivity / useTimelineToolCalls / useConversations / useConversation /
  *      usePlugins / usePluginConfig / useScreenParams / useScreenDrawer /
  *      useHostModels / useHostNodes / useHostProfiles / useSharedNowMs / usePluginAction /
- *      usePanelShortcut / useComposerCommand / useComposerModelPickerMode;
+ *      usePanelShortcut / useComposerCommand;
  *    - host-coupled widgets & helpers: ModelPickerControl / formatModelShortName /
  *      resolveEffectiveThinkingLevel / resolveDefaultChainThinkingLevel /
  *      MarkdownView / MarkdownText / CodeBlockView / ToolCallDetails;
@@ -1093,7 +1093,6 @@ export const PLUGIN_CLIENT_SHARED_EXPORTS = [
   'resolveDefaultChainThinkingLevel',
   'usePanelShortcut',
   'useComposerCommand',
-  'useComposerModelPickerMode',
   'PluginSlot',
   'PluginScope',
   'MarkdownView',

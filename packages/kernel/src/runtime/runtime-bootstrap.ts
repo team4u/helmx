@@ -12,7 +12,7 @@
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import type { Models, ModelsStore, Provider } from '@earendil-works/pi-ai'
 import { Harness, createRegistry, type Registry, type SessionEnd } from '@earendil-works/pi-durable'
-import { HelmxError, MODEL_TIER_PREFIX, type PluginBuildProvider, type PluginPackageManagerProvider } from '@helmx/protocol'
+import { HelmxError, type PluginBuildProvider, type PluginPackageManagerProvider } from '@helmx/protocol'
 import { CredentialService, ProviderService, ensureDataDir, resolveDataDir } from '../services/index.js'
 import {
   createDiagnosticEmitter,
@@ -306,9 +306,6 @@ export async function ensureInitialConversation(deps: {
       nodeId: 'local',
       cwd: deps.cwd,
       model: effective ?? '',
-      ...(resolved?.isOrchestratorTier && resolved.tierId !== undefined
-        ? { modelTier: `${MODEL_TIER_PREFIX}/${resolved.tierId}` }
-        : {}),
       thinkingLevel: thinking ?? '',
       unread: false,
       pinned: false,

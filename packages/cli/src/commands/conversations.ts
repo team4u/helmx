@@ -4,7 +4,12 @@
  *
  * Driven by `@helmx/protocol` `CONVERSATION_CORE_OPERATIONS` via `commandsFromOperations`.
  */
-import { CONVERSATION_CORE_OPERATIONS, type ConversationSummary } from '@helmx/protocol'
+import {
+  CONVERSATION_CORE_OPERATIONS,
+  MODEL_THINKING_LEVELS,
+  REQUEST_SCHEMA_PATTERNS,
+  type ConversationSummary,
+} from '@helmx/protocol'
 import { flagValue, type FlagSpec } from '../args.js'
 import { CliError } from '../errors.js'
 import {
@@ -30,6 +35,7 @@ import {
 const WHEN_BUSY = ['steer', 'followUp', 'reject'] as const
 const WHEN_PENDING_ASK = ['supersede', 'reject'] as const
 const ORIGINS = ['human', 'agent', 'trigger'] as const
+const THINKING_INPUT_VALUES = ['', ...MODEL_THINKING_LEVELS] as const
 
 type ConversationTurnKey =
   | 'conversations.reset'
@@ -69,6 +75,14 @@ const SEND_SCHEMA_FLAGS = new Map(
 
 const SEND_FLAGS: readonly FlagSpec[] = [
   ...convFlags,
+  {
+    ...(SEND_SCHEMA_FLAGS.get('model') ?? { name: 'model', type: 'string' as const }),
+    help: 'one-turn runtime model override (provider/model or tier/<id>; requires idle conversation)',
+  },
+  {
+    ...(SEND_SCHEMA_FLAGS.get('thinking') ?? { name: 'thinking', type: 'string' as const }),
+    help: `one-turn runtime thinking level override (${MODEL_THINKING_LEVELS.join('|')}; requires idle conversation)`,
+  },
   enumFlag('when-busy', WHEN_BUSY, 'policy when conversation is busy, defaults to steer'),
   enumFlag('when-pending-ask', WHEN_PENDING_ASK, 'policy when conversation has a pending AskDoc, defaults to supersede'),
   enumFlag('origin', ORIGINS, 'input origin, defaults to human'),
@@ -204,9 +218,21 @@ export function conversationsCommands(): CommandSpec[] {
             )
           }
           const body: Record<string, unknown> = { text }
+          const model = flagValue<string>(ctx.flags, 'model')
+          const thinking = flagValue<string>(ctx.flags, 'thinking')
           const whenBusy = flagValue<string>(ctx.flags, 'when-busy')
           const whenPendingAsk = flagValue<string>(ctx.flags, 'when-pending-ask')
           const origin = flagValue<string>(ctx.flags, 'origin')
+          if (model !== undefined) {
+            const trimmedModel = model.trim()
+            if (!REQUEST_SCHEMA_PATTERNS.modelRef.test(trimmedModel)) {
+              throw new CliError(`--model expects provider/model or tier/<id>, got "${model}"`, 'invalid_flag_value')
+            }
+            body.model = trimmedModel
+          }
+          if (thinking !== undefined) {
+            body.thinkingLevel = validateEnum(thinking, THINKING_INPUT_VALUES, 'thinking')
+          }
           if (whenBusy !== undefined) body.whenBusy = validateEnum(whenBusy, WHEN_BUSY, 'when-busy')
           if (whenPendingAsk !== undefined) {
             body.whenPendingAsk = validateEnum(whenPendingAsk, WHEN_PENDING_ASK, 'when-pending-ask')

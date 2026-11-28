@@ -40,7 +40,7 @@ import { readWorkspaceFile, type ConversationFileContent } from './workspace-fil
 import type { ConversationTracker } from './conversations.js'
 import type { EventHub } from './events.js'
 import { requireConv } from './conversation-require.js'
-import type { ModelRefResolutionMode, ResolvedModelRef } from './models.js'
+import type { ResolvedModelRef } from './models.js'
 import type { HelmxStore } from './store.js'
 import {
   ConversationAttachments,
@@ -111,9 +111,7 @@ interface ConversationServiceOptions {
   readonly models: () => Models
   readonly parseModelRefOrThrow: (ref: string) => { provider: string; modelId: string }
   /** Optional model-reference resolver (`ModelRegistry.resolveModelRef`); dereferences `tier/<id>` into concrete model + tier preset thinking level. */
-  readonly resolveModelRef?: (ref: string, opts?: { mode?: ModelRefResolutionMode }) => ResolvedModelRef
-  /** Live working-state probe so alignment avoids overriding active runtime models on orchestrator turns. */
-  readonly isConversationWorking?: (id: number) => boolean
+  readonly resolveModelRef?: (ref: string) => ResolvedModelRef
   /** Disabled-model preflight check (ModelRegistry.assertModelEnabled; rejects selection and submission of disabled models). */
   readonly assertModelEnabled: (provider: string, modelId: string) => void
   /**
@@ -149,6 +147,8 @@ export class ConversationService {
   /** submitInput orchestration (validation, idempotency, hooks, guarded commit paths). */
   private readonly submit: ConversationSubmit
   private readonly mutationMutex = createKeyedMutex<number>()
+  /** In-memory transient runtime model/thinking overrides (cleared on run end when `resetOnRunEnd`, config patch, reset, delete, or `null`). */
+  private readonly runtimeModelOverrides = new Map<number, { resetOnRunEnd: boolean }>()
 
   private readonly withMutationGate = <T>(id: number, op: () => Promise<T>): Promise<T> =>
     this.mutationMutex.run(id, op)
@@ -190,7 +190,7 @@ export class ConversationService {
       parseModelRefOrThrow: this.o.parseModelRefOrThrow,
       resolveModelRef: this.o.resolveModelRef,
       summaryWithOwnership: (id) => this.summaryWithOwnership(id),
-      isConversationWorking: this.o.isConversationWorking,
+      hasRuntimeModelOverride: (id) => this.runtimeModelOverrides.has(id),
       // Context window and thresholds may change after model/Profile alignment: trigger context usage recalculation.
       scheduleContextUsageRefresh: (id) => this.tracker.scheduleContextUsageRefresh(id),
     })
@@ -206,6 +206,10 @@ export class ConversationService {
       assertModelEnabled: this.o.assertModelEnabled,
       isClosed: this.o.isClosed,
       alignConversationModel: (id) => this.alignConversationModel(id),
+      hasRuntimeModelOverride: (id) => this.runtimeModelOverrides.has(id),
+      clearRuntimeModelOverride: (id) => {
+        this.runtimeModelOverrides.delete(id)
+      },
       withOwnership: (summary) => this.withOwnership(summary),
       assertMutationGuard: (id, guard) => this.assertMutationGuard(id, guard),
     })
@@ -243,6 +247,13 @@ export class ConversationService {
       trustedPlatformOf: this.o.trustedPlatformOf,
       evictConversationBase: this.o.evictConversationBase,
       onConversationDeleted: this.o.onConversationDeleted,
+      hasRuntimeModelOverride: (id) => this.runtimeModelOverrides.has(id),
+      onSetRuntimeModelOverride: (id, resetOnRunEnd) => {
+        this.runtimeModelOverrides.set(id, { resetOnRunEnd })
+      },
+      onClearRuntimeModelOverride: (id) => {
+        this.runtimeModelOverrides.delete(id)
+      },
       managedConversations: this.o.managedConversations,
       cancelAsksByConversation: this.o.cancelAsksByConversation,
       ownershipOf: this.o.ownershipOf,
@@ -261,6 +272,8 @@ export class ConversationService {
       isStarted: this.o.isStarted,
       assertMutationGuard: (id, guard) => this.assertMutationGuard(id, guard),
       withMutationGate: (id, op) => this.withMutationGate(id, op),
+      hasAutoResetRuntimeModel: (id) => this.hasAutoResetRuntimeModel(id),
+      resetRuntimeModelOnRunEnd: (id, gateOpts) => this.resetRuntimeModelOnRunEnd(id, gateOpts),
     })
 
     this.submit = new ConversationSubmit({
@@ -271,10 +284,18 @@ export class ConversationService {
       resolveAuthorizedAttachments: (convId, ids) => this.attachments.resolveAuthorizedAttachments(convId, ids),
       buildAttachmentContent: (effectiveText, resolved, options) =>
         this.attachments.buildAttachmentContent(effectiveText, resolved, options),
-      resolveEffectiveModelDetails: (override, profileId, mode) =>
-        this.profileAlignment.resolveEffectiveModelDetails(override, profileId, undefined, mode),
+      resolveEffectiveModelDetails: (override, profileId) =>
+        this.profileAlignment.resolveEffectiveModelDetails(override, profileId),
+      resolveModelRef: this.o.resolveModelRef,
       parseModelRefOrThrow: this.o.parseModelRefOrThrow,
+      models: this.o.models,
       assertModelEnabled: this.o.assertModelEnabled,
+      isConversationBusy: (id) => this.tracker.isConversationBusy(id),
+      isCompacting: (id) => this.tracker.isCompacting(id),
+      setConversationRuntimeModel: (id, target, gateOpts) =>
+        gateOpts?.insideMutationGate
+          ? this.applyRuntimeModelOverride(id, target)
+          : this.setConversationRuntimeModel(id, target),
       supersedePendingAsks: this.o.supersedePendingAsks,
       listPendingAskIds: this.o.listPendingAskIds,
       assertWritable: () => this.assertWritable(),
@@ -337,10 +358,17 @@ export class ConversationService {
   // ------------------------------------------------------------------
 
   summaryWithOwnership(id: number): ConversationSummary {
-    return { ...this.tracker.summaryOf(id), ownedBy: this.o.ownershipOf(id) }
+    return this.withOwnership(this.tracker.summaryOf(id))
   }
 
   withOwnership(summary: ConversationSummary): ConversationSummary {
+    if (this.runtimeModelOverrides.has(summary.id)) {
+      return { ...summary, ownedBy: this.o.ownershipOf(summary.id), runtimeModelOverride: true }
+    }
+    if (summary.runtimeModelOverride !== undefined) {
+      const { runtimeModelOverride: _dropped, ...rest } = summary
+      return { ...rest, ownedBy: this.o.ownershipOf(summary.id) }
+    }
     return { ...summary, ownedBy: this.o.ownershipOf(summary.id) }
   }
 
@@ -421,33 +449,57 @@ export class ConversationService {
   async resolveEffectiveModelDetails(
     override: string | undefined,
     profileId: string,
-    mode?: ModelRefResolutionMode,
   ): Promise<ResolvedModelRef | undefined> {
-    return this.profileAlignment.resolveEffectiveModelDetails(override, profileId, undefined, mode)
+    return this.profileAlignment.resolveEffectiveModelDetails(override, profileId)
   }
 
   async resolveEffectiveModel(
     override: string | undefined,
     profileId: string,
-    mode?: ModelRefResolutionMode,
   ): Promise<string | undefined> {
-    return this.profileAlignment.resolveEffectiveModel(override, profileId, mode)
+    return this.profileAlignment.resolveEffectiveModel(override, profileId)
+  }
+
+  hasRuntimeModelOverride(id: number): boolean {
+    return this.runtimeModelOverrides.has(id)
+  }
+
+  hasAutoResetRuntimeModel(id: number): boolean {
+    return this.runtimeModelOverrides.get(id)?.resetOnRunEnd === true
+  }
+
+  private async applyRuntimeModelOverride(
+    id: number,
+    target: { model: string; thinkingLevel?: string; resetOnRunEnd?: boolean } | null,
+  ): Promise<ConversationSummary> {
+    return this.profileAlignment.withConversationChange(id, () =>
+      this.lifecycle.setConversationRuntimeModel(id, target),
+    )
   }
 
   async setConversationRuntimeModel(
     id: number,
-    target: { model: string; thinkingLevel?: string },
+    target: { model: string; thinkingLevel?: string; resetOnRunEnd?: boolean } | null,
   ): Promise<ConversationSummary> {
     this.assertWritable()
-    return this.withMutationGate(id, () =>
-      this.profileAlignment.withConversationChange(id, () =>
-        this.lifecycle.setConversationRuntimeModel(id, target),
-      ),
-    )
+    return this.withMutationGate(id, () => this.applyRuntimeModelOverride(id, target))
   }
 
-  async alignRuntimeModelOnRunEnd(id: number): Promise<void> {
-    return this.profileAlignment.alignRuntimeModelOnRunEnd(id)
+  async resetRuntimeModelOnRunEnd(
+    id: number,
+    opts?: { insideMutationGate?: boolean },
+  ): Promise<void> {
+    if (!this.hasAutoResetRuntimeModel(id)) return
+    const meta = this.store.getConv(id)
+    if (meta === undefined || this.store.isDeleted(id)) {
+      this.runtimeModelOverrides.delete(id)
+      return
+    }
+    if (opts?.insideMutationGate) {
+      await this.applyRuntimeModelOverride(id, null)
+      return
+    }
+    await this.setConversationRuntimeModel(id, null)
   }
 
   async resolveEffectiveThinkingLevel(
