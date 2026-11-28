@@ -1,161 +1,234 @@
-/**
- * Bilingual UI copy (en / zh-CN) for `builtin:duo` client components (zero Emoji).
- */
-import type { ModelPickerControlCopy } from '@helmx/plugin-client'
-import type { HelmxLocale, LocalizedText } from '@helmx/protocol/browser'
+import type { HelmxLocale, LocalizedText, ModelPickerControlCopy } from '@helmx/plugin-client'
+import { formatModelShortName } from '@helmx/plugin-client'
+import type { DuoDraftValidationError, DuoPhase } from './models.ts'
 
 export const DUO_COPY = {
-  profileTitle: { en: 'Duo Mode (Planner / Executor)', 'zh-CN': '双相协同（规划 / 执行）' },
-  profileSwitchLabel: { en: 'Enable Duo Mode', 'zh-CN': '开启双相协同' },
-  profileSaveFirst: {
-    en: 'Save this Profile first before configuring Duo execution defaults.',
-    'zh-CN': '请先保存此 Profile，再配置双相协同的执行模型。',
+  screenTitle: { en: 'Duo Recipes', 'zh-CN': '双相配方' },
+  screenSubtitle: {
+    en: 'Pair a Planner model with an Executor model and expose them as selectable tier/<id> recipes.',
+    'zh-CN': '将规划模型与执行模型配对为 tier/<id> 双相配方，可在会话与角色中直接选用。',
   },
-  profileDisabledHint: {
-    en: 'Off by default. When enabled, top-level conversations using this Profile start in Planning Phase and switch to Executor for workspace edits.',
-    'zh-CN': '默认关闭。开启后，使用此 Profile 的顶层会话将先由规划模型制定方案，再切换执行模型落地与验证。',
+  searchPlaceholder: {
+    en: 'Search recipes by name, id, or model…',
+    'zh-CN': '按配方名、ID 或模型检索…',
   },
-  profilePlannerNote: {
-    en: 'Planner always uses the conversation or Profile model. Choose the Executor model below:',
-    'zh-CN': '规划模型跟随当前会话/Profile 配置；在下方设置执行模型：',
+  searchLabel: { en: 'Search Duo recipes', 'zh-CN': '搜索双相配方' },
+  createRecipe: { en: 'New recipe', 'zh-CN': '新建配方' },
+  editRecipe: { en: 'Edit', 'zh-CN': '编辑' },
+  deleteRecipe: { en: 'Delete', 'zh-CN': '删除' },
+  clearSearch: { en: 'Clear search', 'zh-CN': '清空搜索' },
+
+  emptyTitle: { en: 'No Duo recipes yet', 'zh-CN': '尚未配置双相配方' },
+  emptyHint: {
+    en: 'Create a Planner + Executor recipe so conversations can plan read-only and execute with a dedicated model.',
+    'zh-CN': '创建一个“规划模型 + 执行模型”配方，会话即可自动在只读规划与工作区执行间切换。',
   },
-  fieldExecutorModel: { en: 'Executor model', 'zh-CN': '执行模型' },
-  pickExecutorModel: { en: 'Select executor model', 'zh-CN': '选择执行模型' },
-  clearModel: { en: 'Clear model', 'zh-CN': '清空' },
-  fieldMaxSteps: { en: 'Max execution steps', 'zh-CN': '执行步数上限' },
-  fieldMaxStepsHint: { en: '0 = unlimited', 'zh-CN': '0 为不限' },
-  fieldMaxStepsUnit: { en: 'steps', 'zh-CN': '步' },
-  save: { en: 'Save', 'zh-CN': '保存' },
-  saving: { en: 'Saving…', 'zh-CN': '保存中…' },
-  savedNotice: { en: 'Duo defaults saved.', 'zh-CN': '双相配置已保存。' },
-  clearOverride: { en: 'Reset', 'zh-CN': '清除配置' },
-  clearedNotice: { en: 'Duo configuration cleared.', 'zh-CN': '已清除双相配置。' },
-  errExecutorRequired: {
-    en: 'Select an Executor model before saving Duo Mode.',
-    'zh-CN': '开启双相协同前请先选择执行模型。',
+  startersHeading: { en: 'Starter recipes', 'zh-CN': '推荐起步配对' },
+  startersHint: {
+    en: 'Pre-fill a recipe draft from your configured models or single-model tiers.',
+    'zh-CN': '基于当前可用模型与单模型档位一键预填配方草稿。',
   },
-  errMaxStepsInvalid: {
-    en: 'Max execution steps must be an integer between 0 and 100 (0 = unlimited).',
-    'zh-CN': '执行步数上限必须为 0 到 100 之间的整数（0 表示不限）。',
+  useStarter: { en: 'Use template', 'zh-CN': '使用此配对' },
+  noMatchTitle: { en: 'No matching Duo recipes', 'zh-CN': '没有匹配的双相配方' },
+
+  statusAvailable: { en: 'Ready', 'zh-CN': '就绪' },
+  statusDisabled: { en: 'Disabled model', 'zh-CN': '关联模型已禁用' },
+  statusUnavailable: { en: 'Unavailable', 'zh-CN': '不可用' },
+
+  plannerLabel: { en: 'Planner', 'zh-CN': '规划' },
+  executorLabel: { en: 'Executor', 'zh-CN': '执行' },
+  unlimitedSteps: { en: 'Unlimited steps', 'zh-CN': '不限步数' },
+  stepsCapSuffix: { en: 'steps max', 'zh-CN': '步上限' },
+  overrideBadge: { en: 'Override', 'zh-CN': '临时覆盖' },
+
+  drawerCreateTitle: { en: 'Create Duo Recipe', 'zh-CN': '新建双相配方' },
+  drawerNotFoundTitle: { en: 'Recipe not found', 'zh-CN': '配方不存在' },
+  drawerNotFoundHint: {
+    en: 'This recipe was removed or is not yet synced.',
+    'zh-CN': '该配方已被移除或尚未同步。',
   },
-  errModelDisabled: {
-    en: 'The selected Executor model is currently disabled.',
-    'zh-CN': '所选执行模型当前已禁用。',
+  fieldId: { en: 'Recipe ID', 'zh-CN': '配方 ID' },
+  fieldIdHintCreate: {
+    en: 'Lowercase letters, digits, "-" or "_"; selected in model picker as tier/<id>.',
+    'zh-CN': '支持小写字母、数字、"-" 或 "_"；保存后在模型选择器中作为 tier/<id> 选用。',
   },
-  errModelUnavailable: {
-    en: 'The selected Executor model is currently unavailable in the model catalog.',
-    'zh-CN': '所选执行模型当前不可用。',
+  fieldIdHintLocked: {
+    en: 'Mounted in the model picker as tier/<id>.',
+    'zh-CN': '当前已在模型选择器中挂载为 tier/<id>。',
   },
-  menuLabel: { en: 'Duo Mode', 'zh-CN': '双相协同' },
-  setupDialogTitle: { en: 'Enable Duo Mode', 'zh-CN': '开启双相协同' },
-  setupDialogDescription: {
-    en: 'Your current model acts as Planner. Pick an Executor model for code edits and verification.',
-    'zh-CN': '当前会话模型将担任规划（Planner），请选择负责代码修改与验证的执行模型（Executor）。',
+  fieldName: { en: 'Display name', 'zh-CN': '配方名称' },
+  fieldNamePlaceholder: { en: 'e.g. Architect -> Coder', 'zh-CN': '例如：架构规划 -> 工程实现' },
+  fieldPlanner: { en: 'Planner model', 'zh-CN': '规划模型' },
+  fieldExecutor: { en: 'Executor model', 'zh-CN': '执行模型' },
+  pickModelPlaceholder: {
+    en: 'Select model or single-model tier',
+    'zh-CN': '选择模型或单模型档位',
   },
-  setupEnableBtn: { en: 'Enable Duo', 'zh-CN': '开启双相协同' },
+  fieldMaxSteps: { en: 'Max execution steps', 'zh-CN': '最大执行步数' },
+  fieldMaxStepsHint: {
+    en: 'Auto-pauses execution to hand back to Planner after N steps (0 = unlimited).',
+    'zh-CN': '达到步数上限后自动暂停并交还规划端评估（填 0 表示不限）。',
+  },
+  fieldDescription: { en: 'Description', 'zh-CN': '说明' },
+  fieldDescriptionPlaceholder: {
+    en: 'Optional short summary shown in the model picker and search results.',
+    'zh-CN': '可选简短描述，将展示在模型选择器与全局搜索结果中。',
+  },
+  clearModel: { en: 'Clear selection', 'zh-CN': '清除选择' },
+  close: { en: 'Close', 'zh-CN': '关闭' },
   cancel: { en: 'Cancel', 'zh-CN': '取消' },
-  pillBrand: { en: 'Duo', 'zh-CN': '双相' },
-  pillPhasePlan: { en: 'Plan', 'zh-CN': '规划' },
-  pillPhaseExec: { en: 'Exec', 'zh-CN': '执行' },
-  pillPhaseCoord: { en: 'Coordinator', 'zh-CN': '协调' },
-  popoverPhasePlanning: { en: 'Planning Phase', 'zh-CN': '规划阶段' },
-  popoverPhaseExecution: { en: 'Execution Phase', 'zh-CN': '执行阶段' },
-  popoverPhaseCoordinator: {
-    en: 'Swarm Coordinator (Planner only; workers inherit Executor)',
-    'zh-CN': 'Swarm 协调者（仅用规划模型；Worker 自动继承执行模型）',
+  saveCreate: { en: 'Create recipe', 'zh-CN': '创建配方' },
+  saveUpdate: { en: 'Save changes', 'zh-CN': '保存修改' },
+
+  deleteConfirmTitle: { en: 'Delete Duo recipe?', 'zh-CN': '删除双相配方？' },
+  deleteConfirmDescription: {
+    en: 'Removes tier/<id> from the model catalog immediately.',
+    'zh-CN': '删除后 tier/<id> 将立即从模型目录移除。',
   },
-  popoverPlanner: { en: 'Planner', 'zh-CN': '规划模型' },
-  popoverExecutor: { en: 'Executor', 'zh-CN': '执行模型' },
-  popoverSteps: { en: 'Execution steps', 'zh-CN': '执行步数' },
-  popoverActiveBadge: { en: 'Active', 'zh-CN': '当前' },
-  popoverDisable: { en: 'Turn off Duo for this chat', 'zh-CN': '关闭本会话双相协同' },
-  popoverRevertProfile: { en: 'Revert to Profile default', 'zh-CN': '恢复跟随 Profile' },
-  toolExitPlanTitle: { en: 'Enter execution phase', 'zh-CN': '进入执行阶段' },
-  toolHandBackTitle: { en: 'Hand back to planner', 'zh-CN': '交回规划阶段' },
-  toolPhaseExec: { en: 'Executor', 'zh-CN': '执行' },
-  toolPhasePlan: { en: 'Planner', 'zh-CN': '规划' },
-  toolStatusRunning: { en: 'Switching', 'zh-CN': '切换中' },
-  toolStatusDone: { en: 'Switched', 'zh-CN': '已切换' },
-  toolStatusError: { en: 'Failed', 'zh-CN': '失败' },
+  forceDeleteConfirmTitle: { en: 'Recipe is currently in use', 'zh-CN': '该配方正在被使用' },
+  forceDeleteConfirmAction: { en: 'Force delete', 'zh-CN': '强制删除' },
+
+  settingsSummary: {
+    en: 'Dual-phase recipes pair a read-only Planner with an Executor model and mount as selectable tier/<id> options.',
+    'zh-CN': '双相配方将只读规划模型与工作区执行模型配对，并挂载为可直接选用的 tier/<id> 档位。',
+  },
+  settingsKvRecipes: { en: 'Recipes', 'zh-CN': '已配置配方' },
+  settingsKvReady: { en: 'Ready', 'zh-CN': '可用配方' },
+  settingsOpenManager: { en: 'Manage Duo Recipes', 'zh-CN': '打开双相配方管理' },
+  settingsDisabledAlert: {
+    en: 'Enable builtin:duo to configure and run Dual-Phase Recipes.',
+    'zh-CN': '启用 builtin:duo 插件后即可配置并运行双相协同配方。',
+  },
+
+  pillPlanning: { en: 'Planning', 'zh-CN': '规划' },
+  pillExecuting: { en: 'Executing', 'zh-CN': '执行' },
+  pillStandby: { en: 'Duo', 'zh-CN': '双相' },
+  pillSuppressed: { en: 'Coordinator · Planner', 'zh-CN': '协调者 · 规划模型' },
+  pillEditRecipe: { en: 'Edit recipe', 'zh-CN': '编辑配方' },
+  pillClearOverride: { en: 'Reset override', 'zh-CN': '恢复配方默认' },
+  pillStepLimitPaused: { en: 'Step budget paused', 'zh-CN': '已达步数上限' },
+  pillStandbyHint: {
+    en: 'Send a message to start the session; temporary Executor overrides can be set once started.',
+    'zh-CN': '发送首条消息开始会话后，可在此临时覆盖当前会话的执行模型。',
+  },
+  pillCoordinatorHint: {
+    en: 'Swarm coordinator stays on Planner while dispatched workers inherit this Executor.',
+    'zh-CN': 'Swarm 协调者保持使用规划模型，派发出的 Worker 会继承下方执行模型。',
+  },
+
+  toolTransitionPrefix: { en: 'Duo phase switch', 'zh-CN': '双相切换' },
+  toolToExecution: { en: 'Entered Execution', 'zh-CN': '进入执行阶段' },
+  toolToPlanning: { en: 'Returned to Planner', 'zh-CN': '交还规划阶段' },
+  toolReasonLabel: { en: 'Reason', 'zh-CN': '原因' },
 } as const satisfies Record<string, LocalizedText>
 
-export const duoActionFailed = (err: unknown, locale: HelmxLocale): string => {
-  const detail = err instanceof Error ? err.message : String(err)
-  return locale === 'zh-CN' ? `操作失败：${detail}` : `Operation failed: ${detail}`
-}
-
-export const duoPillTitle = (
-  phase: 'planning' | 'execution',
-  plannerModel: string,
-  executorModel: string,
-  steps: number,
-  maxSteps: number,
-  suppressed: boolean,
-  locale: HelmxLocale,
-): string => {
-  if (suppressed) {
-    return locale === 'zh-CN'
-      ? `双相协同（Swarm 协调者 · 规划: ${plannerModel || '默认'} / 子 Worker: ${executorModel}）`
-      : `Duo Mode (Swarm Coordinator · Planner: ${plannerModel || 'default'} / Worker default: ${executorModel})`
-  }
-  if (locale === 'zh-CN') {
-    const phaseLabel =
-      phase === 'execution'
-        ? maxSteps > 0
-          ? `执行阶段（${steps}/${maxSteps} 步）`
-          : `执行阶段（第 ${steps} 步）`
-        : '规划阶段'
-    return `双相协同 · ${phaseLabel}（Planner: ${plannerModel || '默认'} / Executor: ${executorModel}）`
-  }
-  const phaseLabel =
-    phase === 'execution'
-      ? maxSteps > 0
-        ? `Execution (${steps}/${maxSteps})`
-        : `Execution (step ${steps})`
-      : 'Planning'
-  return `Duo Mode · ${phaseLabel} (Planner: ${plannerModel || 'default'} / Executor: ${executorModel})`
-}
-
-export const duoPopoverStepsValue = (steps: number, maxSteps: number, locale: HelmxLocale): string => {
-  if (maxSteps > 0) return `${steps} / ${maxSteps}`
-  return locale === 'zh-CN' ? `${steps}（不限）` : `${steps} (unlimited)`
-}
-
-export const duoTransitionSummary = (
-  tool: 'exit_plan_mode' | 'hand_back_to_planner',
-  toModelShort: string,
-  reason: string | undefined,
-  locale: HelmxLocale,
-): string => {
-  if (tool === 'exit_plan_mode') {
-    return locale === 'zh-CN' ? `切换至执行模型 ${toModelShort}` : `Switched to executor ${toModelShort}`
-  }
-  const base =
-    locale === 'zh-CN' ? `交回规划模型 ${toModelShort}` : `Returned to planner ${toModelShort}`
-  return reason !== undefined && reason !== '' ? `${base} · ${reason}` : base
-}
-
 const ZH_PICKER_COPY: Partial<ModelPickerControlCopy> = {
-  buttonAria: '模型与思考档位：{model}{level}',
-  levelSuffix: ' · {level}',
-  defaultLabel: '选择模型与思考档位',
-  searchAria: '搜索模型',
-  searchPlaceholder: '搜索模型…',
-  refreshCatalog: '刷新动态模型目录',
-  tiersHeader: '模型档位',
-  tierRowTitle: '使用 {tier}（{model}）',
-  listHeader: '模型列表',
-  navHint: '↑↓ 选择 · Enter 确认',
-  emptyCatalog: '暂无可用模型；请先在「模型与凭据」配置供应商密钥',
-  noMatches: '没有匹配的模型',
-  thinkingHeader: '思考档位',
-  rowDefaultTitle: '使用 {model}（思考档位跟随默认）',
-  levelChipTitle: '使用 {model} · 思考 {level}',
+  searchPlaceholder: '搜索模型或单模型档位…',
+  searchAria: '搜索模型或单模型档位',
+  tiersHeader: '单模型档位',
+  listHeader: '全部模型',
+  emptyCatalog: '暂无可用模型',
+  noMatches: '无匹配模型',
+  thinkingHeader: '思考深度',
+  refreshCatalog: '刷新模型列表',
+  navHint: '方向键选择 · Enter 确认',
   catalogUnavailable: '模型目录不可用',
-  catalogPartialFailure: '部分供应商目录刷新失败',
-  catalogRefreshed: '已刷新模型目录',
-  catalogRefreshFailed: '刷新模型目录失败',
+}
+
+const EN_PICKER_COPY: Partial<ModelPickerControlCopy> = {
+  searchPlaceholder: 'Search models or single-model tiers…',
+  tiersHeader: 'Single-model tiers',
 }
 
 export const buildDuoPickerCopy = (locale: HelmxLocale): Partial<ModelPickerControlCopy> =>
-  locale === 'zh-CN' ? ZH_PICKER_COPY : {}
+  locale === 'zh-CN' ? ZH_PICKER_COPY : EN_PICKER_COPY
+
+export function getDuoValidationMessage(
+  err: DuoDraftValidationError,
+  locale: HelmxLocale,
+): string {
+  const zh = locale === 'zh-CN'
+  switch (err) {
+    case 'id_required':
+      return zh ? '请填写配方 ID。' : 'Recipe ID is required.'
+    case 'id_invalid':
+      return zh
+        ? '配方 ID 仅支持小写字母、数字、"-" 与 "_"，且须以字母或数字开头。'
+        : 'Recipe ID must match /^[a-z0-9][a-z0-9_-]{0,63}$/.'
+    case 'id_conflict':
+      return zh ? '该 ID 已被其他模型档位或双相配方占用。' : 'This ID is already used by another tier or recipe.'
+    case 'name_required':
+      return zh ? '请填写配方显示名称。' : 'Display name is required.'
+    case 'name_too_long':
+      return zh ? '配方名称不得超过 80 个字符。' : 'Display name must be 80 characters or fewer.'
+    case 'planner_required':
+      return zh ? '请选择规划模型。' : 'Planner model is required.'
+    case 'planner_duo_ref':
+      return zh ? '规划模型不能引用双相配方自身或其他双相配方。' : 'Planner model cannot reference a Duo recipe.'
+    case 'executor_required':
+      return zh ? '请选择执行模型。' : 'Executor model is required.'
+    case 'executor_duo_ref':
+      return zh ? '执行模型不能引用双相配方自身或其他双相配方。' : 'Executor model cannot reference a Duo recipe.'
+    case 'steps_invalid':
+      return zh ? '最大执行步数须为 0 到 100 的整数。' : 'Max execution steps must be an integer from 0 to 100.'
+    case 'description_too_long':
+      return zh ? '描述不得超过 240 个字符。' : 'Description must be 240 characters or fewer.'
+  }
+}
+
+export function formatDuoPhaseLabel(phase: DuoPhase, locale: HelmxLocale): string {
+  return phase === 'execution' ? DUO_COPY.pillExecuting[locale] : DUO_COPY.pillPlanning[locale]
+}
+
+export function formatDuoStepCounter(
+  step: number,
+  maxSteps: number,
+  locale: HelmxLocale,
+): string {
+  if (maxSteps <= 0) {
+    return `${step} / ${locale === 'zh-CN' ? '不限' : '∞'}`
+  }
+  return `${step}/${maxSteps}`
+}
+
+export function formatDuoStepBudgetLabel(maxSteps: number, locale: HelmxLocale): string {
+  if (maxSteps <= 0) return DUO_COPY.unlimitedSteps[locale]
+  return `${maxSteps} ${DUO_COPY.stepsCapSuffix[locale]}`
+}
+
+export function formatDuoRecipeSavedNotice(id: string, locale: HelmxLocale): string {
+  return locale === 'zh-CN' ? `已保存双相配方 tier/${id}` : `Saved Duo recipe tier/${id}`
+}
+
+export function formatDuoRecipeRemovedNotice(id: string, locale: HelmxLocale): string {
+  return locale === 'zh-CN' ? `已删除双相配方 tier/${id}` : `Deleted Duo recipe tier/${id}`
+}
+
+export function formatDuoOverrideUpdatedNotice(modelRef: string, locale: HelmxLocale): string {
+  const short = formatModelShortName(modelRef)
+  return locale === 'zh-CN'
+    ? `当前会话执行模型已临时覆盖为 ${short}`
+    : `Temporarily overrode Executor to ${short}`
+}
+
+export function formatDuoOverrideClearedNotice(locale: HelmxLocale): string {
+  return locale === 'zh-CN' ? '已恢复配方默认执行模型' : 'Reset Executor to recipe default'
+}
+
+export function formatDuoTransitionSummary(
+  tool: 'exit_plan_mode' | 'hand_back_to_planner',
+  fromModel: string,
+  toModel: string,
+  locale: HelmxLocale,
+): string {
+  const fromShort = formatModelShortName(fromModel)
+  const toShort = formatModelShortName(toModel)
+  if (tool === 'exit_plan_mode') {
+    return locale === 'zh-CN'
+      ? `规划完成，切换至 ${toShort}`
+      : `Plan ready -> ${toShort}`
+  }
+  return locale === 'zh-CN'
+    ? `从 ${fromShort} 交还 ${toShort}`
+    : `Handed back ${fromShort} -> ${toShort}`
+}

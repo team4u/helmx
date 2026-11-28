@@ -1,48 +1,55 @@
+// @test-isolation: process
 /**
- * Integration tests for `builtin:duo` against real `createHelmx` + `faux` provider:
- * - Default enabled registration, managed skill, client bundle exports, `profiles` doc & `duo` sessionDoc;
- * - Dual-phase `planning` <-> `execution` state machine (`exit_plan_mode`, `hand_back_to_planner`,
- *   `maxExecutionSteps` budget pause, `turn_settled` Planner restore, zero persistent `modelOverride` mutation);
- * - Profile-level Duo defaults + `builtin:tiers` preset template lockstep upgrade + per-conv override & standby meta;
- * - Cross-plugin interop with `builtin:plan` (`helmx.plan-mode-active` precedence + `plan.approved` with/without model switch);
- * - Child model unwrapping (`helmx.default-child-model` + `agent_spawn` + `subagent`);
- * - `swarm-coordinator` posture suppression (keeps Planner + preserves child default model);
- * - Lifecycle safety (`inUse`, `--force` disable restore, `pi.reset`, `conversation.deleted`, `profile.changed`).
+ * Integration tests for `builtin:duo` Dual-Phase Recipes on full Helmx Kernel (`createHelmx`):
+ * - Default enabled, managed `duo` skill, modular client bundles, `singleTurnEligible: false` filtering;
+ * - Recipe CRUD (`set`/`list`/`get`/`remove`) mounted as `tier/<id>` in `ModelCatalog.modelTiers`;
+ * - Top-level conversation choosing `tier/<recipeId>` directly or via Profile:
+ *   Planning Phase (read-only + `exit_plan_mode`) -> Execution Phase (budget `step 1 of 2` -> pause) ->
+ *   `hand_back_to_planner` & `turn_settled` Planner restore;
+ * - `builtin:tiers` template lockstep update propagates to active Duo recipes + sessionDocs;
+ * - Temporary per-conversation `override_executor` / `clear_override` + cleanup on recipe switch;
+ * - `/plan` interop & `plan.approved` (`approve_handoff` without & with `executionModel`);
+ * - Subagent / Swarm inheritance (`agentType` Profile with Duo recipe + parent tree) & `swarm-coordinator` suppression;
+ * - Reference protection (`remove` & `disable` 409 unless `force: true`), runtime cleanup, delete cleanup.
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { fauxAssistantMessage, fauxToolCall, type FauxResponseStep } from '@earendil-works/pi-ai/providers/faux'
-import { getCurrentTools } from '@earendil-works/pi-ai/utils/transcript'
-import { HelmxError, type BeforeTurnHookPayload } from '@helmx/protocol'
+import {
+  HelmxError,
+  type ModelTiersCapability,
+} from '@helmx/protocol'
 import { createPluginBuildProvider } from '@helmx/plugin-build'
+import {
+  fauxAssistantMessage,
+  fauxToolCall,
+  type FauxResponseStep,
+} from '@earendil-works/pi-ai/providers/faux'
+import { getCurrentTools } from '@earendil-works/pi-ai/utils/transcript'
 import { createHelmx } from '../../hub/src/app.js'
 import {
   DEFAULT_CHILD_MODEL_CAPABILITY_ID,
-  PLAN_MODE_ACTIVE_CAPABILITY_ID,
   type DefaultChildModelCapability,
-  type PlanModeActiveCapability,
 } from '../src/contracts.js'
 import {
-  DUO_EXIT_PLAN_MODE_TOOL,
   DUO_EXECUTE_SECTION_ID,
+  DUO_EXIT_PLAN_MODE_TOOL,
   DUO_HAND_BACK_TOOL,
-  DUO_INPUT_META_KEY,
   DUO_PLAN_SECTION_ID,
   DUO_PLUGIN_ID,
-  DUO_PROFILES_DOC,
   DUO_SESSION_DOC,
   DUO_SKILL_ID,
+  DUO_STATE_DOC,
   DUO_STEP_LIMIT_SECTION_ID,
-  type DuoProfilesDocSnapshot,
+  type DuoRecipeView,
   type DuoSessionView,
+  type DuoStateDocSnapshot,
 } from '../src/duo.js'
-import { PLAN_MODE_SECTION_ID, PLAN_PLUGIN_ID, PLAN_TOOL_PROPOSE, PLAN_TOOL_SAVE } from '../src/plan.js'
+import { PLAN_MODE_SECTION_ID, PLAN_TOOL_PROPOSE, PLAN_TOOL_SAVE } from '../src/plan.js'
 import { TIERS_PLUGIN_ID } from '../src/tiers.js'
+import { renderModelTiersCatalogSection } from '../src/tiers/validation.js'
 import { TITLE_PLUGIN_ID } from '../src/title.js'
 import {
-  assertRejectsCode,
   cleanupDir,
-  deferred,
   makeFauxProvider,
   makeTempDir,
   waitFor,
@@ -88,494 +95,452 @@ interface ObservedStep {
 
 function captureStep(
   sink: ObservedStep[],
-  reply: string | (() => ReturnType<typeof fauxAssistantMessage>) = 'acknowledged',
+  reply: ReturnType<typeof fauxAssistantMessage>,
 ): FauxResponseStep {
-  return (context, _opts, _state, model) => {
+  return (ctx, _opts, _state, model) => {
     const sectionsById: Record<string, string | null> = {}
-    for (const msg of context.messages as unknown as Array<Record<string, unknown>>) {
+    for (const msg of ctx.messages as unknown as Array<Record<string, unknown>>) {
       if (msg['role'] !== 'system') continue
       const sections = msg['sections'] as Record<string, string | null> | undefined
       if (sections === undefined) continue
       for (const [k, v] of Object.entries(sections)) {
-        if (v === null) delete sectionsById[k]
-        else sectionsById[k] = v
+        sectionsById[k] = v
       }
     }
+    const toolNames = getCurrentTools(ctx.messages as never).map((t) => t.name)
     sink.push({
       modelId: `${model.provider}/${model.id}`,
-      toolNames: getCurrentTools(context.messages as never).map((t) => t.name),
+      toolNames,
       sectionsById,
     })
-    return typeof reply === 'function' ? reply() : fauxAssistantMessage(reply)
+    return reply
   }
 }
 
-test('registration, managed skill, client bundle exports, and per-conversation dual-phase loop with budget & turn_settled restore', TIMEOUT, async () => {
-  const env = await openDuoEnv({ defaultModel: 'faux/flagship' })
+test('registration, modular client bundles, catalog filtering, and recipe-driven dual-phase loop with budget pause', TIMEOUT, async () => {
+  const env = await openDuoEnv()
   try {
     const { kernel } = env.app
     const summary = kernel.plugins.list().find((p) => p.id === DUO_PLUGIN_ID)
-    assert.ok(summary && summary.enabled, 'builtin:duo must be enabled by default')
-
+    assert.ok(summary && summary.enabled)
     const skills = await kernel.skills.list()
     assert.ok(skills.some((s) => s.id === DUO_SKILL_ID && s.managedByPlugin === DUO_PLUGIN_ID))
 
     const indexMod = await kernel.plugins.getClientModule(DUO_PLUGIN_ID, 'index.tsx')
-    assert.match(indexMod.code, /DuoProfileSection/)
-    assert.match(indexMod.code, /DuoMenuItem/)
     assert.match(indexMod.code, /DuoToolbarPill/)
     assert.match(indexMod.code, /DuoTransitionToolRow/)
+    const managerMod = await kernel.plugins.getClientModule(DUO_PLUGIN_ID, 'manager.tsx')
+    assert.match(managerMod.code, /DuoManagerScreen/)
+    assert.doesNotMatch(managerMod.code, /DuoSettingsPanel/)
+    const settingsMod = await kernel.plugins.getClientModule(DUO_PLUGIN_ID, 'settings.tsx')
+    assert.match(settingsMod.code, /DuoSettingsPanel/)
+    assert.doesNotMatch(settingsMod.code, /DuoManagerScreen/)
 
-    const profilesDoc = kernel.plugins.getPublicDoc(DUO_PLUGIN_ID, DUO_PROFILES_DOC).value as DuoProfilesDocSnapshot
-    assert.deepEqual(profilesDoc, { profiles: {} })
+    const initialState = kernel.plugins.getPublicDoc(DUO_PLUGIN_ID, DUO_STATE_DOC).value as DuoStateDocSnapshot
+    assert.deepEqual(initialState, { recipes: {} })
 
-    const conv = await kernel.conversations.createConversation({ title: 'Duo loop test' })
-    const observed: ObservedStep[] = []
-
-    // Enable Duo per-conversation with step budget 2
-    const status = (await kernel.plugins.invokeAction(DUO_PLUGIN_ID, 'set_conversation', {
-      conversationId: conv.id,
-      enabled: true,
+    await kernel.plugins.invokeAction(TIERS_PLUGIN_ID, 'set', {
+      id: 'scout',
+      model: 'faux/fast',
+      description: 'Quick lookup',
+    })
+    await kernel.plugins.invokeAction(DUO_PLUGIN_ID, 'set', {
+      id: 'arch_coder',
+      name: 'Arch -> Coder',
+      description: 'Read-only architect paired with coder',
+      plannerModel: 'faux/flagship',
       executorModel: 'faux/coder',
-      executorThinkingLevel: 'medium',
+      executorThinkingLevel: 'high',
       maxExecutionSteps: 2,
-    })) as DuoSessionView
-    assert.equal(status.enabled, true)
-    assert.equal(status.phase, 'planning')
-    assert.equal(status.executorModel, 'faux/coder')
-    assert.equal(status.maxExecutionSteps, 2)
+    })
 
+    const catalog = await kernel.models.listModels()
+    const duoEntry = catalog.modelTiers?.find((t) => t.id === 'arch_coder')
+    assert.ok(duoEntry, 'Duo recipe must be mounted in ModelCatalog.modelTiers')
+    assert.equal(duoEntry.displayGroup, 'duo')
+    assert.equal(duoEntry.displayLabel, 'Arch -> Coder')
+    assert.equal(duoEntry.displayDetail, 'flagship → coder')
+    assert.equal(duoEntry.preserveRef, true)
+    assert.equal(duoEntry.singleTurnEligible, false)
+
+    const renderedTiers = renderModelTiersCatalogSection(catalog.modelTiers ?? [])
+    assert.ok(renderedTiers?.includes('tier/scout'))
+    assert.equal(renderedTiers?.includes('tier/arch_coder'), false)
+
+    const conv = await kernel.conversations.createConversation({
+      title: 'Recipe Conv',
+      model: 'tier/arch_coder',
+    })
+    assert.equal(conv.effectiveModelRef, 'tier/arch_coder')
+    assert.equal(conv.model, 'faux/flagship')
+
+    const observed: ObservedStep[] = []
     env.faux.setResponses([
-      captureStep(observed, () =>
-        fauxAssistantMessage([fauxToolCall(DUO_EXIT_PLAN_MODE_TOOL, { plan: 'Edit index and verify' })], { stopReason: 'toolUse' }),
+      captureStep(
+        observed,
+        fauxAssistantMessage([fauxToolCall(DUO_EXIT_PLAN_MODE_TOOL, { plan: 'Edit readme cleanly.' })], {
+          stopReason: 'toolUse',
+        }),
       ),
-      captureStep(observed, () =>
-        fauxAssistantMessage([fauxToolCall('bash', { command: 'echo step1' })], { stopReason: 'toolUse' }),
+      captureStep(
+        observed,
+        fauxAssistantMessage([fauxToolCall('read', { path: 'missing.txt' })], { stopReason: 'toolUse' }),
       ),
-      captureStep(observed, () =>
-        fauxAssistantMessage([fauxToolCall('bash', { command: 'echo step2' })], { stopReason: 'toolUse' }),
+      captureStep(
+        observed,
+        fauxAssistantMessage([fauxToolCall('read', { path: 'missing2.txt' })], { stopReason: 'toolUse' }),
       ),
-      captureStep(observed, () =>
+      captureStep(
+        observed,
         fauxAssistantMessage(
-          [fauxToolCall(DUO_HAND_BACK_TOOL, { reason: 'step_budget_reached', summary: 'Ran 2 checks; returning' })],
+          [
+            fauxToolCall(DUO_HAND_BACK_TOOL, {
+              reason: 'step_budget_reached',
+              summary: 'Checked files and paused at limit.',
+            }),
+          ],
           { stopReason: 'toolUse' },
         ),
       ),
-      captureStep(observed, 'Planning review complete.'),
+      captureStep(observed, fauxAssistantMessage('Back on Planner cleanly.')),
     ])
 
-    await kernel.conversations.submitInput(conv.id, 'Run a bounded dual-phase workflow')
+    await kernel.conversations.submitInput(conv.id, 'Plan and edit')
     await kernel.conversations.waitForIdle(conv.id)
 
     assert.equal(observed.length, 5)
-    // Step 1: Planning on flagship, read-only whitelist + exit_plan_mode (no write/hand_back_to_planner)
     assert.equal(observed[0]!.modelId, 'faux/flagship')
     assert.ok(observed[0]!.toolNames.includes(DUO_EXIT_PLAN_MODE_TOOL))
-    assert.ok(observed[0]!.toolNames.includes('bash'))
     assert.equal(observed[0]!.toolNames.includes('write'), false)
-    assert.equal(observed[0]!.toolNames.includes(DUO_HAND_BACK_TOOL), false)
     assert.ok(typeof observed[0]!.sectionsById[DUO_PLAN_SECTION_ID] === 'string')
 
-    // Steps 2 & 3: Execution on coder with write + hand_back_to_planner
     assert.equal(observed[1]!.modelId, 'faux/coder')
     assert.ok(observed[1]!.toolNames.includes('write'))
-    assert.ok(observed[1]!.toolNames.includes(DUO_HAND_BACK_TOOL))
-    assert.equal(observed[1]!.toolNames.includes(DUO_EXIT_PLAN_MODE_TOOL), false)
     assert.ok(observed[1]!.sectionsById[DUO_EXECUTE_SECTION_ID]?.includes('step 1 of 2'))
     assert.equal(observed[2]!.modelId, 'faux/coder')
     assert.ok(observed[2]!.sectionsById[DUO_EXECUTE_SECTION_ID]?.includes('step 2 of 2'))
 
-    // Step 4: Budget exhausted -> pauses workspace tools down to [hand_back_to_planner]
     assert.equal(observed[3]!.modelId, 'faux/coder')
     assert.deepEqual(observed[3]!.toolNames, [DUO_HAND_BACK_TOOL])
     assert.ok(typeof observed[3]!.sectionsById[DUO_STEP_LIMIT_SECTION_ID] === 'string')
 
-    // Step 5: Back on Planner flagship in planning phase
     assert.equal(observed[4]!.modelId, 'faux/flagship')
     assert.ok(observed[4]!.toolNames.includes(DUO_EXIT_PLAN_MODE_TOOL))
-    assert.equal(observed[4]!.toolNames.includes('write'), false)
-
-    // Turn settled cleanly on Planner without mutating modelOverride
-    const settled = kernel.conversations.getConversation(conv.id)
-    assert.equal(settled.model, 'faux/flagship')
-    assert.equal(settled.modelOverride, undefined)
-    assert.equal(settled.runtimeModelOverride, undefined)
-
-    // Verify presentationMeta on both transition tool results
-    const detail = await kernel.conversations.getConversationDetail(conv.id, { limit: 40 })
-    const toolResults = detail.entries
-      .filter((e) => e.kind === 'pi.tool-result')
-      .map((e) => e.model?.[0] as { details?: Record<string, unknown> } | undefined)
-    const exitMeta = toolResults.find((m) => m?.details?.['tool'] === DUO_EXIT_PLAN_MODE_TOOL)
-    assert.equal(exitMeta?.details?.['tool'], DUO_EXIT_PLAN_MODE_TOOL)
-    assert.equal(exitMeta?.details?.['toModel'], 'faux/coder')
-    const backMeta = toolResults.find((m) => m?.details?.['tool'] === DUO_HAND_BACK_TOOL)
-    assert.equal(backMeta?.details?.['tool'], DUO_HAND_BACK_TOOL)
-    assert.equal(backMeta?.details?.['reason'], 'step_budget_reached')
-
-    // Next turn with turn_settled mid-execution restores Planner automatically
-    observed.length = 0
-    env.faux.setResponses([
-      captureStep(observed, () =>
-        fauxAssistantMessage([fauxToolCall(DUO_EXIT_PLAN_MODE_TOOL, { plan: 'Direct answer after edit' })], { stopReason: 'toolUse' }),
-      ),
-      captureStep(observed, 'Execution finished directly without explicit hand_back.'),
-    ])
-    await kernel.conversations.submitInput(conv.id, 'Complete directly in execution')
-    await kernel.conversations.waitForIdle(conv.id)
-    assert.equal(observed.length, 2)
-    assert.equal(observed[1]!.modelId, 'faux/coder')
     assert.equal(kernel.conversations.getConversation(conv.id).model, 'faux/flagship')
-    const docAfter = kernel.plugins.getPublicSessionDoc(DUO_PLUGIN_ID, DUO_SESSION_DOC, conv.id).value as DuoSessionView
-    assert.equal(docAfter.phase, 'planning')
-    assert.equal(docAfter.executionStepCount, 0)
+
+    const status = (await kernel.plugins.invokeAction(DUO_PLUGIN_ID, 'status', {
+      conversationId: conv.id,
+    })) as DuoSessionView
+    assert.equal(status.phase, 'planning')
+    assert.equal(status.recipeId, 'arch_coder')
   } finally {
     await env.close()
   }
 })
 
-test('Profile-level Duo, builtin:tiers preset lockstep upgrade, per-conv disable/override, and standby input.meta', TIMEOUT, async () => {
+test('Profile binding, builtin:tiers preset cascade, override_executor & stale override cleanup on recipe switch', TIMEOUT, async () => {
   const env = await openDuoEnv()
   try {
     const { kernel } = env.app
-    await kernel.plugins.invokeAction(TIERS_PLUGIN_ID, 'replace', {
-      tiers: {
-        architect: { model: 'faux/flagship', thinkingLevel: 'high' },
-        coder: { model: 'faux/coder', thinkingLevel: 'medium' },
-      },
+    await kernel.plugins.invokeAction(TIERS_PLUGIN_ID, 'set', {
+      id: 'architect',
+      model: 'faux/flagship',
+      thinkingLevel: 'high',
     })
-    await kernel.plugins.invokeAction(TIERS_PLUGIN_ID, 'save_template', { id: 'v1', name: 'V1 Stack' })
+    await kernel.plugins.invokeAction(TIERS_PLUGIN_ID, 'set', {
+      id: 'coder',
+      model: 'faux/coder',
+      thinkingLevel: 'medium',
+    })
     await kernel.plugins.invokeAction(TIERS_PLUGIN_ID, 'save_template', {
-      id: 'v2',
-      name: 'V2 Stack',
+      id: 'v1',
+      name: 'V1',
+    })
+    await kernel.plugins.invokeAction(TIERS_PLUGIN_ID, 'replace', {
       tiers: {
         architect: { model: 'faux/flagship-v2', thinkingLevel: 'high' },
         coder: { model: 'faux/coder-v2', thinkingLevel: 'low' },
       },
     })
+    await kernel.plugins.invokeAction(TIERS_PLUGIN_ID, 'save_template', {
+      id: 'v2',
+      name: 'V2',
+    })
     await kernel.plugins.invokeAction(TIERS_PLUGIN_ID, 'apply_template', { id: 'v1' })
 
-    await kernel.profiles.save({ id: 'eng-duo', name: 'Engineering Duo', model: 'tier/architect' })
-    await kernel.plugins.invokeAction(DUO_PLUGIN_ID, 'set_profile', {
-      profileId: 'eng-duo',
-      enabled: true,
+    await kernel.plugins.invokeAction(DUO_PLUGIN_ID, 'set', {
+      id: 'team_duo',
+      name: 'Team Duo',
+      plannerModel: 'tier/architect',
       executorModel: 'tier/coder',
     })
+    await kernel.profiles.save({
+      id: 'architect-role',
+      name: 'Architect Role',
+      model: 'tier/team_duo',
+      system: 'Plan and implement.',
+    })
 
-    const profilesDoc = kernel.plugins.getPublicDoc(DUO_PLUGIN_ID, DUO_PROFILES_DOC).value as DuoProfilesDocSnapshot
-    assert.equal(profilesDoc.profiles['eng-duo']?.executorModel, 'tier/coder')
+    const conv = await kernel.conversations.createConversation({
+      title: 'Profile Recipe Conv',
+      profileId: 'architect-role',
+    })
+    assert.equal(conv.effectiveModelRef, 'tier/team_duo')
+    assert.equal(conv.model, 'faux/flagship')
 
-    const conv = await kernel.conversations.createConversation({ title: 'Lockstep', profileId: 'eng-duo' })
-    const obs: ObservedStep[] = []
-
-    // Turn under v1 tiers
-    env.faux.setResponses([
-      captureStep(obs, () =>
-        fauxAssistantMessage([fauxToolCall(DUO_EXIT_PLAN_MODE_TOOL, { plan: 'Step' })], { stopReason: 'toolUse' }),
-      ),
-      captureStep(obs, 'Done v1.'),
-    ])
-    await kernel.conversations.submitInput(conv.id, 'Run v1')
-    await kernel.conversations.waitForIdle(conv.id)
-    assert.deepEqual(obs.map((s) => s.modelId), ['faux/flagship', 'faux/coder'])
-
-    // Switch tier template v1 -> v2: Planner & Executor both upgrade in lockstep!
     await kernel.plugins.invokeAction(TIERS_PLUGIN_ID, 'apply_template', { id: 'v2' })
-    obs.length = 0
-    env.faux.setResponses([
-      captureStep(obs, () =>
-        fauxAssistantMessage([fauxToolCall(DUO_EXIT_PLAN_MODE_TOOL, { plan: 'Step v2' })], { stopReason: 'toolUse' }),
-      ),
-      captureStep(obs, 'Done v2.'),
-    ])
-    await kernel.conversations.submitInput(conv.id, 'Run v2')
-    await kernel.conversations.waitForIdle(conv.id)
-    assert.deepEqual(obs.map((s) => s.modelId), ['faux/flagship-v2', 'faux/coder-v2'])
+    await waitFor(
+      () => kernel.conversations.getConversation(conv.id).model === 'faux/flagship-v2',
+      { message: 'planner upgraded via tiers template' },
+    )
+    const upgradedView = (await kernel.plugins.invokeAction(DUO_PLUGIN_ID, 'get', {
+      id: 'team_duo',
+    })) as DuoRecipeView
+    assert.equal(upgradedView.resolvedPlannerModel, 'faux/flagship-v2')
+    assert.equal(upgradedView.resolvedExecutorModel, 'faux/coder-v2')
 
-    // Per-conv explicit disable opts out of Profile Duo
-    await kernel.plugins.invokeAction(DUO_PLUGIN_ID, 'set_conversation', {
+    const statusBeforeOverride = kernel.plugins.getPublicSessionDoc(DUO_PLUGIN_ID, DUO_SESSION_DOC, conv.id)
+      .value as DuoSessionView
+    assert.equal(statusBeforeOverride.executorModel, 'faux/coder-v2')
+    assert.equal(statusBeforeOverride.hasExecutorOverride, false)
+
+    const overridden = (await kernel.plugins.invokeAction(DUO_PLUGIN_ID, 'override_executor', {
       conversationId: conv.id,
-      enabled: false,
-    })
-    obs.length = 0
-    env.faux.setResponses([captureStep(obs, 'Plain single turn without Duo.')])
-    await kernel.conversations.submitInput(conv.id, 'No duo please')
-    await kernel.conversations.waitForIdle(conv.id)
-    assert.equal(obs[0]!.modelId, 'faux/flagship-v2')
-    assert.equal(obs[0]!.toolNames.includes(DUO_EXIT_PLAN_MODE_TOOL), false)
-    assert.equal(obs[0]!.sectionsById[DUO_PLAN_SECTION_ID], undefined)
-    assert.ok(obs[0]!.toolNames.includes('write'))
-
-    // clear_conversation reverts to Profile Duo
-    await kernel.plugins.invokeAction(DUO_PLUGIN_ID, 'clear_conversation', { conversationId: conv.id })
-    const restoredDoc = kernel.plugins.getPublicSessionDoc(DUO_PLUGIN_ID, DUO_SESSION_DOC, conv.id).value as DuoSessionView
-    assert.equal(restoredDoc.enabled, true)
-    assert.equal(restoredDoc.source, 'profile')
-
-    // Standby input.meta enables Duo on a non-Duo Profile conversation cleanly
-    const standbyConv = await kernel.conversations.createConversation({ title: 'Standby Duo' })
-    env.faux.setResponses([captureStep(obs, 'Standby ready.')])
-    await kernel.conversations.submitInput(standbyConv.id, 'Enable via standby meta', {
-      meta: { [DUO_INPUT_META_KEY]: { enabled: true, executorModel: 'faux/fast', maxExecutionSteps: 5 } },
-    })
-    await kernel.conversations.waitForIdle(standbyConv.id)
-    const standbyView = (await kernel.plugins.invokeAction(DUO_PLUGIN_ID, 'status', {
-      conversationId: standbyConv.id,
+      executorModel: 'faux/fast',
+      maxExecutionSteps: 7,
     })) as DuoSessionView
-    assert.equal(standbyView.enabled, true)
-    assert.equal(standbyView.source, 'conversation')
-    assert.equal(standbyView.executorModel, 'faux/fast')
-    assert.equal(standbyView.maxExecutionSteps, 5)
+    assert.equal(overridden.executorModel, 'faux/fast')
+    assert.equal(overridden.hasExecutorOverride, true)
+
+    await kernel.conversations.updateConversation(conv.id, { model: 'faux/fast' })
+    await waitFor(
+      () => kernel.plugins.getPublicSessionDoc(DUO_PLUGIN_ID, DUO_SESSION_DOC, conv.id).value === null,
+      { message: 'sessionDoc cleared after leaving Duo recipe' },
+    )
+
+    await kernel.conversations.updateConversation(conv.id, { model: '' })
+    await waitFor(
+      () =>
+        (
+          kernel.plugins.getPublicSessionDoc(DUO_PLUGIN_ID, DUO_SESSION_DOC, conv.id)
+            .value as DuoSessionView | null
+        )?.recipeId === 'team_duo',
+      { message: 'sessionDoc restored when returning to recipe' },
+    )
+    const afterReturn = kernel.plugins.getPublicSessionDoc(DUO_PLUGIN_ID, DUO_SESSION_DOC, conv.id)
+      .value as DuoSessionView
+    assert.equal(afterReturn.hasExecutorOverride, false)
+    assert.equal(afterReturn.executorModel, 'faux/coder-v2')
   } finally {
     await env.close()
   }
 })
 
-test('/plan interop: /plan yields during planning, plan.approved bridges directly into Duo execution (modelSwitched false & true)', TIMEOUT, async () => {
-  const env = await openDuoEnv({ defaultModel: 'faux/flagship' })
+test('/plan interop: /plan yields during planning, plan.approved bridges into Duo execution (modelSwitched false & true)', TIMEOUT, async () => {
+  const env = await openDuoEnv()
   try {
     const { kernel } = env.app
-    const conv = await kernel.conversations.createConversation({ title: 'Plan + Duo Bridge' })
-    await kernel.plugins.invokeAction(DUO_PLUGIN_ID, 'set_conversation', {
-      conversationId: conv.id,
-      enabled: true,
+    await kernel.plugins.invokeAction(DUO_PLUGIN_ID, 'set', {
+      id: 'plan_pair',
+      name: 'Plan Pair',
+      plannerModel: 'faux/flagship',
       executorModel: 'faux/coder',
     })
-    const planCap = kernel.plugins.consumeCapability<PlanModeActiveCapability>(PLAN_MODE_ACTIVE_CAPABILITY_ID)[0]!.impl
+    const conv = await kernel.conversations.createConversation({
+      title: '/plan + duo',
+      model: 'tier/plan_pair',
+    })
+
     const obs: ObservedStep[] = []
-
-    // Scenario A: `/plan` active during planning -> Duo yields completely; approve_handoff WITHOUT explicit model -> switches straight to Duo executorModel!
-    await kernel.plugins.invokeAction(PLAN_PLUGIN_ID, 'set_mode', { conversationId: conv.id, mode: 'planning' })
-    assert.equal(planCap.isPlanning(conv.id), true)
-
     env.faux.setResponses([
-      captureStep(obs, () =>
-        fauxAssistantMessage([fauxToolCall(PLAN_TOOL_SAVE, { title: 'Bridge Plan', markdown: '# Step 1\nDo work' })], { stopReason: 'toolUse' }),
+      captureStep(
+        obs,
+        fauxAssistantMessage([fauxToolCall(PLAN_TOOL_SAVE, { title: 'Test Plan', markdown: '# Plan' })], {
+          stopReason: 'toolUse',
+        }),
       ),
-      captureStep(obs, () =>
-        fauxAssistantMessage([fauxToolCall(PLAN_TOOL_PROPOSE, { summary: 'Approve into Duo executor' })], { stopReason: 'toolUse' }),
+      captureStep(
+        obs,
+        fauxAssistantMessage([fauxToolCall(PLAN_TOOL_PROPOSE, { summary: 'Propose Test Plan' })], {
+          stopReason: 'toolUse',
+        }),
       ),
-      captureStep(obs, 'Executed handed-off plan on Duo executor.'),
+      captureStep(obs, fauxAssistantMessage('Executed approved plan on coder.')),
     ])
 
-    await kernel.conversations.submitInput(conv.id, 'Explore and propose plan')
-    await waitFor(() => kernel.asks.listAsks('pending').length === 1)
-    const askA = kernel.asks.listAsks('pending')[0]!
-    await kernel.asks.answerAsk(askA.id, { decision: 'approve_handoff', executionModel: '' }, askA.expectedStateSeq)
-    await kernel.conversations.waitForIdle(conv.id)
-
-    // During /plan steps (obs[0], obs[1]): /plan section only, NO <duo_*>, NO exit_plan_mode
+    await kernel.conversations.submitInput(conv.id, '/plan design carefully')
+    await waitFor(
+      () => kernel.asks.listAsks('pending').some((a) => a.conversationId === conv.id),
+      { message: 'pending plan approval ask' },
+    )
+    const askDoc = kernel.asks.listAsks('pending').find((a) => a.conversationId === conv.id)!
     assert.ok(obs[0]!.sectionsById[PLAN_MODE_SECTION_ID] !== undefined)
     assert.equal(obs[0]!.sectionsById[DUO_PLAN_SECTION_ID], undefined)
-    assert.equal(obs[0]!.toolNames.includes(DUO_EXIT_PLAN_MODE_TOOL), false)
 
-    // Handed-off execution step (obs[2]) ran directly on Duo's executorModel (`faux/coder`) in execution phase despite `pi.reset`!
-    assert.equal(obs[2]!.modelId, 'faux/coder')
-    assert.ok(obs[2]!.toolNames.includes('write'))
-    assert.ok(obs[2]!.toolNames.includes(DUO_HAND_BACK_TOOL))
-    assert.ok(obs[2]!.sectionsById[DUO_EXECUTE_SECTION_ID] !== undefined)
-
-    // After run settles -> back to Planner
-    assert.equal(kernel.conversations.getConversation(conv.id).model, 'faux/flagship')
-    assert.equal(planCap.isPlanning(conv.id), false)
-
-    // Scenario B: approve_handoff WITH explicit human executionModel (`faux/fast`) -> respects `faux/fast` instead of Duo's `faux/coder`
-    obs.length = 0
-    await kernel.plugins.invokeAction(PLAN_PLUGIN_ID, 'set_mode', { conversationId: conv.id, mode: 'planning' })
-    env.faux.setResponses([
-      captureStep(obs, () =>
-        fauxAssistantMessage([fauxToolCall(PLAN_TOOL_SAVE, { title: 'Custom Model Plan', markdown: '# Step 1\nUse fast' })], { stopReason: 'toolUse' }),
-      ),
-      captureStep(obs, () =>
-        fauxAssistantMessage([fauxToolCall(PLAN_TOOL_PROPOSE, { summary: 'Approve on explicit model' })], { stopReason: 'toolUse' }),
-      ),
-      captureStep(obs, 'Executed on human-selected fast model.'),
-    ])
-    await kernel.conversations.submitInput(conv.id, 'Propose custom model')
-    await waitFor(() => kernel.asks.listAsks('pending').length === 1)
-    const askB = kernel.asks.listAsks('pending')[0]!
     await kernel.asks.answerAsk(
-      askB.id,
-      { decision: 'approve_handoff', executionModel: 'faux/fast' },
-      askB.expectedStateSeq,
+      askDoc.id,
+      { decision: 'approve_handoff' },
+      askDoc.expectedStateSeq,
     )
     await kernel.conversations.waitForIdle(conv.id)
-
-    assert.equal(obs[2]!.modelId, 'faux/fast')
+    assert.equal(obs.length, 3)
+    assert.equal(obs[2]!.modelId, 'faux/coder')
     assert.ok(obs[2]!.sectionsById[DUO_EXECUTE_SECTION_ID] !== undefined)
-    assert.equal(kernel.conversations.getConversation(conv.id).model, 'faux/flagship')
-  } finally {
-    await env.close()
-  }
-})
 
-test('child inheritance (DEFAULT_CHILD_MODEL_CAPABILITY_ID + subagent) and swarm-coordinator posture suppression', TIMEOUT, async () => {
-  const env = await openDuoEnv({ defaultModel: 'faux/flagship' })
-  try {
-    const { kernel } = env.app
-    await kernel.plugins.invokeAction(TIERS_PLUGIN_ID, 'set', {
-      id: 'coder',
-      model: 'faux/coder',
-      thinkingLevel: 'low',
-    })
-    const conv = await kernel.conversations.createConversation({ title: 'Duo Parent + Coordinator' })
-    await kernel.plugins.invokeAction(DUO_PLUGIN_ID, 'set_conversation', {
-      conversationId: conv.id,
-      enabled: true,
-      executorModel: 'tier/coder',
-    })
-
-    const childCap = kernel.plugins.consumeCapability<DefaultChildModelCapability>(DEFAULT_CHILD_MODEL_CAPABILITY_ID)[0]!.impl
-    assert.deepEqual(childCap.resolveDefaultChildModel(conv.id), {
-      model: 'faux/coder',
-      thinkingLevel: 'low',
-    })
-
-    // 1. Subagent spawned in Planning phase (model omitted) unwraps to concrete `faux/coder`, honors explicit `faux/fast`, and hides Duo tools
-    const obsAll: ObservedStep[] = []
+    const obs2: ObservedStep[] = []
     env.faux.setResponses([
-      captureStep(obsAll, () =>
-        fauxAssistantMessage(
-          [
-            fauxToolCall('subagent', { prompt: 'Inherited worker task', background: false }, { id: 'sub-inherit' }),
-            fauxToolCall('subagent', { prompt: 'Explicit fast task', model: 'faux/fast', background: false }, { id: 'sub-explicit' }),
-          ],
-          { stopReason: 'toolUse' },
-        ),
+      captureStep(
+        obs2,
+        fauxAssistantMessage([fauxToolCall(PLAN_TOOL_SAVE, { title: 'Test Plan 2', markdown: '# Plan 2' })], {
+          stopReason: 'toolUse',
+        }),
       ),
-      captureStep(obsAll, 'Child reply A.'),
-      captureStep(obsAll, 'Child reply B.'),
-      captureStep(obsAll, 'Parent synthesized subagent work.'),
+      captureStep(
+        obs2,
+        fauxAssistantMessage([fauxToolCall(PLAN_TOOL_PROPOSE, { summary: 'Propose Test Plan 2' })], {
+          stopReason: 'toolUse',
+        }),
+      ),
+      captureStep(obs2, fauxAssistantMessage('Executed on user chosen fast model.')),
     ])
-
-    await kernel.conversations.submitInput(conv.id, 'Delegate two child tasks')
+    await kernel.conversations.submitInput(conv.id, '/plan design 2')
+    await waitFor(
+      () => kernel.asks.listAsks('pending').some((a) => a.conversationId === conv.id),
+      { message: 'second pending plan ask' },
+    )
+    const askDoc2 = kernel.asks.listAsks('pending').find((a) => a.conversationId === conv.id)!
+    await kernel.asks.answerAsk(
+      askDoc2.id,
+      { decision: 'approve_handoff', executionModel: 'faux/fast' },
+      askDoc2.expectedStateSeq,
+    )
     await kernel.conversations.waitForIdle(conv.id)
-
-    const children = kernel.conversations.listConversations({ parentConversationId: conv.id })
-    assert.equal(children.length, 2)
-    assert.deepEqual(children.map((c) => c.model).sort(), ['faux/coder', 'faux/fast'])
-    for (const childStep of obsAll.filter((s) => s.modelId !== 'faux/flagship')) {
-      assert.equal(childStep.toolNames.includes(DUO_EXIT_PLAN_MODE_TOOL), false)
-      assert.equal(childStep.toolNames.includes(DUO_HAND_BACK_TOOL), false)
-      assert.equal(childStep.sectionsById[DUO_PLAN_SECTION_ID], undefined)
-    }
-
-    // 2. swarm-coordinator tag suppresses Duo self-coding prompts/tools while KEEPING Planner + helmx.default-child-model!
-    await kernel.conversations.updateConversation(conv.id, { tags: ['swarm-coordinator'] })
-    assert.deepEqual(childCap.resolveDefaultChildModel(conv.id), {
-      model: 'faux/coder',
-      thinkingLevel: 'low',
+    assert.equal(obs2.length, 3)
+    assert.equal(obs2[2]!.modelId, 'faux/fast')
+    assert.ok(obs2[2]!.sectionsById[DUO_EXECUTE_SECTION_ID] !== undefined)
+    await waitFor(() => kernel.conversations.getConversation(conv.id).model === 'faux/flagship', {
+      message: 'planner restored after turn',
     })
-
-    obsAll.length = 0
-    env.faux.setResponses([captureStep(obsAll, 'Coordinator stayed on Planner.')])
-    await kernel.conversations.submitInput(conv.id, 'Coordinate swarm workers')
-    await kernel.conversations.waitForIdle(conv.id)
-
-    assert.equal(obsAll[0]!.modelId, 'faux/flagship')
-    assert.equal(obsAll[0]!.sectionsById[DUO_PLAN_SECTION_ID], undefined)
-    assert.equal(obsAll[0]!.sectionsById[DUO_EXECUTE_SECTION_ID], undefined)
-    assert.equal(obsAll[0]!.toolNames.includes(DUO_EXIT_PLAN_MODE_TOOL), false)
-    assert.equal(obsAll[0]!.toolNames.includes(DUO_HAND_BACK_TOOL), false)
   } finally {
     await env.close()
   }
 })
 
-test('lifecycle: inUse gates disable unless --force, force-disable restores runtime model, and delete/profile cleanup stay clean', TIMEOUT, async () => {
-  const env = await openDuoEnv({ defaultModel: 'faux/flagship' })
+test('subagent/Profile Duo unwrapping and swarm-coordinator posture suppression', TIMEOUT, async () => {
+  const env = await openDuoEnv()
   try {
     const { kernel } = env.app
-    await kernel.profiles.save({ id: 'duo-prof', name: 'Duo Prof', model: 'faux/flagship' })
-    await kernel.plugins.invokeAction(DUO_PLUGIN_ID, 'set_profile', {
-      profileId: 'duo-prof',
-      enabled: true,
+    await kernel.plugins.invokeAction(DUO_PLUGIN_ID, 'set', {
+      id: 'sub_pair',
+      name: 'Sub Pair',
+      plannerModel: 'faux/flagship',
       executorModel: 'faux/coder',
+      executorThinkingLevel: 'medium',
     })
-    const conv = await kernel.conversations.createConversation({ title: 'Lifecycle', profileId: 'duo-prof' })
-
-    // 1. Active profile/conv Duo blocks non-forced disable with 409 plugin_in_use
-    // (wait out transient fire-and-forget `event:conversation.upsert` task completion first).
-    let disableErr: unknown
-    await waitFor(async () => {
-      try {
-        await kernel.plugins.disable(DUO_PLUGIN_ID)
-        return false
-      } catch (err) {
-        if (err instanceof HelmxError && err.code === 'plugin_has_live_tasks') {
-          return false
-        }
-        disableErr = err
-        return true
-      }
-    })
-    assert.ok(disableErr instanceof HelmxError && disableErr.code === 'plugin_in_use' && disableErr.status === 409)
-
-    // 2. Deleting profile cleans up profiles doc (async internal host event delivery)
-    await kernel.profiles.delete('duo-prof')
-    await waitFor(() => {
-      const snap = kernel.plugins.getPublicDoc(DUO_PLUGIN_ID, DUO_PROFILES_DOC).value as DuoProfilesDocSnapshot
-      return snap.profiles['duo-prof'] === undefined
+    await kernel.profiles.save({
+      id: 'duo-coder',
+      name: 'Duo Coder Profile',
+      model: 'tier/sub_pair',
     })
 
-    // 3. Rebind conversation to default profile, configure conv override, enter execution mid-turn via a test hook gate, verify liveTasks 409
-    await kernel.conversations.updateConversation(conv.id, { profileId: 'assistant' })
-    await kernel.plugins.invokeAction(DUO_PLUGIN_ID, 'set_conversation', {
-      conversationId: conv.id,
-      enabled: true,
-      executorModel: 'faux/coder',
-    })
-    const gate = deferred<void>()
-    await kernel.plugins.register({
-      id: 'test:duo-hold-exec',
-      name: { en: 'Duo Hold Exec' },
-      version: '0.1.0',
-      definePlugin(ctx) {
-        ctx.hook.onBeforeTurn(async (payload: BeforeTurnHookPayload) => {
-          if (payload.conversation.id === conv.id && payload.conversation.model === 'faux/coder') {
-            await gate.promise
-          }
-          return { action: 'continue' }
-        }, { priority: -110 })
-      },
+    const parent = await kernel.conversations.createConversation({
+      title: 'Parent Duo',
+      model: 'tier/sub_pair',
     })
 
+    const defaultChildCap = kernel.plugins
+      .consumeCapability<DefaultChildModelCapability>(DEFAULT_CHILD_MODEL_CAPABILITY_ID)
+      .find((c) => c.pluginId === DUO_PLUGIN_ID)?.impl
+    assert.deepEqual(defaultChildCap?.resolveDefaultChildModel(parent.id), {
+      model: 'faux/coder',
+      thinkingLevel: 'medium',
+    })
+
+    const plainParent = await kernel.conversations.createConversation({
+      title: 'Plain Parent',
+      model: 'faux/flagship',
+    })
+    const obsChild: ObservedStep[] = []
     env.faux.setResponses([
-      () => fauxAssistantMessage([fauxToolCall(DUO_EXIT_PLAN_MODE_TOOL, { plan: 'Hold mid-execution' })], { stopReason: 'toolUse' }),
-      () => fauxAssistantMessage('Post hold.'),
+      captureStep(
+        obsChild,
+        fauxAssistantMessage([fauxToolCall('subagent', { prompt: 'do work', agentType: 'duo-coder' })], {
+          stopReason: 'toolUse',
+        }),
+      ),
+      captureStep(obsChild, fauxAssistantMessage('Child done on executor.')),
+      captureStep(obsChild, fauxAssistantMessage('Parent done.')),
     ])
-    await kernel.conversations.submitInput(conv.id, 'Enter exec and pause')
-    await waitFor(() => kernel.conversations.getConversation(conv.id).model === 'faux/coder')
+    await kernel.conversations.submitInput(plainParent.id, 'delegate')
+    await kernel.conversations.waitForIdle(plainParent.id)
+    assert.equal(obsChild.length, 3)
+    assert.equal(obsChild[1]!.modelId, 'faux/coder')
+    assert.equal(obsChild[1]!.sectionsById[DUO_PLAN_SECTION_ID], undefined)
 
-    // Active execution blocks even --force disable with 409 plugin_has_live_tasks!
-    await assertRejectsCode(() => kernel.plugins.disable(DUO_PLUGIN_ID, { force: true }), 'plugin_has_live_tasks')
-    gate.resolve()
-    await kernel.conversations.waitForIdle(conv.id)
-    assert.equal(kernel.conversations.getConversation(conv.id).model, 'faux/flagship')
-
-    // After idle, force-disable succeeds and strips managed skill from <available_skills> & load_skill
-    await kernel.plugins.disable(DUO_PLUGIN_ID, { force: true })
-    const disabledHook = await kernel.plugins.runHook('before_turn', {
-      conversation: kernel.conversations.getConversation(conv.id),
-      inputs: [],
-      sections: [],
-      tools: [],
-      messages: [],
+    await kernel.conversations.updateConversation(parent.id, { tags: ['swarm-coordinator'] })
+    const obsCoord: ObservedStep[] = []
+    env.faux.setResponses([captureStep(obsCoord, fauxAssistantMessage('Coordinating directly.'))])
+    await kernel.conversations.submitInput(parent.id, 'coordinate')
+    await kernel.conversations.waitForIdle(parent.id)
+    assert.equal(obsCoord.length, 1)
+    assert.equal(obsCoord[0]!.sectionsById[DUO_PLAN_SECTION_ID], undefined)
+    assert.equal(obsCoord[0]!.sectionsById[DUO_EXECUTE_SECTION_ID], undefined)
+    assert.equal(obsCoord[0]!.toolNames.includes(DUO_EXIT_PLAN_MODE_TOOL), false)
+    const coordView = kernel.plugins.getPublicSessionDoc(DUO_PLUGIN_ID, DUO_SESSION_DOC, parent.id)
+      .value as DuoSessionView
+    assert.equal(coordView.suppressedByCoordinator, true)
+    assert.deepEqual(defaultChildCap?.resolveDefaultChildModel(parent.id), {
+      model: 'faux/coder',
+      thinkingLevel: 'medium',
     })
-    const disabledSkillsText =
-      disabledHook.action === 'transform'
-        ? (disabledHook.value.sections.find((s) => s.id === 'profile.skills')?.text ?? '')
-        : ''
-    assert.equal(disabledSkillsText.includes(`id="${DUO_SKILL_ID}"`), false)
-    await assertRejectsCode(
-      () => kernel.plugins.executeTool('load_skill', { skillId: DUO_SKILL_ID }, { conversationId: conv.id }),
-      'skill_not_available',
-      403,
-    )
-    await kernel.plugins.enable(DUO_PLUGIN_ID)
+  } finally {
+    await env.close()
+  }
+})
 
-    // Deleting conversation cleans up safely without errors
-    await kernel.conversations.deleteConversation(conv.id)
+test('lifecycle safety: reference protection on remove & disable unless --force, and runtime restore', TIMEOUT, async () => {
+  const env = await openDuoEnv()
+  try {
+    const { kernel } = env.app
+    await kernel.plugins.invokeAction(DUO_PLUGIN_ID, 'set', {
+      id: 'life_pair',
+      name: 'Life Pair',
+      plannerModel: 'faux/flagship',
+      executorModel: 'faux/coder',
+    })
+    const conv = await kernel.conversations.createConversation({
+      title: 'Lifecycle Duo',
+      model: 'tier/life_pair',
+    })
+
+    await assert.rejects(
+      () => kernel.plugins.invokeAction(DUO_PLUGIN_ID, 'remove', { id: 'life_pair' }),
+      (err: unknown) => err instanceof HelmxError && err.code === 'model_tier_in_use' && err.status === 409,
+    )
+
+    await assert.rejects(
+      () => kernel.plugins.disable(DUO_PLUGIN_ID),
+      (err: unknown) => err instanceof HelmxError && err.code === 'plugin_in_use' && err.status === 409,
+    )
+
+    await kernel.plugins.disable(DUO_PLUGIN_ID, { force: true })
+    assert.equal(
+      kernel.plugins
+        .consumeCapability<ModelTiersCapability>('helmx.model-tiers')
+        .some((c) => c.pluginId === DUO_PLUGIN_ID),
+      false,
+    )
+    assert.throws(
+      () => kernel.plugins.getPublicSessionDoc(DUO_PLUGIN_ID, DUO_SESSION_DOC, conv.id),
+      (err: unknown) => err instanceof HelmxError && err.code === 'plugin_doc_not_found',
+    )
+
+    await kernel.plugins.enable(DUO_PLUGIN_ID)
+    const forceRemoved = (await kernel.plugins.invokeAction(DUO_PLUGIN_ID, 'remove', {
+      id: 'life_pair',
+      force: true,
+    })) as { removed: boolean }
+    assert.equal(forceRemoved.removed, true)
   } finally {
     await env.close()
   }

@@ -1,38 +1,24 @@
 ---
 name: duo
-description: Use when running or configuring dual-phase Planning/Execution orchestration (builtin:duo)—covers Planner-Executor separation, exit_plan_mode / hand_back_to_planner handoffs, step budgets, Profile and per-conversation configuration, and subagent/Swarm inheritance.
+description: Use when running or configuring Dual-Phase Orchestration Recipes (builtin:duo)—covers Planner-Executor recipes mounted as tier/<id>, exit_plan_mode / hand_back_to_planner handoffs, step budgets, temporary conversation overrides, and subagent/Swarm inheritance.
 managedByPlugin: builtin:duo
 ---
 
-# Dual-Phase Planning & Execution (`builtin:duo`)
+# Dual-Phase Orchestration Recipes (`builtin:duo`)
 
-`builtin:duo` keeps top-level human-owned conversations starting in a **read-only Planning Phase** on the conversation's configured Planner model, then hands execution off in place to a dedicated **Executor model** (`executorModel`, concrete `provider/model` or `tier/<id>`) without mutating persisted conversation overrides.
+`builtin:duo` mounts **Duo Recipes** (`tier/<recipeId>`) into the model catalog so top-level human conversations (or Profiles) can pair a **Planner** model with an **Executor** model in one selection.
 
-## Configuration Scopes
-
-1. **Planner Model**: Always equals the conversation's configured model (`modelOverride` -> `Profile.model` -> global `defaultModel`).
-2. **Profile-level Duo**: Configure `executorModel` (+ optional `executorThinkingLevel` and `maxExecutionSteps`, default `30`, `0` = unlimited) per Profile in Profile settings or via `builtin:duo.set_profile`. All top-level human conversations under that Profile inherit Duo automatically.
-3. **Per-conversation Override**: Enable, change `executorModel` / `maxExecutionSteps`, or explicitly disable Duo (`enabled: false`) for one conversation via Composer controls or `builtin:duo.set_conversation` / `builtin:duo.clear_conversation`.
-4. **Model Tiers lockstep**: Using symbolic tier refs such as Planner `tier/architect` + Executor `tier/coder` lets switching a `builtin:tiers` preset template upgrade both roles together automatically.
-
-## Runtime State Machine (`planning` <-> `execution`)
-
+## 1. Duo Recipes & Phase Alternation
+- **Manage Recipes**: Use `helmx duo list|get|set|remove` (or open **Duo Recipes** in the Web sidebar).
+  - Each recipe binds `plannerModel` + `executorModel` (either concrete `provider/modelId` or a single-model `tier/<id>` from `builtin:tiers`, never another Duo recipe) and `maxExecutionSteps` (default `30`, `0` = unlimited).
+  - Duo recipes carry `singleTurnEligible: false` and `preserveRef: true`, so they appear under **Dual-phase recipes** in the primary Model Picker while remaining hidden from single-turn subagent `<available_model_tiers>`.
 - **Planning Phase (`phase: "planning"`)**: Runs on the Planner model with read-only research tools (`read`, `read_artifact`, `load_skill`, `ask_user`, `bash`, `run_action`), active delegation tools (`subagent`, `SubagentWorkflow`, `swarm_*` when allowed), and `exit_plan_mode`.
 - **`exit_plan_mode({ plan })`**: Call alone to transition in place to the Executor model (`phase: "execution"`).
-- **Execution Phase (`phase: "execution"`)**: Runs on `executorModel` with full workspace tools, counting tool steps against `maxExecutionSteps`.
+- **Execution Phase (`phase: "execution"`)**: Full workspace toolset runs on the Executor model up to `maxExecutionSteps` turns; when the turn settles, the conversation automatically restores to Planning Phase and the Planner model.
 - **`hand_back_to_planner({ reason, summary })`**: Call alone when blocked by a flawed plan, missing user clarification, or reaching `maxExecutionSteps` — returns immediately to Planner and Planning Phase.
-- **Auto-restore**: Settling any turn (`completed | failed | aborted`), resetting (`/clear`), or disabling `builtin:duo` restores the conversation's baseline Planner model.
 
-## Interop Rules
-
-- **`/plan` precedence**: When `builtin:plan` is active in read-only `/plan` mode, `builtin:duo` yields completely during planning; approving a `/plan` emits `plan.approved` and transitions an active Duo conversation straight into Execution Phase (respecting any explicit execution model selected during approval).
-- **Subagents, Workflows & Swarm**: Children never run Duo loops directly and default omitted `model` arguments to the Duo `executorModel`.
-- **Swarm Coordinators**: Conversations tagged `swarm-coordinator` remain in planning posture on their Planner model and never enter self-coding execution turns, while still sharing `executorModel` as default child model.
-
-## Actions (`run_action`)
-
-- `builtin:duo.status` (`{ conversationId? }`) — inspect resolved Duo state and configuration for a conversation (read-only).
-- `builtin:duo.set_conversation` (`{ conversationId?, enabled, executorModel?, executorThinkingLevel?, maxExecutionSteps? }`) — set or disable per-conversation Duo override.
-- `builtin:duo.clear_conversation` (`{ conversationId? }`) — remove per-conversation Duo override and revert to Profile inheritance.
-- `builtin:duo.set_profile` (`{ profileId, enabled, executorModel?, executorThinkingLevel?, maxExecutionSteps? }`) — configure Profile-level Duo defaults.
-- `builtin:duo.clear_profile` (`{ profileId }`) — remove Profile-level Duo configuration.
+## 2. Subagent, Swarm & `/plan` Interop
+- Subagents/Workflows/Swarm workers spawned without an explicit `model` under an active Duo conversation (or targeting a Profile bound to a Duo recipe) automatically inherit the **Executor** model (`helmx.default-child-model` + `agent_spawn`), reserving the Planner model for planning and orchestration.
+- Active `/plan` mode (`builtin:plan`) takes precedence while planning; once `/plan` approves into execution, `builtin:duo` hands off to its Execution Phase budget unless the user explicitly chose a different model at approval time.
+- Active `swarm-coordinator` conversations stay on the Planner model (`exit_plan_mode` / `hand_back_to_planner` suppressed) while workers continue inheriting the Executor.
+- Use `helmx duo override-executor` / `clear-override` (or the composer Duo pill) for temporary per-conversation Executor tuning without editing the underlying recipe.

@@ -1,29 +1,28 @@
 /**
- * Shared constants, JSON schemas, and pure helpers for `builtin:duo` (dual-phase planning/execution orchestration).
+ * Contracts, schemas, and validation helpers for `builtin:duo` Dual-Phase Recipes.
  */
 import {
   HelmxError,
-  MODEL_TIER_PREFIX,
-  isJsonObject,
+  MODEL_TIER_DESCRIPTION_MAX_LENGTH,
   isValidModelTierId,
   parseModelTierRef,
   type ConversationScope,
   type ConversationSummary,
   type JsonSchema,
   type ModelTiersCapability,
+  type ModelTierSpec,
 } from '@helmx/protocol'
-import { isTopLevelHumanConversation } from '../shared-helpers.js'
 import { READ_ONLY_PLANNING_BASE_TOOLS } from '../shared-planning.js'
 
 export const DUO_PLUGIN_ID = 'builtin:duo' as const
 export const DUO_SKILL_ID = 'duo' as const
 
-export const DUO_PROFILES_DOC = 'profiles' as const
+export const DUO_STATE_DOC = 'state' as const
 export const DUO_SESSION_DOC = 'duo' as const
-export const DUO_PROFILES_KV = 'profile_configs' as const
-export const DUO_CONV_CONFIGS_KV = 'conv_configs' as const
+export const DUO_SCREEN_ID = 'main' as const
+export const DUO_RECIPES_KV = 'recipes' as const
+export const DUO_CONV_OVERRIDES_KV = 'conv_overrides' as const
 export const DUO_STATES_KV = 'states' as const
-export const DUO_INPUT_META_KEY = DUO_PLUGIN_ID
 
 export const DUO_ELIGIBLE_SCOPE: ConversationScope = {
   topLevelOnly: true,
@@ -43,10 +42,12 @@ export const DUO_STEP_LIMIT_SECTION_ID = 'duo.step_limit' as const
 
 export const DUO_DEFAULT_MAX_STEPS = 30
 export const DUO_MAX_STEPS_LIMIT = 100
+export const DUO_RECIPE_NAME_MAX_LENGTH = 80
+export const MAX_DUO_RECIPES_COUNT = 32
 export const DUO_THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const
 export type DuoThinkingLevel = (typeof DUO_THINKING_LEVELS)[number]
-const VALID_THINKING_SET: ReadonlySet<string> = new Set(DUO_THINKING_LEVELS)
 
+/** Planning baseline tools retained alongside exit_plan_mode and active delegation tools. */
 export const DUO_PLAN_BASE_TOOL_WHITELIST: ReadonlySet<string> = new Set([
   ...READ_ONLY_PLANNING_BASE_TOOLS,
   DUO_EXIT_PLAN_MODE_TOOL,
@@ -56,40 +57,54 @@ export const COORDINATOR_SUPPRESS_TAG = 'swarm-coordinator' as const
 
 export type DuoPhase = 'planning' | 'execution'
 export type DuoTransitionTool = typeof DUO_EXIT_PLAN_MODE_TOOL | typeof DUO_HAND_BACK_TOOL
-export type DuoConfigSource = 'conversation' | 'profile'
 
-export interface DuoProfileConfig {
-  enabled: boolean
+export interface DuoRecipe {
+  id: string
+  name: string
+  description?: string
+  plannerModel: string
+  plannerThinkingLevel?: string
   executorModel: string
   executorThinkingLevel?: string
   maxExecutionSteps: number
   updatedAt: number
 }
 
-export interface DuoProfilesDocSnapshot {
-  profiles: Record<string, DuoProfileConfig>
+export interface DuoRecipeView extends DuoRecipe {
+  resolvedPlannerModel?: string
+  resolvedPlannerThinkingLevel?: string
+  resolvedExecutorModel?: string
+  resolvedExecutorThinkingLevel?: string
+  available: boolean
+  unavailableReason?: string
 }
 
-export interface DuoConversationConfigRecord {
+export interface DuoStateDocSnapshot {
+  recipes: Record<string, DuoRecipe>
+}
+
+export interface DuoConversationOverrideRecord {
   conversationId: number
-  enabled: boolean
-  executorModel?: string
+  executorModel: string
   executorThinkingLevel?: string
   maxExecutionSteps?: number
   updatedAt: number
 }
 
 export interface DuoResolvedConfig {
-  source: DuoConfigSource
+  recipeId: string
+  recipeName: string
+  plannerModel: string
+  plannerThinkingLevel?: string
   executorModel: string
   executorThinkingLevel?: string
   maxExecutionSteps: number
-  profileId?: string
-  hasConversationOverride: boolean
+  hasExecutorOverride: boolean
 }
 
 export interface DuoRuntimeRecord {
   conversationId: number
+  recipeId?: string
   phase: DuoPhase
   executorModel: string
   executorThinkingLevel?: string
@@ -99,27 +114,25 @@ export interface DuoRuntimeRecord {
   planText?: string
   planFilePath?: string
   turnHadSteer?: boolean
-  /** True when `builtin:duo` itself applied a runtime model override that must be cleared on hand-back / settle / reset / stop. */
-  activeRuntimeOverride: boolean
-  /** True when `plan.approved` transitioned to execution with a human-chosen model (`modelSwitched: true`). */
+  activeRuntimeOverride?: boolean
   planChosenModelActive?: boolean
   updatedAt: number
 }
 
 export interface DuoSessionView {
   enabled: boolean
-  source?: DuoConfigSource
+  recipeId: string
+  recipeName: string
   phase: DuoPhase
   plannerModel: string
   plannerThinkingLevel?: string
-  executorModel?: string
+  executorModel: string
   executorThinkingLevel?: string
   maxExecutionSteps: number
   executionStepCount: number
   stepLimitPaused: boolean
   suppressedByCoordinator?: boolean
-  hasConversationOverride: boolean
-  profileId?: string
+  hasExecutorOverride: boolean
 }
 
 export type DuoTransitionMeta = {
@@ -131,16 +144,43 @@ export type DuoTransitionMeta = {
   reason?: string
 }
 
-export const DUO_PROFILE_CONFIG_SCHEMA: JsonSchema = {
+export const DUO_RECIPE_SCHEMA: JsonSchema = {
   type: 'object',
-  required: ['enabled', 'executorModel', 'maxExecutionSteps', 'updatedAt'],
+  required: ['id', 'name', 'plannerModel', 'executorModel', 'maxExecutionSteps', 'updatedAt'],
   additionalProperties: false,
   properties: {
-    enabled: { type: 'boolean' },
-    executorModel: { type: 'string' },
-    executorThinkingLevel: { type: 'string' },
+    id: { type: 'string', minLength: 1 },
+    name: { type: 'string', minLength: 1, maxLength: DUO_RECIPE_NAME_MAX_LENGTH },
+    description: { type: 'string', maxLength: MODEL_TIER_DESCRIPTION_MAX_LENGTH },
+    plannerModel: { type: 'string', minLength: 1 },
+    plannerThinkingLevel: { type: 'string', enum: [...DUO_THINKING_LEVELS] },
+    executorModel: { type: 'string', minLength: 1 },
+    executorThinkingLevel: { type: 'string', enum: [...DUO_THINKING_LEVELS] },
     maxExecutionSteps: { type: 'integer', minimum: 0, maximum: DUO_MAX_STEPS_LIMIT },
     updatedAt: { type: 'number' },
+  },
+}
+
+export const DUO_RECIPE_VIEW_SCHEMA: JsonSchema = {
+  type: 'object',
+  required: ['id', 'name', 'plannerModel', 'executorModel', 'maxExecutionSteps', 'updatedAt', 'available'],
+  additionalProperties: false,
+  properties: {
+    id: { type: 'string', minLength: 1 },
+    name: { type: 'string', minLength: 1, maxLength: DUO_RECIPE_NAME_MAX_LENGTH },
+    description: { type: 'string', maxLength: MODEL_TIER_DESCRIPTION_MAX_LENGTH },
+    plannerModel: { type: 'string', minLength: 1 },
+    plannerThinkingLevel: { type: 'string', enum: [...DUO_THINKING_LEVELS] },
+    executorModel: { type: 'string', minLength: 1 },
+    executorThinkingLevel: { type: 'string', enum: [...DUO_THINKING_LEVELS] },
+    maxExecutionSteps: { type: 'integer', minimum: 0, maximum: DUO_MAX_STEPS_LIMIT },
+    updatedAt: { type: 'number' },
+    resolvedPlannerModel: { type: 'string' },
+    resolvedPlannerThinkingLevel: { type: 'string' },
+    resolvedExecutorModel: { type: 'string' },
+    resolvedExecutorThinkingLevel: { type: 'string' },
+    available: { type: 'boolean' },
+    unavailableReason: { type: 'string' },
   },
 }
 
@@ -148,17 +188,21 @@ export const DUO_SESSION_VIEW_SCHEMA: JsonSchema = {
   type: 'object',
   required: [
     'enabled',
+    'recipeId',
+    'recipeName',
     'phase',
     'plannerModel',
+    'executorModel',
     'maxExecutionSteps',
     'executionStepCount',
     'stepLimitPaused',
-    'hasConversationOverride',
+    'hasExecutorOverride',
   ],
   additionalProperties: false,
   properties: {
     enabled: { type: 'boolean' },
-    source: { type: 'string', enum: ['conversation', 'profile'] },
+    recipeId: { type: 'string' },
+    recipeName: { type: 'string' },
     phase: { type: 'string', enum: ['planning', 'execution'] },
     plannerModel: { type: 'string' },
     plannerThinkingLevel: { type: 'string' },
@@ -168,8 +212,7 @@ export const DUO_SESSION_VIEW_SCHEMA: JsonSchema = {
     executionStepCount: { type: 'integer', minimum: 0 },
     stepLimitPaused: { type: 'boolean' },
     suppressedByCoordinator: { type: 'boolean' },
-    hasConversationOverride: { type: 'boolean' },
-    profileId: { type: 'string' },
+    hasExecutorOverride: { type: 'boolean' },
   },
 }
 
@@ -179,8 +222,8 @@ export const DUO_TRANSITION_META_SCHEMA: JsonSchema = {
   additionalProperties: false,
   properties: {
     tool: { type: 'string', enum: [DUO_EXIT_PLAN_MODE_TOOL, DUO_HAND_BACK_TOOL] },
-    fromModel: { type: 'string', minLength: 1 },
-    toModel: { type: 'string', minLength: 1 },
+    fromModel: { type: 'string' },
+    toModel: { type: 'string' },
     fromPhase: { type: 'string', enum: ['planning', 'execution'] },
     toPhase: { type: 'string', enum: ['planning', 'execution'] },
     reason: { type: 'string' },
@@ -188,34 +231,87 @@ export const DUO_TRANSITION_META_SCHEMA: JsonSchema = {
 }
 
 export function isDuoConversationEligible(conv: Pick<ConversationSummary, 'parentConversationId' | 'ownedBy'>): boolean {
-  return isTopLevelHumanConversation(conv)
+  return conv.parentConversationId === undefined && (conv.ownedBy ?? 'human') === 'human'
 }
 
 export function isCoordinatorSuppressed(conv: Pick<ConversationSummary, 'tags'>): boolean {
   return Array.isArray(conv.tags) && conv.tags.includes(COORDINATOR_SUPPRESS_TAG)
 }
 
-export function normalizeDuoModelRef(raw: unknown, field = 'executorModel'): string {
+export function assertDuoRecipeId(raw: unknown): string {
   if (typeof raw !== 'string') {
-    throw new HelmxError('validation_error', `${field} must be a non-empty 'provider/model' or 'tier/<id>' string`, 400)
+    throw new HelmxError('validation_error', 'Recipe id must be a string', 400, { id: raw })
   }
-  const model = raw.trim()
-  const slash = model.indexOf('/')
-  if (slash <= 0 || slash >= model.length - 1 || /\s/.test(model)) {
+  const id = raw.trim()
+  if (!isValidModelTierId(id)) {
     throw new HelmxError(
       'validation_error',
-      `${field} must be in 'provider/model' or 'tier/<id>' format: ${raw}`,
+      `Recipe id '${id}' must match /^[a-z0-9][a-z0-9_-]{0,63}$/`,
       400,
-      { model: raw },
+      { id: raw },
     )
   }
-  if (model.slice(0, slash) === MODEL_TIER_PREFIX) {
-    const tierId = model.slice(slash + 1)
-    if (!isValidModelTierId(tierId)) {
-      throw new HelmxError('validation_error', `Invalid tier reference '${model}'`, 400, { model })
-    }
+  return id
+}
+
+export function normalizeDuoRecipeName(raw: unknown): string {
+  if (typeof raw !== 'string') {
+    throw new HelmxError('validation_error', 'Recipe name must be a non-empty string', 400, { name: raw })
   }
-  return model
+  const name = raw.trim()
+  if (!name || name.length > DUO_RECIPE_NAME_MAX_LENGTH) {
+    throw new HelmxError(
+      'validation_error',
+      `Recipe name must be 1..${DUO_RECIPE_NAME_MAX_LENGTH} characters`,
+      400,
+      { name: raw },
+    )
+  }
+  return name
+}
+
+export function normalizeDuoDescription(raw: unknown): string | undefined {
+  if (raw === undefined || raw === null) return undefined
+  if (typeof raw !== 'string') {
+    throw new HelmxError('validation_error', 'Recipe description must be a string', 400, { description: raw })
+  }
+  const trimmed = raw.trim()
+  if (!trimmed) return undefined
+  if (trimmed.length > MODEL_TIER_DESCRIPTION_MAX_LENGTH) {
+    throw new HelmxError(
+      'validation_error',
+      `Recipe description exceeds max length (${MODEL_TIER_DESCRIPTION_MAX_LENGTH})`,
+      400,
+      { descriptionLength: trimmed.length },
+    )
+  }
+  return trimmed
+}
+
+export function normalizeDuoModelRef(raw: unknown, field = 'executorModel'): string {
+  if (typeof raw !== 'string') {
+    throw new HelmxError('validation_error', `${field} must be a non-empty string`, 400)
+  }
+  const trimmed = raw.trim()
+  if (!trimmed) {
+    throw new HelmxError('validation_error', `${field} must be non-empty`, 400)
+  }
+  if (trimmed.startsWith('tier/')) {
+    const tierId = trimmed.slice('tier/'.length)
+    if (!isValidModelTierId(tierId)) {
+      throw new HelmxError('validation_error', `${field} has invalid tier reference "${trimmed}"`, 400)
+    }
+    return `tier/${tierId}`
+  }
+  const slash = trimmed.indexOf('/')
+  if (slash <= 0 || slash >= trimmed.length - 1) {
+    throw new HelmxError(
+      'validation_error',
+      `${field} must be in "provider/modelId" or "tier/<id>" form`,
+      400,
+    )
+  }
+  return trimmed
 }
 
 export function normalizeDuoThinkingLevel(raw: unknown, field = 'executorThinkingLevel'): string | undefined {
@@ -224,117 +320,88 @@ export function normalizeDuoThinkingLevel(raw: unknown, field = 'executorThinkin
     throw new HelmxError('validation_error', `${field} must be a string`, 400)
   }
   const trimmed = raw.trim()
-  if (trimmed === '') return undefined
-  if (!VALID_THINKING_SET.has(trimmed)) {
+  if (!trimmed) return undefined
+  if (!(DUO_THINKING_LEVELS as readonly string[]).includes(trimmed)) {
     throw new HelmxError(
       'validation_error',
-      `Invalid ${field} '${trimmed}'; valid values: ${DUO_THINKING_LEVELS.join(' | ')}`,
+      `${field} must be one of: ${DUO_THINKING_LEVELS.join(', ')}`,
       400,
-      { thinkingLevel: trimmed },
     )
   }
   return trimmed
 }
 
 export function normalizeMaxExecutionSteps(raw: unknown, fallback = DUO_DEFAULT_MAX_STEPS): number {
-  if (raw === undefined || raw === null) return fallback
+  if (raw === undefined) return fallback
   if (typeof raw !== 'number' || !Number.isInteger(raw) || raw < 0 || raw > DUO_MAX_STEPS_LIMIT) {
     throw new HelmxError(
       'validation_error',
-      `maxExecutionSteps must be an integer between 0 and ${DUO_MAX_STEPS_LIMIT} (0 = unlimited)`,
+      `maxExecutionSteps must be an integer between 0 and ${DUO_MAX_STEPS_LIMIT}`,
       400,
-      { maxExecutionSteps: raw },
     )
   }
   return raw
 }
 
-export function resolveDuoModelThroughTiers(
-  modelRef: string,
-  thinkingLevel: string | undefined,
-  tiersCap: ModelTiersCapability | undefined,
-): { model: string; thinkingLevel?: string } {
-  const tierId = parseModelTierRef(modelRef)
-  if (tierId === undefined || tiersCap === undefined) {
-    return {
-      model: modelRef,
-      ...(thinkingLevel !== undefined ? { thinkingLevel } : {}),
-    }
+export function formatDuoModelShortName(modelRef: string | undefined): string {
+  if (!modelRef) return ''
+  const trimmed = modelRef.trim()
+  if (!trimmed) return ''
+  if (trimmed.startsWith('tier/') && trimmed.length > 'tier/'.length) {
+    return trimmed
   }
-  const spec = tiersCap.getTiers()[tierId]
-  if (spec === undefined) {
-    return {
-      model: modelRef,
-      ...(thinkingLevel !== undefined ? { thinkingLevel } : {}),
-    }
-  }
-  const effectiveThinking = thinkingLevel ?? spec.thinkingLevel
-  return {
-    model: spec.model,
-    ...(effectiveThinking !== undefined && effectiveThinking !== '' ? { thinkingLevel: effectiveThinking } : {}),
-  }
+  const slash = trimmed.lastIndexOf('/')
+  return slash >= 0 && slash < trimmed.length - 1 ? trimmed.slice(slash + 1) : trimmed
 }
 
-export type ParsedDuoInputMeta =
-  | { present: false }
-  | {
-      present: true
-      valid: true
-      enabled: boolean
-      executorModel?: string
-      executorThinkingLevel?: string
-      maxExecutionSteps?: number
+/**
+ * Collect concrete external `ModelTierSpec` definitions from all non-Duo providers
+ * implementing `'helmx.model-tiers'` (e.g. `builtin:tiers`).
+ */
+export function collectExternalTierMap(
+  providers: ReadonlyArray<{ pluginId: string; impl: ModelTiersCapability }>,
+): Record<string, ModelTierSpec> {
+  const map: Record<string, ModelTierSpec> = {}
+  for (const entry of providers) {
+    if (entry.pluginId === DUO_PLUGIN_ID) continue
+    let tiers: Readonly<Record<string, ModelTierSpec>> | undefined
+    try {
+      tiers = entry.impl.getTiers()
+    } catch {
+      continue
     }
-  | { present: true; valid: false; reason: string }
+    if (!tiers || typeof tiers !== 'object') continue
+    for (const [tierId, spec] of Object.entries(tiers)) {
+      if (!spec || typeof spec.model !== 'string' || !spec.model.trim()) continue
+      // External tier entries must resolve to concrete provider/model refs (never nested tier/<id>).
+      if (parseModelTierRef(spec.model) !== undefined) continue
+      map[tierId] = spec
+    }
+  }
+  return map
+}
 
-export function parseDuoInputMeta(meta: unknown): ParsedDuoInputMeta {
-  if (!isJsonObject(meta) || !Object.hasOwn(meta, DUO_INPUT_META_KEY)) {
-    return { present: false }
-  }
-  const entry = meta[DUO_INPUT_META_KEY]
-  if (!isJsonObject(entry)) {
-    return { present: true, valid: false, reason: `input.meta['${DUO_INPUT_META_KEY}'] must be an object` }
-  }
-  if (typeof entry['enabled'] !== 'boolean') {
-    return { present: true, valid: false, reason: `input.meta['${DUO_INPUT_META_KEY}'].enabled must be a boolean` }
-  }
-  const enabled = entry['enabled']
-  if (!enabled) {
-    return { present: true, valid: true, enabled: false }
-  }
-  let executorModel: string | undefined
-  if (entry['executorModel'] !== undefined) {
-    try {
-      executorModel = normalizeDuoModelRef(entry['executorModel'], 'input.meta.executorModel')
-    } catch (err) {
-      return { present: true, valid: false, reason: err instanceof Error ? err.message : String(err) }
+/**
+ * Resolve a model ref (`provider/model` or external `tier/<id>`) into a concrete model + thinking level.
+ * Returns `undefined` when `modelRef` points to a missing/unmounted external `tier/<id>`.
+ */
+export function resolveDuoModelThroughExternalTiers(
+  modelRef: string,
+  explicitThinkingLevel: string | undefined,
+  externalTiers: Readonly<Record<string, ModelTierSpec>>,
+): { model: string; thinkingLevel?: string } | undefined {
+  const tierId = parseModelTierRef(modelRef)
+  if (tierId === undefined) {
+    return {
+      model: modelRef,
+      ...(explicitThinkingLevel !== undefined ? { thinkingLevel: explicitThinkingLevel } : {}),
     }
   }
-  let executorThinkingLevel: string | undefined
-  if (entry['executorThinkingLevel'] !== undefined) {
-    try {
-      executorThinkingLevel = normalizeDuoThinkingLevel(
-        entry['executorThinkingLevel'],
-        'input.meta.executorThinkingLevel',
-      )
-    } catch (err) {
-      return { present: true, valid: false, reason: err instanceof Error ? err.message : String(err) }
-    }
-  }
-  let maxExecutionSteps: number | undefined
-  if (entry['maxExecutionSteps'] !== undefined) {
-    try {
-      maxExecutionSteps = normalizeMaxExecutionSteps(entry['maxExecutionSteps'])
-    } catch (err) {
-      return { present: true, valid: false, reason: err instanceof Error ? err.message : String(err) }
-    }
-  }
+  const entry = Object.hasOwn(externalTiers, tierId) ? externalTiers[tierId] : undefined
+  if (!entry) return undefined
+  const thinking = explicitThinkingLevel ?? entry.thinkingLevel
   return {
-    present: true,
-    valid: true,
-    enabled: true,
-    ...(executorModel !== undefined ? { executorModel } : {}),
-    ...(executorThinkingLevel !== undefined ? { executorThinkingLevel } : {}),
-    ...(maxExecutionSteps !== undefined ? { maxExecutionSteps } : {}),
+    model: entry.model,
+    ...(thinking !== undefined ? { thinkingLevel: thinking } : {}),
   }
 }

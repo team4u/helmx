@@ -13,7 +13,7 @@
 
 1. **命名空间、固化与符号继承**
    - `tier` 为内核保留命名空间，不可注册同名 Provider、不可设置 `disabledModels` 或逐模型 `modelThinkingLevels`，也不允许 `tier -> tier` 嵌套引用（`set` / `replace` 强校验拒绝自引与未包含 `/` 的非法引用）。
-   - **会话固化 vs 符号继承**：在具体会话上选用 `tier/<id>` 或经 `subagent` / `swarm` / `fork` 派工时，内核立即将其解引用并固化为真实 `provider/modelId`；而在 `Profile.model`、`defaultModel`、`defaultCompactionModel` 或 [`builtin:duo`](duo.md) 的 `executorModel` 中绑定 `tier/<id>` 时保留符号引用——切换模板或更新档位后，相关配置与未设覆写的会话自动对齐到新模型。
+   - **会话固化 vs 符号继承**：在具体会话上选用普通单模型档位 `tier/<id>` 或经 `subagent` / `swarm` / `fork` 派工时，内核立即将其解引用并固化为真实 `provider/modelId`；而在 `Profile.model`、`defaultModel`、`defaultCompactionModel`、`preserveRef: true` 档位（如 [`builtin:duo`](duo.md) 双相配方）或 Duo 配方的 `plannerModel` / `executorModel` 中绑定 `tier/<id>` 时保留符号引用——切换模板或更新档位后，相关配置与未设覆写的会话及 Duo 配方自动对齐到新模型。
    - **思考强度优先级**：显式传入（如 `thinkingLevel` / `effort`）> 档位预设 `tier.thinkingLevel` > 逐模型默认 `modelThinkingLevels` > `Profile.thinkingLevel` > 全局默认，并按底层模型实际能力裁剪（clamp）。
    - **诚实失败**：引用不存在的档位返回 `404 model_tier_not_found`，目标模型被禁用返回 `409 model_disabled`，绝不静默回退到默认模型。
 
@@ -22,7 +22,7 @@
    - 删除模板（`delete_template`）不影响当前已激活的档位映射。
 
 3. **目录注入与受管技能**
-   - **动态目录（`before_turn` Hook）**：当至少存在一个可用档位且 `autoInjectCatalog: true`（默认开启）时，向系统段注入紧凑的 `<available_model_tiers>` 列表；关闭开关或无可用档位时零注入。
+   - **动态目录（`before_turn` Hook）**：当至少存在一个可用且 `singleTurnEligible !== false` 的档位且 `autoInjectCatalog: true`（默认开启）时，向系统段注入紧凑的 `<available_model_tiers>` 列表（自动排除 [`builtin:duo`](duo.md) 双相配方等仅顶层可用的 `tier/<id>`）；关闭开关或无可用单轮档位时零注入。
    - **受管技能 `model-tiers`**：经 `ctx.host.skills.ensureSkill` 自举通用多档位分工指南，不包含硬编码档位名或具体供应商模型名。
 
 4. **引用保护与搜索**

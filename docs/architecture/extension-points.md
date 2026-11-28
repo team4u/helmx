@@ -180,8 +180,8 @@ pnpm helmx plugins doc builtin:workflow runs --current --watch --json
   - `helmx.default-child-model`：`DefaultChildModelCapability`（`resolveDefaultChildModel(parentConversationId)`），`builtin:duo` 提供默认子代理/成员模型解析（映射至活跃 Duo 会话的 `executorModel` 与 `executorThinkingLevel`），由 `builtin:workflow` 与 `builtin:swarm` 在省略显式 `model` 时消费；
   - `helmx.plan-mode-active`：`PlanModeActiveCapability`（`isPlanning(conversationId)`），`builtin:plan` 提供只读计划模式探测，供 `builtin:duo` 等插件避让 `/plan` 规划回合；
   - `helmx.conversation-depth`：`builtin:swarm` 等派工插件提供 `depthOf(conversationId)` 上报 `{ depth, leaf? }`，由 `builtin:workflow` 在单一 `maxSubagentDepth` 策略（默认 `1`）下统一消费，执行 `before_turn` 剥离与 `subagent_depth_exceeded` 守卫；
-  - `helmx.model-tiers`：`builtin:tiers` 提供 `{ getTiers, onChanged }`，内核 `ModelRegistry` 直接从 `PluginHost` 消费并在启停与变更时自动广播 `models.changed` 并对齐继承会话；
-  - `helmx.search`：`PluginSearchProvider`（`search(input, signal)`），内置 `workflow` / `triggers` / `tiers` / `port-forward` 等插件按需提供动态资源检索，由组合层 `GET /api/omnibox/search` 与 FTS5 会话检索并行聚合（单插件 200ms 隔离超时、每插件最多 8 条、运行时结构校验、`SecretStash` 脱敏，并经 `failedPlugins` / `messagesUnavailable` 如实回报局部异常；插件停用即时释放）。静态插件配置项检索另走独立端点 `GET /api/plugins/config-catalog`（脱敏且不膨胀 SSE `PluginSummary`）。
+  - `helmx.model-tiers`：`builtin:tiers`（单模型档位）与 `builtin:duo`（双相协同配方，`preserveRef: true` / `singleTurnEligible: false`）均实现 `{ getTiers, onChanged }`，由内核 `ModelRegistry` 统一聚合冲突校验、目录投影与变更重对齐；
+  - `helmx.search`：`PluginSearchProvider`（`search(input, signal)`），内置 `workflow` / `triggers` / `tiers` / `duo` / `port-forward` 等插件按需提供动态资源检索，由组合层 `GET /api/omnibox/search` 与 FTS5 会话检索并行聚合（单插件 200ms 隔离超时、每插件最多 8 条、运行时结构校验、`SecretStash` 脱敏，并经 `failedPlugins` / `messagesUnavailable` 如实回报局部异常；插件停用即时释放）。静态插件配置项检索另走独立端点 `GET /api/plugins/config-catalog`（脱敏且不膨胀 SSE `PluginSummary`）。
 
 ### 轻量按键持久存储（`ctx.kv`）
 

@@ -45,8 +45,8 @@ Keep long-running interactive sessions on a responsive workhorse tier; when hitt
 - **Deterministic workflows**: Start implementation on a fast/workhorse tier backed by a strict shell `gate` (build + typecheck + tests). In a `try/catch`, escalate only failures to a stronger tier with the failure diagnostics.
 - **Peer Swarm**: Dispatch workers on the workhorse tier; if a worker stalls on a complex bug, upgrade that worker in place via `switch_worker_model` using a stronger `tier/<id>` while keeping its accumulated context.
 
-### 4. Dual-Phase Conversations (`builtin:duo`)
-Pair `builtin:tiers` with `builtin:duo` to keep top-level conversations alternating cleanly between a Planner tier (configured as the conversation/Profile model, e.g. `tier/architect`) and an Executor tier (e.g. `tier/coder`). Switching preset templates via `builtin:tiers.apply_template` updates both roles simultaneously.
+### 4. Dual-Phase Recipes (`builtin:duo`)
+Pair `builtin:tiers` with `builtin:duo` recipes (`duo list`, `duo set`): define a Duo recipe referencing single-model Planner and Executor tiers (e.g. `tier/architect` -> `tier/coder`), then select `tier/<recipeId>` on a top-level human conversation or Profile. Updating or applying preset templates via `builtin:tiers.apply_template` propagates automatically to every Duo recipe referencing those tiers.
 
 ## Managing Tiers & Preset Templates (`run_action`)
 

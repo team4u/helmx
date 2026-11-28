@@ -94,13 +94,27 @@ test('validation: rejects malformed IDs, recursive tier targets, invalid thinkin
     { id: 'scout', model: 'faux/fast', thinkingLevel: 'low', description: 'Fast search', available: true },
     { id: 'broken', model: 'faux/missing', description: 'Should be hidden', available: false },
     { id: 'muted', model: 'faux/workhorse', description: 'Disabled', available: true, disabled: true },
+    {
+      id: 'architect_duo',
+      model: 'faux/workhorse',
+      description: 'Dual-phase recipe should never leak to subagent tiers',
+      available: true,
+      singleTurnEligible: false,
+    },
   ])
   assert.ok(xml !== undefined)
   assert.match(xml, /<tier id="tier\/scout" effort="low">Fast search<\/tier>/)
   assert.match(xml, /never agentType or profileId/)
   assert.doesNotMatch(xml, /tier\/broken/)
   assert.doesNotMatch(xml, /tier\/muted/)
+  assert.doesNotMatch(xml, /tier\/architect_duo/)
   assert.equal(renderModelTiersCatalogSection([{ id: 'x', model: 'faux/fast', available: false }]), undefined)
+  assert.equal(
+    renderModelTiersCatalogSection([
+      { id: 'duo_only', model: 'faux/fast', available: true, singleTurnEligible: false },
+    ]),
+    undefined,
+  )
 })
 
 test('integration: default enabled, managed skill, reserved namespace, CRUD actions, templates, and before_turn catalog', { timeout: 60_000 }, async () => {

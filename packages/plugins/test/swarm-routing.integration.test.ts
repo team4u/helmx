@@ -1613,16 +1613,18 @@ describe('builtin:swarm board routing, settlement & self-healing', { concurrency
       model: 'faux/coder',
       thinkingLevel: 'low',
     })
+    await kernel.plugins.invokeAction(DUO_PLUGIN_ID, 'set', {
+      id: 'coord_pair',
+      name: 'Coordinator Pair',
+      plannerModel: 'faux/flagship',
+      executorModel: 'tier/coder',
+    })
 
     const coord = await kernel.conversations.createConversation({
       title: 'Duo Swarm Coordinator',
       profileId: 'assistant',
+      model: 'tier/coord_pair',
       cwd: repoDir,
-    })
-    await kernel.plugins.invokeAction(DUO_PLUGIN_ID, 'set_conversation', {
-      conversationId: coord.id,
-      enabled: true,
-      executorModel: 'tier/coder',
     })
 
     const observed: Array<{

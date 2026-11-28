@@ -208,6 +208,7 @@ export function projectTierEntries(tiers: Readonly<Record<string, ModelTierSpec>
       model: spec.model,
       ...(spec.thinkingLevel ? { thinkingLevel: spec.thinkingLevel } : {}),
       ...(spec.description ? { description: spec.description } : {}),
+      ...(spec.singleTurnEligible === false ? { singleTurnEligible: false } : {}),
       available: entry !== undefined && entry.available === true && !disabled,
       ...(disabled ? { disabled: true } : {}),
       ...(thinkingLevels ? { thinkingLevels } : {}),
@@ -216,7 +217,7 @@ export function projectTierEntries(tiers: Readonly<Record<string, ModelTierSpec>
 }
 
 export function renderModelTiersCatalogSection(entries: ReadonlyArray<ModelTierCatalogEntry>): string | undefined {
-  const usable = entries.filter((e) => e.available && e.disabled !== true)
+  const usable = entries.filter((e) => e.available && e.disabled !== true && e.singleTurnEligible !== false)
   if (usable.length === 0) return undefined
   const rows = usable.map((t) => {
     const effort = t.thinkingLevel ? ` effort="${escapeXml(t.thinkingLevel)}"` : ''

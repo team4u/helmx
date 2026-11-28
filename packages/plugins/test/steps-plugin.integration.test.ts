@@ -233,14 +233,15 @@ test('cross-plugin interop: duo planning strips update_steps and execution resto
   const env = await openStepsIntegrationEnv()
   try {
     const { kernel } = env.app
+    await kernel.plugins.invokeAction(DUO_PLUGIN_ID, 'set', {
+      id: 'steps_pair',
+      name: 'Steps Pair',
+      plannerModel: 'faux/flagship',
+      executorModel: 'faux/workhorse',
+    })
     const duoConv = await kernel.conversations.createConversation({
       title: 'duo-with-steps',
-      model: 'faux/flagship',
-    })
-    await kernel.plugins.invokeAction(DUO_PLUGIN_ID, 'set_conversation', {
-      conversationId: duoConv.id,
-      enabled: true,
-      executorModel: 'faux/workhorse',
+      model: 'tier/steps_pair',
     })
 
     const captured: CapturedTurn[] = []

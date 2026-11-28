@@ -1,22 +1,27 @@
 /**
- * Runtime state machine, Profile/conversation configuration store, `/plan` bridge,
- * coordinator suppression, and child default model resolution for `builtin:duo`.
+ * Core orchestration manager for `builtin:duo` Dual-Phase Recipes.
  */
 import {
   HelmxError,
+  parseModelTierRef,
   type AgentSpawnRequest,
   type BeforeTurnHookPayload,
   type ConversationSummary,
-  type DispatchToolsCapability,
   type HelmxPluginContext,
   type HookResult,
   type InputHookPayload,
+  type ModelCatalog,
   type ModelTiersCapability,
+  type ModelTierSpec,
   type PluginDocHandle,
   type PluginInUseItem,
   type PluginKvHandle,
+  type PluginSearchItem,
+  type PluginSearchQuery,
   type PluginSessionDocHandle,
   type PluginToolResultEnvelope,
+  type Profile,
+  type ProvidedCapability,
 } from '@helmx/protocol'
 import {
   PLAN_MODE_ACTIVE_CAPABILITY_ID,
@@ -25,6 +30,7 @@ import {
   type PlanModeActiveCapability,
   type PlanningOrchestrationToolsCapability,
 } from '../contracts.js'
+import { compactOneLine, rankSearchCandidates } from '../search-utils.js'
 import {
   createKeyedQueue,
   errorMessageOf,
@@ -38,73 +44,92 @@ import {
   DUO_EXECUTE_SECTION_ID,
   DUO_EXIT_PLAN_MODE_TOOL,
   DUO_HAND_BACK_TOOL,
-  DUO_INPUT_META_KEY,
   DUO_ONLY_TOOL_NAMES,
   DUO_PLAN_BASE_TOOL_WHITELIST,
   DUO_PLAN_SECTION_ID,
+  DUO_PLUGIN_ID,
+  DUO_SCREEN_ID,
   DUO_STEP_LIMIT_SECTION_ID,
+  MAX_DUO_RECIPES_COUNT,
+  assertDuoRecipeId,
+  collectExternalTierMap,
+  formatDuoModelShortName,
   isCoordinatorSuppressed,
   isDuoConversationEligible,
+  normalizeDuoDescription,
   normalizeDuoModelRef,
+  normalizeDuoRecipeName,
   normalizeDuoThinkingLevel,
   normalizeMaxExecutionSteps,
-  parseDuoInputMeta,
-  resolveDuoModelThroughTiers,
-  type DuoConversationConfigRecord,
-  type DuoProfileConfig,
-  type DuoProfilesDocSnapshot,
+  resolveDuoModelThroughExternalTiers,
+  type DuoConversationOverrideRecord,
+  type DuoRecipe,
+  type DuoRecipeView,
   type DuoResolvedConfig,
   type DuoRuntimeRecord,
   type DuoSessionView,
+  type DuoStateDocSnapshot,
   type DuoTransitionMeta,
 } from './contracts.js'
 
+const DISPATCH_TOOLS_CAPABILITY_ID = 'helmx.dispatch-tools' as const
+const MAX_ANCESTOR_HOPS = 32
+
 export interface ExitPlanModeToolInput {
-  plan: string
+  plan?: string
 }
 
 export interface HandBackToPlannerToolInput {
-  reason: string
-  summary: string
+  reason?: string
+  summary?: string
 }
 
-export interface SetDuoConversationInput {
-  conversationId: number
-  enabled: boolean
-  executorModel?: string
+export interface SetDuoRecipeInput {
+  id: string
+  name: string
+  description?: string
+  plannerModel: string
+  plannerThinkingLevel?: string
+  executorModel: string
   executorThinkingLevel?: string
   maxExecutionSteps?: number
 }
 
-export interface SetDuoProfileInput {
-  profileId: string
-  enabled: boolean
-  executorModel?: string
+export interface RemoveDuoRecipeInput {
+  id: string
+  force?: boolean
+}
+
+export interface OverrideDuoExecutorInput {
+  conversationId: number
+  executorModel: string
   executorThinkingLevel?: string
   maxExecutionSteps?: number
 }
 
 export interface DuoManagerDeps {
   ctx: HelmxPluginContext
-  profilesDoc: PluginDocHandle<DuoProfilesDocSnapshot>
-  profilesKv: PluginKvHandle<DuoProfileConfig>
-  convConfigsKv: PluginKvHandle<DuoConversationConfigRecord>
+  stateDoc: PluginDocHandle<DuoStateDocSnapshot>
+  recipesKv: PluginKvHandle<DuoRecipe>
+  convOverridesKv: PluginKvHandle<DuoConversationOverrideRecord>
   statesKv: PluginKvHandle<DuoRuntimeRecord>
   duoDoc: PluginSessionDocHandle<DuoSessionView | null>
 }
 
 export interface DuoManager {
-  setStopping(next: boolean): void
-  hydrate(): void
+  readonly modelTiersCapability: ModelTiersCapability
+  start(): Promise<void>
   reconcile(): Promise<void>
   stop(): Promise<void>
-  liveTaskLabels(): string[]
-  inUseItems(): PluginInUseItem[]
+  inUseItems(): Promise<PluginInUseItem[]>
+  listRecipes(): Promise<DuoRecipeView[]>
+  getRecipe(id: string): Promise<DuoRecipeView>
+  setRecipe(input: SetDuoRecipeInput): Promise<DuoRecipeView>
+  removeRecipe(input: RemoveDuoRecipeInput): Promise<{ removed: boolean }>
   getStatus(conversationId: number): DuoSessionView | null
-  setConversationConfig(input: SetDuoConversationInput): Promise<DuoSessionView | null>
-  clearConversationConfig(conversationId: number): Promise<DuoSessionView | null>
-  setProfileConfig(input: SetDuoProfileInput): Promise<DuoProfileConfig>
-  clearProfileConfig(profileId: string): Promise<{ removed: boolean }>
+  overrideExecutor(input: OverrideDuoExecutorInput): Promise<DuoSessionView>
+  clearOverride(conversationId: number): Promise<DuoSessionView | null>
+  searchRecipes(input: PluginSearchQuery, signal: AbortSignal): PluginSearchItem[]
   resolveDefaultChildModel(parentConversationId: number): { model: string; thinkingLevel?: string } | undefined
   handleInput(payload: InputHookPayload): Promise<HookResult<InputHookPayload>>
   handleBeforeTurn(turn: BeforeTurnHookPayload): Promise<HookResult<BeforeTurnHookPayload>>
@@ -114,7 +139,7 @@ export interface DuoManager {
   handleConversationUpsert(payload: unknown): Promise<void>
   handleConversationDeleted(conversationId: number): Promise<void>
   handleConversationReset(conversationId: number): Promise<void>
-  handleProfileChanged(payload: unknown): Promise<void>
+  handleProfileChanged(payload: unknown): void
   executeExitPlanModeTool(input: ExitPlanModeToolInput, conversationId: number): Promise<PluginToolResultEnvelope>
   executeHandBackTool(input: HandBackToPlannerToolInput, conversationId: number): Promise<PluginToolResultEnvelope>
 }
@@ -135,13 +160,14 @@ function buildDuoPlanningSection(resolved: DuoResolvedConfig): string {
     : `\`${resolved.executorModel}\``
   return [
     '<duo_planning_mode>',
-    `You are currently in the READ-ONLY **Planning Phase** of Dual-Phase Orchestration (\`builtin:duo\`). Your Executor counterpart (${executorLine}) is standing by.`,
-    READ_ONLY_PLANNING_INSPECTION_RULE,
+    `You are currently in the READ-ONLY **Planning Phase** of Dual-Phase Orchestration (\`builtin:duo\`, recipe \`tier/${resolved.recipeId}\`). Your Executor counterpart (${executorLine}) is standing by.`,
+    READ_ONLY_PLANNING_INSCTION_RULE_SAFE,
     `2. Decide whether to handle in place or delegate: if active delegation tools (\`subagent\`, \`SubagentWorkflow\`, \`swarm_dispatch_worker\`, etc.) are present and the task benefits from parallel/isolated execution or verification, stay in Planning Phase and delegate directly. If the task is ready for single-stream file edits, builds/fixes, or final integration in this workspace, call \`${DUO_EXIT_PLAN_MODE_TOOL}({ plan })\` ALONE (never in parallel with other tools) to hand execution to ${executorLine}.`,
     '3. Keep plans actionable and compact: include exact target files, concrete step-by-step edits, verification criteria, and a concise `Re-plan if:` list so the Executor knows when to call `hand_back_to_planner`. Do not invoke `exit_plan_mode` for pure Q&A turns.',
     '</duo_planning_mode>',
   ].join('\n')
 }
+const READ_ONLY_PLANNING_INSCTION_RULE_SAFE = READ_ONLY_PLANNING_INSPECTION_RULE
 
 function buildDuoExecutionSection(record: DuoRuntimeRecord): string {
   const budgetNote =
@@ -180,124 +206,376 @@ function parsePlanApprovedEventPayload(raw: unknown): PlanApprovedEventPayload |
   }
 }
 
+function serializeTiersSnapshot(tiers: Readonly<Record<string, ModelTierSpec>>): string {
+  const sorted = Object.keys(tiers)
+    .sort()
+    .map((id) => {
+      const s = tiers[id]!
+      return [
+        id,
+        s.model,
+        s.thinkingLevel ?? '',
+        s.description ?? '',
+        s.displayGroup ?? '',
+        s.displayLabel ?? '',
+        s.displayDetail ?? '',
+        s.preserveRef === true ? '1' : '0',
+        s.singleTurnEligible === false ? '0' : '1',
+      ]
+    })
+  return JSON.stringify(sorted)
+}
+
+function findConcreteCatalogEntry(
+  catalog: ModelCatalog,
+  modelRef: string,
+): ModelCatalog['models'][number] | undefined {
+  const slash = modelRef.indexOf('/')
+  if (slash <= 0 || slash >= modelRef.length - 1) return undefined
+  const provider = modelRef.slice(0, slash)
+  const modelId = modelRef.slice(slash + 1)
+  return catalog.models.find((m) => m.provider === provider && m.modelId === modelId)
+}
+
 export function createDuoManager(deps: DuoManagerDeps): DuoManager {
-  const { ctx, profilesDoc, profilesKv, convConfigsKv, statesKv, duoDoc } = deps
+  const { ctx, stateDoc, recipesKv, convOverridesKv, statesKv, duoDoc } = deps
   const queue = createKeyedQueue<number>()
 
   let stopping = false
-  let profileCache = new Map<string, DuoProfileConfig>()
-  let convConfigCache = new Map<number, DuoConversationConfigRecord>()
+  let recipeCache = new Map<string, DuoRecipe>()
+  let convOverrideCache = new Map<number, DuoConversationOverrideRecord>()
   let runtimeCache = new Map<number, DuoRuntimeRecord>()
+  let profileModelsCache = new Map<string, string | undefined>()
+  const activeRecipeByConvId = new Map<number, string>()
   const pendingPlanHandoffResets = new Set<number>()
 
-  const getTiersCapability = (): ModelTiersCapability | undefined =>
-    ctx.consume<ModelTiersCapability>('helmx.model-tiers')[0]?.impl
+  const duoTierListeners = new Set<() => void>()
+  let externalCapabilityUnsub: (() => void) | undefined
+  const externalTierUnsubs = new Map<ModelTiersCapability, () => void>()
+  let lastExternalSnapshot = ''
+  let lastEmittedTiersSnapshot = ''
 
-  const isPlanModeActive = (conversationId: number): boolean =>
-    ctx.consume<PlanModeActiveCapability>(PLAN_MODE_ACTIVE_CAPABILITY_ID)[0]?.impl.isPlanning(conversationId) === true
+  const getExternalTierEntries = (): ReadonlyArray<ProvidedCapability<ModelTiersCapability>> =>
+    ctx
+      .consume<ModelTiersCapability>('helmx.model-tiers')
+      .filter((entry: ProvidedCapability<ModelTiersCapability>) => entry.pluginId !== DUO_PLUGIN_ID)
 
-  const collectExtraPlanningTools = (): ReadonlySet<string> => {
-    const out = new Set<string>()
-    for (const { impl } of ctx.consume<DispatchToolsCapability>('helmx.dispatch-tools')) {
-      for (const name of impl.toolNames) out.add(name)
+  const getExternalTiers = (): Record<string, ModelTierSpec> =>
+    collectExternalTierMap(ctx.consume<ModelTiersCapability>('helmx.model-tiers'))
+
+  const findExternalTierConflict = (id: string): string | undefined => {
+    for (const entry of getExternalTierEntries()) {
+      let tiers: Readonly<Record<string, ModelTierSpec>> | undefined
+      try {
+        tiers = entry.impl.getTiers()
+      } catch {
+        continue
+      }
+      if (tiers && Object.hasOwn(tiers, id)) {
+        return entry.pluginId
+      }
     }
-    for (const { impl } of ctx.consume<PlanningOrchestrationToolsCapability>(
-      PLANNING_ORCHESTRATION_TOOLS_CAPABILITY_ID,
-    )) {
-      for (const name of impl.toolNames) out.add(name)
+    return undefined
+  }
+
+  const buildMountedTiersRecord = (
+    externalTiers: Readonly<Record<string, ModelTierSpec>>,
+  ): Record<string, ModelTierSpec> => {
+    const out: Record<string, ModelTierSpec> = {}
+    const sorted = [...recipeCache.values()].sort((a, b) => a.id.localeCompare(b.id))
+    for (const recipe of sorted) {
+      const planner = resolveDuoModelThroughExternalTiers(
+        recipe.plannerModel,
+        recipe.plannerThinkingLevel,
+        externalTiers,
+      )
+      if (!planner) {
+        // Unresolved external Planner tier: omit recipe from mounted ModelCatalog tiers until resolved.
+        continue
+      }
+      const executor = resolveDuoModelThroughExternalTiers(
+        recipe.executorModel,
+        recipe.executorThinkingLevel,
+        externalTiers,
+      )
+      const plannerShort = formatDuoModelShortName(planner.model)
+      const executorShort = formatDuoModelShortName(executor?.model ?? recipe.executorModel)
+      out[recipe.id] = {
+        model: planner.model,
+        ...(planner.thinkingLevel !== undefined ? { thinkingLevel: planner.thinkingLevel } : {}),
+        ...(recipe.description !== undefined ? { description: recipe.description } : {}),
+        displayGroup: 'duo',
+        displayLabel: recipe.name,
+        displayDetail: `${plannerShort} → ${executorShort}`,
+        preserveRef: true,
+        singleTurnEligible: false,
+      }
     }
     return out
   }
 
-  const syncProfilesDoc = async (): Promise<void> => {
-    const snapshot: Record<string, DuoProfileConfig> = {}
-    for (const [id, cfg] of profileCache.entries()) {
-      snapshot[id] = cfg
+  const notifyDuoTiersChanged = (): void => {
+    for (const listener of [...duoTierListeners]) {
+      try {
+        listener()
+      } catch {
+        // Ignore subscriber error during tear-down/update.
+      }
     }
-    profilesDoc.set({ profiles: snapshot })
-    await profilesDoc.flush()
+  }
+
+  const refreshEmittedSnapshotAndNotify = (forceNotify = false): void => {
+    const externalTiers = getExternalTiers()
+    const nextExternal = serializeTiersSnapshot(externalTiers)
+    const mounted = buildMountedTiersRecord(externalTiers)
+    const nextEmitted = serializeTiersSnapshot(mounted)
+    const externalChanged = nextExternal !== lastExternalSnapshot
+    const emittedChanged = nextEmitted !== lastEmittedTiersSnapshot
+    if (externalChanged) lastExternalSnapshot = nextExternal
+    if (emittedChanged) lastEmittedTiersSnapshot = nextEmitted
+    if (externalChanged || emittedChanged) {
+      syncAllConversationDocs()
+    }
+    if (forceNotify || emittedChanged) {
+      notifyDuoTiersChanged()
+    }
+  }
+
+  const reconcileExternalTierSubscriptions = (): void => {
+    const externalEntries = getExternalTierEntries()
+    const activeImpls = new Set(externalEntries.map((entry) => entry.impl))
+    for (const [impl, unsub] of [...externalTierUnsubs.entries()]) {
+      if (!activeImpls.has(impl)) {
+        try {
+          unsub()
+        } catch {
+          // Ignore unsub failure.
+        }
+        externalTierUnsubs.delete(impl)
+      }
+    }
+    for (const entry of externalEntries) {
+      if (externalTierUnsubs.has(entry.impl) || typeof entry.impl.onChanged !== 'function') {
+        continue
+      }
+      const unsub = entry.impl.onChanged(() => {
+        if (!stopping) {
+          refreshEmittedSnapshotAndNotify(false)
+        }
+      })
+      externalTierUnsubs.set(entry.impl, typeof unsub === 'function' ? unsub : () => {})
+    }
+  }
+
+  const syncStateDoc = async (): Promise<void> => {
+    const sorted = Object.fromEntries(
+      [...recipeCache.entries()]
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([id, recipe]) => [id, recipe]),
+    )
+    stateDoc.set({ recipes: sorted })
+    await stateDoc.flush()
+  }
+
+  const buildRecipeView = (
+    recipe: DuoRecipe,
+    catalog: ModelCatalog,
+    externalTiers: Readonly<Record<string, ModelTierSpec>>,
+  ): DuoRecipeView => {
+    const resolvedPlanner = resolveDuoModelThroughExternalTiers(
+      recipe.plannerModel,
+      recipe.plannerThinkingLevel,
+      externalTiers,
+    )
+    const resolvedExecutor = resolveDuoModelThroughExternalTiers(
+      recipe.executorModel,
+      recipe.executorThinkingLevel,
+      externalTiers,
+    )
+
+    let available = true
+    let unavailableReason: string | undefined
+
+    const checkEndpoint = (
+      role: 'Planner' | 'Executor',
+      rawRef: string,
+      resolved: { model: string; thinkingLevel?: string } | undefined,
+    ): void => {
+      if (!available) return
+      if (!resolved) {
+        available = false
+        unavailableReason = `${role} tier "${rawRef}" is not available`
+        return
+      }
+      const entry = findConcreteCatalogEntry(catalog, resolved.model)
+      if (entry?.disabled === true) {
+        available = false
+        unavailableReason = `${role} model "${resolved.model}" is disabled`
+        return
+      }
+      if (!entry || entry.available !== true) {
+        available = false
+        unavailableReason = `${role} model "${resolved.model}" is unavailable`
+      }
+    }
+
+    checkEndpoint('Planner', recipe.plannerModel, resolvedPlanner)
+    checkEndpoint('Executor', recipe.executorModel, resolvedExecutor)
+
+    return {
+      ...recipe,
+      ...(resolvedPlanner !== undefined
+        ? {
+            resolvedPlannerModel: resolvedPlanner.model,
+            ...(resolvedPlanner.thinkingLevel !== undefined
+              ? { resolvedPlannerThinkingLevel: resolvedPlanner.thinkingLevel }
+              : {}),
+          }
+        : {}),
+      ...(resolvedExecutor !== undefined
+        ? {
+            resolvedExecutorModel: resolvedExecutor.model,
+            ...(resolvedExecutor.thinkingLevel !== undefined
+              ? { resolvedExecutorThinkingLevel: resolvedExecutor.thinkingLevel }
+              : {}),
+          }
+        : {}),
+      available,
+      ...(unavailableReason !== undefined ? { unavailableReason } : {}),
+    }
+  }
+
+  const getRecipeForConversation = (
+    conv: Pick<ConversationSummary, 'effectiveModelRef' | 'modelOverride' | 'parentConversationId' | 'ownedBy'>,
+  ): DuoRecipe | undefined => {
+    if (!isDuoConversationEligible(conv)) return undefined
+    const ref = conv.effectiveModelRef ?? conv.modelOverride
+    if (!ref) return undefined
+    const tierId = parseModelTierRef(ref)
+    if (tierId === undefined) return undefined
+    return recipeCache.get(tierId)
   }
 
   const resolveConfigForConversation = (
-    conv: Pick<ConversationSummary, 'id' | 'parentConversationId' | 'ownedBy' | 'profileId'>,
-  ): DuoResolvedConfig | undefined => {
-    if (!isDuoConversationEligible(conv)) return undefined
-    const convCfg = convConfigCache.get(conv.id)
-    const profileCfg = conv.profileId !== undefined ? profileCache.get(conv.profileId) : undefined
+    conv: Pick<
+      ConversationSummary,
+      'id' | 'model' | 'thinkingLevel' | 'effectiveModelRef' | 'modelOverride' | 'parentConversationId' | 'ownedBy'
+    >,
+  ): { resolved?: DuoResolvedConfig; missingExecutorTier?: string } => {
+    const recipe = getRecipeForConversation(conv)
+    if (!recipe) return {}
+    const externalTiers = getExternalTiers()
+    const override = convOverrideCache.get(conv.id)
+    const runtime = runtimeCache.get(conv.id)
 
-    if (convCfg !== undefined) {
-      if (!convCfg.enabled) return undefined
-      const executorModel = convCfg.executorModel ?? profileCfg?.executorModel
-      if (executorModel === undefined || executorModel === '') return undefined
-      const executorThinkingLevel =
-        convCfg.executorModel !== undefined
-          ? convCfg.executorThinkingLevel
-          : (convCfg.executorThinkingLevel ?? profileCfg?.executorThinkingLevel)
-      const maxExecutionSteps =
-        convCfg.maxExecutionSteps ?? profileCfg?.maxExecutionSteps ?? DUO_DEFAULT_MAX_STEPS
-      return {
-        source: 'conversation',
-        executorModel,
-        ...(executorThinkingLevel !== undefined ? { executorThinkingLevel } : {}),
-        maxExecutionSteps,
-        ...(conv.profileId !== undefined ? { profileId: conv.profileId } : {}),
-        hasConversationOverride: true,
-      }
+    const plannerFromExternal = resolveDuoModelThroughExternalTiers(
+      recipe.plannerModel,
+      recipe.plannerThinkingLevel,
+      externalTiers,
+    )
+    const plannerModel =
+      runtime?.phase !== 'execution' && conv.model
+        ? conv.model
+        : plannerFromExternal?.model ?? recipe.plannerModel
+    const plannerThinkingLevel =
+      runtime?.phase !== 'execution' && conv.model
+        ? conv.thinkingLevel ?? plannerFromExternal?.thinkingLevel
+        : plannerFromExternal?.thinkingLevel
+
+    const rawExecutorModel = override?.executorModel ?? recipe.executorModel
+    const rawExecutorThinking =
+      override !== undefined
+        ? override.executorThinkingLevel
+        : recipe.executorThinkingLevel
+    const resolvedExecutor = resolveDuoModelThroughExternalTiers(
+      rawExecutorModel,
+      rawExecutorThinking,
+      externalTiers,
+    )
+    if (!resolvedExecutor) {
+      return { missingExecutorTier: rawExecutorModel }
     }
 
-    if (profileCfg !== undefined && profileCfg.enabled) {
-      return {
-        source: 'profile',
-        executorModel: profileCfg.executorModel,
-        ...(profileCfg.executorThinkingLevel !== undefined
-          ? { executorThinkingLevel: profileCfg.executorThinkingLevel }
+    return {
+      resolved: {
+        recipeId: recipe.id,
+        recipeName: recipe.name,
+        plannerModel,
+        ...(plannerThinkingLevel !== undefined ? { plannerThinkingLevel } : {}),
+        executorModel: resolvedExecutor.model,
+        ...(resolvedExecutor.thinkingLevel !== undefined
+          ? { executorThinkingLevel: resolvedExecutor.thinkingLevel }
           : {}),
-        maxExecutionSteps: profileCfg.maxExecutionSteps,
-        ...(conv.profileId !== undefined ? { profileId: conv.profileId } : {}),
-        hasConversationOverride: false,
-      }
+        maxExecutionSteps: override?.maxExecutionSteps ?? recipe.maxExecutionSteps,
+        hasExecutorOverride: override !== undefined,
+      },
     }
-
-    return undefined
   }
 
-  const buildSessionView = (
-    conv: ConversationSummary,
-    resolved: DuoResolvedConfig | undefined,
-    runtime: DuoRuntimeRecord | undefined,
-  ): DuoSessionView | null => {
-    if (!isDuoConversationEligible(conv) || resolved === undefined) {
-      return null
-    }
+  const buildSessionView = (conv: ConversationSummary): DuoSessionView | null => {
+    const recipe = getRecipeForConversation(conv)
+    if (!recipe) return null
+    const externalTiers = getExternalTiers()
+    const override = convOverrideCache.get(conv.id)
+    const runtime = runtimeCache.get(conv.id)
     const suppressed = isCoordinatorSuppressed(conv)
-    const activePhase = !suppressed && runtime?.phase === 'execution' ? 'execution' : 'planning'
+    const activePhase = suppressed
+      ? 'planning'
+      : runtime?.phase === 'execution'
+        ? 'execution'
+        : 'planning'
+
+    const resolvedPlanner = resolveDuoModelThroughExternalTiers(
+      recipe.plannerModel,
+      recipe.plannerThinkingLevel,
+      externalTiers,
+    )
+    const rawExecutorModel = override?.executorModel ?? recipe.executorModel
+    const rawExecutorThinking =
+      override !== undefined ? override.executorThinkingLevel : recipe.executorThinkingLevel
+    const resolvedExecutor = resolveDuoModelThroughExternalTiers(
+      rawExecutorModel,
+      rawExecutorThinking,
+      externalTiers,
+    )
+
+    const plannerModel =
+      activePhase === 'planning' && conv.model
+        ? conv.model
+        : resolvedPlanner?.model ?? recipe.plannerModel
+    const plannerThinkingLevel =
+      activePhase === 'planning' && conv.model
+        ? conv.thinkingLevel ?? resolvedPlanner?.thinkingLevel
+        : resolvedPlanner?.thinkingLevel
+
+    const executorModel = resolvedExecutor?.model ?? rawExecutorModel
+    const executorThinkingLevel = resolvedExecutor?.thinkingLevel
+
     return {
       enabled: true,
-      source: resolved.source,
+      recipeId: recipe.id,
+      recipeName: recipe.name,
       phase: activePhase,
-      plannerModel: conv.modelOverride || conv.model || '',
-      ...(conv.thinkingLevelOverride
-        ? { plannerThinkingLevel: conv.thinkingLevelOverride }
-        : conv.thinkingLevel
-          ? { plannerThinkingLevel: conv.thinkingLevel }
-          : {}),
-      executorModel: resolved.executorModel,
-      ...(resolved.executorThinkingLevel !== undefined
-        ? { executorThinkingLevel: resolved.executorThinkingLevel }
-        : {}),
-      maxExecutionSteps: resolved.maxExecutionSteps,
-      executionStepCount: activePhase === 'execution' ? (runtime?.executionStepCount ?? 0) : 0,
+      plannerModel,
+      ...(plannerThinkingLevel !== undefined ? { plannerThinkingLevel } : {}),
+      executorModel,
+      ...(executorThinkingLevel !== undefined ? { executorThinkingLevel } : {}),
+      maxExecutionSteps: override?.maxExecutionSteps ?? recipe.maxExecutionSteps,
+      executionStepCount: activePhase === 'execution' ? runtime?.executionStepCount ?? 0 : 0,
       stepLimitPaused: activePhase === 'execution' && runtime?.stepLimitPaused === true,
+      hasExecutorOverride: override !== undefined,
       ...(suppressed ? { suppressedByCoordinator: true } : {}),
-      hasConversationOverride: resolved.hasConversationOverride,
-      ...(conv.profileId !== undefined ? { profileId: conv.profileId } : {}),
     }
   }
 
   const syncSessionDocForConversation = (conv: ConversationSummary): void => {
-    const resolved = resolveConfigForConversation(conv)
-    const view = buildSessionView(conv, resolved, runtimeCache.get(conv.id))
-    duoDoc.set(conv.id, view)
+    const recipe = getRecipeForConversation(conv)
+    if (recipe !== undefined) {
+      activeRecipeByConvId.set(conv.id, recipe.id)
+    } else {
+      activeRecipeByConvId.delete(conv.id)
+    }
+    duoDoc.set(conv.id, buildSessionView(conv))
   }
 
   const clearRuntimeRecord = async (conversationId: number): Promise<void> => {
@@ -330,40 +608,60 @@ export function createDuoManager(deps: DuoManagerDeps): DuoManager {
     return latestConv
   }
 
-  const assertModelNotDisabled = async (modelRef: string): Promise<void> => {
-    const catalog = await ctx.host.listModels()
-    const resolved = resolveDuoModelThroughTiers(modelRef, undefined, getTiersCapability())
-    const slash = resolved.model.indexOf('/')
-    if (slash <= 0 || slash >= resolved.model.length - 1) return
-    const provider = resolved.model.slice(0, slash)
-    const modelId = resolved.model.slice(slash + 1)
-    const entry = catalog.models.find((m) => m.provider === provider && m.modelId === modelId)
+  const assertModelRefNotDisabled = (
+    catalog: ModelCatalog,
+    externalTiers: Readonly<Record<string, ModelTierSpec>>,
+    modelRef: string,
+    roleLabel: string,
+    options?: { requireExternalTierPresent?: boolean },
+  ): void => {
+    const tierId = parseModelTierRef(modelRef)
+    const resolved = resolveDuoModelThroughExternalTiers(modelRef, undefined, externalTiers)
+    if (tierId !== undefined && resolved === undefined) {
+      if (options?.requireExternalTierPresent) {
+        throw new HelmxError(
+          'validation_error',
+          `${roleLabel} tier "${modelRef}" is not mounted by any model-tiers provider`,
+          400,
+          { model: modelRef },
+        )
+      }
+      return
+    }
+    const targetConcrete = resolved?.model ?? modelRef
+    const entry = findConcreteCatalogEntry(catalog, targetConcrete)
     if (entry?.disabled === true) {
       throw new HelmxError(
         'model_disabled',
-        `Executor model '${resolved.model}' is disabled; re-enable it before binding Duo to it`,
+        `${roleLabel} model '${targetConcrete}' is disabled; re-enable it before binding Duo to it`,
         409,
-        { model: modelRef },
+        { model: modelRef, resolvedModel: targetConcrete },
       )
     }
   }
 
-  const resolveExecutorFromParentOrProfile = (
-    parentConversationId: number | undefined,
+  const resolveExecutorFromConversationTree = (
+    startConversationId: number | undefined,
   ): { model: string; thinkingLevel?: string } | undefined => {
-    let cursor = parentConversationId
     const visited = new Set<number>()
-    while (cursor !== undefined && !visited.has(cursor) && visited.size < 32) {
+    let cursor = startConversationId
+    let hops = 0
+    while (cursor !== undefined && !visited.has(cursor) && hops < MAX_ANCESTOR_HOPS) {
       visited.add(cursor)
+      hops += 1
       const conv = getConversationOrUndefined(ctx.host, cursor)
-      if (conv === undefined) break
-      const resolved = resolveConfigForConversation(conv)
-      if (resolved !== undefined) {
-        return resolveDuoModelThroughTiers(
-          resolved.executorModel,
-          resolved.executorThinkingLevel,
-          getTiersCapability(),
-        )
+      if (!conv) break
+      if (isDuoConversationEligible(conv)) {
+        const { resolved } = resolveConfigForConversation(conv)
+        if (resolved !== undefined) {
+          return {
+            model: resolved.executorModel,
+            ...(resolved.executorThinkingLevel !== undefined
+              ? { thinkingLevel: resolved.executorThinkingLevel }
+              : {}),
+          }
+        }
+        return undefined
       }
       cursor = conv.parentConversationId
     }
@@ -371,102 +669,253 @@ export function createDuoManager(deps: DuoManagerDeps): DuoManager {
   }
 
   const syncAllConversationDocs = (): void => {
-    const convIds = new Set<number>([...convConfigCache.keys(), ...runtimeCache.keys()])
-    for (const id of convIds) {
-      const conv = getConversationOrUndefined(ctx.host, id)
-      if (conv !== undefined) {
-        syncSessionDocForConversation(conv)
-      }
-    }
+    const seen = new Set<number>()
     try {
       const list = ctx.host.listConversations({ topLevelOnly: true, ownedBy: 'human' })
       for (const conv of list) {
+        seen.add(conv.id)
+        const recipe = getRecipeForConversation(conv)
         if (
-          isDuoConversationEligible(conv) &&
-          (profileCache.has(conv.profileId ?? '') || duoDoc.get(conv.id) !== null)
+          recipe !== undefined ||
+          convOverrideCache.has(conv.id) ||
+          runtimeCache.has(conv.id) ||
+          duoDoc.get(conv.id) !== null
         ) {
           syncSessionDocForConversation(conv)
         }
       }
     } catch {
-      // Minimal unit harnesses may omit host.listConversations.
+      // Ignore if host conversation listing is unavailable during early startup/shutdown.
+    }
+    for (const convId of new Set<number>([
+      ...activeRecipeByConvId.keys(),
+      ...convOverrideCache.keys(),
+      ...runtimeCache.keys(),
+    ])) {
+      if (seen.has(convId)) continue
+      const conv = getConversationOrUndefined(ctx.host, convId)
+      if (conv !== undefined) {
+        syncSessionDocForConversation(conv)
+      } else {
+        activeRecipeByConvId.delete(convId)
+        duoDoc.set(convId, null)
+      }
     }
   }
 
-  return {
-    setStopping(next) {
-      stopping = next
-    },
+  const refreshProfileModelsCache = async (): Promise<void> => {
+    try {
+      const profiles = await ctx.host.profiles.list()
+      const next = new Map<string, string | undefined>()
+      for (const p of profiles) {
+        next.set(p.id, p.model)
+      }
+      profileModelsCache = next
+    } catch {
+      // Non-fatal during partial shutdown.
+    }
+  }
 
-    hydrate() {
-      profileCache = new Map()
-      for (const { key, value } of listAllKvEntries<DuoProfileConfig>(profilesKv)) {
-        if (value && typeof value.enabled === 'boolean' && typeof value.executorModel === 'string') {
-          profileCache.set(key, value)
+  const isPlanModeActive = (conversationId: number): boolean => {
+    for (const cap of ctx.consume<PlanModeActiveCapability>(PLAN_MODE_ACTIVE_CAPABILITY_ID)) {
+      try {
+        if (cap.impl.isPlanning(conversationId)) return true
+      } catch {
+        // Ignore fault in external capability provider.
+      }
+    }
+    return false
+  }
+
+  const collectExtraPlanningTools = (): Set<string> => {
+    const names = new Set<string>()
+    for (const capId of [PLANNING_ORCHESTRATION_TOOLS_CAPABILITY_ID, DISPATCH_TOOLS_CAPABILITY_ID] as const) {
+      for (const cap of ctx.consume<PlanningOrchestrationToolsCapability>(capId)) {
+        for (const name of cap.impl.toolNames) {
+          names.add(name)
         }
       }
-      convConfigCache = new Map()
-      for (const { key, value } of listAllKvEntries<DuoConversationConfigRecord>(convConfigsKv)) {
-        const id = Number(key)
-        if (Number.isSafeInteger(id) && id >= 1 && value && typeof value.enabled === 'boolean') {
-          convConfigCache.set(id, { ...value, conversationId: id })
+    }
+    return names
+  }
+
+  const findRecipeReferences = async (
+    targetIds?: ReadonlySet<string>,
+  ): Promise<PluginInUseItem[]> => {
+    const idsToCheck = targetIds ?? new Set(recipeCache.keys())
+    if (idsToCheck.size === 0) return []
+    const [catalog, profiles] = await Promise.all([
+      ctx.host.listModels(),
+      ctx.host.profiles.list(),
+    ])
+    const refs: PluginInUseItem[] = []
+    const checkGlobal = (modelRef: string | undefined, kind: string, fieldName: string): void => {
+      const tid = modelRef !== undefined ? parseModelTierRef(modelRef) : undefined
+      if (tid !== undefined && idsToCheck.has(tid)) {
+        refs.push({
+          kind,
+          id: `tier/${tid}`,
+          label: `Global ${fieldName} references tier/${tid}`,
+        })
+      }
+    }
+    checkGlobal(catalog.defaultModel, 'model_default', 'defaultModel')
+    checkGlobal(catalog.defaultCompactionModel, 'compaction_model', 'defaultCompactionModel')
+    for (const p of profiles) {
+      const tid = p.model !== undefined ? parseModelTierRef(p.model) : undefined
+      if (tid !== undefined && idsToCheck.has(tid)) {
+        refs.push({
+          kind: 'profile',
+          id: p.id,
+          label: `Profile "${p.name}" (${p.id}) uses tier/${tid}`,
+        })
+      }
+    }
+    try {
+      const convs = ctx.host.listConversations({ topLevelOnly: true, ownedBy: 'human' })
+      for (const conv of convs) {
+        const overrideTid = conv.modelOverride ? parseModelTierRef(conv.modelOverride) : undefined
+        const effectiveTid = conv.effectiveModelRef ? parseModelTierRef(conv.effectiveModelRef) : undefined
+        const tid = overrideTid ?? effectiveTid
+        if (tid !== undefined && idsToCheck.has(tid)) {
+          refs.push({
+            kind: 'conversation',
+            id: String(conv.id),
+            label: `Conversation #${conv.id} (${conv.title || 'untitled'}) uses tier/${tid}`,
+          })
         }
       }
-      runtimeCache = new Map()
-      for (const { key, value } of listAllKvEntries<DuoRuntimeRecord>(statesKv)) {
-        const id = Number(key)
-        if (Number.isSafeInteger(id) && id >= 1 && value && (value.phase === 'planning' || value.phase === 'execution')) {
-          runtimeCache.set(id, { ...value, conversationId: id })
+    } catch {
+      // Ignore if host conversation index is unavailable.
+    }
+    return refs
+  }
+
+  const clearOverridesAndRuntimeForRecipe = async (recipeId: string): Promise<void> => {
+    const affectedConvIds = new Set<number>()
+    for (const [convId, trackedRecipeId] of activeRecipeByConvId.entries()) {
+      if (trackedRecipeId === recipeId) affectedConvIds.add(convId)
+    }
+    for (const convId of convOverrideCache.keys()) {
+      const conv = getConversationOrUndefined(ctx.host, convId)
+      const ref = conv?.effectiveModelRef ?? conv?.modelOverride
+      const tid = ref ? parseModelTierRef(ref) : undefined
+      if (tid === recipeId || tid === undefined) affectedConvIds.add(convId)
+    }
+    for (const [convId, rt] of runtimeCache.entries()) {
+      if (rt.recipeId === recipeId) affectedConvIds.add(convId)
+    }
+    for (const convId of affectedConvIds) {
+      await queue.enqueue(convId, async () => {
+        if (convOverrideCache.delete(convId)) {
+          convOverridesKv.delete(String(convId))
+          await convOverridesKv.flush()
+        }
+        if (runtimeCache.has(convId)) {
+          await restoreToPlanning(convId, false)
+        }
+        activeRecipeByConvId.delete(convId)
+        duoDoc.set(convId, null)
+      })
+    }
+  }
+
+  const modelTiersCapability: ModelTiersCapability = {
+    getTiers() {
+      return buildMountedTiersRecord(getExternalTiers())
+    },
+    onChanged(listener) {
+      duoTierListeners.add(listener)
+      return () => {
+        duoTierListeners.delete(listener)
+      }
+    },
+  }
+
+  return {
+    modelTiersCapability,
+
+    async start() {
+      stopping = false
+
+      const nextRecipes = new Map<string, DuoRecipe>()
+      for (const entry of listAllKvEntries(recipesKv)) {
+        if (entry.value && typeof entry.value.id === 'string') {
+          nextRecipes.set(entry.key, entry.value)
         }
       }
-      const docMap: Record<string, DuoProfileConfig> = {}
-      for (const [id, cfg] of profileCache.entries()) {
-        docMap[id] = cfg
+      recipeCache = nextRecipes
+
+      const nextOverrides = new Map<number, DuoConversationOverrideRecord>()
+      for (const entry of listAllKvEntries(convOverridesKv)) {
+        const convId = Number(entry.key)
+        if (Number.isSafeInteger(convId) && convId > 0 && entry.value?.executorModel) {
+          nextOverrides.set(convId, entry.value)
+        }
       }
-      profilesDoc.set({ profiles: docMap })
+      convOverrideCache = nextOverrides
+
+      const nextStates = new Map<number, DuoRuntimeRecord>()
+      for (const entry of listAllKvEntries(statesKv)) {
+        const convId = Number(entry.key)
+        if (Number.isSafeInteger(convId) && convId > 0 && entry.value) {
+          nextStates.set(convId, entry.value)
+        }
+      }
+      runtimeCache = nextStates
+
+      await refreshProfileModelsCache()
+      await syncStateDoc()
+
+      externalCapabilityUnsub = ctx.onCapabilityChanged('helmx.model-tiers', () => {
+        if (stopping) return
+        reconcileExternalTierSubscriptions()
+        refreshEmittedSnapshotAndNotify(false)
+      })
+      reconcileExternalTierSubscriptions()
+      lastExternalSnapshot = serializeTiersSnapshot(getExternalTiers())
+      lastEmittedTiersSnapshot = serializeTiersSnapshot(buildMountedTiersRecord(getExternalTiers()))
+
+      if (recipeCache.size > 0) {
+        notifyDuoTiersChanged()
+      }
+      syncAllConversationDocs()
     },
 
     async reconcile() {
-      const profiles = await ctx.host.profiles.list()
-      const liveProfileIds = new Set(profiles.map((p) => p.id))
-      let profileRemoved = false
-      for (const profileId of [...profileCache.keys()]) {
-        if (!liveProfileIds.has(profileId)) {
-          profileCache.delete(profileId)
-          profilesKv.delete(profileId)
-          profileRemoved = true
-        }
-      }
-      if (profileRemoved) {
-        await profilesKv.flush()
-        await syncProfilesDoc()
-      }
+      if (stopping) return
+      await refreshProfileModelsCache()
+      reconcileExternalTierSubscriptions()
+      refreshEmittedSnapshotAndNotify(false)
 
-      let convConfigRemoved = false
-      for (const convId of [...convConfigCache.keys()]) {
-        if (getConversationOrUndefined(ctx.host, convId) === undefined) {
-          convConfigCache.delete(convId)
-          convConfigsKv.delete(String(convId))
-          convConfigRemoved = true
-        }
-      }
-      if (convConfigRemoved) {
-        await convConfigsKv.flush()
-      }
-
-      for (const [convId, rec] of [...runtimeCache.entries()]) {
+      for (const [convId] of [...runtimeCache.entries()]) {
         await queue.enqueue(convId, async () => {
+          if (stopping) return
           const conv = getConversationOrUndefined(ctx.host, convId)
           if (conv === undefined) {
-            runtimeCache.delete(convId)
-            statesKv.delete(String(convId))
-            await statesKv.flush()
+            await clearRuntimeRecord(convId)
+            duoDoc.set(convId, null)
             return
           }
-          if (conv.status !== 'working' && conv.status !== 'blocked' && rec.phase === 'execution') {
+          const isBusy = conv.status === 'working' || conv.status === 'blocked'
+          if (!isBusy) {
             await restoreToPlanning(convId, true)
           }
         })
+      }
+
+      // Drop orphaned per-conversation overrides whose conversation deleted or left Duo.
+      let removedOverride = false
+      for (const convId of [...convOverrideCache.keys()]) {
+        const conv = getConversationOrUndefined(ctx.host, convId)
+        if (conv === undefined || getRecipeForConversation(conv) === undefined) {
+          convOverrideCache.delete(convId)
+          convOverridesKv.delete(String(convId))
+          removedOverride = true
+        }
+      }
+      if (removedOverride) {
+        await convOverridesKv.flush()
       }
 
       syncAllConversationDocs()
@@ -474,6 +923,22 @@ export function createDuoManager(deps: DuoManagerDeps): DuoManager {
 
     async stop() {
       stopping = true
+      if (externalCapabilityUnsub !== undefined) {
+        try {
+          externalCapabilityUnsub()
+        } catch {
+          // Ignore unsub failure.
+        }
+        externalCapabilityUnsub = undefined
+      }
+      for (const unsub of externalTierUnsubs.values()) {
+        try {
+          unsub()
+        } catch {
+          // Ignore unsub failure.
+        }
+      }
+      externalTierUnsubs.clear()
       await queue.drain()
       for (const [convId] of [...runtimeCache.entries()]) {
         await queue.enqueue(convId, async () => {
@@ -483,8 +948,6 @@ export function createDuoManager(deps: DuoManagerDeps): DuoManager {
             try {
               await ignoreConversationNotFound(() => ctx.host.setConversationRuntimeModel(convId, null))
             } catch (err) {
-              // Kernel `STOP_WINDOW_HOST_CALLS` does not permit `host.setConversationRuntimeModel` during `stopWindow`:
-              // retain the KV marker so next boot `reconcile()` clears any runtime model override once idle.
               if (err instanceof HelmxError && err.code === 'plugin_context_closed') {
                 keepStateForReconcile = true
               } else {
@@ -500,334 +963,373 @@ export function createDuoManager(deps: DuoManagerDeps): DuoManager {
           duoDoc.set(convId, null)
         })
       }
-      pendingPlanHandoffResets.clear()
+      for (const convId of [...activeRecipeByConvId.keys()]) {
+        duoDoc.set(convId, null)
+      }
+      activeRecipeByConvId.clear()
     },
 
-    liveTaskLabels() {
-      const labels: string[] = []
-      for (const [convId, rec] of runtimeCache.entries()) {
-        if (rec.phase === 'execution') {
-          labels.push(`Duo execution active on conversation ${convId}`)
-        }
-      }
-      return labels
+    async inUseItems() {
+      return findRecipeReferences()
     },
 
-    inUseItems() {
-      const items: PluginInUseItem[] = []
-      for (const [profileId, cfg] of profileCache.entries()) {
-        if (cfg.enabled) {
-          items.push({
-            kind: 'profile',
-            id: profileId,
-            label: `Profile '${profileId}' enables builtin:duo (executor: ${cfg.executorModel})`,
-          })
-        }
-      }
-      for (const [convId, cfg] of convConfigCache.entries()) {
-        if (cfg.enabled) {
-          items.push({
-            kind: 'conversation',
-            id: String(convId),
-            label: `Conversation #${convId} enables builtin:duo`,
-          })
-        }
-      }
-      return items
+    async listRecipes() {
+      const catalog = await ctx.host.listModels()
+      const externalTiers = getExternalTiers()
+      return [...recipeCache.values()]
+        .sort((a, b) => a.id.localeCompare(b.id))
+        .map((recipe) => buildRecipeView(recipe, catalog, externalTiers))
     },
 
-    getStatus(conversationId) {
-      const conv = getConversationOrUndefined(ctx.host, conversationId)
-      if (conv === undefined) {
-        throw new HelmxError('not_found', `Conversation not found: ${conversationId}`, 404, { conversationId })
+    async getRecipe(rawId) {
+      const id = assertDuoRecipeId(rawId)
+      const recipe = recipeCache.get(id)
+      if (!recipe) {
+        throw new HelmxError('duo_recipe_not_found', `Duo recipe '${id}' does not exist`, 404, { id })
       }
-      const view = buildSessionView(conv, resolveConfigForConversation(conv), runtimeCache.get(conversationId))
-      if (view !== null) return view
-      const convCfg = convConfigCache.get(conversationId)
-      return {
-        enabled: false,
-        phase: 'planning',
-        plannerModel: conv.modelOverride || conv.model || '',
-        maxExecutionSteps: DUO_DEFAULT_MAX_STEPS,
-        executionStepCount: 0,
-        stepLimitPaused: false,
-        hasConversationOverride: convCfg !== undefined,
-        ...(conv.profileId !== undefined ? { profileId: conv.profileId } : {}),
-      }
+      const catalog = await ctx.host.listModels()
+      return buildRecipeView(recipe, catalog, getExternalTiers())
     },
 
-    async setConversationConfig(input) {
-      const conv = getConversationOrUndefined(ctx.host, input.conversationId)
-      if (conv === undefined) {
-        throw new HelmxError('not_found', `Conversation not found: ${input.conversationId}`, 404, {
-          conversationId: input.conversationId,
-        })
-      }
-      if (!isDuoConversationEligible(conv)) {
+    async setRecipe(input) {
+      const id = assertDuoRecipeId(input.id)
+      if (!recipeCache.has(id) && recipeCache.size >= MAX_DUO_RECIPES_COUNT) {
         throw new HelmxError(
-          'duo_unsupported_conversation',
-          'Duo orchestration is only supported in top-level human-owned conversations',
+          'validation_error',
+          `Maximum number of Duo recipes (${MAX_DUO_RECIPES_COUNT}) reached`,
           400,
-          { conversationId: conv.id },
+          { count: recipeCache.size },
         )
       }
-      return queue.enqueue(conv.id, async () => {
-        if (!input.enabled) {
-          const rec: DuoConversationConfigRecord = {
-            conversationId: conv.id,
-            enabled: false,
-            updatedAt: Date.now(),
-          }
-          convConfigCache.set(conv.id, rec)
-          convConfigsKv.set(String(conv.id), rec)
-          await convConfigsKv.flush()
-          const latest = await restoreToPlanning(conv.id, true)
-          return buildSessionView(latest ?? conv, undefined, undefined)
-        }
+      const conflictingPlugin = findExternalTierConflict(id)
+      if (conflictingPlugin !== undefined) {
+        throw new HelmxError(
+          'model_tier_conflict',
+          `Model tier id '${id}' conflicts with provider ${conflictingPlugin}`,
+          409,
+          { id, conflictingPluginId: conflictingPlugin },
+        )
+      }
 
-        const profileCfg = conv.profileId !== undefined ? profileCache.get(conv.profileId) : undefined
-        const existingConv = convConfigCache.get(conv.id)
-        const rawModel = input.executorModel ?? existingConv?.executorModel ?? profileCfg?.executorModel
-        if (rawModel === undefined || rawModel.trim() === '') {
+      const name = normalizeDuoRecipeName(input.name)
+      const description = normalizeDuoDescription(input.description)
+      const plannerModel = normalizeDuoModelRef(input.plannerModel, 'plannerModel')
+      const executorModel = normalizeDuoModelRef(input.executorModel, 'executorModel')
+
+      for (const [roleField, ref] of [
+        ['plannerModel', plannerModel],
+        ['executorModel', executorModel],
+      ] as const) {
+        const tierId = parseModelTierRef(ref)
+        if (tierId !== undefined && (tierId === id || recipeCache.has(tierId))) {
           throw new HelmxError(
             'validation_error',
-            'executorModel is required when enabling Duo on a conversation without a Duo-configured Profile',
+            `${roleField} cannot reference Duo recipe "tier/${tierId}"`,
             400,
+            { field: roleField, model: ref },
           )
         }
-        const executorModel = normalizeDuoModelRef(rawModel, 'executorModel')
-        await assertModelNotDisabled(executorModel)
-
-        const rawThinking =
-          input.executorThinkingLevel !== undefined
-            ? input.executorThinkingLevel
-            : input.executorModel !== undefined
-              ? undefined
-              : (existingConv?.executorThinkingLevel ?? profileCfg?.executorThinkingLevel)
-        const executorThinkingLevel = normalizeDuoThinkingLevel(rawThinking, 'executorThinkingLevel')
-        const maxExecutionSteps = normalizeMaxExecutionSteps(
-          input.maxExecutionSteps ?? existingConv?.maxExecutionSteps ?? profileCfg?.maxExecutionSteps,
-        )
-
-        const rec: DuoConversationConfigRecord = {
-          conversationId: conv.id,
-          enabled: true,
-          executorModel,
-          ...(executorThinkingLevel !== undefined ? { executorThinkingLevel } : {}),
-          maxExecutionSteps,
-          updatedAt: Date.now(),
-        }
-        convConfigCache.set(conv.id, rec)
-        convConfigsKv.set(String(conv.id), rec)
-        await convConfigsKv.flush()
-        const latestConv = getConversationOrUndefined(ctx.host, conv.id) ?? conv
-        syncSessionDocForConversation(latestConv)
-        return buildSessionView(latestConv, resolveConfigForConversation(latestConv), runtimeCache.get(conv.id))
-      })
-    },
-
-    async clearConversationConfig(conversationId) {
-      const conv = getConversationOrUndefined(ctx.host, conversationId)
-      if (conv === undefined) {
-        throw new HelmxError('not_found', `Conversation not found: ${conversationId}`, 404, { conversationId })
-      }
-      if (!isDuoConversationEligible(conv)) {
-        throw new HelmxError(
-          'duo_unsupported_conversation',
-          'Duo orchestration is only supported in top-level human-owned conversations',
-          400,
-          { conversationId: conv.id },
-        )
-      }
-      return queue.enqueue(conv.id, async () => {
-        convConfigCache.delete(conv.id)
-        convConfigsKv.delete(String(conv.id))
-        await convConfigsKv.flush()
-        const latest = await restoreToPlanning(conv.id, true)
-        const target = latest ?? conv
-        return buildSessionView(target, resolveConfigForConversation(target), undefined)
-      })
-    },
-
-    async setProfileConfig(input) {
-      const profileId = input.profileId.trim()
-      if (!profileId) {
-        throw new HelmxError('validation_error', 'profileId must be a non-empty string', 400)
-      }
-      const profile = await ctx.host.profiles.get(profileId)
-      if (!profile) {
-        throw new HelmxError('profile_not_found', `Profile '${profileId}' does not exist`, 404, { profileId })
-      }
-      const existing = profileCache.get(profileId)
-      if (!input.enabled) {
-        const next: DuoProfileConfig = {
-          enabled: false,
-          executorModel:
-            input.executorModel !== undefined && input.executorModel.trim() !== ''
-              ? normalizeDuoModelRef(input.executorModel, 'executorModel')
-              : (existing?.executorModel ?? ''),
-          ...(existing?.executorThinkingLevel !== undefined
-            ? { executorThinkingLevel: existing.executorThinkingLevel }
-            : {}),
-          maxExecutionSteps: normalizeMaxExecutionSteps(
-            input.maxExecutionSteps ?? existing?.maxExecutionSteps,
-          ),
-          updatedAt: Date.now(),
-        }
-        profileCache.set(profileId, next)
-        profilesKv.set(profileId, next)
-        await profilesKv.flush()
-        await syncProfilesDoc()
-        syncAllConversationDocs()
-        return next
       }
 
-      const rawModel = input.executorModel ?? existing?.executorModel
-      if (rawModel === undefined || rawModel.trim() === '') {
-        throw new HelmxError('validation_error', 'executorModel is required when enabling Duo on a Profile', 400)
-      }
-      const executorModel = normalizeDuoModelRef(rawModel, 'executorModel')
-      await assertModelNotDisabled(executorModel)
-      const rawThinking =
-        input.executorThinkingLevel !== undefined
-          ? input.executorThinkingLevel
-          : input.executorModel !== undefined
-            ? undefined
-            : existing?.executorThinkingLevel
-      const executorThinkingLevel = normalizeDuoThinkingLevel(rawThinking, 'executorThinkingLevel')
-      const maxExecutionSteps = normalizeMaxExecutionSteps(
-        input.maxExecutionSteps ?? existing?.maxExecutionSteps,
+      const plannerThinkingLevel = normalizeDuoThinkingLevel(
+        input.plannerThinkingLevel,
+        'plannerThinkingLevel',
       )
-      const next: DuoProfileConfig = {
-        enabled: true,
+      const executorThinkingLevel = normalizeDuoThinkingLevel(
+        input.executorThinkingLevel,
+        'executorThinkingLevel',
+      )
+      const maxExecutionSteps = normalizeMaxExecutionSteps(
+        input.maxExecutionSteps,
+        DUO_DEFAULT_MAX_STEPS,
+      )
+
+      const catalog = await ctx.host.listModels()
+      const externalTiers = getExternalTiers()
+      assertModelRefNotDisabled(catalog, externalTiers, plannerModel, 'Planner')
+      assertModelRefNotDisabled(catalog, externalTiers, executorModel, 'Executor')
+
+      const next: DuoRecipe = {
+        id,
+        name,
+        ...(description !== undefined ? { description } : {}),
+        plannerModel,
+        ...(plannerThinkingLevel !== undefined ? { plannerThinkingLevel } : {}),
         executorModel,
         ...(executorThinkingLevel !== undefined ? { executorThinkingLevel } : {}),
         maxExecutionSteps,
         updatedAt: Date.now(),
       }
-      profileCache.set(profileId, next)
-      profilesKv.set(profileId, next)
-      await profilesKv.flush()
-      await syncProfilesDoc()
+
+      recipeCache.set(id, next)
+      recipesKv.set(id, next)
+      await recipesKv.flush()
+      await syncStateDoc()
+      refreshEmittedSnapshotAndNotify(true)
       syncAllConversationDocs()
-      return next
+      return buildRecipeView(next, catalog, getExternalTiers())
     },
 
-    async clearProfileConfig(profileId) {
-      const id = profileId.trim()
-      if (!id) {
-        throw new HelmxError('validation_error', 'profileId must be a non-empty string', 400)
+    async removeRecipe(input) {
+      const id = assertDuoRecipeId(input.id)
+      if (!recipeCache.has(id)) {
+        return { removed: false }
       }
-      const existed = profileCache.delete(id)
-      if (existed) {
-        profilesKv.delete(id)
-        await profilesKv.flush()
-        await syncProfilesDoc()
-        syncAllConversationDocs()
+      const refs = await findRecipeReferences(new Set([id]))
+      if (refs.length > 0 && input.force !== true) {
+        throw new HelmxError(
+          'model_tier_in_use',
+          `Duo recipe 'tier/${id}' is in use by ${refs.map((r) => r.label).join('; ')} (pass force: true to remove anyway)`,
+          409,
+          { id, references: refs },
+        )
       }
-      return { removed: existed }
+
+      recipeCache.delete(id)
+      recipesKv.delete(id)
+      await recipesKv.flush()
+      await syncStateDoc()
+      await clearOverridesAndRuntimeForRecipe(id)
+      refreshEmittedSnapshotAndNotify(true)
+      syncAllConversationDocs()
+      return { removed: true }
+    },
+
+    getStatus(conversationId) {
+      const conv = getConversationOrUndefined(ctx.host, conversationId)
+      if (conv === undefined) {
+        throw new HelmxError('conversation_not_found', `Conversation ${conversationId} not found`, 404)
+      }
+      return buildSessionView(conv)
+    },
+
+    async overrideExecutor(input) {
+      const conv = getConversationOrUndefined(ctx.host, input.conversationId)
+      if (conv === undefined) {
+        throw new HelmxError('conversation_not_found', `Conversation ${input.conversationId} not found`, 404)
+      }
+      if (!isDuoConversationEligible(conv)) {
+        throw new HelmxError(
+          'validation_error',
+          'Duo executor overrides are only available on top-level human-owned conversations',
+          400,
+        )
+      }
+      const recipe = getRecipeForConversation(conv)
+      if (!recipe) {
+        throw new HelmxError(
+          'validation_error',
+          'Conversation must select a Duo recipe (tier/<id>) before overriding its Executor',
+          400,
+        )
+      }
+
+      const executorModel = normalizeDuoModelRef(input.executorModel, 'executorModel')
+      const tierId = parseModelTierRef(executorModel)
+      if (tierId !== undefined && recipeCache.has(tierId)) {
+        throw new HelmxError(
+          'validation_error',
+          `executorModel cannot reference Duo recipe "tier/${tierId}"`,
+          400,
+        )
+      }
+      const externalTiers = getExternalTiers()
+      const catalog = await ctx.host.listModels()
+      assertModelRefNotDisabled(catalog, externalTiers, executorModel, 'Executor', {
+        requireExternalTierPresent: true,
+      })
+
+      const executorThinkingLevel = normalizeDuoThinkingLevel(
+        input.executorThinkingLevel,
+        'executorThinkingLevel',
+      )
+      const existing = convOverrideCache.get(conv.id)
+      const maxExecutionSteps =
+        input.maxExecutionSteps !== undefined
+          ? normalizeMaxExecutionSteps(input.maxExecutionSteps)
+          : existing?.maxExecutionSteps
+
+      return queue.enqueue(conv.id, async () => {
+        const next: DuoConversationOverrideRecord = {
+          conversationId: conv.id,
+          executorModel,
+          ...(executorThinkingLevel !== undefined ? { executorThinkingLevel } : {}),
+          ...(maxExecutionSteps !== undefined ? { maxExecutionSteps } : {}),
+          updatedAt: Date.now(),
+        }
+        convOverrideCache.set(conv.id, next)
+        convOverridesKv.set(String(conv.id), next)
+        await convOverridesKv.flush()
+        const latestConv = getConversationOrUndefined(ctx.host, conv.id) ?? conv
+        syncSessionDocForConversation(latestConv)
+        return buildSessionView(latestConv)!
+      })
+    },
+
+    async clearOverride(conversationId) {
+      const conv = getConversationOrUndefined(ctx.host, conversationId)
+      if (conv === undefined) {
+        throw new HelmxError('conversation_not_found', `Conversation ${conversationId} not found`, 404)
+      }
+      return queue.enqueue(conv.id, async () => {
+        if (convOverrideCache.delete(conv.id)) {
+          convOverridesKv.delete(String(conv.id))
+          await convOverridesKv.flush()
+        }
+        const latestConv = getConversationOrUndefined(ctx.host, conv.id) ?? conv
+        syncSessionDocForConversation(latestConv)
+        return buildSessionView(latestConv)
+      })
+    },
+
+    searchRecipes(input, signal) {
+      if (signal.aborted) return []
+      const externalTiers = getExternalTiers()
+      interface SearchCandidate {
+        recipe: DuoRecipe
+        description?: string
+        plannerResolved?: string
+        executorResolved?: string
+        available: boolean
+      }
+      const candidates: SearchCandidate[] = []
+      for (const recipe of recipeCache.values()) {
+        if (signal.aborted) return []
+        const description =
+          recipe.description !== undefined ? compactOneLine(ctx.host.redact(recipe.description)) : undefined
+        const resolvedPlanner = resolveDuoModelThroughExternalTiers(
+          recipe.plannerModel,
+          recipe.plannerThinkingLevel,
+          externalTiers,
+        )
+        const resolvedExecutor = resolveDuoModelThroughExternalTiers(
+          recipe.executorModel,
+          recipe.executorThinkingLevel,
+          externalTiers,
+        )
+        candidates.push({
+          recipe,
+          description,
+          plannerResolved: resolvedPlanner?.model,
+          executorResolved: resolvedExecutor?.model,
+          available: resolvedPlanner !== undefined && resolvedExecutor !== undefined,
+        })
+      }
+
+      return rankSearchCandidates<SearchCandidate, PluginSearchItem>({
+        query: input.query,
+        limit: input.limit,
+        signal,
+        items: candidates,
+        fields: (entry) => ({
+          primary: [entry.recipe.name, `tier/${entry.recipe.id}`, entry.recipe.id],
+          secondary: [
+            entry.description,
+            entry.recipe.plannerModel,
+            entry.recipe.executorModel,
+            entry.plannerResolved,
+            entry.executorResolved,
+          ],
+          keywords: ['duo', 'recipe', 'recipes', 'pair', 'planner', 'executor', 'dual-phase', '双相', '配方', '协同'],
+        }),
+        tieBreaker: (entry) => entry.recipe.id,
+        toResult: (entry, score) => {
+          const plannerShort = formatDuoModelShortName(entry.plannerResolved ?? entry.recipe.plannerModel)
+          const executorShort = formatDuoModelShortName(entry.executorResolved ?? entry.recipe.executorModel)
+          const pairSummary = `tier/${entry.recipe.id} · ${plannerShort} → ${executorShort}`
+          const subtitle =
+            entry.description !== undefined
+              ? compactOneLine(`${pairSummary} · ${entry.description}`)
+              : pairSummary
+          return {
+            id: `recipe:${entry.recipe.id}`,
+            kind: 'resource',
+            title: entry.recipe.name,
+            subtitle,
+            breadcrumb: [{ en: 'Duo Recipes', 'zh-CN': '双相配方' }],
+            icon: 'git-pull-request',
+            ...(!entry.available ? { badge: { en: 'Unavailable', 'zh-CN': '不可用' } } : {}),
+            target: `screen:${DUO_PLUGIN_ID}/${DUO_SCREEN_ID}?edit=${encodeURIComponent(entry.recipe.id)}`,
+            score,
+          }
+        },
+      })
     },
 
     resolveDefaultChildModel(parentConversationId) {
-      return resolveExecutorFromParentOrProfile(parentConversationId)
+      return resolveExecutorFromConversationTree(parentConversationId)
     },
 
     async handleInput(payload) {
       if (stopping) return { action: 'continue' }
-      const parsedMeta = parseDuoInputMeta(payload.input.meta)
-      if (parsedMeta.present && !parsedMeta.valid) {
-        return { action: 'block', reason: parsedMeta.reason }
-      }
       const conv = getConversationOrUndefined(ctx.host, payload.conversationId)
       if (conv === undefined || !isDuoConversationEligible(conv)) {
         return { action: 'continue' }
       }
+      if (!runtimeCache.has(conv.id)) {
+        return { action: 'continue' }
+      }
 
       return queue.enqueue(conv.id, async () => {
-        if (parsedMeta.present && parsedMeta.valid) {
-          if (!parsedMeta.enabled) {
-            const rec: DuoConversationConfigRecord = {
-              conversationId: conv.id,
-              enabled: false,
-              updatedAt: Date.now(),
-            }
-            convConfigCache.set(conv.id, rec)
-            convConfigsKv.set(String(conv.id), rec)
-            await convConfigsKv.flush()
-            await restoreToPlanning(conv.id, true)
-            return { action: 'continue' }
-          }
-          const profileCfg = conv.profileId !== undefined ? profileCache.get(conv.profileId) : undefined
-          const executorModel = parsedMeta.executorModel ?? profileCfg?.executorModel
-          if (executorModel === undefined) {
-            return {
-              action: 'block',
-              reason: `input.meta['${DUO_INPUT_META_KEY}'].executorModel is required when Profile has no Duo config`,
-            }
-          }
-          const rec: DuoConversationConfigRecord = {
-            conversationId: conv.id,
-            enabled: true,
-            executorModel,
-            ...(parsedMeta.executorThinkingLevel !== undefined
-              ? { executorThinkingLevel: parsedMeta.executorThinkingLevel }
-              : profileCfg?.executorThinkingLevel !== undefined && parsedMeta.executorModel === undefined
-                ? { executorThinkingLevel: profileCfg.executorThinkingLevel }
-                : {}),
-            maxExecutionSteps:
-              parsedMeta.maxExecutionSteps ?? profileCfg?.maxExecutionSteps ?? DUO_DEFAULT_MAX_STEPS,
-            updatedAt: Date.now(),
-          }
-          convConfigCache.set(conv.id, rec)
-          convConfigsKv.set(String(conv.id), rec)
-          await convConfigsKv.flush()
-        }
-
         const latestConv = getConversationOrUndefined(ctx.host, conv.id) ?? conv
         const runtime = runtimeCache.get(conv.id)
         if (runtime !== undefined) {
           const isBusy = latestConv.status === 'working' || latestConv.status === 'blocked'
           const isSteer = isBusy && (payload.input.whenBusy ?? 'steer') === 'steer'
           if (isSteer && runtime.phase === 'execution') {
-            const next: DuoRuntimeRecord = { ...runtime, turnHadSteer: true, updatedAt: Date.now() }
-            runtimeCache.set(conv.id, next)
-            statesKv.set(String(conv.id), next)
+            const updated: DuoRuntimeRecord = { ...runtime, turnHadSteer: true, updatedAt: Date.now() }
+            runtimeCache.set(conv.id, updated)
+            statesKv.set(String(conv.id), updated)
             await statesKv.flush()
           } else if (!isBusy) {
             await restoreToPlanning(conv.id, true)
-            return { action: 'continue' }
           }
         }
-        syncSessionDocForConversation(latestConv)
         return { action: 'continue' }
       })
     },
 
     async handleBeforeTurn(turn) {
+      if (stopping) return { action: 'continue' }
+      const conv = getConversationOrUndefined(ctx.host, turn.conversation.id)
       const stripDuoArtifacts = (): HookResult<BeforeTurnHookPayload> => {
-        const tools = turn.tools.filter((t) => !DUO_ONLY_TOOL_NAMES.has(t.name))
-        const sections = turn.sections.filter(
-          (s) => s.id !== DUO_PLAN_SECTION_ID && s.id !== DUO_EXECUTE_SECTION_ID && s.id !== DUO_STEP_LIMIT_SECTION_ID,
+        const hasDuoTool = turn.tools.some((t) => DUO_ONLY_TOOL_NAMES.has(t.name))
+        const hasDuoSection = turn.sections.some(
+          (s) => s.id === DUO_PLAN_SECTION_ID || s.id === DUO_EXECUTE_SECTION_ID || s.id === DUO_STEP_LIMIT_SECTION_ID,
         )
-        if (tools.length === turn.tools.length && sections.length === turn.sections.length) {
-          return { action: 'continue' }
+        if (!hasDuoTool && !hasDuoSection) return { action: 'continue' }
+        return {
+          action: 'transform',
+          value: {
+            ...turn,
+            tools: turn.tools.filter((t) => !DUO_ONLY_TOOL_NAMES.has(t.name)),
+            sections: turn.sections.filter(
+              (s) =>
+                s.id !== DUO_PLAN_SECTION_ID &&
+                s.id !== DUO_EXECUTE_SECTION_ID &&
+                s.id !== DUO_STEP_LIMIT_SECTION_ID,
+            ),
+          },
         }
-        return { action: 'transform', value: { ...turn, tools, sections } }
       }
 
-      const conv = turn.conversation
-      if (stopping || !isDuoConversationEligible(conv)) {
+      if (conv === undefined || !isDuoConversationEligible(conv)) {
+        return stripDuoArtifacts()
+      }
+
+      const { resolved } = resolveConfigForConversation(conv)
+      if (resolved === undefined) {
+        if (runtimeCache.has(conv.id)) {
+          await queue.enqueue(conv.id, () => restoreToPlanning(conv.id, true))
+        }
         return stripDuoArtifacts()
       }
 
       if (isPlanModeActive(conv.id)) {
-        return { action: 'continue' }
-      }
-
-      const resolved = resolveConfigForConversation(conv)
-      if (resolved === undefined) {
         if (runtimeCache.has(conv.id)) {
           await queue.enqueue(conv.id, () => restoreToPlanning(conv.id, true))
+        } else {
+          syncSessionDocForConversation(conv)
         }
         return stripDuoArtifacts()
       }
@@ -914,28 +1416,33 @@ export function createDuoManager(deps: DuoManagerDeps): DuoManager {
 
       let resolvedTarget: { model: string; thinkingLevel?: string } | undefined
       if (request.agentType !== undefined && request.agentType.trim() !== '') {
-        const profileCfg = profileCache.get(request.agentType.trim())
-        if (profileCfg !== undefined && profileCfg.enabled) {
-          resolvedTarget = resolveDuoModelThroughTiers(
-            profileCfg.executorModel,
-            profileCfg.executorThinkingLevel,
-            getTiersCapability(),
+        const profileModel = profileModelsCache.get(request.agentType.trim())
+        const profileRecipeId = profileModel !== undefined ? parseModelTierRef(profileModel) : undefined
+        const recipe = profileRecipeId !== undefined ? recipeCache.get(profileRecipeId) : undefined
+        if (recipe !== undefined) {
+          resolvedTarget = resolveDuoModelThroughExternalTiers(
+            recipe.executorModel,
+            recipe.executorThinkingLevel,
+            getExternalTiers(),
           )
         }
       }
       if (resolvedTarget === undefined) {
-        resolvedTarget = resolveExecutorFromParentOrProfile(request.parentConversationId)
+        resolvedTarget = resolveExecutorFromConversationTree(request.parentConversationId)
       }
       if (resolvedTarget === undefined) return { action: 'continue' }
+
+      const nextThinking =
+        request.effort !== undefined && request.effort.trim() !== ''
+          ? request.effort
+          : resolvedTarget.thinkingLevel
 
       return {
         action: 'transform',
         value: {
           ...request,
           model: resolvedTarget.model,
-          ...(request.effort === undefined && resolvedTarget.thinkingLevel !== undefined
-            ? { effort: resolvedTarget.thinkingLevel }
-            : {}),
+          ...(nextThinking !== undefined ? { effort: nextThinking } : {}),
         },
       }
     },
@@ -959,7 +1466,7 @@ export function createDuoManager(deps: DuoManagerDeps): DuoManager {
         if (conv === undefined || !isDuoConversationEligible(conv) || isCoordinatorSuppressed(conv)) {
           return
         }
-        const resolved = resolveConfigForConversation(conv)
+        const { resolved } = resolveConfigForConversation(conv)
         if (resolved === undefined) return
 
         let activeRuntimeOverride = false
@@ -983,6 +1490,7 @@ export function createDuoManager(deps: DuoManagerDeps): DuoManager {
 
         const nextRecord: DuoRuntimeRecord = {
           conversationId: conv.id,
+          recipeId: resolved.recipeId,
           phase: 'execution',
           executorModel: resolved.executorModel,
           ...(resolved.executorThinkingLevel !== undefined
@@ -1008,13 +1516,39 @@ export function createDuoManager(deps: DuoManagerDeps): DuoManager {
       const event = payload as { type?: unknown; conversation?: ConversationSummary } | undefined
       const conv = event?.type === 'conversation.upsert' ? event.conversation : undefined
       if (!conv || typeof conv.id !== 'number') return
-      if (isCoordinatorSuppressed(conv) && runtimeCache.has(conv.id)) {
-        await queue.enqueue(conv.id, () => restoreToPlanning(conv.id, true))
+
+      const recipe = getRecipeForConversation(conv)
+      const prevRecipeId = activeRecipeByConvId.get(conv.id)
+
+      // Clean up temporary overrides / execution runtime when switching away from or changing Duo recipe.
+      if (
+        (recipe === undefined && (convOverrideCache.has(conv.id) || runtimeCache.has(conv.id))) ||
+        (recipe !== undefined && prevRecipeId !== undefined && prevRecipeId !== recipe.id) ||
+        (isCoordinatorSuppressed(conv) && runtimeCache.has(conv.id))
+      ) {
+        await queue.enqueue(conv.id, async () => {
+          const latestConv = getConversationOrUndefined(ctx.host, conv.id) ?? conv
+          const latestRecipe = getRecipeForConversation(latestConv)
+          const switchedAwayOrChanged =
+            latestRecipe === undefined || (prevRecipeId !== undefined && prevRecipeId !== latestRecipe.id)
+          if (switchedAwayOrChanged && convOverrideCache.delete(conv.id)) {
+            convOverridesKv.delete(String(conv.id))
+            await convOverridesKv.flush()
+          }
+          if (switchedAwayOrChanged || isCoordinatorSuppressed(latestConv)) {
+            await restoreToPlanning(conv.id, true)
+            return
+          }
+          syncSessionDocForConversation(latestConv)
+        })
         return
       }
+
       if (
-        convConfigCache.has(conv.id) ||
-        (conv.profileId !== undefined && profileCache.has(conv.profileId)) ||
+        recipe !== undefined ||
+        prevRecipeId !== undefined ||
+        convOverrideCache.has(conv.id) ||
+        runtimeCache.has(conv.id) ||
         duoDoc.get(conv.id) !== null
       ) {
         syncSessionDocForConversation(conv)
@@ -1023,12 +1557,14 @@ export function createDuoManager(deps: DuoManagerDeps): DuoManager {
 
     async handleConversationDeleted(conversationId) {
       if (stopping) return
-      if (!convConfigCache.has(conversationId) && !runtimeCache.has(conversationId)) return
+      activeRecipeByConvId.delete(conversationId)
+      if (!convOverrideCache.has(conversationId) && !runtimeCache.has(conversationId)) return
       await queue.enqueue(conversationId, async () => {
         if (stopping) return
-        convConfigCache.delete(conversationId)
-        convConfigsKv.delete(String(conversationId))
-        await convConfigsKv.flush()
+        if (convOverrideCache.delete(conversationId)) {
+          convOverridesKv.delete(String(conversationId))
+          await convOverridesKv.flush()
+        }
         runtimeCache.delete(conversationId)
         statesKv.delete(String(conversationId))
         await statesKv.flush()
@@ -1047,17 +1583,14 @@ export function createDuoManager(deps: DuoManagerDeps): DuoManager {
       })
     },
 
-    async handleProfileChanged(payload) {
-      const event = payload as { profile?: { id?: unknown }; removed?: boolean } | undefined
-      const profileId = typeof event?.profile?.id === 'string' ? event.profile.id : undefined
-      if (!profileId) return
+    handleProfileChanged(payload) {
+      const event = payload as { profile?: Profile; removed?: boolean } | undefined
+      const profile = event?.profile
+      if (!profile || typeof profile.id !== 'string' || !profile.id) return
       if (event?.removed === true) {
-        const existed = profileCache.delete(profileId)
-        if (existed) {
-          profilesKv.delete(profileId)
-          await profilesKv.flush()
-          await syncProfilesDoc()
-        }
+        profileModelsCache.delete(profile.id)
+      } else {
+        profileModelsCache.set(profile.id, profile.model)
       }
       syncAllConversationDocs()
     },
@@ -1082,16 +1615,21 @@ export function createDuoManager(deps: DuoManagerDeps): DuoManager {
         if (isCoordinatorSuppressed(conv)) {
           return toolError('exit_plan_mode is disabled while coordinating an active Swarm group.')
         }
-        const resolved = resolveConfigForConversation(conv)
+        const { resolved, missingExecutorTier } = resolveConfigForConversation(conv)
+        if (missingExecutorTier !== undefined) {
+          return toolError(
+            `Failed to switch to executor tier "${missingExecutorTier}": tier is not available. Staying in planning phase.`,
+          )
+        }
         if (resolved === undefined) {
-          return toolError('exit_plan_mode requires builtin:duo to be enabled on this conversation or Profile.')
+          return toolError('exit_plan_mode requires a Duo recipe (tier/<id>) on this conversation or Profile.')
         }
         const current = runtimeCache.get(conv.id)
         if (current?.phase === 'execution') {
           return toolError('Conversation is already in execution phase.')
         }
 
-        const fromModel = conv.model || conv.modelOverride || resolved.executorModel
+        const fromModel = conv.model || conv.modelOverride || resolved.plannerModel
         let nextSummary: ConversationSummary
         try {
           nextSummary = await ctx.host.setConversationRuntimeModel(conv.id, {
@@ -1109,6 +1647,7 @@ export function createDuoManager(deps: DuoManagerDeps): DuoManager {
 
         const nextRecord: DuoRuntimeRecord = {
           conversationId: conv.id,
+          recipeId: resolved.recipeId,
           phase: 'execution',
           executorModel: resolved.executorModel,
           ...(resolved.executorThinkingLevel !== undefined

@@ -1,31 +1,30 @@
+// @test-isolation: process
 /**
- * Unit & Happy-DOM UI tests for `builtin:duo`:
- * - Pure contracts & client helper parsing/validation;
- * - PluginHost lifecycle (`plan.approved`, `helmx.plan-mode-active`, `helmx.planning-orchestration-tools`,
- *   `helmx.default-child-model`, grandchild chain walking, `pi.reset` + handoff exception,
- *   `reconcile()` crash recovery, `stop()` restore, standby `input.meta` block/accept);
- * - Real esbuild-compiled Happy-DOM rendering of `DuoProfileSection`, `DuoMenuItem`,
- *   `DuoToolbarPill`, and `DuoTransitionToolRow` (Radix primitives, zero Emoji, `presentationMeta` rendering).
+ * Unit tests for `builtin:duo` Dual-Phase Recipes:
+ * - Pure contract validation (`assertDuoRecipeId`, `normalizeDuoRecipeName`, `normalizeDuoModelRef`,
+ *   `resolveDuoModelThroughExternalTiers`, etc.);
+ * - `PluginHost` unit coverage: recipe CRUD, conflict rejection (`409 model_tier_conflict`),
+ *   Duo->Duo recursion rejection, missing external tier omission from `getTiers()`, dynamic
+ *   non-cyclic external tier `onChanged` updates, `inUse()` & `remove()` reference guards,
+ *   `override_executor` / `clear_override`, `plan.approved` + `pi.reset` handoff preservation,
+ *   grandchild `DEFAULT_CHILD_MODEL_CAPABILITY_ID`, planning tools, `reconcile` & `stop`;
+ * - Client `models.ts` + `copy.ts` helper sanity & zero-Emoji validation (interactive Happy-DOM
+ *   rendering of all Duo client modules runs in `packages/web/test/duo-client-interactions.test.tsx`).
  */
 import assert from 'node:assert/strict'
-import { createRequire } from 'node:module'
-import { writeFileSync } from 'node:fs'
-import { dirname, join, resolve } from 'node:path'
 import { test } from 'node:test'
-import { fileURLToPath, pathToFileURL } from 'node:url'
-import { ensureHappyDom, resetHappyDom } from '../../plugin-client/test/helpers/dom-harness.js'
 import {
   HelmxError,
   type BeforeTurnHookPayload,
   type ConversationSummary,
-  type PluginClientContext as PluginClientContextType,
+  type HostModelsSlice,
+  type ModelTiersCapability,
+  type ModelTierSpec,
   type PluginToolSpec,
   type Profile,
 } from '@helmx/protocol'
-import type { PluginClientHostPort, PluginSessionDocKey } from '@helmx/plugin-client'
 import { PluginHost, type PluginHostBackend } from '@helmx/kernel'
-import { CLIENT_SHARED_GLOBALS, compilePluginClientModule, createPluginBuildProvider } from '@helmx/plugin-build'
-import { createPluginHostBackendFixture } from '../../kernel/test/helpers/plugin-host-backend.js'
+import { createPluginBuildProvider } from '@helmx/plugin-build'
 import {
   DEFAULT_CHILD_MODEL_CAPABILITY_ID,
   PLAN_APPROVED_EVENT,
@@ -37,33 +36,34 @@ import {
   DUO_DEFAULT_MAX_STEPS,
   DUO_EXIT_PLAN_MODE_TOOL,
   DUO_HAND_BACK_TOOL,
-  DUO_INPUT_META_KEY,
   DUO_PLAN_SECTION_ID,
   DUO_PLUGIN_ID,
-  DUO_PROFILES_DOC,
   DUO_SESSION_DOC,
-  DUO_STATES_KV,
   createDuoPlugin,
   type DuoSessionView,
 } from '../src/duo.js'
 import {
+  assertDuoRecipeId,
+  collectExternalTierMap,
   normalizeDuoModelRef,
+  normalizeDuoRecipeName,
   normalizeDuoThinkingLevel,
   normalizeMaxExecutionSteps,
-  parseDuoInputMeta,
-  resolveDuoModelThroughTiers,
-  type DuoRuntimeRecord,
+  resolveDuoModelThroughExternalTiers,
 } from '../src/duo/contracts.js'
+import { DUO_COPY } from '../src/duo/client/copy.ts'
 import {
-  extractFallbackTransitionInfo,
-  extractFirstErrorLine,
-  isDuoEligibleConversation,
-  parseDuoProfilesDoc,
+  createEmptyDuoDraft,
+  filterDuoRecipeItems,
+  getStarterDuoPresets,
+  matchDuoRecipeFromModelRef,
   parseDuoSessionDoc,
-  parseDuoStandbyMeta,
-  parseDuoTransitionPresentationMeta,
-  validateMaxStepsInput,
-} from '../src/duo/client/models.js'
+  parseDuoStateDoc,
+  parseDuoTransitionMeta,
+  synthesizeDuoRecipeItems,
+  validateDuoDraft,
+} from '../src/duo/client/models.ts'
+import { createPluginHostBackendFixture } from '../../kernel/test/helpers/plugin-host-backend.js'
 import {
   MemoryConfigStore,
   MemoryDocStore,
@@ -74,20 +74,21 @@ import {
 } from './helpers/plugin-test-env.js'
 
 const TIMEOUT = { timeout: 60_000 } as const
-const EMOJI_RE = /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u
+const EMOJI_RE = /\p{Extended_Pictographic}/u
 
 function makeToolSpec(name: string): PluginToolSpec {
   return {
     name,
-    description: `Tool ${name}`,
+    description: name,
     inputSchema: { type: 'object', properties: {} },
-    execute: () => 'ok',
+    execute: async () => ({ output: 'ok' }),
   }
 }
 
 function openDuoUnitHost(options: {
   conversations?: ConversationSummary[]
   profiles?: Profile[]
+  defaultModel?: string
   kvStore?: MemoryKvStore
   deferServices?: boolean
 } = {}) {
@@ -107,6 +108,7 @@ function openDuoUnitHost(options: {
   const kvStore = options.kvStore ?? new MemoryKvStore()
   const docStore = new MemoryDocStore()
   const base = createPluginHostBackendFixture()
+  let defaultModel = options.defaultModel
 
   const backend: PluginHostBackend = {
     ...base,
@@ -123,9 +125,11 @@ function openDuoUnitHost(options: {
       models: [
         { provider: 'faux', modelId: 'flagship', available: true },
         { provider: 'faux', modelId: 'coder', available: true },
+        { provider: 'faux', modelId: 'fast', available: true },
         { provider: 'faux', modelId: 'disabled', available: true, disabled: true },
       ],
       thinkingLevels: { 'faux/coder': ['low', 'medium', 'high'] },
+      ...(defaultModel ? { defaultModel } : {}),
     }),
     listConversations(filter) {
       let items = [...conversations.values()].map((c) => structuredClone(c))
@@ -186,6 +190,9 @@ function openDuoUnitHost(options: {
       runtimeCalls,
       kvStore,
       docStore,
+      setDefaultModel(next: string | undefined) {
+        defaultModel = next
+      },
       async dispatchEvent(type: string, payload: unknown) {
         for (const fn of [...(listeners.get(type) ?? [])]) {
           await fn(payload)
@@ -199,433 +206,387 @@ function openDuoUnitHost(options: {
   })
 }
 
-test('pure contracts and client model helpers validate inputs strictly', TIMEOUT, () => {
-  assert.equal(normalizeDuoModelRef(' faux/coder '), 'faux/coder')
+test('pure contracts, client recipe helpers, and bilingual zero-Emoji copy validate strictly', TIMEOUT, () => {
+  assert.equal(EMOJI_RE.test(JSON.stringify(DUO_COPY)), false, 'DUO_COPY must contain zero Emoji')
+
+  assert.equal(assertDuoRecipeId('architect_coder'), 'architect_coder')
+  assert.throws(() => assertDuoRecipeId('BadId'), HelmxError)
+  assert.throws(() => assertDuoRecipeId('tier/x'), HelmxError)
+
+  assert.equal(normalizeDuoRecipeName('  Arch -> Code  '), 'Arch -> Code')
+  assert.throws(() => normalizeDuoRecipeName('   '), HelmxError)
+  assert.throws(() => normalizeDuoRecipeName('x'.repeat(81)), HelmxError)
+
+  assert.equal(normalizeDuoModelRef('anthropic/claude-opus'), 'anthropic/claude-opus')
   assert.equal(normalizeDuoModelRef('tier/coder'), 'tier/coder')
-  assert.throws(() => normalizeDuoModelRef(''), /validation_error|provider\/model/i)
-  assert.throws(() => normalizeDuoModelRef('tier/BadUpper'), /Invalid tier reference/i)
-
-  assert.equal(normalizeDuoThinkingLevel(' high '), 'high')
-  assert.equal(normalizeDuoThinkingLevel('  '), undefined)
-  assert.throws(() => normalizeDuoThinkingLevel('turbo'), /Invalid executorThinkingLevel/i)
-
+  assert.throws(() => normalizeDuoModelRef('tier/BadUpper'), HelmxError)
+  assert.throws(() => normalizeDuoModelRef('no-slash'), HelmxError)
+  assert.throws(() => normalizeDuoThinkingLevel('bogus'), HelmxError)
   assert.equal(normalizeMaxExecutionSteps(undefined), DUO_DEFAULT_MAX_STEPS)
-  assert.equal(normalizeMaxExecutionSteps(0), 0)
-  assert.equal(normalizeMaxExecutionSteps(100), 100)
-  assert.throws(() => normalizeMaxExecutionSteps(-1), /between 0 and 100/)
-  assert.throws(() => normalizeMaxExecutionSteps(101), /between 0 and 100/)
+  assert.throws(() => normalizeMaxExecutionSteps(101), HelmxError)
 
+  const externalMap = collectExternalTierMap([
+    {
+      pluginId: 'builtin:tiers',
+      impl: { getTiers: () => ({ coder: { model: 'faux/coder', thinkingLevel: 'low' } }) },
+    },
+    {
+      pluginId: DUO_PLUGIN_ID,
+      impl: { getTiers: () => ({ ignored_self: { model: 'faux/flagship' } }) },
+    },
+  ])
+  assert.deepEqual(Object.keys(externalMap), ['coder'])
   assert.deepEqual(
-    parseDuoInputMeta({ [DUO_INPUT_META_KEY]: { enabled: true, executorModel: ' tier/coder ', maxExecutionSteps: 12 } }),
-    { present: true, valid: true, enabled: true, executorModel: 'tier/coder', maxExecutionSteps: 12 },
+    resolveDuoModelThroughExternalTiers('tier/coder', undefined, externalMap),
+    { model: 'faux/coder', thinkingLevel: 'low' },
   )
-  const invalidMeta = parseDuoInputMeta({ [DUO_INPUT_META_KEY]: { enabled: 'yes' } })
-  assert.ok(invalidMeta.present && !invalidMeta.valid)
+  assert.equal(resolveDuoModelThroughExternalTiers('tier/missing', undefined, externalMap), undefined)
 
-  assert.deepEqual(
-    resolveDuoModelThroughTiers('tier/coder', undefined, {
-      getTiers: () => ({ coder: { model: 'faux/coder', thinkingLevel: 'medium' } }),
-      onChanged: () => () => {},
-    }),
-    { model: 'faux/coder', thinkingLevel: 'medium' },
-  )
-
-  // Client helpers
-  assert.equal(isDuoEligibleConversation(makeConversationSummary({ id: 1 })), true)
-  assert.equal(isDuoEligibleConversation(makeConversationSummary({ id: 2, parentConversationId: 1 })), false)
-  assert.equal(isDuoEligibleConversation(makeConversationSummary({ id: 3, ownedBy: 'helmx' })), false)
-
-  const parsedProfiles = parseDuoProfilesDoc({
-    profiles: { p1: { enabled: true, executorModel: 'faux/coder', maxExecutionSteps: 15, updatedAt: 1 } },
+  const parsedState = parseDuoStateDoc({
+    recipes: {
+      r1: {
+        id: 'r1',
+        name: 'Arch -> Code',
+        plannerModel: 'faux/flagship',
+        executorModel: 'tier/coder',
+        maxExecutionSteps: 12,
+        updatedAt: 1,
+      },
+      bad: { id: 'bad' },
+    },
   })
-  assert.equal(parsedProfiles['p1']?.executorModel, 'faux/coder')
-  assert.equal(parseDuoSessionDoc({ enabled: false, plannerModel: 'a' }), null)
-  assert.equal(parseDuoSessionDoc({ enabled: true, phase: 'execution', plannerModel: 'faux/a', executorModel: 'faux/b' })?.phase, 'execution')
-  assert.deepEqual(parseDuoStandbyMeta({ [DUO_PLUGIN_ID]: { enabled: true, executorModel: 'faux/b' } }), {
+  assert.equal(Object.keys(parsedState.recipes).length, 1)
+  assert.ok(matchDuoRecipeFromModelRef('tier/r1', parsedState.recipes))
+  assert.equal(matchDuoRecipeFromModelRef('faux/flagship', parsedState.recipes), undefined)
+
+  const hostModels: HostModelsSlice = {
+    models: [
+      { id: 'faux/flagship', provider: 'faux', modelId: 'flagship', label: 'Flagship', available: true, thinkingLevels: [] },
+      { id: 'faux/coder', provider: 'faux', modelId: 'coder', label: 'Coder', available: true, thinkingLevels: ['low', 'medium', 'high'] },
+    ],
+    modelThinkingLevels: {},
+    modelTiers: [],
+  }
+  const items = synthesizeDuoRecipeItems(parsedState.recipes, hostModels)
+  assert.equal(filterDuoRecipeItems(items, 'arch').length, 1)
+  assert.equal(filterDuoRecipeItems(items, 'nomatch').length, 0)
+  assert.ok(getStarterDuoPresets('en', hostModels).length >= 2)
+
+  const draft = createEmptyDuoDraft()
+  assert.equal(
+    validateDuoDraft(
+      { ...draft, id: 'coder', name: 'Conflict', plannerModel: 'faux/flagship', executorModel: 'faux/coder' },
+      { mode: 'create', existingRecipeIds: new Set(['r1']), externalTierIds: new Set(['coder']) },
+    ),
+    'id_conflict',
+  )
+  assert.equal(
+    validateDuoDraft(
+      { ...draft, id: 'r2', name: 'Nested', plannerModel: 'tier/r1', executorModel: 'faux/coder' },
+      { mode: 'create', existingRecipeIds: new Set(['r1']), externalTierIds: new Set(['coder']) },
+    ),
+    'planner_duo_ref',
+  )
+  assert.equal(
+    validateDuoDraft(
+      { ...draft, id: 'r2', name: 'Self', plannerModel: 'faux/flagship', executorModel: 'tier/r2' },
+      { mode: 'create', existingRecipeIds: new Set(['r1']), externalTierIds: new Set(['coder']) },
+    ),
+    'executor_duo_ref',
+  )
+
+  const parsedSession = parseDuoSessionDoc({
     enabled: true,
-    executorModel: 'faux/b',
+    recipeId: 'r1',
+    recipeName: 'Arch -> Code',
+    phase: 'planning',
+    plannerModel: 'faux/flagship',
+    executorModel: 'faux/coder',
+    maxExecutionSteps: 10,
+    executionStepCount: 0,
+    stepLimitPaused: false,
+    hasExecutorOverride: true,
   })
-  assert.equal(parseDuoTransitionPresentationMeta({ tool: 'other' }), undefined)
-  assert.equal(extractFallbackTransitionInfo({ plan: 'First line\nSecond line' }), 'First line')
-  assert.equal(extractFirstErrorLine('\n  Boom happened  \nmore'), 'Boom happened')
-  assert.equal(validateMaxStepsInput(''), DUO_DEFAULT_MAX_STEPS)
-  assert.equal(validateMaxStepsInput('150'), null)
+  assert.equal(parsedSession?.recipeId, 'r1')
+  assert.equal(parsedSession?.hasExecutorOverride, true)
+
+  const meta = parseDuoTransitionMeta({
+    tool: DUO_EXIT_PLAN_MODE_TOOL,
+    fromModel: 'faux/flagship',
+    toModel: 'faux/coder',
+    fromPhase: 'planning',
+    toPhase: 'execution',
+  })
+  assert.equal(meta?.toModel, 'faux/coder')
 })
 
-test('PluginHost unit: plan.approved, pi.reset handoff preservation, grandchild default-child-model, planning tools, reconcile & stop', TIMEOUT, async () => {
-  const kvStore = new MemoryKvStore()
-  // Seed stranded execution record for crash recovery in reconcile() + deleted conv 999 cleanup
-  kvStore.put(
-    DUO_PLUGIN_ID,
-    DUO_STATES_KV,
-    '1',
-    JSON.stringify({
-      conversationId: 1,
-      phase: 'execution',
-      executorModel: 'faux/coder',
-      maxExecutionSteps: 30,
-      executionStepCount: 4,
-      activeRuntimeOverride: true,
-      updatedAt: Date.now(),
-    } satisfies DuoRuntimeRecord),
-  )
-  kvStore.put(
-    DUO_PLUGIN_ID,
-    DUO_STATES_KV,
-    '999',
-    JSON.stringify({
-      conversationId: 999,
-      phase: 'execution',
-      executorModel: 'faux/coder',
-      maxExecutionSteps: 30,
-      executionStepCount: 1,
-      activeRuntimeOverride: true,
-      updatedAt: Date.now(),
-    } satisfies DuoRuntimeRecord),
-  )
-
-  const h = await openDuoUnitHost({
-    kvStore,
-    deferServices: true,
-    conversations: [
-      makeConversationSummary({ id: 1, model: 'faux/coder', status: 'idle', runtimeModelOverride: true }),
-      makeConversationSummary({ id: 2, parentConversationId: 1, ownedBy: 'helmx', model: 'faux/coder' }),
-      makeConversationSummary({ id: 3, parentConversationId: 2, ownedBy: 'helmx', model: 'faux/coder' }),
-    ],
-  })
-
+test('PluginHost unit: recipe capability mounting, external tier delta cascade without loops, override & crash recovery', TIMEOUT, async () => {
+  const env = await openDuoUnitHost()
   try {
-    await h.host.start()
-    await h.host.reconcile()
-    // 1. reconcile() recovered stranded #1 back to planning via setConversationRuntimeModel(1, null) & dropped #999
-    assert.equal(h.runtimeCalls.some((c) => c.id === 1 && c.target === null), true)
-    assert.equal(kvStore.getParsed(DUO_PLUGIN_ID, DUO_STATES_KV, '999'), undefined)
-
-    // 2. Register stub capability providers: helmx.plan-mode-active & helmx.planning-orchestration-tools
-    let planningFlag = false
-    await h.host.register({
-      id: 'ext:test-caps',
-      name: { en: 'Test Caps' },
-      version: '0.1.0',
-      definePlugin(ctx) {
-        ctx.provide(PLAN_MODE_ACTIVE_CAPABILITY_ID, {
-          isPlanning: (id: number) => id === 1 && planningFlag,
+    let externalTiers: Record<string, ModelTierSpec> = {
+      coder: { model: 'faux/coder', thinkingLevel: 'low' },
+    }
+    const externalListeners = new Set<() => void>()
+    const externalProviderPlugin = {
+      id: 'test:tiers',
+      name: 'Test Tiers',
+      definePlugin(ctx: { provide<T>(id: string, impl: T): () => void }) {
+        ctx.provide<ModelTiersCapability>('helmx.model-tiers', {
+          getTiers: () => externalTiers,
+          onChanged: (listener) => {
+            externalListeners.add(listener)
+            return () => externalListeners.delete(listener)
+          },
         })
+      },
+    }
+    await env.host.register(externalProviderPlugin)
+
+    await assert.rejects(
+      () =>
+        env.host.invokeAction(DUO_PLUGIN_ID, 'set', {
+          id: 'coder',
+          name: 'Conflict',
+          plannerModel: 'faux/flagship',
+          executorModel: 'faux/fast',
+        }),
+      (err: unknown) => err instanceof HelmxError && err.code === 'model_tier_conflict' && err.status === 409,
+    )
+
+    await env.host.invokeAction(DUO_PLUGIN_ID, 'set', {
+      id: 'arch_code',
+      name: 'Architect & Coder',
+      description: 'Plan deeply then execute swiftly',
+      plannerModel: 'faux/flagship',
+      executorModel: 'tier/coder',
+      maxExecutionSteps: 5,
+    })
+
+    await assert.rejects(
+      () =>
+        env.host.invokeAction(DUO_PLUGIN_ID, 'set', {
+          id: 'nested',
+          name: 'Nested',
+          plannerModel: 'tier/arch_code',
+          executorModel: 'faux/fast',
+        }),
+      (err: unknown) => err instanceof HelmxError && err.code === 'validation_error' && err.status === 400,
+    )
+
+    const duoCap = env.host
+      .consumeCapability<ModelTiersCapability>('helmx.model-tiers')
+      .find((c) => c.pluginId === DUO_PLUGIN_ID)?.impl
+    assert.ok(duoCap)
+    let duoChangeCount = 0
+    const unsubDuo = duoCap.onChanged!(() => {
+      duoChangeCount += 1
+    })
+
+    const mounted = duoCap.getTiers()
+    assert.ok(mounted['arch_code'])
+    assert.equal(mounted['arch_code']!.model, 'faux/flagship')
+    assert.equal(mounted['arch_code']!.displayGroup, 'duo')
+    assert.equal(mounted['arch_code']!.displayLabel, 'Architect & Coder')
+    assert.equal(mounted['arch_code']!.displayDetail, 'flagship → coder')
+    assert.equal(mounted['arch_code']!.preserveRef, true)
+    assert.equal(mounted['arch_code']!.singleTurnEligible, false)
+
+    await env.host.invokeAction(DUO_PLUGIN_ID, 'set', {
+      id: 'ext_planner',
+      name: 'External Planner',
+      plannerModel: 'tier/future_arch',
+      executorModel: 'tier/coder',
+    })
+    assert.equal(duoCap.getTiers()['ext_planner'], undefined, 'unresolved external Planner must be omitted from getTiers()')
+
+    const beforeCascadeCount = duoChangeCount
+    for (const fn of externalListeners) fn()
+    assert.equal(duoChangeCount, beforeCascadeCount)
+
+    externalTiers = {
+      ...externalTiers,
+      future_arch: { model: 'faux/flagship', thinkingLevel: 'high' },
+    }
+    for (const fn of externalListeners) fn()
+    assert.equal(duoChangeCount, beforeCascadeCount + 1)
+    assert.equal(duoCap.getTiers()['ext_planner']?.model, 'faux/flagship')
+    assert.equal(duoCap.getTiers()['ext_planner']?.thinkingLevel, 'high')
+    if (typeof unsubDuo === 'function') unsubDuo()
+
+    const conv1 = makeConversationSummary({
+      id: 1,
+      model: 'faux/flagship',
+      modelOverride: 'tier/arch_code',
+      effectiveModelRef: 'tier/arch_code',
+    })
+    env.conversations.set(1, conv1)
+    await env.dispatchEvent('conversation.upsert', { type: 'conversation.upsert', conversation: conv1 })
+
+    const status1 = (await env.host.invokeAction(DUO_PLUGIN_ID, 'status', {
+      conversationId: 1,
+    })) as DuoSessionView
+    assert.equal(status1.recipeId, 'arch_code')
+    assert.equal(status1.executorModel, 'faux/coder')
+    assert.equal(status1.hasExecutorOverride, false)
+
+    const overridden = (await env.host.invokeAction(DUO_PLUGIN_ID, 'override_executor', {
+      conversationId: 1,
+      executorModel: 'faux/fast',
+      executorThinkingLevel: 'medium',
+      maxExecutionSteps: 8,
+    })) as DuoSessionView
+    assert.equal(overridden.executorModel, 'faux/fast')
+    assert.equal(overridden.hasExecutorOverride, true)
+
+    await env.dispatchEvent(PLAN_APPROVED_EVENT, {
+      conversationId: 1,
+      modelSwitched: false,
+      filePath: '/repo/plan.md',
+    })
+    assert.equal(env.runtimeCalls.at(-1)?.target?.model, 'faux/fast')
+    assert.equal(
+      (env.host.getPublicSessionDoc(DUO_PLUGIN_ID, DUO_SESSION_DOC, 1).value as DuoSessionView | null)?.phase,
+      'execution',
+    )
+
+    await env.dispatchEvent('pi.reset', { type: 'pi.reset', conversationId: 1 })
+    assert.equal(
+      (env.host.getPublicSessionDoc(DUO_PLUGIN_ID, DUO_SESSION_DOC, 1).value as DuoSessionView | null)?.phase,
+      'execution',
+    )
+    await env.dispatchEvent('pi.reset', { type: 'pi.reset', conversationId: 1 })
+    assert.equal(
+      (env.host.getPublicSessionDoc(DUO_PLUGIN_ID, DUO_SESSION_DOC, 1).value as DuoSessionView | null)?.phase,
+      'planning',
+    )
+
+    await assert.rejects(
+      () => env.host.invokeAction(DUO_PLUGIN_ID, 'remove', { id: 'arch_code' }),
+      (err: unknown) => err instanceof HelmxError && err.code === 'model_tier_in_use' && err.status === 409,
+    )
+    const clearedConv = makeConversationSummary({ id: 1, model: 'faux/flagship' })
+    env.conversations.set(1, clearedConv)
+    await env.dispatchEvent('conversation.upsert', { type: 'conversation.upsert', conversation: clearedConv })
+    assert.equal(env.host.getPublicSessionDoc(DUO_PLUGIN_ID, DUO_SESSION_DOC, 1).value, null)
+    const afterSwitchStatus = await env.host.invokeAction(DUO_PLUGIN_ID, 'status', { conversationId: 1 })
+    assert.equal(afterSwitchStatus, null)
+
+    env.setDefaultModel('tier/arch_code')
+    await assert.rejects(
+      () => env.host.invokeAction(DUO_PLUGIN_ID, 'remove', { id: 'arch_code' }),
+      (err: unknown) => err instanceof HelmxError && err.status === 409,
+    )
+    env.setDefaultModel(undefined)
+    const removed = (await env.host.invokeAction(DUO_PLUGIN_ID, 'remove', { id: 'arch_code' })) as { removed: boolean }
+    assert.equal(removed.removed, true)
+
+    await env.host.invokeAction(DUO_PLUGIN_ID, 'set', {
+      id: 'tree_pair',
+      name: 'Tree Pair',
+      plannerModel: 'faux/flagship',
+      executorModel: 'faux/coder',
+    })
+    env.conversations.set(10, makeConversationSummary({ id: 10, model: 'faux/flagship', effectiveModelRef: 'tier/tree_pair' }))
+    env.conversations.set(11, makeConversationSummary({ id: 11, parentConversationId: 10, ownedBy: 'helmx', model: 'faux/coder' }))
+    env.conversations.set(12, makeConversationSummary({ id: 12, parentConversationId: 11, ownedBy: 'helmx', model: 'faux/coder' }))
+
+    const childCap = env.host.consumeCapability<DefaultChildModelCapability>(DEFAULT_CHILD_MODEL_CAPABILITY_ID)[0]?.impl
+    assert.deepEqual(childCap?.resolveDefaultChildModel(12), { model: 'faux/coder' })
+
+    await env.host.register({
+      id: 'test:orch',
+      name: 'Test Orch',
+      definePlugin(ctx) {
         ctx.provide(PLANNING_ORCHESTRATION_TOOLS_CAPABILITY_ID, {
-          toolNames: ['swarm_list_groups'],
+          toolNames: ['subagent', 'SubagentWorkflow'],
         })
       },
     })
-
-    // Disabled model rejected honestly in set_conversation
-    await assert.rejects(
-      () =>
-        h.host.invokeAction(DUO_PLUGIN_ID, 'set_conversation', {
-          conversationId: 1,
-          enabled: true,
-          executorModel: 'faux/disabled',
-        }),
-      (err: unknown) => err instanceof HelmxError && err.code === 'model_disabled' && err.status === 409,
-    )
-
-    // Enable Duo on #1
-    await h.host.invokeAction(DUO_PLUGIN_ID, 'set_conversation', {
-      conversationId: 1,
-      enabled: true,
-      executorModel: 'faux/coder',
-      executorThinkingLevel: 'high',
-    })
-
-    // 3. Grandchild #3 walks parent chain #3 -> #2 -> #1 and resolves default child model!
-    const childCap = h.host.consumeCapability<DefaultChildModelCapability>(DEFAULT_CHILD_MODEL_CAPABILITY_ID)[0]!.impl
-    assert.deepEqual(childCap.resolveDefaultChildModel(3), {
-      model: 'faux/coder',
-      thinkingLevel: 'high',
-    })
-
-    // 4. Invalid input.meta blocks honestly
-    const blocked = await h.host.runHook('input', {
-      conversationId: 1,
-      input: { id: 'i1', text: 'hi', origin: 'human', createdAt: 1, meta: { [DUO_INPUT_META_KEY]: { enabled: 42 } } },
-    })
-    assert.equal(blocked.action, 'block')
-
-    // 5. Planning phase retains PLANNING_ORCHESTRATION_TOOLS_CAPABILITY_ID tool (`swarm_list_groups`) and strips `write`
-    const tools = [makeToolSpec('read'), makeToolSpec('write'), makeToolSpec('swarm_list_groups'), makeToolSpec(DUO_EXIT_PLAN_MODE_TOOL), makeToolSpec(DUO_HAND_BACK_TOOL)]
-    const planTurn = await h.host.runHook('before_turn', {
-      conversation: h.conversations.get(1)!,
+    const turn = await env.host.runHook('before_turn', {
+      conversation: env.conversations.get(10)!,
       inputs: [],
-      tools,
+      tools: [
+        makeToolSpec('read'),
+        makeToolSpec('edit'),
+        makeToolSpec('subagent'),
+        makeToolSpec('SubagentWorkflow'),
+        makeToolSpec(DUO_EXIT_PLAN_MODE_TOOL),
+        makeToolSpec(DUO_HAND_BACK_TOOL),
+      ],
       sections: [],
       messages: [],
     } satisfies BeforeTurnHookPayload)
-    assert.equal(planTurn.action, 'transform')
-    if (planTurn.action === 'transform') {
-      assert.deepEqual(planTurn.value.tools.map((t) => t.name), ['read', 'swarm_list_groups', DUO_EXIT_PLAN_MODE_TOOL])
-      assert.ok(planTurn.value.sections.some((s) => s.id === DUO_PLAN_SECTION_ID))
+    assert.equal(turn.action, 'transform')
+    if (turn.action === 'transform') {
+      const names = turn.value.tools.map((t) => t.name)
+      assert.ok(names.includes('subagent') && names.includes('SubagentWorkflow'))
+      assert.ok(names.includes(DUO_EXIT_PLAN_MODE_TOOL))
+      assert.equal(names.includes('edit'), false)
+      assert.ok(turn.value.sections.some((s) => s.id === DUO_PLAN_SECTION_ID))
     }
-
-    // 6. `/plan` active yields completely in before_turn (preserves caller tools & sections untouched)
-    planningFlag = true
-    const yielded = await h.host.runHook('before_turn', {
-      conversation: h.conversations.get(1)!,
-      inputs: [],
-      tools,
-      sections: [{ id: 'plan.mode', text: '<plan_mode>' }],
-      messages: [],
-    } satisfies BeforeTurnHookPayload)
-    if (yielded.action === 'transform') {
-      assert.deepEqual(
-        yielded.value.tools.map((t) => t.name),
-        tools.map((t) => t.name),
-      )
-      assert.deepEqual(yielded.value.sections, [{ id: 'plan.mode', text: '<plan_mode>' }])
-    } else {
-      assert.equal(yielded.action, 'continue')
-    }
-    planningFlag = false
-
-    // 7. `plan.approved` with modelSwitched: false transitions to execution AND skips immediate `pi.reset` handoff!
-    await h.dispatchEvent(PLAN_APPROVED_EVENT, { conversationId: 1, modelSwitched: false, filePath: 'plan-v1.md' })
-    const afterPlanApprove = (await h.host.invokeAction(DUO_PLUGIN_ID, 'status', { conversationId: 1 })) as DuoSessionView
-    assert.equal(afterPlanApprove.phase, 'execution')
-    assert.equal(h.conversations.get(1)?.model, 'faux/coder')
-
-    // Simulated immediate `pi.reset` from `approve_handoff` does NOT undo execution phase
-    await h.dispatchEvent('conversation.entry', { type: 'conversation.entry', conversationId: 1, entry: { kind: 'pi.reset' } })
-    const afterHandoffReset = (await h.host.invokeAction(DUO_PLUGIN_ID, 'status', { conversationId: 1 })) as DuoSessionView
-    assert.equal(afterHandoffReset.phase, 'execution')
-
-    // A second unrelated `pi.reset` (/clear) DOES restore back to planning
-    await h.dispatchEvent('conversation.entry', { type: 'conversation.entry', conversationId: 1, entry: { kind: 'pi.reset' } })
-    const afterManualReset = (await h.host.invokeAction(DUO_PLUGIN_ID, 'status', { conversationId: 1 })) as DuoSessionView
-    assert.equal(afterManualReset.phase, 'planning')
-    assert.equal(h.conversations.get(1)?.model, 'faux/flagship')
-
-    // 8. Re-enter execution: active execution blocks even --force disable (liveTasks); settling restores Planner cleanly and lets dispose/disable succeed
-    await h.dispatchEvent(PLAN_APPROVED_EVENT, { conversationId: 1, modelSwitched: false })
-    assert.equal(h.conversations.get(1)?.model, 'faux/coder')
-    await assert.rejects(
-      () => h.host.disable(DUO_PLUGIN_ID, { force: true }),
-      (err: unknown) => err instanceof HelmxError && err.code === 'plugin_has_live_tasks' && err.status === 409,
-    )
-    const runtimeCallsBeforeSettle = h.runtimeCalls.length
-    await h.host.runHook('turn_settled', {
-      conversation: h.conversations.get(1)!,
-      inputs: [],
-      outcome: 'completed',
-      settledAt: Date.now(),
-    })
-    assert.equal(h.runtimeCalls.slice(runtimeCallsBeforeSettle).some((c) => c.id === 1 && c.target === null), true)
-    assert.equal(h.conversations.get(1)?.model, 'faux/flagship')
-    await h.host.disable(DUO_PLUGIN_ID, { force: true })
+    await env.host.disable('test:orch', { force: true })
+    void PLAN_MODE_ACTIVE_CAPABILITY_ID
   } finally {
-    await h.close()
+    await env.close()
   }
 })
 
-test('Happy-DOM client components: DuoProfileSection, DuoMenuItem, DuoToolbarPill, and DuoTransitionToolRow render cleanly with zero Emoji', TIMEOUT, async (t) => {
-  ensureHappyDom()
-  const req = createRequire(new URL('../../plugin-client/package.json', import.meta.url))
-  const React = req('react') as typeof import('react')
-  const ReactJsxRuntime = req('react/jsx-runtime') as unknown
-  const ReactDOMClient = req('react-dom/client') as {
-    createRoot: (container: Element) => { render(node: import('react').ReactNode): void; unmount(): void }
-  }
-  const LucideReact = req('lucide-react') as unknown
-  const HelmxUi = await import('@helmx/ui')
-  const HelmxPluginClient = await import('@helmx/plugin-client')
-  const { PluginClientContext, PluginClientHostContext } = HelmxPluginClient
-
-  const g = globalThis as Record<string, unknown>
-  g[CLIENT_SHARED_GLOBALS['react']!] = React
-  g[CLIENT_SHARED_GLOBALS['react/jsx-runtime']!] = ReactJsxRuntime
-  g[CLIENT_SHARED_GLOBALS['@helmx/ui']!] = HelmxUi
-  g[CLIENT_SHARED_GLOBALS['@helmx/plugin-client']!] = HelmxPluginClient
-  g[CLIENT_SHARED_GLOBALS['lucide-react']!] = LucideReact
-  g['IS_REACT_ACT_ENVIRONMENT'] = true
-
-  const cacheDir = await makeTempDir('helmx-duo-dom-')
-  t.after(async () => {
-    resetHappyDom()
-    await cleanupDir(cacheDir)
-  }, TIMEOUT)
-
-  const here = dirname(fileURLToPath(import.meta.url))
-  const compiled = await compilePluginClientModule(
+test('PluginHost crash recovery: reconcile clears stranded runtime override from previous run', TIMEOUT, async () => {
+  const kvStore = new MemoryKvStore()
+  kvStore.put(
     DUO_PLUGIN_ID,
-    resolve(here, '../src/duo/client'),
-    'index.tsx',
-    cacheDir,
+    'recipes',
+    'r1',
+    JSON.stringify({
+      id: 'r1',
+      name: 'Recovery Pair',
+      plannerModel: 'faux/flagship',
+      executorModel: 'faux/coder',
+      maxExecutionSteps: 5,
+      updatedAt: 1,
+    }),
   )
-  const modPath = join(cacheDir, 'duo-client.mjs')
-  writeFileSync(modPath, compiled.code, 'utf8')
-  const clientMod = (await import(pathToFileURL(modPath).href)) as {
-    DuoProfileSection: React.ComponentType<{ profileId: string; isNew: boolean; disabled: boolean }>
-    DuoMenuItem: React.ComponentType<Record<string, unknown>>
-    DuoToolbarPill: React.ComponentType<Record<string, unknown>>
-    DuoTransitionToolRow: React.ComponentType<Record<string, unknown>>
-  }
+  kvStore.put(
+    DUO_PLUGIN_ID,
+    'states',
+    '1',
+    JSON.stringify({
+      conversationId: 1,
+      recipeId: 'r1',
+      phase: 'execution',
+      executorModel: 'faux/coder',
+      maxExecutionSteps: 5,
+      executionStepCount: 2,
+      activeRuntimeOverride: true,
+      updatedAt: 1,
+    }),
+  )
 
-  const conv1 = makeConversationSummary({ id: 1, model: 'faux/flagship', profileId: 'eng' })
-  const convChild = makeConversationSummary({ id: 2, parentConversationId: 1, model: 'faux/coder' })
-  const profilesDoc = {
-    profiles: {
-      eng: { enabled: true, executorModel: 'faux/coder', executorThinkingLevel: 'high', maxExecutionSteps: 30, updatedAt: 1 },
-    },
-  }
-  const sessionView: DuoSessionView = {
-    enabled: true,
-    source: 'profile',
-    phase: 'execution',
-    plannerModel: 'faux/flagship',
-    executorModel: 'faux/coder',
-    executorThinkingLevel: 'high',
-    maxExecutionSteps: 30,
-    executionStepCount: 3,
-    stepLimitPaused: false,
-    hasConversationOverride: false,
-    profileId: 'eng',
-  }
-
-  const modelsSlice = {
-    models: [
-      { id: 'faux/flagship', provider: 'faux', name: 'Flagship', available: true },
-      { id: 'faux/coder', provider: 'faux', name: 'Coder', available: true },
+  const env = await openDuoUnitHost({
+    kvStore,
+    conversations: [
+      makeConversationSummary({
+        id: 1,
+        status: 'idle',
+        model: 'faux/coder',
+        modelOverride: 'tier/r1',
+        effectiveModelRef: 'tier/r1',
+        runtimeModelOverride: true,
+      }),
     ],
-    thinkingLevels: { 'faux/coder': ['low', 'medium', 'high'] },
-    modelThinkingLevels: {},
-  }
-  const sessionStateConv1 = {
-    value: sessionView,
-    hasValue: true as const,
-    deleted: false as const,
-    connected: true as const,
-  }
-  const emptySessionState = { hasValue: false as const, deleted: false as const, connected: false as const }
-
-  const noop = () => () => {}
-  const hostPort = {
-    getAuthenticated: () => false,
-    subscribeAuthenticated: noop,
-    getTheme: () => 'light',
-    subscribePrefs: noop,
-    getConversations: () => [conv1, convChild],
-    subscribeConversations: noop,
-    getConversationSummary: (id: number) => (id === 1 ? conv1 : convChild),
-    subscribeConversationSummary: noop,
-    getConversationDetail: () => undefined,
-    subscribeConversationDetail: noop,
-    getConversationLive: () => undefined,
-    subscribeConversationLive: noop,
-    getConversationPendingAsks: () => [],
-    subscribeConversationPendingAsks: noop,
-    getLoadError: () => undefined,
-    subscribeLoadError: noop,
-    getModelsSlice: () => modelsSlice,
-    subscribeModels: noop,
-    getPluginDocValue: (k: string) => (k === `${DUO_PLUGIN_ID}/${DUO_PROFILES_DOC}` ? profilesDoc : undefined),
-    subscribePluginDoc: noop,
-    ensurePluginDoc: async () => undefined,
-    subscribeSessionDoc: noop,
-    getSessionDocState: (key: PluginSessionDocKey) =>
-      key.pluginId === DUO_PLUGIN_ID && key.docName === DUO_SESSION_DOC && key.conversationId === 1
-        ? sessionStateConv1
-        : emptySessionState,
-    loadConversationDetail: async () => undefined,
-    markdown: { view: () => null, codeBlock: () => null },
-  } as unknown as PluginClientHostPort
-
-  const ctx: PluginClientContextType = {
-    pluginId: DUO_PLUGIN_ID,
-    callAction: async () => ({}),
-    fetchRoute: async () => new Response(null, { status: 404 }),
-    submitInput: async () => {},
-    openScreen: () => {},
-    openSplitScreen: () => {},
-    openConversationDrawer: () => {},
-    openArtifact: () => {},
-    openWorkbench: () => {},
-    closeWorkbench: () => {},
-    notify: () => {},
-    getPluginDoc: async () => undefined,
-    getPluginSessionDoc: async () => undefined,
-    conversationId: 1,
-    theme: 'light',
-    locale: 'en',
-    translate: (text) => (typeof text === 'string' ? text : text.en ?? ''),
-  }
-
-  const wrap = (node: import('react').ReactNode) =>
-    React.createElement(
-      HelmxUi.UiLocaleProvider,
-      { locale: 'en' },
-      React.createElement(
-        PluginClientHostContext.Provider,
-        { value: hostPort },
-        React.createElement(PluginClientContext.Provider, { value: ctx }, node),
-      ),
-    )
-
-  const mountNode = document.createElement('div')
-  document.body.appendChild(mountNode)
-  const root = ReactDOMClient.createRoot(mountNode)
-
+    deferServices: true,
+  })
   try {
-    await React.act(async () => {
-      root.render(
-        wrap(
-          React.createElement(
-            React.Fragment,
-            null,
-            React.createElement(clientMod.DuoProfileSection, { profileId: 'eng', isNew: false, disabled: false }),
-            React.createElement(clientMod.DuoToolbarPill, { conversation: conv1 }),
-            React.createElement(clientMod.DuoToolbarPill, { conversation: convChild }),
-            React.createElement(clientMod.DuoTransitionToolRow, {
-              toolName: DUO_EXIT_PLAN_MODE_TOOL,
-              callId: 'c1',
-              status: 'done',
-              durationMs: 120,
-              presentationMeta: {
-                tool: DUO_EXIT_PLAN_MODE_TOOL,
-                fromModel: 'faux/flagship',
-                toModel: 'faux/coder',
-                fromPhase: 'planning',
-                toPhase: 'execution',
-              },
-            }),
-            React.createElement(clientMod.DuoTransitionToolRow, {
-              toolName: DUO_HAND_BACK_TOOL,
-              callId: 'c2',
-              status: 'done',
-              presentationMeta: {
-                tool: DUO_HAND_BACK_TOOL,
-                fromModel: 'faux/coder',
-                toModel: 'faux/flagship',
-                fromPhase: 'execution',
-                toPhase: 'planning',
-                reason: 'step_budget_reached',
-              },
-            }),
-          ),
-        ),
-      )
-    })
-
-    const text = mountNode.textContent ?? ''
-    assert.equal(EMOJI_RE.test(text), false, `UI text must contain zero Emoji: ${text}`)
-    assert.match(text, /Duo Mode/)
-    assert.match(text, /Exec 3\/30/)
-    assert.match(text, /flagship → coder/)
-    assert.match(text, /Switched to executor coder/)
-    assert.match(text, /Returned to planner flagship/)
-
-    const pills = mountNode.querySelectorAll('.duo-pill-trigger')
-    assert.equal(pills.length, 1, 'child conversation must NOT render DuoToolbarPill')
-    assert.ok(mountNode.querySelectorAll('.duo-trace-row').length === 2)
+    await env.host.start()
+    await env.host.reconcile()
+    assert.equal(env.runtimeCalls.at(-1)?.target, null)
+    assert.equal(
+      (env.host.getPublicSessionDoc(DUO_PLUGIN_ID, DUO_SESSION_DOC, 1).value as DuoSessionView | null)?.phase,
+      'planning',
+    )
+    await env.host.dispose()
+    assert.equal(env.kvStore.get(DUO_PLUGIN_ID, 'states', '1'), undefined)
   } finally {
-    await React.act(async () => {
-      root.unmount()
-    })
+    await env.close()
   }
 })
