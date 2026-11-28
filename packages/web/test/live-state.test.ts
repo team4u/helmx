@@ -3,7 +3,7 @@ import { test } from 'node:test'
 import { isPluginSummaryActive as protocolIsPluginSummaryActive } from '@helmx/protocol/browser'
 import type { ConversationDetail, ConversationLive, ConversationSummary, HelmxSnapshot } from '@helmx/protocol'
 import { applyConversationEntry, applyEventFrame, applyResumedFrame, applySnapshot, applyTransientLiveDeltaFrame, applyTransientLiveFrame, clearPendingEntries, emptyLiveState, entryMatchesReference, evictConversationDetails, isPluginSummaryActive, mergeConversationDetail, omitPluginDocLoadErrors, reconcilePluginsState, sortNodes, sseClientTimings, SseParser } from '../src/lib/live-state.js'
-import { assetsApi, normalizeModelCatalogInfo } from '../src/lib/api.js'
+import { assetsApi, conversationsApi, normalizeModelCatalogInfo } from '../src/lib/api.js'
 import type { NodeInfo } from '@helmx/protocol'
 
 const conv: ConversationSummary = { id: 1, title: '助理', profileId: 'assistant', cwd: '/tmp', model: '', thinkingLevel: '', status: 'idle', tags: [], stateChangeSeq: 1, completionSeq: 0, unread: false, pinned: true, pendingAskCount: 0, createdAt: 0, updatedAt: 0 }
@@ -783,4 +783,113 @@ test('assetsApi.setModelFilter 通过 normalizeModelCatalogInfo 统一规范化�
   } finally {
     globalThis.fetch = originalFetch
   }
+})
+
+test('modelTiers 目录解析剥离旧编排字段且 submitInput 可透传单轮 model/thinkingLevel', { timeout: 60_000 }, async () => {
+  const catalog = normalizeModelCatalogInfo({
+    models: [{ provider: 'anthropic', modelId: 'claude-3-7-sonnet', available: true }],
+    thinkingLevels: { 'anthropic/claude-3-7-sonnet': ['off', 'high'] },
+    modelTiers: [
+      {
+        id: 'auto',
+        model: 'anthropic/claude-3-7-sonnet',
+        available: true,
+        thinkingLevel: 'high',
+        thinkingLevels: ['off', 'high'],
+        description: 'Auto',
+        executorModel: 'faux/legacy',
+        maxExecutionSteps: 30,
+      },
+    ],
+  })
+  assert.deepEqual(catalog.modelTiers, [
+    {
+      id: 'auto',
+      model: 'anthropic/claude-3-7-sonnet',
+      available: true,
+      thinkingLevel: 'high',
+      thinkingLevels: ['off', 'high'],
+      description: 'Auto',
+    },
+  ])
+
+  const originalFetch = globalThis.fetch
+  const bodies: Array<Record<string, unknown>> = []
+  globalThis.fetch = (async (_url: RequestInfo | URL, init?: RequestInit) => {
+    bodies.push(JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>)
+    return new Response(JSON.stringify({ submissionId: 'sub-1', status: 'dispatched' }), { status: 200 })
+  }) as typeof fetch
+  try {
+    await conversationsApi.submitInput(7, {
+      text: 'try once',
+      origin: 'human',
+      model: 'anthropic/claude-3-7-sonnet',
+      thinkingLevel: 'high',
+    })
+    await conversationsApi.submitInput(7, { text: 'plain', origin: 'human' })
+    assert.deepEqual(bodies, [
+      { text: 'try once', origin: 'human', model: 'anthropic/claude-3-7-sonnet', thinkingLevel: 'high' },
+      { text: 'plain', origin: 'human' },
+    ])
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('runtimeModelOverride 在 applySnapshot / mergeConversationDetail / conversation.upsert 中保真并在结束时清除', { timeout: 60_000 }, () => {
+  const baseDetail: ConversationDetail = {
+    ...conv,
+    model: 'faux/base',
+    thinkingLevel: 'low',
+    entries: [{ id: '1', kind: 'pi.assistant' }],
+  }
+  const overridden: ConversationSummary = {
+    ...conv,
+    model: 'anthropic/claude-opus-4-6',
+    modelOverride: 'faux/base',
+    runtimeModelOverride: true,
+    thinkingLevel: 'max',
+  }
+
+  // snapshot 写入 runtimeModelOverride: true 且保留/同步 detail
+  const snapState = applySnapshot({ ...emptyLiveState(), conversationDetails: { 1: baseDetail } }, {
+    ...snapshot,
+    conversations: [overridden],
+  })
+  assert.equal(snapState.conversations[0]?.runtimeModelOverride, true)
+  assert.equal(snapState.conversationDetails[1]?.runtimeModelOverride, true)
+
+  // detail 合并时若列表摘要已清除 runtimeModelOverride，即使滞后 HTTP 详情仍带 true 也不得复活
+  const staleDetailFromHttp: ConversationDetail = {
+    ...overridden,
+    entries: [{ id: '1', kind: 'pi.assistant' }],
+  }
+  const clearedSummaryState = {
+    ...snapState,
+    conversations: [{ ...conv, model: 'faux/base', modelOverride: 'faux/base', thinkingLevel: 'low' }],
+  }
+  const mergedWithClearedSummary = mergeConversationDetail(clearedSummaryState, staleDetailFromHttp)
+  assert.equal('runtimeModelOverride' in (mergedWithClearedSummary.conversationDetails[1] ?? {}), false)
+
+  // detail 合并时若列表无摘要或列表仍带 runtimeModelOverride: true，则遵循 summary ?? detail
+  const mergedDirect = mergeConversationDetail(emptyLiveState(), staleDetailFromHttp)
+  assert.equal(mergedDirect.conversationDetails[1]?.runtimeModelOverride, true)
+
+  // SSE conversation.upsert 省略 runtimeModelOverride 时清除既有标志，防止残留旧临时换模状态
+  const settledState = applyEventFrame(snapState, {
+    seq: snapState.seq + 1,
+    event: {
+      type: 'conversation.upsert',
+      conversation: { ...conv, model: 'faux/base', modelOverride: 'faux/base', thinkingLevel: 'low' },
+    },
+  })
+  assert.equal('runtimeModelOverride' in (settledState.conversations[0] ?? {}), false)
+  assert.equal('runtimeModelOverride' in (settledState.conversationDetails[1] ?? {}), false)
+
+  // 后续重连快照省略 runtimeModelOverride 时也必须清理 detail
+  const clearedSnap = applySnapshot(snapState, {
+    ...snapshot,
+    conversations: [{ ...conv, model: 'faux/base', modelOverride: 'faux/base', thinkingLevel: 'low' }],
+  })
+  assert.equal('runtimeModelOverride' in (clearedSnap.conversationDetails[1] ?? {}), false)
 })

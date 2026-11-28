@@ -714,4 +714,86 @@ describe('agent-standby', () => {
     await waitForCondition(() => window.location.hash === '#/settings/models')
     assert.equal(window.location.hash, '#/settings/models')
   })
+
+  test('standby one-turn override: stages nextTurnMode, supports clear, and sends { model, thinkingLevel } on first submit while keeping baseline on create/patch', { timeout: 60_000 }, async () => {
+    state.modelsOverride = {
+      models: [
+        { provider: 'faux', modelId: 'glm-4.6', available: true },
+        { provider: 'anthropic', modelId: 'claude-opus-4-6', available: true },
+      ],
+      thinkingLevels: {
+        'faux/glm-4.6': ['off', 'low', 'high'],
+        'anthropic/claude-opus-4-6': ['off', 'medium', 'max'],
+      },
+    }
+    await mount('#/a/assistant')
+
+    // First select persistent baseline model faux/glm-4.6 · low
+    clickButton('button.composer-model-button')
+    const basePopover = document.body.querySelector<HTMLElement>('.composer-model-popover')!
+    const glmRow = [...basePopover.querySelectorAll<HTMLElement>('.composer-model-row')]
+      .find((row) => row.querySelector('.composer-model-row-main')?.textContent?.includes('glm-4.6'))!
+    const lowChip = [...glmRow.querySelectorAll<HTMLButtonElement>('.composer-model-level-chip')]
+      .find((btn) => btn.textContent?.trim() === 'low')!
+    await act(async () => { lowChip.click() })
+    await settle()
+
+    // Now reopen and switch to "Next turn only" tab to stage anthropic/claude-opus-4-6 · max
+    clickButton('button.composer-model-button')
+    const nextTurnPopover = document.body.querySelector<HTMLElement>('.composer-model-popover')!
+    const nextTurnTab = [...nextTurnPopover.querySelectorAll<HTMLButtonElement>('[role="radio"], button')]
+      .find((btn) => btn.textContent?.trim() === 'Next turn only')
+    assert.ok(nextTurnTab, 'Standby ModelPicker renders Next turn only mode tab')
+    await act(async () => { nextTurnTab.click() })
+    await settle()
+
+    const opusRow = [...nextTurnPopover.querySelectorAll<HTMLElement>('.composer-model-row')]
+      .find((row) => row.querySelector('.composer-model-row-main')?.textContent?.includes('claude-opus-4-6'))!
+    const maxChip = [...opusRow.querySelectorAll<HTMLButtonElement>('.composer-model-level-chip')]
+      .find((btn) => btn.textContent?.trim() === 'max')!
+    await act(async () => { maxChip.click() })
+    await settle()
+
+    assert.ok(document.querySelector('.composer-picker-root.composer-model-has-next-turn') !== null)
+    assert.equal(document.querySelector('.composer-model-next-turn-badge')?.textContent?.trim(), 'Next turn')
+    assert.equal(document.querySelector('.composer-model-label')?.textContent?.trim(), 'claude-opus-4-6')
+    assert.equal(document.querySelector('.composer-model-level')?.textContent?.trim(), '· max')
+
+    // Clear via X button restores baseline display
+    const clearBtn = document.querySelector<HTMLButtonElement>('button.composer-model-next-turn-clear')
+    assert.ok(clearBtn, 'clear one-turn override button renders')
+    await act(async () => { clearBtn.click() })
+    await settle()
+    assert.ok(document.querySelector('.composer-model-next-turn-badge') === null)
+    assert.equal(document.querySelector('.composer-model-label')?.textContent?.trim(), 'glm-4.6')
+    assert.equal(document.querySelector('.composer-model-level')?.textContent?.trim(), '· low')
+
+    // Re-stage next turn override and send first message
+    clickButton('button.composer-model-button')
+    const rePopover = document.body.querySelector<HTMLElement>('.composer-model-popover')!
+    const reNextTab = [...rePopover.querySelectorAll<HTMLButtonElement>('[role="radio"], button')]
+      .find((btn) => btn.textContent?.trim() === 'Next turn only')!
+    await act(async () => { reNextTab.click() })
+    await settle()
+    const reOpusRow = [...rePopover.querySelectorAll<HTMLElement>('.composer-model-row')]
+      .find((row) => row.querySelector('.composer-model-row-main')?.textContent?.includes('claude-opus-4-6'))!
+    const reMaxChip = [...reOpusRow.querySelectorAll<HTMLButtonElement>('.composer-model-level-chip')]
+      .find((btn) => btn.textContent?.trim() === 'max')!
+    await act(async () => { reMaxChip.click() })
+    await settle()
+
+    const input = textarea(MAIN_LABEL)
+    act(() => { typeInto(input, '单轮模型首发') })
+    await act(async () => { pressEnter(input) })
+    await waitForCondition(() => state.submitCalls.length === 1 && state.patchCalls.length === 1)
+
+    assert.equal((state.createCalls[0] as { model?: string }).model, 'faux/glm-4.6', 'POST create keeps baseline model')
+    assert.deepEqual(state.patchCalls, [{ id: 9, body: { thinkingLevel: 'low' } }], 'PATCH keeps baseline thinking level')
+    assert.deepEqual(state.submitCalls[0]?.body, {
+      text: '单轮模型首发',
+      origin: 'human',
+      model: 'anthropic/claude-opus-4-6',
+      thinkingLevel: 'max',
+    }, 'first submitInput carries staged one-turn model and thinkingLevel')
+  })
 })

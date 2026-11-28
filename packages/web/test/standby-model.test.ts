@@ -53,7 +53,7 @@ describe("standby-model", () => {
     creates: Array<ConversationInit>
     patches: Array<{ id: number; thinkingLevel: string }>
     uploads: Array<{ id: number; name: string }>
-    submits: Array<{ id: number; payload: { text: string; attachments?: string[]; meta?: Record<string, unknown> } }>
+    submits: Array<{ id: number; payload: { text: string; model?: string; thinkingLevel?: string; attachments?: string[]; meta?: Record<string, unknown> } }>
     errors: Array<{ title: string; conversationId?: number }>
     backgroundNotices: number[]
     navigations: number[]
@@ -247,10 +247,36 @@ describe("standby-model", () => {
     updateStandbyDraft(key, { text: '清理校验' })
     await run(key, 'assistant', makeDeps(log))
     assert.deepEqual(getStandbyDraft(key), {
-      text: '', localFiles: [], uploaded: [], model: undefined, thinkingLevel: undefined, inputMeta: undefined,
+      text: '', localFiles: [], uploaded: [], model: undefined, thinkingLevel: undefined,
+      nextTurnModel: undefined, nextTurnThinkingLevel: undefined, inputMeta: undefined,
       envCustomized: false, envNodeId: undefined, envCwd: undefined,
       conversationId: undefined, sending: false, error: null,
     })
+  })
+
+  test('executeStandbySend forwards nextTurnModel/nextTurnThinkingLevel only on submit while create/patch keep baseline', { timeout: 60_000 }, async () => {
+    const key = standbyDraftKey({ panel: 'primary', profileId: 'assistant' })
+    const log = makeLog()
+    updateStandbyDraft(key, {
+      text: '单轮覆盖首发',
+      model: 'faux/glm-4.6',
+      thinkingLevel: 'low',
+      nextTurnModel: 'anthropic/claude-opus-4-6',
+      nextTurnThinkingLevel: 'max',
+    })
+    const res = await run(key, 'assistant', makeDeps(log))
+    assert.equal(res, 'sent')
+    assert.deepEqual(log.creates, [{ profileId: 'assistant', model: 'faux/glm-4.6' }])
+    assert.deepEqual(log.patches, [{ id: 9, thinkingLevel: 'low' }])
+    assert.deepEqual(log.submits, [{
+      id: 9,
+      payload: {
+        text: '单轮覆盖首发',
+        origin: 'human',
+        model: 'anthropic/claude-opus-4-6',
+        thinkingLevel: 'max',
+      } as DepLog['submits'][number]['payload'],
+    }])
   })
 
   test('buildStandbyCreateInit: environment/model ride along only when explicitly set', { timeout: 60_000 }, () => {

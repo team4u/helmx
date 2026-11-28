@@ -54,6 +54,10 @@ export interface StandbyDraftState {
   model: string | undefined
   /** Explicit thinking level; undefined = no patch (patchable only after creation). */
   thinkingLevel: string | undefined
+  /** Optional staged one-turn model override carried only on the first `submitInput`. */
+  nextTurnModel: string | undefined
+  /** Optional staged one-turn thinking-level override carried only on the first `submitInput`. */
+  nextTurnThinkingLevel: string | undefined
   /** Whether the environment was explicitly customized (URL inheritance or
    * user edit); false means create carries no nodeId/cwd. */
   envCustomized: boolean
@@ -77,6 +81,8 @@ export const EMPTY_STANDBY_DRAFT: StandbyDraftState = {
   uploaded: [],
   model: undefined,
   thinkingLevel: undefined,
+  nextTurnModel: undefined,
+  nextTurnThinkingLevel: undefined,
   envCustomized: false,
   envNodeId: undefined,
   envCwd: undefined,
@@ -620,6 +626,8 @@ export interface StandbySendDeps {
     payload: {
       text: string
       origin: 'human'
+      model?: string
+      thinkingLevel?: string
       meta?: Record<string, unknown>
       attachments?: string[]
     },
@@ -688,11 +696,18 @@ export async function executeStandbySend(
         uploaded: [...current.uploaded, { artifactId: meta.id, name: meta.name, size: meta.size, mimeType: meta.mimeType }],
       })
     }
-    const attachments = getStandbyDraft(key).uploaded.map((item) => item.artifactId)
-    const liveMeta = getStandbyDraft(key).inputMeta
+    const latestDraft = getStandbyDraft(key)
+    const attachments = latestDraft.uploaded.map((item) => item.artifactId)
+    const liveMeta = latestDraft.inputMeta
+    const nextTurnModel = latestDraft.nextTurnModel?.trim()
+    const nextTurnThinkingLevel = latestDraft.nextTurnThinkingLevel?.trim()
     await deps.submit(conversationId, {
       text: payload,
       origin: 'human',
+      ...(nextTurnModel !== undefined && nextTurnModel !== '' ? { model: nextTurnModel } : {}),
+      ...(nextTurnThinkingLevel !== undefined && nextTurnThinkingLevel !== ''
+        ? { thinkingLevel: nextTurnThinkingLevel }
+        : {}),
       ...(liveMeta !== undefined && Object.keys(liveMeta).length > 0 ? { meta: { ...liveMeta } } : {}),
       ...(attachments.length > 0 ? { attachments } : {}),
     })

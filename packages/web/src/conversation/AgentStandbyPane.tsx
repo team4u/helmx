@@ -11,8 +11,6 @@
 import { useEffect, useMemo, useRef } from 'react'
 import {
   ComposerCommandContext,
-  ComposerModelPickerModeContext,
-  createComposerModelPickerModeRegistry,
   useHostModels,
 } from '@helmx/plugin-client'
 import { useWebLocale } from '../i18n/use-web-locale.js'
@@ -95,7 +93,6 @@ export function AgentStandbyPane({ profileId, nodeId, cwd, isSplit, onCloseSplit
     commandRegistry: commands.commandRegistry,
     commandRegistryVersion: commands.commandRegistryVersion,
   })
-  const modelPickerModeRegistry = useMemo(() => createComposerModelPickerModeRegistry(), [])
 
   // A target-carried environment (new-topic / delete-navigation inheritance) becomes the
   // draft's own customized environment on first visit; later inheritance never overwrites it.
@@ -191,25 +188,23 @@ export function AgentStandbyPane({ profileId, nodeId, cwd, isSplit, onCloseSplit
 
       {standbyReady && profile !== undefined ? (
         <ComposerCommandContext.Provider value={commands.commandRegistry}>
-          <ComposerModelPickerModeContext.Provider value={modelPickerModeRegistry}>
-            <StandbyComposer
-              draftKey={draftKey}
-              draft={draft}
-              profile={profile}
-              modelDefaults={modelDefaults}
-              envError={envError}
-              anchored={draft.conversationId !== undefined}
-              anchoredConversation={anchoredConversation}
-              runningCommand={commands.runningCommand}
-              slashPluginCommands={slashPluginCommands}
-              onRunPluginCommand={commands.runPluginCommand}
-              isSplit={isSplit}
-              textareaRef={textareaRef}
-              onSend={submitDraft}
-              onAddFiles={addFiles}
-              onResetEnvToDefault={resetEnvToDefault}
-            />
-          </ComposerModelPickerModeContext.Provider>
+          <StandbyComposer
+            draftKey={draftKey}
+            draft={draft}
+            profile={profile}
+            modelDefaults={modelDefaults}
+            envError={envError}
+            anchored={draft.conversationId !== undefined}
+            anchoredConversation={anchoredConversation}
+            runningCommand={commands.runningCommand}
+            slashPluginCommands={slashPluginCommands}
+            onRunPluginCommand={commands.runPluginCommand}
+            isSplit={isSplit}
+            textareaRef={textareaRef}
+            onSend={submitDraft}
+            onAddFiles={addFiles}
+            onResetEnvToDefault={resetEnvToDefault}
+          />
         </ComposerCommandContext.Provider>
       ) : null}
     </div>

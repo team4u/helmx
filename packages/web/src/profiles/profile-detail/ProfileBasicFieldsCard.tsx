@@ -101,7 +101,6 @@ export function ProfileBasicFieldsCard({
             resetLabel={t('profiles.modelOption.followSystemDefault')}
             resetTitle={t('profiles.modelOption.followSystemDefault')}
             enableShortcut={false}
-            allowOrchestratorTiers={true}
             disabled={disabled}
             {...pickerAdapter}
             onApply={(model, level) =>

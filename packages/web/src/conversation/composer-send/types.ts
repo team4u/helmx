@@ -11,7 +11,7 @@ import type {
   WhenBusy,
 } from '@helmx/protocol/browser'
 import type { QualifiedCommand } from '../../lib/commands-model.js'
-import type { PendingAttachment, SessionEnvBlocker } from '../composer-model.js'
+import type { NextTurnModelOverride, PendingAttachment, SessionEnvBlocker } from '../composer-model.js'
 import type { ConversationDirtySink } from '../conversation-window-model.js'
 import type { EditRequestTarget } from '../timeline-model.js'
 
@@ -57,6 +57,10 @@ export interface ComposerSendInput {
   dirtySink?: ConversationDirtySink | null
   /** Panel-local command handler registry: claims interactive slash commands before falling back to action RPC. */
   commandRegistry?: ComposerCommandRegistry
+  /** Optional staged one-turn model/thinking override for the next idle submission. */
+  nextTurnOverride?: NextTurnModelOverride | null
+  /** Called only after `submitInput` resolves with the applied one-turn override. */
+  onConsumeNextTurnOverride?: (consumed: NextTurnModelOverride) => void
 }
 
 export interface ComposerSendApi {

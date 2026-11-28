@@ -1,14 +1,13 @@
-import { memo, useCallback, useId, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import type { ComposerMenuSlotProps, ComposerScopeProps, ConversationSummary, WhenBusy } from '@helmx/protocol/browser'
 import { COMPOSER_DOCK_SLOT, COMPOSER_MENU_SLOT, COMPOSER_STATUS_SLOT, COMPOSER_TOOLBAR_SLOT } from '@helmx/protocol/browser'
 import { Button, HelmxIcon, Kbd } from '@helmx/ui'
 import {
   ComposerCommandContext,
-  ComposerModelPickerModeContext,
   PluginSlot,
   createComposerCommandRegistry,
-  createComposerModelPickerModeRegistry,
   useSharedNowMs,
+  type ModelPickerNextTurnMode,
 } from '@helmx/plugin-client'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { conversationsApi } from '../lib/api.js'
@@ -37,7 +36,10 @@ import {
   busyEnterMode,
   canConfigureSessionEnv,
   getComposerPlaceholder,
+  normalizeNextTurnOverride,
+  sameNextTurnOverride,
   useIsMobile,
+  type NextTurnModelOverride,
 } from './composer-model.js'
 import { useComposerSend, type ComposerPrefill } from './composer-send.js'
 import { contextUsageLabel } from './context-usage-model.js'
@@ -148,10 +150,27 @@ export const Composer = memo(function Composer({
     [slashPluginCommands, menuSlotPluginIds],
   )
 
+  const composerEditable = (conversation.ownedBy ?? 'human') === 'human'
+  const [nextTurnState, setNextTurnState] = useState<{
+    conversationId: number
+    override: NextTurnModelOverride
+  } | null>(null)
+  const rawNextTurnOverride =
+    nextTurnState !== null && nextTurnState.conversationId === conversation.id
+      ? nextTurnState.override
+      : null
+  const consumeNextTurnOverride = useCallback(
+    (consumed: NextTurnModelOverride) => {
+      setNextTurnState((current) => {
+        if (current === null || current.conversationId !== conversation.id) return current
+        return sameNextTurnOverride(current.override, consumed) ? null : current
+      })
+    },
+    [conversation.id],
+  )
   const composerDirtyKey = useId()
   const dirtySink = useConversationDirtySink()
   const [commandRegistry] = useState(() => createComposerCommandRegistry())
-  const modelPickerModeRegistry = useMemo(() => createComposerModelPickerModeRegistry(), [])
   const {
     text,
     attachments,
@@ -188,8 +207,50 @@ export const Composer = memo(function Composer({
       dirtyKey: composerDirtyKey,
       dirtySink,
       commandRegistry,
+      nextTurnOverride:
+        composerEditable && !working && conversation.pendingAskCount === 0 ? rawNextTurnOverride : null,
+      onConsumeNextTurnOverride: consumeNextTurnOverride,
     },
     t,
+  )
+
+  const nextTurnAllowed =
+    composerEditable && !working && conversation.pendingAskCount === 0 && editingEntryId === null
+  const nextTurnOverride = nextTurnAllowed ? rawNextTurnOverride : null
+  useEffect(() => {
+    if (nextTurnState === null) return
+    if (nextTurnState.conversationId !== conversation.id || !nextTurnAllowed) {
+      setNextTurnState(null)
+    }
+  }, [nextTurnState, conversation.id, nextTurnAllowed])
+
+  const handleNextTurnChange = useCallback(
+    (override: { model?: string; thinkingLevel?: string } | null) => {
+      const normalized = normalizeNextTurnOverride(override)
+      setNextTurnState(
+        normalized === undefined ? null : { conversationId: conversation.id, override: normalized },
+      )
+    },
+    [conversation.id],
+  )
+  const nextTurnMode = useMemo<ModelPickerNextTurnMode>(
+    () => ({
+      model: nextTurnOverride?.model,
+      thinkingLevel: nextTurnOverride?.thinkingLevel,
+      disabled: !composerEditable,
+      busy: working || conversation.pendingAskCount > 0 || editingEntryId !== null || sending,
+      onChange: handleNextTurnChange,
+    }),
+    [
+      nextTurnOverride?.model,
+      nextTurnOverride?.thinkingLevel,
+      composerEditable,
+      working,
+      conversation.pendingAskCount,
+      editingEntryId,
+      sending,
+      handleNextTurnChange,
+    ],
   )
 
   const conversationProfile = useMemo(
@@ -312,8 +373,7 @@ export const Composer = memo(function Composer({
 
   return (
     <ComposerCommandContext.Provider value={commandRegistry}>
-      <ComposerModelPickerModeContext.Provider value={modelPickerModeRegistry}>
-        <ComposerInputShell
+      <ComposerInputShell
           attachments={attachmentItems}
           shortcuts={{
             panel: isDrawer ? 'drawer' : isSplit ? 'split' : 'primary',
@@ -399,7 +459,13 @@ export const Composer = memo(function Composer({
                   ) : null}
                 </>
               ) : undefined,
-            modelPicker: <ModelPicker conversation={conversation} onReturnFocus={returnFocusToTextarea} />,
+            modelPicker: (
+              <ModelPicker
+                conversation={conversation}
+                nextTurnMode={nextTurnMode}
+                onReturnFocus={returnFocusToTextarea}
+              />
+            ),
             toolbar: (
               <PluginSlot
                 ownerPluginId="builtin:composer"
@@ -439,7 +505,6 @@ export const Composer = memo(function Composer({
             ),
           }}
         />
-      </ComposerModelPickerModeContext.Provider>
     </ComposerCommandContext.Provider>
   )
 })

@@ -68,6 +68,10 @@ export interface SubmitInputPayload {
   attachments?: string[]
   /** 历史编辑重发：覆盖该 entry 及其后全部条目（服务端执行 rewind 重放）。 */
   replaceFromEntryId?: number
+  /** 单轮临时换模：仅作用于本次提交启动的回合，回合结束恢复会话基线。 */
+  model?: string
+  /** 单轮临时思考档位：仅作用于本次提交启动的回合，回合结束恢复会话基线。 */
+  thinkingLevel?: string
 }
 
 const TOKEN_STORAGE_KEY = 'helmx:token'
@@ -555,51 +559,19 @@ export function normalizeModelCatalogInfo(raw: unknown): ModelCatalogInfo {
       ) {
         throw new Error('Invalid model tier entry format')
       }
-      if (
-        entry.kind !== undefined &&
-        entry.kind !== 'single' &&
-        entry.kind !== 'orchestrator'
-      ) {
-        throw new Error('Invalid model tier entry format')
-      }
-      if (
-        entry.kind === 'orchestrator' &&
-        (typeof entry.executorModel !== 'string' || entry.executorModel === '')
-      ) {
-        throw new Error('Invalid model tier entry format')
-      }
       modelTiers.push({
         id: entry.id,
-        ...(entry.kind === 'orchestrator' ? { kind: 'orchestrator' as const } : {}),
         model: entry.model,
         available: entry.available,
         ...(entry.disabled === true ? { disabled: true } : {}),
         ...(typeof entry.thinkingLevel === 'string' && entry.thinkingLevel !== ''
           ? { thinkingLevel: entry.thinkingLevel }
           : {}),
-        ...(entry.kind === 'orchestrator' && typeof entry.executorModel === 'string'
-          ? { executorModel: entry.executorModel }
-          : {}),
-        ...(entry.kind === 'orchestrator' &&
-        typeof entry.executorThinkingLevel === 'string' &&
-        entry.executorThinkingLevel !== ''
-          ? { executorThinkingLevel: entry.executorThinkingLevel }
-          : {}),
-        ...(entry.kind === 'orchestrator' &&
-        typeof entry.maxExecutionSteps === 'number' &&
-        Number.isInteger(entry.maxExecutionSteps)
-          ? { maxExecutionSteps: entry.maxExecutionSteps }
-          : {}),
         ...(typeof entry.description === 'string' && entry.description !== ''
           ? { description: entry.description }
           : {}),
         ...(Array.isArray(entry.thinkingLevels) && entry.thinkingLevels.every((l) => typeof l === 'string')
           ? { thinkingLevels: entry.thinkingLevels }
-          : {}),
-        ...(entry.kind === 'orchestrator' &&
-        Array.isArray(entry.executorThinkingLevels) &&
-        entry.executorThinkingLevels.every((l) => typeof l === 'string')
-          ? { executorThinkingLevels: entry.executorThinkingLevels }
           : {}),
       })
     }
