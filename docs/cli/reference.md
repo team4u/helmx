@@ -245,7 +245,7 @@ PUT 为整体替换契约：update 走语义化标志时 CLI 先 GET 完整 Prof
 | `helmx webhook create / list / delete` | builtin:triggers | webhook 端点管理（HMAC-SHA256 验签）；create 必填 `--id --secret`，**secret 仅允许人工 HTTP/CLI 配置**（会话上下文调用被 403 拒绝） |
 | `helmx magpie status / refresh / quota` | builtin:magpie | 网关状态、目录刷新与配额查询 |
 | `helmx tiers list / set / remove / save-template / apply-template / delete-template` | builtin:tiers | 语义模型档位（`tier/<id>`）映射与多套预设模板管理 |
-| `helmx duo list / get / set / remove / status / override-executor / clear-override` | builtin:duo | 编排器（`tier/<id>`）管理、状态查询与单会话临时 Executor 覆盖 |
+| `helmx orchestrator list / get / set / remove / status / override-executor / clear-override` | builtin:orchestrator | 编排器（`tier/<id>`）管理、状态查询与单会话临时 Executor 覆盖 |
 
 ---
 

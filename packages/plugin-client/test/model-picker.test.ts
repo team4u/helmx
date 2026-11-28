@@ -865,11 +865,11 @@ test('ModelPickerControl grouped tiers, displayLabel/displayDetail & preserveRef
         description: 'Fast ungrouped tier',
       },
       {
-        id: 'claude-duo',
+        id: 'claude-orch',
         model: 'anthropic/claude-3-7-sonnet',
         thinkingLevel: 'high',
         description: 'Plan then refine',
-        displayGroup: 'duo',
+        displayGroup: 'orchestrator',
         displayLabel: 'Claude 精修',
         displayDetail: 'opus → sonnet',
         preserveRef: true,
@@ -891,7 +891,7 @@ test('ModelPickerControl grouped tiers, displayLabel/displayDetail & preserveRef
           PluginClientHostContext.Provider,
           { value: makePort(handle) },
           e(ModelPickerControl, {
-            effectiveModel: 'tier/claude-duo',
+            effectiveModel: 'tier/claude-orch',
             activeThinkingLevel: 'high',
             resetLabel: 'Reset',
             resetTitle: 'Reset',
@@ -915,7 +915,7 @@ test('ModelPickerControl grouped tiers, displayLabel/displayDetail & preserveRef
     }
   }
 
-  // 1. Trigger shows displayLabel + duo icon (without thinking level suffix), popover renders grouped tiers BEFORE ungrouped tiers BEFORE models, and keyboard navigation matches
+  // 1. Trigger shows displayLabel + orchestrator icon (without thinking level suffix), popover renders grouped tiers BEFORE ungrouped tiers BEFORE models, and keyboard navigation matches
   const run1 = await mountPicker({ activeThinkingLevel: 'high' })
   try {
     const trigger = run1.container.querySelector<HTMLButtonElement>('button.composer-model-button')
@@ -939,7 +939,7 @@ test('ModelPickerControl grouped tiers, displayLabel/displayDetail & preserveRef
     assert.equal(rows[0]!.querySelector('.composer-model-row-name')?.classList.contains('mono'), false)
     assert.match(rows[1]!.textContent ?? '', /tier\/fast/)
 
-    // Keyboard navigation picks index 0 -> 'tier/claude-duo'
+    // Keyboard navigation picks index 0 -> 'tier/claude-orch'
     const search = popover.querySelector<HTMLInputElement>('input[aria-label="Search models"]')
     assert.ok(search !== null)
     await act(async () => {
@@ -948,7 +948,7 @@ test('ModelPickerControl grouped tiers, displayLabel/displayDetail & preserveRef
     await act(async () => {
       search.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
     })
-    assert.deepEqual(applied, [{ model: 'tier/claude-duo', thinkingLevel: null }])
+    assert.deepEqual(applied, [{ model: 'tier/claude-orch', thinkingLevel: null }])
   } finally {
     await run1.cleanup()
   }

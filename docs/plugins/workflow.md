@@ -6,10 +6,10 @@
 
 ### 模型工具（2 个，外加动态 `workflow_steer`）
 
-- **`subagent`**：派生子代理。支持 `fork: true` 从父会话上下文分叉（默认收口为叶子，除非显式传入 `maxSubagentDepth`）、`nodeId` 动态目标计算节点覆写（显式 `'local'` 可切回本机，远端节点需兼容 `cwd`，与 `resume` 互斥）、`isolation: 'worktree'` 隔离工作树、`resume` 续接（凭 `execution.conversationId` / `executionId`）、`schema` 结构化输出、`gate` 验收命令、`model` / `effort` 覆盖（省略 `model` 时自动经 `helmx.default-child-model` 消费 [`builtin:duo`](duo.md) 等插件提供的默认执行模型）、`maxSubagentDepth` 显式授予派生深度；
+- **`subagent`**：派生子代理。支持 `fork: true` 从父会话上下文分叉（默认收口为叶子，除非显式传入 `maxSubagentDepth`）、`nodeId` 动态目标计算节点覆写（显式 `'local'` 可切回本机，远端节点需兼容 `cwd`，与 `resume` 互斥）、`isolation: 'worktree'` 隔离工作树、`resume` 续接（凭 `execution.conversationId` / `executionId`）、`schema` 结构化输出、`gate` 验收命令、`model` / `effort` 覆盖（省略 `model` 时自动经 `helmx.default-child-model` 消费 [`builtin:orchestrator`](orchestrator.md) 等插件提供的默认执行模型）、`maxSubagentDepth` 显式授予派生深度；
 - **`SubagentWorkflow`**：确定性 DSL 编排（内联 `script` / `scriptPath` / 已保存 `name`），journal 账本支持 `resumeFromRunId` 断点恢复。
 
-后台策略按**当前会话归属**判定：human 会话缺省后台（终态后幂等汇报自动到达父会话，禁止 sleep 轮询；若父会话处于 `working` 且持有 `runtimeModelOverride: true`，汇报以 `whenBusy: 'followUp'` 排队送达以免中途抢占临时执行模型，其余忙态沿用 `steer`）、显式 `background: false` 同步等待；`helmx` 自动化会话缺省同步、显式 `background: true` 拒绝。同步 `subagent` 直接经内核 `ctx.host.spawnAgent` 执行并按 `(parentConversationId, parentToolCallId)` 幂等续接，不创建 `WorkflowRun` 磁盘账本记录；后台 `subagent` 与 `SubagentWorkflow` 由引擎账本持久化跟踪。`helmx workflows run` 动作与模型工具的 `background` 是不同参数、不同入口。同时，本插件通过 `helmx.dispatch-tools`（`['subagent', 'SubagentWorkflow']`）与 `helmx.planning-orchestration-tools`（`['subagent', 'SubagentWorkflow', 'workflow_steer']`）分别对接深度守卫与 [`builtin:duo`](duo.md) 规划阶段放行。
+后台策略按**当前会话归属**判定：human 会话缺省后台（终态后幂等汇报自动到达父会话，禁止 sleep 轮询；若父会话处于 `working` 且持有 `runtimeModelOverride: true`，汇报以 `whenBusy: 'followUp'` 排队送达以免中途抢占临时执行模型，其余忙态沿用 `steer`）、显式 `background: false` 同步等待；`helmx` 自动化会话缺省同步、显式 `background: true` 拒绝。同步 `subagent` 直接经内核 `ctx.host.spawnAgent` 执行并按 `(parentConversationId, parentToolCallId)` 幂等续接，不创建 `WorkflowRun` 磁盘账本记录；后台 `subagent` 与 `SubagentWorkflow` 由引擎账本持久化跟踪。`helmx workflows run` 动作与模型工具的 `background` 是不同参数、不同入口。同时，本插件通过 `helmx.dispatch-tools`（`['subagent', 'SubagentWorkflow']`）与 `helmx.planning-orchestration-tools`（`['subagent', 'SubagentWorkflow', 'workflow_steer']`）分别对接深度守卫与 [`builtin:orchestrator`](orchestrator.md) 规划阶段放行。
 
 ### 动作（10 个，五端复用）
 

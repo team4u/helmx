@@ -2924,7 +2924,7 @@ test('swarm-unit15: dispatch_worker passes ownedBy=helmx atomically (no post-cre
             return resolvedDefault
           },
         }
-        return [{ pluginId: 'builtin:duo', impl: impl as unknown as T }]
+        return [{ pluginId: 'builtin:orchestrator', impl: impl as unknown as T }]
       },
       host: {
         profiles: { get: async (id: string) => profiles.get(id) },
@@ -3014,7 +3014,7 @@ test('swarm-unit15: dispatch_worker passes ownedBy=helmx atomically (no post-cre
     assert.equal(h.createCalls[1]!['model'], 'faux/coder')
     assert.equal(h.updateCalls[2]!.patch['thinkingLevel'], 'high')
 
-    // 4) Explicit caller model takes precedence and skips inheriting Duo executor thinkingLevel
+    // 4) Explicit caller model takes precedence and skips inheriting Orchestrator executor thinkingLevel
     const queryCountBeforeExplicit = h.consumeQueries.length
     await h.handlers.dispatchWorker({ groupId: 'grp_model_1', name: 'w4', prompt: 'task 4', model: 'faux/fast' }, 1)
     assert.equal(h.consumeQueries.length, queryCountBeforeExplicit, 'explicit model must not consult default-child-model')

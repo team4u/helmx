@@ -1,19 +1,19 @@
 /**
- * builtin:duo Orchestrator UI interactive DOM tests (compiled TSX via @helmx/plugin-build):
+ * builtin:orchestrator Orchestrator UI interactive DOM tests (compiled TSX via @helmx/plugin-build):
  * - Modular Fast Refresh exports (`index.tsx`, `manager.tsx`, `settings.tsx`), zero Emoji, CSS hygiene;
  * - Unified ModelPicker: Orchestrators grouped under "Orchestrator", trigger shows custom displayLabel
  *   only (no concrete model, no thinking level, no Temp override badge during execution), filtered out
  *   of "Next turn only" (`singleTurnEligible: false`) and when `allowPreserveRefTiers={false}`;
- * - `DuoManagerScreen` + `DuoDetailDrawer`: loading state, empty starter `<List>`/`<ListRow>`,
- *   status pills filter + `SearchBox`, `.duo-orchestrator-fields` + `<MonoId>` + `Cmd/Ctrl+Enter` save,
+ * - `OrchestratorManagerScreen` + `OrchestratorDetailDrawer`: loading state, empty starter `<List>`/`<ListRow>`,
+ *   status pills filter + `SearchBox`, `.orch-fields` + `<MonoId>` + `Cmd/Ctrl+Enter` save,
  *   `remove` + `409` force-delete double-confirm;
- * - `DuoSettingsPanel`: loading state, KPIs + `<List density="compact">` + `openScreen` triggers;
- * - `DuoToolbarPill` in `COMPOSER_STATUS_SLOT`: standby returns `null` (zero sessionDoc subscription),
+ * - `OrchestratorSettingsPanel`: loading state, KPIs + `<List density="compact">` + `openScreen` triggers;
+ * - `OrchestratorStatusPill` in `COMPOSER_STATUS_SLOT`: standby returns `null` (zero sessionDoc subscription),
  *   minimal `Plan · <planner>` / `Exec · <executor>` / `Coord · <planner>` status pill, popover with
  *   `<MonoId>`, Planner/Executor thinking levels, interactive Executor `ModelPickerControl` calling
  *   `override_executor`, `Reset override` calling `clear_override`, step counter, edit pencil,
  *   ineligible sub-conversation guard, and live disable cleanup;
- * - `DuoTransitionToolRow`: `trace-row` for `exit_plan_mode`, `hand_back_to_planner`, running & error.
+ * - `OrchestratorTransitionToolRow`: `trace-row` for `exit_plan_mode`, `hand_back_to_planner`, running & error.
  */
 import './helpers/register-happy-dom.js'
 import assert from 'node:assert/strict'
@@ -44,19 +44,19 @@ const {
   PluginClientHostContext,
 } = await import('@helmx/plugin-client')
 const {
-  DUO_DEFAULT_MAX_STEPS,
-  DUO_EXIT_PLAN_MODE_TOOL,
-  DUO_HAND_BACK_TOOL,
-  DUO_PLUGIN_ID,
-  DUO_SCREEN_ID,
-  DUO_SESSION_DOC,
-  DUO_STATE_DOC,
-  createEmptyDuoDraft,
-  getStarterDuoPresets,
-  parseDuoSessionDoc,
-  parseDuoStateDoc,
-  validateDuoDraft,
-} = await import('../../plugins/src/duo/client/models.ts')
+  ORCHESTRATOR_DEFAULT_MAX_STEPS,
+  ORCHESTRATOR_EXIT_PLAN_MODE_TOOL,
+  ORCHESTRATOR_HAND_BACK_TOOL,
+  ORCHESTRATOR_PLUGIN_ID,
+  ORCHESTRATOR_SCREEN_ID,
+  ORCHESTRATOR_SESSION_DOC,
+  ORCHESTRATOR_STATE_DOC,
+  createEmptyOrchestratorDraft,
+  getStarterOrchestratorPresets,
+  parseOrchestratorSessionDoc,
+  parseOrchestratorStateDoc,
+  validateOrchestratorDraft,
+} = await import('../../plugins/src/orchestrator/client/models.ts')
 const { Composer } = await import('../src/conversation/Composer.js')
 const { AgentStandbyPane } = await import('../src/conversation/AgentStandbyPane.js')
 const { ModelPicker } = await import('../src/conversation/ModelPicker.js')
@@ -78,21 +78,27 @@ const EMOJI_RE = /[\u{1F300}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}\u{1F1E6
 let rawIndexModule: Record<string, unknown>
 let rawManagerModule: Record<string, unknown>
 let rawSettingsModule: Record<string, unknown>
-let DuoToolbarPill: (props: Record<string, unknown>) => React.ReactElement | null
-let DuoTransitionToolRow: (props: Record<string, unknown>) => React.ReactElement
-let DuoManagerScreen: (props: Record<string, unknown>) => React.ReactElement
-let DuoSettingsPanel: () => React.ReactElement
+let OrchestratorStatusPill: (props: Record<string, unknown>) => React.ReactElement | null
+let OrchestratorTransitionToolRow: (props: Record<string, unknown>) => React.ReactElement
+let OrchestratorManagerScreen: (props: Record<string, unknown>) => React.ReactElement
+let OrchestratorSettingsPanel: () => React.ReactElement
 
-describe('duo-client-interactions', () => {
+describe('orchestrator-client-interactions', () => {
   before(async () => {
     mountSharedPluginNamespaces()
-    rawIndexModule = await importBuiltinClientModule(DUO_PLUGIN_ID, 'index.tsx')
-    rawManagerModule = await importBuiltinClientModule(DUO_PLUGIN_ID, 'manager.tsx')
-    rawSettingsModule = await importBuiltinClientModule(DUO_PLUGIN_ID, 'settings.tsx')
-    DuoToolbarPill = rawIndexModule['DuoToolbarPill'] as (props: Record<string, unknown>) => React.ReactElement | null
-    DuoTransitionToolRow = rawIndexModule['DuoTransitionToolRow'] as (props: Record<string, unknown>) => React.ReactElement
-    DuoManagerScreen = rawManagerModule['DuoManagerScreen'] as (props: Record<string, unknown>) => React.ReactElement
-    DuoSettingsPanel = rawSettingsModule['DuoSettingsPanel'] as () => React.ReactElement
+    rawIndexModule = await importBuiltinClientModule(ORCHESTRATOR_PLUGIN_ID, 'index.tsx')
+    rawManagerModule = await importBuiltinClientModule(ORCHESTRATOR_PLUGIN_ID, 'manager.tsx')
+    rawSettingsModule = await importBuiltinClientModule(ORCHESTRATOR_PLUGIN_ID, 'settings.tsx')
+    OrchestratorStatusPill = rawIndexModule['OrchestratorStatusPill'] as (
+      props: Record<string, unknown>,
+    ) => React.ReactElement | null
+    OrchestratorTransitionToolRow = rawIndexModule['OrchestratorTransitionToolRow'] as (
+      props: Record<string, unknown>,
+    ) => React.ReactElement
+    OrchestratorManagerScreen = rawManagerModule['OrchestratorManagerScreen'] as (
+      props: Record<string, unknown>,
+    ) => React.ReactElement
+    OrchestratorSettingsPanel = rawSettingsModule['OrchestratorSettingsPanel'] as () => React.ReactElement
   }, { timeout: 60_000 })
 
   afterEach(() => {
@@ -132,7 +138,7 @@ describe('duo-client-interactions', () => {
       description: 'Architect paired with Coder',
       available: true,
       thinkingLevels: ['off', 'high', 'xhigh'],
-      displayGroup: 'duo',
+      displayGroup: 'orchestrator',
       displayLabel: 'Orchestrator (Flagship)',
       displayDetail: 'flagship → workhorse',
       preserveRef: true,
@@ -155,7 +161,7 @@ describe('duo-client-interactions', () => {
     const openedScreens: string[] = []
     const notifications: Array<{ message: string; tone: string }> = []
     const base: PluginClientContextType = {
-      pluginId: DUO_PLUGIN_ID,
+      pluginId: ORCHESTRATOR_PLUGIN_ID,
       callAction: async (actionId, input) => {
         actionCalls.push({ actionId, input })
         if (options.onAction) return options.onAction(actionId, input)
@@ -183,10 +189,10 @@ describe('duo-client-interactions', () => {
     return Object.assign(base, { actionCalls, openedScreens, notifications })
   }
 
-  function createDocAndSessionHarness(initialStateDoc: unknown = { recipes: {} }) {
+  function createDocAndSessionHarness(initialStateDoc: unknown = { items: {} }) {
     const listeners = new Set<() => void>()
     const states = new Map<string, PluginSessionDocState>()
-    const stateDocKey = `${DUO_PLUGIN_ID}/${DUO_STATE_DOC}`
+    const stateDocKey = `${ORCHESTRATOR_PLUGIN_ID}/${ORCHESTRATOR_STATE_DOC}`
     const EMPTY: PluginSessionDocState = { hasValue: false, deleted: false, connected: true }
     let stateDocVal = initialStateDoc
 
@@ -198,8 +204,8 @@ describe('duo-client-interactions', () => {
         stateDocVal = next
         for (const fn of [...listeners]) fn()
       },
-      setDuoDoc(conversationId: number, value: unknown) {
-        const key = `${DUO_PLUGIN_ID}/${DUO_SESSION_DOC}/${conversationId}`
+      setOrchestratorDoc(conversationId: number, value: unknown) {
+        const key = `${ORCHESTRATOR_PLUGIN_ID}/${ORCHESTRATOR_SESSION_DOC}/${conversationId}`
         states.set(
           key,
           value === null
@@ -319,10 +325,10 @@ describe('duo-client-interactions', () => {
     }
   }
 
-  function makeDuoPluginSummary(): PluginSummary {
+  function makeOrchestratorPluginSummary(): PluginSummary {
     const hooks: HookName[] = ['input', 'before_turn', 'agent_spawn', 'turn_settled']
     return {
-      id: DUO_PLUGIN_ID,
+      id: ORCHESTRATOR_PLUGIN_ID,
       name: { en: 'Orchestrator', 'zh-CN': '编排器' },
       version: '0.2.0',
       locked: false,
@@ -330,7 +336,7 @@ describe('duo-client-interactions', () => {
       status: 'active',
       hooks,
       actions: [],
-      tools: [DUO_EXIT_PLAN_MODE_TOOL, DUO_HAND_BACK_TOOL],
+      tools: [ORCHESTRATOR_EXIT_PLAN_MODE_TOOL, ORCHESTRATOR_HAND_BACK_TOOL],
       clientHashes: {
         'index.tsx': 'seeded',
         'manager.tsx': 'seeded',
@@ -339,45 +345,45 @@ describe('duo-client-interactions', () => {
     }
   }
 
-  function makeDuoUiContributions() {
+  function makeOrchestratorUiContributions() {
     return [
       {
-        pluginId: DUO_PLUGIN_ID,
+        pluginId: ORCHESTRATOR_PLUGIN_ID,
         surface: 'plugin.slot' as const,
         spec: {
-          id: 'duo-toolbar-pill',
+          id: 'orchestrator-status-pill',
           target: COMPOSER_STATUS_SLOT,
           order: 15,
-          client: { module: 'index.tsx', export: 'DuoToolbarPill' },
+          client: { module: 'index.tsx', export: 'OrchestratorStatusPill' },
         },
       },
     ]
   }
 
-  test('modular Fast Refresh exports, duo CSS hygiene, pure helpers, and zero Emoji', { timeout: 60_000 }, () => {
-    assert.equal(DUO_PLUGIN_ID, 'builtin:duo')
-    assert.equal(DUO_STATE_DOC, 'state')
-    assert.equal(DUO_SESSION_DOC, 'duo')
-    assert.equal(DUO_DEFAULT_MAX_STEPS, 30)
-    void DuoToolbarPill
+  test('modular Fast Refresh exports, orchestrator CSS hygiene, pure helpers, and zero Emoji', { timeout: 60_000 }, () => {
+    assert.equal(ORCHESTRATOR_PLUGIN_ID, 'builtin:orchestrator')
+    assert.equal(ORCHESTRATOR_STATE_DOC, 'state')
+    assert.equal(ORCHESTRATOR_SESSION_DOC, 'orchestrator')
+    assert.equal(ORCHESTRATOR_DEFAULT_MAX_STEPS, 30)
+    void OrchestratorStatusPill
 
     const indexExports = Object.keys(rawIndexModule).filter((k) => k !== '__helmxClientCss').sort()
-    assert.deepEqual(indexExports, ['DuoToolbarPill', 'DuoTransitionToolRow'])
+    assert.deepEqual(indexExports, ['OrchestratorStatusPill', 'OrchestratorTransitionToolRow'])
 
     const managerExports = Object.keys(rawManagerModule).filter((k) => k !== '__helmxClientCss').sort()
-    assert.deepEqual(managerExports, ['DuoManagerScreen'])
+    assert.deepEqual(managerExports, ['OrchestratorManagerScreen'])
 
     const settingsExports = Object.keys(rawSettingsModule).filter((k) => k !== '__helmxClientCss').sort()
-    assert.deepEqual(settingsExports, ['DuoSettingsPanel'])
+    assert.deepEqual(settingsExports, ['OrchestratorSettingsPanel'])
 
     const cssText = String(rawIndexModule['__helmxClientCss'] ?? '')
-    assert.match(cssText, /\.duo-status-trigger/)
-    assert.match(cssText, /\.duo-orchestrator-fields/)
-    assert.match(cssText, /\.duo-trace-row/)
+    assert.match(cssText, /\.orch-status-trigger/)
+    assert.match(cssText, /\.orch-fields/)
+    assert.match(cssText, /\.orch-trace-row/)
     assert.match(cssText, /@media\s*\(hover:\s*hover\)/)
 
-    const parsed = parseDuoStateDoc({
-      recipes: {
+    const parsed = parseOrchestratorStateDoc({
+      items: {
         arch_coder: {
           id: 'arch_coder',
           name: 'Orchestrator (Flagship)',
@@ -388,17 +394,17 @@ describe('duo-client-interactions', () => {
         },
       },
     })
-    assert.ok(parsed.recipes['arch_coder'])
-    assert.equal(parseDuoSessionDoc({ enabled: false }), null)
-    const empty = createEmptyDuoDraft()
+    assert.ok(parsed.items['arch_coder'])
+    assert.equal(parseOrchestratorSessionDoc({ enabled: false }), null)
+    const empty = createEmptyOrchestratorDraft()
     assert.equal(
-      validateDuoDraft(
+      validateOrchestratorDraft(
         { ...empty, id: 'coder', name: 'Bad', plannerModel: 'faux/flagship', executorModel: 'faux/fast' },
-        { mode: 'create', existingRecipeIds: new Set(), externalTierIds: new Set(['coder']) },
+        { mode: 'create', existingItemIds: new Set(), externalTierIds: new Set(['coder']) },
       ),
       'id_conflict',
     )
-    const starters = getStarterDuoPresets('en', {
+    const starters = getStarterOrchestratorPresets('en', {
       models: TEST_MODELS,
       modelTiers: TEST_TIERS,
       modelThinkingLevels: {},
@@ -407,7 +413,7 @@ describe('duo-client-interactions', () => {
     assert.equal(starters[0]!.plannerModel, 'tier/architect')
     assert.equal(starters[0]!.executorModel, 'tier/coder')
     assert.equal(EMOJI_RE.test(JSON.stringify(starters)), false)
-    const zhStarters = getStarterDuoPresets('zh-CN', {
+    const zhStarters = getStarterOrchestratorPresets('zh-CN', {
       models: TEST_MODELS,
       modelTiers: TEST_TIERS,
       modelThinkingLevels: {},
@@ -457,13 +463,13 @@ describe('duo-client-interactions', () => {
     }
   })
 
-  test('DuoManagerScreen + DuoDetailDrawer: loading, starter ListRow creation, filter/search List, Cmd+Enter edit save, and 409 force-delete', { timeout: 60_000 }, async () => {
+  test('OrchestratorManagerScreen + OrchestratorDetailDrawer: loading, starter ListRow creation, filter/search List, Cmd+Enter edit save, and 409 force-delete', { timeout: 60_000 }, async () => {
     const ctx = makeSpyCtx()
 
     // 0. Loading state when doc is undefined
     setBuiltinClientStub({ docs: {} })
     const loadingMount = await mountWithHost(
-      e(PluginClientContext.Provider, { value: ctx }, e(DuoManagerScreen, { inlineDrawer: true })),
+      e(PluginClientContext.Provider, { value: ctx }, e(OrchestratorManagerScreen, { inlineDrawer: true })),
     )
     try {
       assert.match(loadingMount.host.textContent ?? '', /Loading orchestrators/)
@@ -472,12 +478,12 @@ describe('duo-client-interactions', () => {
     }
 
     // 1. Empty state -> starter ListRow -> click "Bind" opens create drawer (no MonoId/Badge) -> Create invokes 'set'
-    setBuiltinClientStub({ docs: { state: { recipes: {} } } })
+    setBuiltinClientStub({ docs: { state: { items: {} } } })
     const emptyMount = await mountWithHost(
       e(
         PluginClientContext.Provider,
         { value: ctx },
-        e(DuoManagerScreen, { inlineDrawer: true }),
+        e(OrchestratorManagerScreen, { inlineDrawer: true }),
       ),
     )
     try {
@@ -485,16 +491,16 @@ describe('duo-client-interactions', () => {
       assert.match(text, /No orchestrators yet/)
       assert.match(text, /Starter orchestrators/)
       assert.match(text, /Orchestrator \(flagship\)/)
-      assert.ok(emptyMount.host.querySelector('[data-starter-duo="duo_architect"]') !== null)
+      assert.ok(emptyMount.host.querySelector('[data-starter-orchestrator="orch_architect"]') !== null)
 
       await act(async () => {
         findButton(emptyMount.host, 'Bind').click()
       })
       assert.ok(emptyMount.host.querySelector('.helmx-mono-id') === null, 'Create drawer omits MonoId meta')
-      assert.ok(emptyMount.host.querySelector('.duo-orchestrator-fields') !== null, 'Grouped orchestrator fields render')
-      const idInput = emptyMount.host.querySelector<HTMLInputElement>('#duo-recipe-id')
+      assert.ok(emptyMount.host.querySelector('.orch-fields') !== null, 'Grouped orchestrator fields render')
+      const idInput = emptyMount.host.querySelector<HTMLInputElement>('#orch-id')
       assert.ok(idInput !== null)
-      assert.equal(idInput.value, 'duo_architect')
+      assert.equal(idInput.value, 'orch_architect')
 
       await act(async () => {
         findButton(emptyMount.host, 'Create').click()
@@ -502,7 +508,7 @@ describe('duo-client-interactions', () => {
       const setCall = ctx.actionCalls.find((c) => c.actionId === 'set')
       assert.ok(setCall !== undefined)
       assert.deepEqual(setCall.input, {
-        id: 'duo_architect',
+        id: 'orch_architect',
         name: 'Orchestrator (flagship)',
         plannerModel: 'tier/architect',
         executorModel: 'tier/coder',
@@ -519,7 +525,7 @@ describe('duo-client-interactions', () => {
     setBuiltinClientStub({
       docs: {
         state: {
-          recipes: {
+          items: {
             arch_coder: {
               id: 'arch_coder',
               name: 'Orchestrator (Flagship)',
@@ -556,7 +562,7 @@ describe('duo-client-interactions', () => {
       e(
         PluginClientContext.Provider,
         { value: populatedCtx },
-        e(DuoManagerScreen, { inlineDrawer: true }),
+        e(OrchestratorManagerScreen, { inlineDrawer: true }),
       ),
     )
     try {
@@ -572,21 +578,21 @@ describe('duo-client-interactions', () => {
       await act(async () => {
         attentionTab.click()
       })
-      assert.equal(fullMount.host.querySelectorAll('[data-duo-recipe-id]').length, 1)
+      assert.equal(fullMount.host.querySelectorAll('[data-orchestrator-id]').length, 1)
       const availableTab = Array.from(fullMount.host.querySelectorAll<HTMLButtonElement>('[role="tab"]'))
         .find((el) => (el.textContent ?? '').includes('Available'))
       assert.ok(availableTab !== undefined)
       await act(async () => {
         availableTab.click()
       })
-      assert.equal(fullMount.host.querySelectorAll('[data-duo-recipe-id]').length, 1)
-      assert.ok(fullMount.host.querySelector('[data-duo-recipe-id="arch_coder"] [aria-label="Available"]') !== null)
+      assert.equal(fullMount.host.querySelectorAll('[data-orchestrator-id]').length, 1)
+      assert.ok(fullMount.host.querySelector('[data-orchestrator-id="arch_coder"] [aria-label="Available"]') !== null)
       const allTab = Array.from(fullMount.host.querySelectorAll<HTMLButtonElement>('[role="tab"]'))
         .find((el) => (el.textContent ?? '').includes('All'))!
       await act(async () => {
         allTab.click()
       })
-      assert.equal(fullMount.host.querySelectorAll('[data-duo-recipe-id]').length, 2)
+      assert.equal(fullMount.host.querySelectorAll('[data-orchestrator-id]').length, 2)
 
       // Filter via SearchBox + Reset filters
       const searchInput = fullMount.host.querySelector<HTMLInputElement>('input[aria-label="Search orchestrators"]')
@@ -598,11 +604,11 @@ describe('duo-client-interactions', () => {
       await act(async () => {
         findButton(fullMount.host, 'Reset filters').click()
       })
-      assert.equal(fullMount.host.querySelectorAll('[data-duo-recipe-id]').length, 2)
+      assert.equal(fullMount.host.querySelectorAll('[data-orchestrator-id]').length, 2)
 
       // Open edit drawer on arch_coder ListRow -> verify MonoId + change name -> Cmd+Enter submits
       const rowTrigger = fullMount.host.querySelector<HTMLButtonElement>(
-        '[data-duo-recipe-id="arch_coder"] button.helmx-list-row-trigger',
+        '[data-orchestrator-id="arch_coder"] button.helmx-list-row-trigger',
       )
       assert.ok(rowTrigger !== null)
       await act(async () => {
@@ -612,8 +618,8 @@ describe('duo-client-interactions', () => {
         fullMount.host.querySelector('.primary-drawer-id .helmx-mono-id-code')?.textContent?.trim(),
         'tier/arch_coder',
       )
-      const nameInput = fullMount.host.querySelector<HTMLInputElement>('#duo-recipe-name')
-      const idField = fullMount.host.querySelector<HTMLInputElement>('#duo-recipe-id')
+      const nameInput = fullMount.host.querySelector<HTMLInputElement>('#orch-name')
+      const idField = fullMount.host.querySelector<HTMLInputElement>('#orch-id')
       assert.ok(nameInput !== null && idField !== null)
       assert.equal(idField.disabled, true, 'orchestrator id is locked during edit')
       await act(async () => {
@@ -629,7 +635,7 @@ describe('duo-client-interactions', () => {
 
       // Delete triggers 409 -> Force delete confirm dialog
       const deleteBtn = fullMount.host.querySelector<HTMLButtonElement>(
-        '[data-duo-recipe-id="arch_coder"] button.duo-row-delete-btn',
+        '[data-orchestrator-id="arch_coder"] button.orch-row-delete-btn',
       )
       assert.ok(deleteBtn !== null)
       await act(async () => {
@@ -653,12 +659,12 @@ describe('duo-client-interactions', () => {
     }
   })
 
-  test('DuoSettingsPanel: shows orchestrator KPIs, compact ListRow, and opens Orchestrator screen', { timeout: 60_000 }, async () => {
+  test('OrchestratorSettingsPanel: shows orchestrator KPIs, compact ListRow, and opens Orchestrator screen', { timeout: 60_000 }, async () => {
     const ctx = makeSpyCtx()
     setBuiltinClientStub({
       docs: {
         state: {
-          recipes: {
+          items: {
             arch_coder: {
               id: 'arch_coder',
               name: 'Orchestrator (Flagship)',
@@ -672,8 +678,8 @@ describe('duo-client-interactions', () => {
       },
     })
     const mounted = await mountWithHost(
-      e(PluginClientContext.Provider, { value: ctx }, e(DuoSettingsPanel)),
-      { plugins: [makeDuoPluginSummary()] },
+      e(PluginClientContext.Provider, { value: ctx }, e(OrchestratorSettingsPanel)),
+      { plugins: [makeOrchestratorPluginSummary()] },
     )
     try {
       const text = mounted.host.textContent ?? ''
@@ -690,21 +696,21 @@ describe('duo-client-interactions', () => {
         findButton(mounted.host, 'Open Orchestrator').click()
       })
       assert.deepEqual(ctx.openedScreens, [
-        `screen:${DUO_PLUGIN_ID}/${DUO_SCREEN_ID}?edit=arch_coder`,
-        `screen:${DUO_PLUGIN_ID}/${DUO_SCREEN_ID}`,
+        `screen:${ORCHESTRATOR_PLUGIN_ID}/${ORCHESTRATOR_SCREEN_ID}?edit=arch_coder`,
+        `screen:${ORCHESTRATOR_PLUGIN_ID}/${ORCHESTRATOR_SCREEN_ID}`,
       ])
     } finally {
       await mounted.unmount()
     }
   })
 
-  test('Composer + AgentStandbyPane + DuoToolbarPill (COMPOSER_STATUS_SLOT): standby returns null, active status pill, overrides, coordinator & live disable', { timeout: 60_000 }, async () => {
+  test('Composer + AgentStandbyPane + OrchestratorStatusPill (COMPOSER_STATUS_SLOT): standby returns null, active status pill, overrides, coordinator & live disable', { timeout: 60_000 }, async () => {
     mountSharedPluginNamespaces({ realHooks: true })
     resetPluginClientCache()
-    seedPluginClientModule(DUO_PLUGIN_ID, 'index.tsx', rawIndexModule)
+    seedPluginClientModule(ORCHESTRATOR_PLUGIN_ID, 'index.tsx', rawIndexModule)
 
     const harness = createDocAndSessionHarness({
-      recipes: {
+      items: {
         arch_coder: {
           id: 'arch_coder',
           name: 'Orchestrator (Flagship)',
@@ -720,12 +726,12 @@ describe('duo-client-interactions', () => {
     const openedTargets: string[] = []
     const onInvokeAction = async (pluginId: string, actionId: string, input: unknown) => {
       actionCalls.push({ pluginId, actionId, input })
-      if (pluginId === DUO_PLUGIN_ID && actionId === 'override_executor') {
+      if (pluginId === ORCHESTRATOR_PLUGIN_ID && actionId === 'override_executor') {
         const inp = input as { conversationId: number; executorModel: string }
-        harness.setDuoDoc(inp.conversationId, {
+        harness.setOrchestratorDoc(inp.conversationId, {
           enabled: true,
-          recipeId: 'arch_coder',
-          recipeName: 'Orchestrator (Flagship)',
+          orchestratorId: 'arch_coder',
+          orchestratorName: 'Orchestrator (Flagship)',
           phase: 'planning',
           plannerModel: 'faux/flagship',
           plannerThinkingLevel: 'xhigh',
@@ -736,12 +742,12 @@ describe('duo-client-interactions', () => {
           hasExecutorOverride: true,
         })
       }
-      if (pluginId === DUO_PLUGIN_ID && actionId === 'clear_override') {
+      if (pluginId === ORCHESTRATOR_PLUGIN_ID && actionId === 'clear_override') {
         const inp = input as { conversationId: number }
-        harness.setDuoDoc(inp.conversationId, {
+        harness.setOrchestratorDoc(inp.conversationId, {
           enabled: true,
-          recipeId: 'arch_coder',
-          recipeName: 'Orchestrator (Flagship)',
+          orchestratorId: 'arch_coder',
+          orchestratorName: 'Orchestrator (Flagship)',
           phase: 'planning',
           plannerModel: 'faux/flagship',
           plannerThinkingLevel: 'xhigh',
@@ -768,19 +774,19 @@ describe('duo-client-interactions', () => {
         e(AgentStandbyPane, { profileId: 'assistant' }),
       ),
       {
-        plugins: [makeDuoPluginSummary()],
-        uiContributions: makeDuoUiContributions(),
+        plugins: [makeOrchestratorPluginSummary()],
+        uiContributions: makeOrchestratorUiContributions(),
         profiles: [{ id: 'assistant', name: 'Assistant', model: 'tier/arch_coder' }],
       },
     )
     try {
-      assert.ok(standbyMount.host.querySelector('button.duo-status-trigger') === null)
+      assert.ok(standbyMount.host.querySelector('button.orch-status-trigger') === null)
       assert.equal(harness.subscribedKeys.size, 0)
     } finally {
       await standbyMount.unmount()
     }
 
-    // 2. Ineligible sub-conversation never renders DuoToolbarPill or subscribes
+    // 2. Ineligible sub-conversation never renders OrchestratorStatusPill or subscribes
     const childConv = makeConversation({
       id: 41,
       title: 'Child worker',
@@ -796,13 +802,13 @@ describe('duo-client-interactions', () => {
       ),
       {
         conversations: [childConv],
-        plugins: [makeDuoPluginSummary()],
-        uiContributions: makeDuoUiContributions(),
+        plugins: [makeOrchestratorPluginSummary()],
+        uiContributions: makeOrchestratorUiContributions(),
       },
     )
     try {
-      assert.ok(childMount.host.querySelector('button.duo-status-trigger') === null)
-      assert.equal(harness.subscribedKeys.has(`${DUO_PLUGIN_ID}/${DUO_SESSION_DOC}/41`), false)
+      assert.ok(childMount.host.querySelector('button.orch-status-trigger') === null)
+      assert.equal(harness.subscribedKeys.has(`${ORCHESTRATOR_PLUGIN_ID}/${ORCHESTRATOR_SESSION_DOC}/41`), false)
     } finally {
       await childMount.unmount()
     }
@@ -818,10 +824,10 @@ describe('duo-client-interactions', () => {
       effectiveModelRef: 'tier/arch_coder',
       runtimeModelOverride: true,
     })
-    harness.setDuoDoc(40, {
+    harness.setOrchestratorDoc(40, {
       enabled: true,
-      recipeId: 'arch_coder',
-      recipeName: 'Orchestrator (Flagship)',
+      orchestratorId: 'arch_coder',
+      orchestratorName: 'Orchestrator (Flagship)',
       phase: 'execution',
       plannerModel: 'faux/flagship',
       plannerThinkingLevel: 'xhigh',
@@ -845,8 +851,8 @@ describe('duo-client-interactions', () => {
       ),
       {
         conversations: [parentConv],
-        plugins: [makeDuoPluginSummary()],
-        uiContributions: makeDuoUiContributions(),
+        plugins: [makeOrchestratorPluginSummary()],
+        uiContributions: makeOrchestratorUiContributions(),
       },
     )
     try {
@@ -858,7 +864,7 @@ describe('duo-client-interactions', () => {
       assert.ok(activeMount.host.querySelector('.composer-model-runtime-badge') === null)
 
       // Status-row pill renders inside .composer-status-row with minimal "Exec · workhorse"
-      const pill = activeMount.host.querySelector<HTMLButtonElement>('.composer-status-row button.duo-status-trigger')
+      const pill = activeMount.host.querySelector<HTMLButtonElement>('.composer-status-row button.orch-status-trigger')
       assert.ok(pill !== null)
       assert.equal(pill.textContent?.replace(/\s+/g, ' ').trim(), 'Exec·workhorse')
       assert.ok(pill.title.includes('3/12'))
@@ -866,7 +872,7 @@ describe('duo-client-interactions', () => {
       await act(async () => {
         pill.click()
       })
-      const popover = document.body.querySelector<HTMLElement>('.duo-popover')
+      const popover = document.body.querySelector<HTMLElement>('.orch-popover')
       assert.ok(popover !== null)
       assert.match(popover.textContent ?? '', /Orchestrator \(Flagship\)/)
       assert.match(popover.textContent ?? '', /tier\/arch_coder/)
@@ -879,13 +885,13 @@ describe('duo-client-interactions', () => {
       await act(async () => {
         editBtn.click()
       })
-      assert.equal(openedTargets.at(-1), `screen:${DUO_PLUGIN_ID}/${DUO_SCREEN_ID}?edit=arch_coder`)
+      assert.equal(openedTargets.at(-1), `screen:${ORCHESTRATOR_PLUGIN_ID}/${ORCHESTRATOR_SCREEN_ID}?edit=arch_coder`)
 
       // Re-open popover and test interactive Executor ModelPickerControl (excludes Orchestrator group)
       await act(async () => {
         pill.click()
       })
-      const reopenedPopover = document.body.querySelector<HTMLElement>('.duo-popover')!
+      const reopenedPopover = document.body.querySelector<HTMLElement>('.orch-popover')!
       const pickerTrigger = reopenedPopover.querySelector<HTMLButtonElement>('button.composer-model-button')
       assert.ok(pickerTrigger !== null)
       await act(async () => {
@@ -910,10 +916,10 @@ describe('duo-client-interactions', () => {
 
       // Coordinator suppression + stepLimitPaused warn tone
       await act(async () => {
-        harness.setDuoDoc(40, {
+        harness.setOrchestratorDoc(40, {
           enabled: true,
-          recipeId: 'arch_coder',
-          recipeName: 'Orchestrator (Flagship)',
+          orchestratorId: 'arch_coder',
+          orchestratorName: 'Orchestrator (Flagship)',
           phase: 'planning',
           plannerModel: 'faux/flagship',
           executorModel: 'faux/workhorse',
@@ -926,34 +932,34 @@ describe('duo-client-interactions', () => {
       })
       assert.equal(pill.textContent?.replace(/\s+/g, ' ').trim(), 'Coord·flagship')
 
-      // Live disable removes DuoToolbarPill
+      // Live disable removes OrchestratorStatusPill
       await act(async () => {
         activeMount.store.updateLive((s) => ({
           ...s,
-          plugins: [{ ...makeDuoPluginSummary(), enabled: false, status: 'disabled' }],
+          plugins: [{ ...makeOrchestratorPluginSummary(), enabled: false, status: 'disabled' }],
           uiContributions: [],
         }))
       })
-      assert.ok(activeMount.host.querySelector('button.duo-status-trigger') === null)
+      assert.ok(activeMount.host.querySelector('button.orch-status-trigger') === null)
     } finally {
       await activeMount.unmount()
     }
   })
 
-  test('DuoTransitionToolRow: renders 26px trace-row for exit_plan_mode, hand_back_to_planner, running and error states', { timeout: 60_000 }, async () => {
+  test('OrchestratorTransitionToolRow: renders 26px trace-row for exit_plan_mode, hand_back_to_planner, running and error states', { timeout: 60_000 }, async () => {
     const ctx = makeSpyCtx()
     const mountRow = async (props: Record<string, unknown>) =>
-      mountWithHost(e(PluginClientContext.Provider, { value: ctx }, e(DuoTransitionToolRow, props)))
+      mountWithHost(e(PluginClientContext.Provider, { value: ctx }, e(OrchestratorTransitionToolRow, props)))
 
     const exitMount = await mountRow({
       conversationId: 10,
       callId: 'c1',
-      toolName: DUO_EXIT_PLAN_MODE_TOOL,
+      toolName: ORCHESTRATOR_EXIT_PLAN_MODE_TOOL,
       status: 'done',
       durationMs: 420,
       result: 'Entered execution phase on faux/workhorse.',
       presentationMeta: {
-        tool: DUO_EXIT_PLAN_MODE_TOOL,
+        tool: ORCHESTRATOR_EXIT_PLAN_MODE_TOOL,
         fromModel: 'faux/flagship',
         toModel: 'faux/workhorse',
         fromPhase: 'planning',
@@ -961,7 +967,7 @@ describe('duo-client-interactions', () => {
       },
     })
     try {
-      assert.ok(exitMount.host.querySelector('.trace-entry > .trace-row.duo-trace-row') !== null)
+      assert.ok(exitMount.host.querySelector('.trace-entry > .trace-row.orch-trace-row') !== null)
       assert.match(exitMount.host.textContent ?? '', /Enter execution phase/)
       assert.match(exitMount.host.textContent ?? '', /Switched to executor workhorse/)
       assert.match(exitMount.host.textContent ?? '', /Executor/)
@@ -973,11 +979,11 @@ describe('duo-client-interactions', () => {
     const handBackMount = await mountRow({
       conversationId: 10,
       callId: 'c2',
-      toolName: DUO_HAND_BACK_TOOL,
+      toolName: ORCHESTRATOR_HAND_BACK_TOOL,
       status: 'done',
       result: 'Returned to planner.',
       presentationMeta: {
-        tool: DUO_HAND_BACK_TOOL,
+        tool: ORCHESTRATOR_HAND_BACK_TOOL,
         fromModel: 'faux/workhorse',
         toModel: 'faux/flagship',
         fromPhase: 'execution',
@@ -996,7 +1002,7 @@ describe('duo-client-interactions', () => {
     const runningMount = await mountRow({
       conversationId: 10,
       callId: 'c3',
-      toolName: DUO_HAND_BACK_TOOL,
+      toolName: ORCHESTRATOR_HAND_BACK_TOOL,
       status: 'running',
       input: { reason: 'replan_needed' },
     })
@@ -1010,7 +1016,7 @@ describe('duo-client-interactions', () => {
     const errorMount = await mountRow({
       conversationId: 10,
       callId: 'c4',
-      toolName: DUO_EXIT_PLAN_MODE_TOOL,
+      toolName: ORCHESTRATOR_EXIT_PLAN_MODE_TOOL,
       status: 'error',
       isError: true,
       result: 'Failed to switch to executor\nSecond line detail',

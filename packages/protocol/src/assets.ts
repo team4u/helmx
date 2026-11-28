@@ -137,7 +137,7 @@ export interface ModelTierSpec {
   thinkingLevel?: string
   /** Optional concise routing description for humans and agents (<= 240 chars). */
   description?: string
-  /** Optional UI group key (e.g. `'duo'`); grouped tiers render ahead of ungrouped tiers. */
+  /** Optional UI group key (e.g. `'orchestrator'`); grouped tiers render ahead of ungrouped tiers. */
   displayGroup?: string
   /** Optional human-friendly label shown in model pickers (e.g. `'Claude 精修'`). */
   displayLabel?: string

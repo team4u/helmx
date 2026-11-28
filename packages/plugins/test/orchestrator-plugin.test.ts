@@ -1,15 +1,15 @@
 // @test-isolation: process
 /**
- * Unit tests for `builtin:duo` Dual-Phase Recipes:
- * - Pure contract validation (`assertDuoRecipeId`, `normalizeDuoRecipeName`, `normalizeDuoModelRef`,
- *   `resolveDuoModelThroughExternalTiers`, etc.);
- * - `PluginHost` unit coverage: recipe CRUD, conflict rejection (`409 model_tier_conflict`),
- *   Duo->Duo recursion rejection, missing external tier omission from `getTiers()`, dynamic
+ * Unit tests for `builtin:orchestrator`:
+ * - Pure contract validation (`assertOrchestratorId`, `normalizeOrchestratorName`, `normalizeOrchestratorModelRef`,
+ *   `resolveOrchestratorModelThroughExternalTiers`, etc.);
+ * - `PluginHost` unit coverage: item CRUD, conflict rejection (`409 model_tier_conflict`),
+ *   Orchestrator->Orchestrator recursion rejection, missing external tier omission from `getTiers()`, dynamic
  *   non-cyclic external tier `onChanged` updates, `inUse()` & `remove()` reference guards,
  *   `override_executor` / `clear_override`, `plan.approved` + `pi.reset` handoff preservation,
  *   grandchild `DEFAULT_CHILD_MODEL_CAPABILITY_ID`, planning tools, `reconcile` & `stop`;
  * - Client `models.ts` + `copy.ts` helper sanity & zero-Emoji validation (interactive Happy-DOM
- *   rendering of all Duo client modules runs in `packages/web/test/duo-client-interactions.test.tsx`).
+ *   rendering of all Orchestrator client modules runs in `packages/web/test/orchestrator-client-interactions.test.tsx`).
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
@@ -34,36 +34,36 @@ import {
   type DefaultChildModelCapability,
 } from '../src/contracts.js'
 import {
-  DUO_DEFAULT_MAX_STEPS,
-  DUO_EXIT_PLAN_MODE_TOOL,
-  DUO_HAND_BACK_TOOL,
-  DUO_PLAN_SECTION_ID,
-  DUO_PLUGIN_ID,
-  DUO_SESSION_DOC,
-  createDuoPlugin,
-  type DuoSessionView,
-} from '../src/duo.js'
+  ORCHESTRATOR_DEFAULT_MAX_STEPS,
+  ORCHESTRATOR_EXIT_PLAN_MODE_TOOL,
+  ORCHESTRATOR_HAND_BACK_TOOL,
+  ORCHESTRATOR_PLAN_SECTION_ID,
+  ORCHESTRATOR_PLUGIN_ID,
+  ORCHESTRATOR_SESSION_DOC,
+  createOrchestratorPlugin,
+  type OrchestratorSessionView,
+} from '../src/orchestrator.js'
 import {
-  assertDuoRecipeId,
+  assertOrchestratorId,
   collectExternalTierMap,
-  normalizeDuoModelRef,
-  normalizeDuoRecipeName,
-  normalizeDuoThinkingLevel,
   normalizeMaxExecutionSteps,
-  resolveDuoModelThroughExternalTiers,
-} from '../src/duo/contracts.js'
-import { DUO_COPY } from '../src/duo/client/copy.ts'
+  normalizeOrchestratorModelRef,
+  normalizeOrchestratorName,
+  normalizeOrchestratorThinkingLevel,
+  resolveOrchestratorModelThroughExternalTiers,
+} from '../src/orchestrator/contracts.js'
+import { ORCHESTRATOR_COPY } from '../src/orchestrator/client/copy.ts'
 import {
-  createEmptyDuoDraft,
-  filterDuoRecipeItems,
-  getStarterDuoPresets,
-  matchDuoRecipeFromModelRef,
-  parseDuoSessionDoc,
-  parseDuoStateDoc,
-  parseDuoTransitionMeta,
-  synthesizeDuoRecipeItems,
-  validateDuoDraft,
-} from '../src/duo/client/models.ts'
+  createEmptyOrchestratorDraft,
+  filterOrchestratorItems,
+  getStarterOrchestratorPresets,
+  matchOrchestratorItemFromModelRef,
+  parseOrchestratorSessionDoc,
+  parseOrchestratorStateDoc,
+  parseOrchestratorTransitionMeta,
+  synthesizeOrchestratorItems,
+  validateOrchestratorDraft,
+} from '../src/orchestrator/client/models.ts'
 import { createPluginHostBackendFixture } from '../../kernel/test/helpers/plugin-host-backend.js'
 import {
   MemoryConfigStore,
@@ -86,7 +86,7 @@ function makeToolSpec(name: string): PluginToolSpec {
   }
 }
 
-function openDuoUnitHost(options: {
+function openOrchestratorUnitHost(options: {
   conversations?: ConversationSummary[]
   profiles?: Profile[]
   defaultModel?: string
@@ -173,7 +173,7 @@ function openDuoUnitHost(options: {
     emitEvent: () => {},
   }
 
-  return makeTempDir('helmx-duo-unit-').then(async (dataDir) => {
+  return makeTempDir('helmx-orch-unit-').then(async (dataDir) => {
     const host = new PluginHost({
       dataDir,
       host: backend,
@@ -183,7 +183,7 @@ function openDuoUnitHost(options: {
       buildProvider: createPluginBuildProvider(),
       deferServices: options.deferServices ?? false,
     })
-    await host.register(createDuoPlugin())
+    await host.register(createOrchestratorPlugin())
     return {
       host,
       conversations,
@@ -208,26 +208,26 @@ function openDuoUnitHost(options: {
 }
 
 test('pure contracts, client orchestrator helpers, and bilingual zero-Emoji copy validate strictly', TIMEOUT, () => {
-  const serializedCopy = JSON.stringify(DUO_COPY)
-  assert.equal(EMOJI_RE.test(serializedCopy), false, 'DUO_COPY must contain zero Emoji')
-  assert.equal(serializedCopy.includes('配方'), false, 'DUO_COPY must align to Orchestrator / 编排器')
-  assert.equal(DUO_COPY.screenTitle.en, 'Orchestrator')
-  assert.equal(DUO_COPY.screenTitle['zh-CN'], '编排器')
+  const serializedCopy = JSON.stringify(ORCHESTRATOR_COPY)
+  assert.equal(EMOJI_RE.test(serializedCopy), false, 'ORCHESTRATOR_COPY must contain zero Emoji')
+  assert.equal(serializedCopy.includes('配方'), false, 'ORCHESTRATOR_COPY must align to Orchestrator / 编排器')
+  assert.equal(ORCHESTRATOR_COPY.screenTitle.en, 'Orchestrator')
+  assert.equal(ORCHESTRATOR_COPY.screenTitle['zh-CN'], '编排器')
 
-  assert.equal(assertDuoRecipeId('architect_coder'), 'architect_coder')
-  assert.throws(() => assertDuoRecipeId('BadId'), HelmxError)
-  assert.throws(() => assertDuoRecipeId('tier/x'), HelmxError)
+  assert.equal(assertOrchestratorId('architect_coder'), 'architect_coder')
+  assert.throws(() => assertOrchestratorId('BadId'), HelmxError)
+  assert.throws(() => assertOrchestratorId('tier/x'), HelmxError)
 
-  assert.equal(normalizeDuoRecipeName('  Arch -> Code  '), 'Arch -> Code')
-  assert.throws(() => normalizeDuoRecipeName('   '), HelmxError)
-  assert.throws(() => normalizeDuoRecipeName('x'.repeat(81)), HelmxError)
+  assert.equal(normalizeOrchestratorName('  Arch -> Code  '), 'Arch -> Code')
+  assert.throws(() => normalizeOrchestratorName('   '), HelmxError)
+  assert.throws(() => normalizeOrchestratorName('x'.repeat(81)), HelmxError)
 
-  assert.equal(normalizeDuoModelRef('anthropic/claude-opus'), 'anthropic/claude-opus')
-  assert.equal(normalizeDuoModelRef('tier/coder'), 'tier/coder')
-  assert.throws(() => normalizeDuoModelRef('tier/BadUpper'), HelmxError)
-  assert.throws(() => normalizeDuoModelRef('no-slash'), HelmxError)
-  assert.throws(() => normalizeDuoThinkingLevel('bogus'), HelmxError)
-  assert.equal(normalizeMaxExecutionSteps(undefined), DUO_DEFAULT_MAX_STEPS)
+  assert.equal(normalizeOrchestratorModelRef('anthropic/claude-opus'), 'anthropic/claude-opus')
+  assert.equal(normalizeOrchestratorModelRef('tier/coder'), 'tier/coder')
+  assert.throws(() => normalizeOrchestratorModelRef('tier/BadUpper'), HelmxError)
+  assert.throws(() => normalizeOrchestratorModelRef('no-slash'), HelmxError)
+  assert.throws(() => normalizeOrchestratorThinkingLevel('bogus'), HelmxError)
+  assert.equal(normalizeMaxExecutionSteps(undefined), ORCHESTRATOR_DEFAULT_MAX_STEPS)
   assert.throws(() => normalizeMaxExecutionSteps(101), HelmxError)
 
   const externalMap = collectExternalTierMap([
@@ -236,19 +236,19 @@ test('pure contracts, client orchestrator helpers, and bilingual zero-Emoji copy
       impl: { getTiers: () => ({ coder: { model: 'faux/coder', thinkingLevel: 'low' } }) },
     },
     {
-      pluginId: DUO_PLUGIN_ID,
+      pluginId: ORCHESTRATOR_PLUGIN_ID,
       impl: { getTiers: () => ({ ignored_self: { model: 'faux/flagship' } }) },
     },
   ])
   assert.deepEqual(Object.keys(externalMap), ['coder'])
   assert.deepEqual(
-    resolveDuoModelThroughExternalTiers('tier/coder', undefined, externalMap),
+    resolveOrchestratorModelThroughExternalTiers('tier/coder', undefined, externalMap),
     { model: 'faux/coder', thinkingLevel: 'low' },
   )
-  assert.equal(resolveDuoModelThroughExternalTiers('tier/missing', undefined, externalMap), undefined)
+  assert.equal(resolveOrchestratorModelThroughExternalTiers('tier/missing', undefined, externalMap), undefined)
 
-  const parsedState = parseDuoStateDoc({
-    recipes: {
+  const parsedState = parseOrchestratorStateDoc({
+    items: {
       r1: {
         id: 'r1',
         name: 'Arch -> Code',
@@ -260,9 +260,9 @@ test('pure contracts, client orchestrator helpers, and bilingual zero-Emoji copy
       bad: { id: 'bad' },
     },
   })
-  assert.equal(Object.keys(parsedState.recipes).length, 1)
-  assert.ok(matchDuoRecipeFromModelRef('tier/r1', parsedState.recipes))
-  assert.equal(matchDuoRecipeFromModelRef('faux/flagship', parsedState.recipes), undefined)
+  assert.equal(Object.keys(parsedState.items).length, 1)
+  assert.ok(matchOrchestratorItemFromModelRef('tier/r1', parsedState.items))
+  assert.equal(matchOrchestratorItemFromModelRef('faux/flagship', parsedState.items), undefined)
 
   const hostModels: HostModelsSlice = {
     models: [
@@ -272,38 +272,38 @@ test('pure contracts, client orchestrator helpers, and bilingual zero-Emoji copy
     modelThinkingLevels: {},
     modelTiers: [],
   }
-  const items = synthesizeDuoRecipeItems(parsedState.recipes, hostModels)
-  assert.equal(filterDuoRecipeItems(items, 'arch').length, 1)
-  assert.equal(filterDuoRecipeItems(items, 'nomatch').length, 0)
-  assert.ok(getStarterDuoPresets('en', hostModels).length >= 2)
+  const items = synthesizeOrchestratorItems(parsedState.items, hostModels)
+  assert.equal(filterOrchestratorItems(items, 'arch').length, 1)
+  assert.equal(filterOrchestratorItems(items, 'nomatch').length, 0)
+  assert.ok(getStarterOrchestratorPresets('en', hostModels).length >= 2)
 
-  const draft = createEmptyDuoDraft()
+  const draft = createEmptyOrchestratorDraft()
   assert.equal(
-    validateDuoDraft(
+    validateOrchestratorDraft(
       { ...draft, id: 'coder', name: 'Conflict', plannerModel: 'faux/flagship', executorModel: 'faux/coder' },
-      { mode: 'create', existingRecipeIds: new Set(['r1']), externalTierIds: new Set(['coder']) },
+      { mode: 'create', existingItemIds: new Set(['r1']), externalTierIds: new Set(['coder']) },
     ),
     'id_conflict',
   )
   assert.equal(
-    validateDuoDraft(
+    validateOrchestratorDraft(
       { ...draft, id: 'r2', name: 'Nested', plannerModel: 'tier/r1', executorModel: 'faux/coder' },
-      { mode: 'create', existingRecipeIds: new Set(['r1']), externalTierIds: new Set(['coder']) },
+      { mode: 'create', existingItemIds: new Set(['r1']), externalTierIds: new Set(['coder']) },
     ),
-    'planner_duo_ref',
+    'planner_orchestrator_ref',
   )
   assert.equal(
-    validateDuoDraft(
+    validateOrchestratorDraft(
       { ...draft, id: 'r2', name: 'Self', plannerModel: 'faux/flagship', executorModel: 'tier/r2' },
-      { mode: 'create', existingRecipeIds: new Set(['r1']), externalTierIds: new Set(['coder']) },
+      { mode: 'create', existingItemIds: new Set(['r1']), externalTierIds: new Set(['coder']) },
     ),
-    'executor_duo_ref',
+    'executor_orchestrator_ref',
   )
 
-  const parsedSession = parseDuoSessionDoc({
+  const parsedSession = parseOrchestratorSessionDoc({
     enabled: true,
-    recipeId: 'r1',
-    recipeName: 'Arch -> Code',
+    orchestratorId: 'r1',
+    orchestratorName: 'Arch -> Code',
     phase: 'planning',
     plannerModel: 'faux/flagship',
     executorModel: 'faux/coder',
@@ -312,11 +312,11 @@ test('pure contracts, client orchestrator helpers, and bilingual zero-Emoji copy
     stepLimitPaused: false,
     hasExecutorOverride: true,
   })
-  assert.equal(parsedSession?.recipeId, 'r1')
+  assert.equal(parsedSession?.orchestratorId, 'r1')
   assert.equal(parsedSession?.hasExecutorOverride, true)
 
-  const meta = parseDuoTransitionMeta({
-    tool: DUO_EXIT_PLAN_MODE_TOOL,
+  const meta = parseOrchestratorTransitionMeta({
+    tool: ORCHESTRATOR_EXIT_PLAN_MODE_TOOL,
     fromModel: 'faux/flagship',
     toModel: 'faux/coder',
     fromPhase: 'planning',
@@ -325,21 +325,21 @@ test('pure contracts, client orchestrator helpers, and bilingual zero-Emoji copy
   assert.equal(meta?.toModel, 'faux/coder')
 })
 
-test('PluginHost unit: recipe capability mounting, external tier delta cascade without loops, override & crash recovery', TIMEOUT, async () => {
-  const env = await openDuoUnitHost()
+test('PluginHost unit: orchestrator capability mounting, external tier delta cascade without loops, override & crash recovery', TIMEOUT, async () => {
+  const env = await openOrchestratorUnitHost()
   try {
-    const duoStatusSlot = env.host
+    const statusSlot = env.host
       .listUi()
       .find(
         (u) =>
-          u.pluginId === DUO_PLUGIN_ID &&
+          u.pluginId === ORCHESTRATOR_PLUGIN_ID &&
           u.surface === 'plugin.slot' &&
-          (u.spec as { id?: string }).id === 'duo-toolbar-pill',
+          (u.spec as { id?: string }).id === 'orchestrator-status-pill',
       )
-    assert.ok(duoStatusSlot, 'duo-toolbar-pill must be registered on PluginHost')
-    const duoStatusSpec = duoStatusSlot.spec as { target?: string; order?: number }
-    assert.equal(duoStatusSpec.target, COMPOSER_STATUS_SLOT)
-    assert.equal(duoStatusSpec.order, 15, 'duo-toolbar-pill must register with order 15 (> token-speed 10, < magpie 20)')
+    assert.ok(statusSlot, 'orchestrator-status-pill must be registered on PluginHost')
+    const statusSpec = statusSlot.spec as { target?: string; order?: number }
+    assert.equal(statusSpec.target, COMPOSER_STATUS_SLOT)
+    assert.equal(statusSpec.order, 15, 'orchestrator-status-pill must register with order 15 (> token-speed 10, < magpie 20)')
 
     let externalTiers: Record<string, ModelTierSpec> = {
       coder: { model: 'faux/coder', thinkingLevel: 'low' },
@@ -362,7 +362,7 @@ test('PluginHost unit: recipe capability mounting, external tier delta cascade w
 
     await assert.rejects(
       () =>
-        env.host.invokeAction(DUO_PLUGIN_ID, 'set', {
+        env.host.invokeAction(ORCHESTRATOR_PLUGIN_ID, 'set', {
           id: 'coder',
           name: 'Conflict',
           plannerModel: 'faux/flagship',
@@ -371,7 +371,7 @@ test('PluginHost unit: recipe capability mounting, external tier delta cascade w
       (err: unknown) => err instanceof HelmxError && err.code === 'model_tier_conflict' && err.status === 409,
     )
 
-    await env.host.invokeAction(DUO_PLUGIN_ID, 'set', {
+    await env.host.invokeAction(ORCHESTRATOR_PLUGIN_ID, 'set', {
       id: 'arch_code',
       name: 'Architect & Coder',
       description: 'Plan deeply then execute swiftly',
@@ -382,7 +382,7 @@ test('PluginHost unit: recipe capability mounting, external tier delta cascade w
 
     await assert.rejects(
       () =>
-        env.host.invokeAction(DUO_PLUGIN_ID, 'set', {
+        env.host.invokeAction(ORCHESTRATOR_PLUGIN_ID, 'set', {
           id: 'nested',
           name: 'Nested',
           plannerModel: 'tier/arch_code',
@@ -391,45 +391,45 @@ test('PluginHost unit: recipe capability mounting, external tier delta cascade w
       (err: unknown) => err instanceof HelmxError && err.code === 'validation_error' && err.status === 400,
     )
 
-    const duoCap = env.host
+    const orchCap = env.host
       .consumeCapability<ModelTiersCapability>('helmx.model-tiers')
-      .find((c) => c.pluginId === DUO_PLUGIN_ID)?.impl
-    assert.ok(duoCap)
-    let duoChangeCount = 0
-    const unsubDuo = duoCap.onChanged!(() => {
-      duoChangeCount += 1
+      .find((c) => c.pluginId === ORCHESTRATOR_PLUGIN_ID)?.impl
+    assert.ok(orchCap)
+    let orchChangeCount = 0
+    const unsubOrch = orchCap.onChanged!(() => {
+      orchChangeCount += 1
     })
 
-    const mounted = duoCap.getTiers()
+    const mounted = orchCap.getTiers()
     assert.ok(mounted['arch_code'])
     assert.equal(mounted['arch_code']!.model, 'faux/flagship')
-    assert.equal(mounted['arch_code']!.displayGroup, 'duo')
+    assert.equal(mounted['arch_code']!.displayGroup, 'orchestrator')
     assert.equal(mounted['arch_code']!.displayLabel, 'Architect & Coder')
     assert.equal(mounted['arch_code']!.displayDetail, 'flagship → coder')
     assert.equal(mounted['arch_code']!.preserveRef, true)
     assert.equal(mounted['arch_code']!.singleTurnEligible, false)
 
-    await env.host.invokeAction(DUO_PLUGIN_ID, 'set', {
+    await env.host.invokeAction(ORCHESTRATOR_PLUGIN_ID, 'set', {
       id: 'ext_planner',
       name: 'External Planner',
       plannerModel: 'tier/future_arch',
       executorModel: 'tier/coder',
     })
-    assert.equal(duoCap.getTiers()['ext_planner'], undefined, 'unresolved external Planner must be omitted from getTiers()')
+    assert.equal(orchCap.getTiers()['ext_planner'], undefined, 'unresolved external Planner must be omitted from getTiers()')
 
-    const beforeCascadeCount = duoChangeCount
+    const beforeCascadeCount = orchChangeCount
     for (const fn of externalListeners) fn()
-    assert.equal(duoChangeCount, beforeCascadeCount)
+    assert.equal(orchChangeCount, beforeCascadeCount)
 
     externalTiers = {
       ...externalTiers,
       future_arch: { model: 'faux/flagship', thinkingLevel: 'high' },
     }
     for (const fn of externalListeners) fn()
-    assert.equal(duoChangeCount, beforeCascadeCount + 1)
-    assert.equal(duoCap.getTiers()['ext_planner']?.model, 'faux/flagship')
-    assert.equal(duoCap.getTiers()['ext_planner']?.thinkingLevel, 'high')
-    if (typeof unsubDuo === 'function') unsubDuo()
+    assert.equal(orchChangeCount, beforeCascadeCount + 1)
+    assert.equal(orchCap.getTiers()['ext_planner']?.model, 'faux/flagship')
+    assert.equal(orchCap.getTiers()['ext_planner']?.thinkingLevel, 'high')
+    if (typeof unsubOrch === 'function') unsubOrch()
 
     const conv1 = makeConversationSummary({
       id: 1,
@@ -440,19 +440,19 @@ test('PluginHost unit: recipe capability mounting, external tier delta cascade w
     env.conversations.set(1, conv1)
     await env.dispatchEvent('conversation.upsert', { type: 'conversation.upsert', conversation: conv1 })
 
-    const status1 = (await env.host.invokeAction(DUO_PLUGIN_ID, 'status', {
+    const status1 = (await env.host.invokeAction(ORCHESTRATOR_PLUGIN_ID, 'status', {
       conversationId: 1,
-    })) as DuoSessionView
-    assert.equal(status1.recipeId, 'arch_code')
+    })) as OrchestratorSessionView
+    assert.equal(status1.orchestratorId, 'arch_code')
     assert.equal(status1.executorModel, 'faux/coder')
     assert.equal(status1.hasExecutorOverride, false)
 
-    const overridden = (await env.host.invokeAction(DUO_PLUGIN_ID, 'override_executor', {
+    const overridden = (await env.host.invokeAction(ORCHESTRATOR_PLUGIN_ID, 'override_executor', {
       conversationId: 1,
       executorModel: 'faux/fast',
       executorThinkingLevel: 'medium',
       maxExecutionSteps: 8,
-    })) as DuoSessionView
+    })) as OrchestratorSessionView
     assert.equal(overridden.executorModel, 'faux/fast')
     assert.equal(overridden.hasExecutorOverride, true)
 
@@ -463,42 +463,42 @@ test('PluginHost unit: recipe capability mounting, external tier delta cascade w
     })
     assert.equal(env.runtimeCalls.at(-1)?.target?.model, 'faux/fast')
     assert.equal(
-      (env.host.getPublicSessionDoc(DUO_PLUGIN_ID, DUO_SESSION_DOC, 1).value as DuoSessionView | null)?.phase,
+      (env.host.getPublicSessionDoc(ORCHESTRATOR_PLUGIN_ID, ORCHESTRATOR_SESSION_DOC, 1).value as OrchestratorSessionView | null)?.phase,
       'execution',
     )
 
     await env.dispatchEvent('pi.reset', { type: 'pi.reset', conversationId: 1 })
     assert.equal(
-      (env.host.getPublicSessionDoc(DUO_PLUGIN_ID, DUO_SESSION_DOC, 1).value as DuoSessionView | null)?.phase,
+      (env.host.getPublicSessionDoc(ORCHESTRATOR_PLUGIN_ID, ORCHESTRATOR_SESSION_DOC, 1).value as OrchestratorSessionView | null)?.phase,
       'execution',
     )
     await env.dispatchEvent('pi.reset', { type: 'pi.reset', conversationId: 1 })
     assert.equal(
-      (env.host.getPublicSessionDoc(DUO_PLUGIN_ID, DUO_SESSION_DOC, 1).value as DuoSessionView | null)?.phase,
+      (env.host.getPublicSessionDoc(ORCHESTRATOR_PLUGIN_ID, ORCHESTRATOR_SESSION_DOC, 1).value as OrchestratorSessionView | null)?.phase,
       'planning',
     )
 
     await assert.rejects(
-      () => env.host.invokeAction(DUO_PLUGIN_ID, 'remove', { id: 'arch_code' }),
+      () => env.host.invokeAction(ORCHESTRATOR_PLUGIN_ID, 'remove', { id: 'arch_code' }),
       (err: unknown) => err instanceof HelmxError && err.code === 'model_tier_in_use' && err.status === 409,
     )
     const clearedConv = makeConversationSummary({ id: 1, model: 'faux/flagship' })
     env.conversations.set(1, clearedConv)
     await env.dispatchEvent('conversation.upsert', { type: 'conversation.upsert', conversation: clearedConv })
-    assert.equal(env.host.getPublicSessionDoc(DUO_PLUGIN_ID, DUO_SESSION_DOC, 1).value, null)
-    const afterSwitchStatus = await env.host.invokeAction(DUO_PLUGIN_ID, 'status', { conversationId: 1 })
+    assert.equal(env.host.getPublicSessionDoc(ORCHESTRATOR_PLUGIN_ID, ORCHESTRATOR_SESSION_DOC, 1).value, null)
+    const afterSwitchStatus = await env.host.invokeAction(ORCHESTRATOR_PLUGIN_ID, 'status', { conversationId: 1 })
     assert.equal(afterSwitchStatus, null)
 
     env.setDefaultModel('tier/arch_code')
     await assert.rejects(
-      () => env.host.invokeAction(DUO_PLUGIN_ID, 'remove', { id: 'arch_code' }),
+      () => env.host.invokeAction(ORCHESTRATOR_PLUGIN_ID, 'remove', { id: 'arch_code' }),
       (err: unknown) => err instanceof HelmxError && err.status === 409,
     )
     env.setDefaultModel(undefined)
-    const removed = (await env.host.invokeAction(DUO_PLUGIN_ID, 'remove', { id: 'arch_code' })) as { removed: boolean }
+    const removed = (await env.host.invokeAction(ORCHESTRATOR_PLUGIN_ID, 'remove', { id: 'arch_code' })) as { removed: boolean }
     assert.equal(removed.removed, true)
 
-    await env.host.invokeAction(DUO_PLUGIN_ID, 'set', {
+    await env.host.invokeAction(ORCHESTRATOR_PLUGIN_ID, 'set', {
       id: 'tree_pair',
       name: 'Tree Pair',
       plannerModel: 'faux/flagship',
@@ -528,8 +528,8 @@ test('PluginHost unit: recipe capability mounting, external tier delta cascade w
         makeToolSpec('edit'),
         makeToolSpec('subagent'),
         makeToolSpec('SubagentWorkflow'),
-        makeToolSpec(DUO_EXIT_PLAN_MODE_TOOL),
-        makeToolSpec(DUO_HAND_BACK_TOOL),
+        makeToolSpec(ORCHESTRATOR_EXIT_PLAN_MODE_TOOL),
+        makeToolSpec(ORCHESTRATOR_HAND_BACK_TOOL),
       ],
       sections: [],
       messages: [],
@@ -538,9 +538,9 @@ test('PluginHost unit: recipe capability mounting, external tier delta cascade w
     if (turn.action === 'transform') {
       const names = turn.value.tools.map((t) => t.name)
       assert.ok(names.includes('subagent') && names.includes('SubagentWorkflow'))
-      assert.ok(names.includes(DUO_EXIT_PLAN_MODE_TOOL))
+      assert.ok(names.includes(ORCHESTRATOR_EXIT_PLAN_MODE_TOOL))
       assert.equal(names.includes('edit'), false)
-      assert.ok(turn.value.sections.some((s) => s.id === DUO_PLAN_SECTION_ID))
+      assert.ok(turn.value.sections.some((s) => s.id === ORCHESTRATOR_PLAN_SECTION_ID))
     }
     await env.host.disable('test:orch', { force: true })
     void PLAN_MODE_ACTIVE_CAPABILITY_ID
@@ -552,8 +552,8 @@ test('PluginHost unit: recipe capability mounting, external tier delta cascade w
 test('PluginHost crash recovery: reconcile clears stranded runtime override from previous run', TIMEOUT, async () => {
   const kvStore = new MemoryKvStore()
   kvStore.put(
-    DUO_PLUGIN_ID,
-    'recipes',
+    ORCHESTRATOR_PLUGIN_ID,
+    'items',
     'r1',
     JSON.stringify({
       id: 'r1',
@@ -565,12 +565,12 @@ test('PluginHost crash recovery: reconcile clears stranded runtime override from
     }),
   )
   kvStore.put(
-    DUO_PLUGIN_ID,
+    ORCHESTRATOR_PLUGIN_ID,
     'states',
     '1',
     JSON.stringify({
       conversationId: 1,
-      recipeId: 'r1',
+      orchestratorId: 'r1',
       phase: 'execution',
       executorModel: 'faux/coder',
       maxExecutionSteps: 5,
@@ -580,7 +580,7 @@ test('PluginHost crash recovery: reconcile clears stranded runtime override from
     }),
   )
 
-  const env = await openDuoUnitHost({
+  const env = await openOrchestratorUnitHost({
     kvStore,
     conversations: [
       makeConversationSummary({
@@ -599,11 +599,11 @@ test('PluginHost crash recovery: reconcile clears stranded runtime override from
     await env.host.reconcile()
     assert.equal(env.runtimeCalls.at(-1)?.target, null)
     assert.equal(
-      (env.host.getPublicSessionDoc(DUO_PLUGIN_ID, DUO_SESSION_DOC, 1).value as DuoSessionView | null)?.phase,
+      (env.host.getPublicSessionDoc(ORCHESTRATOR_PLUGIN_ID, ORCHESTRATOR_SESSION_DOC, 1).value as OrchestratorSessionView | null)?.phase,
       'planning',
     )
     await env.host.dispose()
-    assert.equal(env.kvStore.get(DUO_PLUGIN_ID, 'states', '1'), undefined)
+    assert.equal(env.kvStore.get(ORCHESTRATOR_PLUGIN_ID, 'states', '1'), undefined)
   } finally {
     await env.close()
   }

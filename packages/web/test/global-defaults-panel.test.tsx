@@ -671,7 +671,7 @@ test('GlobalDefaultsPanel: unmounting while save is in flight suppresses post-un
 test('GlobalDefaultsPanel: defaultModel includes preserveRef tiers while compactionModel excludes them', { timeout: 60_000 }, async () => {
   const panel = await mountDefaultsPanel({}, {
     modelDefaults: {
-      defaultModel: 'tier/claude-duo',
+      defaultModel: 'tier/claude-orch',
       defaultThinkingLevel: 'high',
       modelTiers: [
         {
@@ -681,10 +681,10 @@ test('GlobalDefaultsPanel: defaultModel includes preserveRef tiers while compact
           thinkingLevels: ['off', 'low', 'medium'],
         },
         {
-          id: 'claude-duo',
+          id: 'claude-orch',
           model: 'anthropic/claude-3-7-sonnet',
-          displayGroup: 'duo',
-          displayLabel: 'Claude Duo',
+          displayGroup: 'orchestrator',
+          displayLabel: 'Claude Orchestrator',
           displayDetail: 'sonnet -> mini',
           preserveRef: true,
           singleTurnEligible: false,
@@ -697,12 +697,12 @@ test('GlobalDefaultsPanel: defaultModel includes preserveRef tiers while compact
   try {
     const defaultTrigger = panel.container.querySelector('#model-defaults-model') as HTMLButtonElement
     assert.ok(defaultTrigger, 'default model trigger must exist')
-    assert.equal(defaultTrigger.querySelector('.composer-model-label')?.textContent?.trim(), 'Claude Duo')
+    assert.equal(defaultTrigger.querySelector('.composer-model-label')?.textContent?.trim(), 'Claude Orchestrator')
     assert.ok(defaultTrigger.querySelector('.composer-model-level') === null)
     await click(defaultTrigger)
     const defaultPop = document.body.querySelector<HTMLElement>('.composer-model-popover')!
     assert.match(defaultPop.textContent ?? '', /Orchestrator/)
-    assert.match(defaultPop.textContent ?? '', /Claude Duo/)
+    assert.match(defaultPop.textContent ?? '', /Claude Orchestrator/)
     assert.match(defaultPop.textContent ?? '', /tier\/fast/)
 
     // Select tier/fast row to commit & close default popover cleanly, wait for in-flight save to settle, then open compaction picker -> preserveRef tier hidden
@@ -716,7 +716,7 @@ test('GlobalDefaultsPanel: defaultModel includes preserveRef tiers while compact
     await click(compactionTrigger)
     const compactionPop = document.body.querySelector<HTMLElement>('.composer-model-popover')
     assert.ok(compactionPop !== null, 'compaction picker popover must open')
-    assert.doesNotMatch(compactionPop.textContent ?? '', /Claude Duo/)
+    assert.doesNotMatch(compactionPop.textContent ?? '', /Claude Orchestrator/)
     assert.match(compactionPop.textContent ?? '', /tier\/fast/)
   } finally {
     await panel.unmount()

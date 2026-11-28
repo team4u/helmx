@@ -432,7 +432,7 @@ export interface DefaultChildModelCapability {
   resolveDefaultChildModel(parentConversationId: number): { model: string; thinkingLevel?: string } | undefined
 }
 
-/** 能力契约：只读 Plan Mode 活跃探测（供 duo 等多阶段插件让渡优先级）。 */
+/** 能力契约：只读 Plan Mode 活跃探测（供 builtin:orchestrator 等多阶段插件让渡优先级）。 */
 export const PLAN_MODE_ACTIVE_CAPABILITY_ID = 'helmx.plan-mode-active' as const
 
 export interface PlanModeActiveCapability {
@@ -446,7 +446,7 @@ export interface PlanningOrchestrationToolsCapability {
   readonly toolNames: readonly string[]
 }
 
-/** 宿主内部分发事件：/plan 审批通过后触发（供 duo 等监听阶段切换）。 */
+/** 宿主内部分发事件：/plan 审批通过后触发（供 builtin:orchestrator 等监听阶段切换）。 */
 export const PLAN_APPROVED_EVENT = 'plan.approved' as const
 
 export interface PlanApprovedEventPayload {

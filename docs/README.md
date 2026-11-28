@@ -32,7 +32,7 @@
 | [Mermaid](plugins/mermaid.md) | 在聊天里渲染图表 |
 | [Token 速率](plugins/token-speed.md) | 查看生成速度和首字延迟估算 |
 | [模型档位](plugins/tiers.md) | 维护 `tier/<id>` 语义档位映射与多套自定义模板 |
-| [双相协同](plugins/duo.md) | 顶层会话 Planner 只读规划与 Executor 落地执行自动切换 |
+| [编排器](plugins/orchestrator.md) | 顶层会话 Planner 只读规划与 Executor 落地执行自动切换 |
 | [会话标题](plugins/title.md) | 首轮静默自动命名与 `/title` 按需整理 |
 | [计划模式](plugins/plan.md) | 只读调研、澄清问答、计划草拟、`AskDoc` 审批归档与交接执行 |
 

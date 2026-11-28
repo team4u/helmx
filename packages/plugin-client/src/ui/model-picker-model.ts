@@ -291,7 +291,7 @@ export const DEFAULT_MODEL_PICKER_COPY: Readonly<ModelPickerControlCopy> = Objec
   searchPlaceholder: 'Search models…',
   refreshCatalog: 'Refresh dynamic model catalog',
   tiersHeader: 'Model tiers',
-  tierGroupLabels: Object.freeze({ duo: 'Orchestrator' }),
+  tierGroupLabels: Object.freeze({ orchestrator: 'Orchestrator' }),
   tierRowTitle: 'Use {tier} ({model})',
   listHeader: 'Model list',
   navHint: '↑↓ select · Enter confirm',

@@ -5,23 +5,23 @@ import {
   type HostModelsSlice,
 } from '@helmx/plugin-client'
 
-export const DUO_PLUGIN_ID = 'builtin:duo' as const
-export const DUO_STATE_DOC = 'state' as const
-export const DUO_SESSION_DOC = 'duo' as const
-export const DUO_SCREEN_ID = 'main' as const
-export const DUO_EXIT_PLAN_MODE_TOOL = 'exit_plan_mode' as const
-export const DUO_HAND_BACK_TOOL = 'hand_back_to_planner' as const
-export const DUO_DEFAULT_MAX_STEPS = 30
-export const DUO_MAX_STEPS_LIMIT = 100
-export const DUO_RECIPE_NAME_MAX_LENGTH = 80
-export const DUO_DESCRIPTION_MAX_LENGTH = 240
-export const DUO_ID_REGEX = /^[a-z0-9][a-z0-9_-]{0,63}$/
+export const ORCHESTRATOR_PLUGIN_ID = 'builtin:orchestrator' as const
+export const ORCHESTRATOR_STATE_DOC = 'state' as const
+export const ORCHESTRATOR_SESSION_DOC = 'orchestrator' as const
+export const ORCHESTRATOR_SCREEN_ID = 'main' as const
+export const ORCHESTRATOR_EXIT_PLAN_MODE_TOOL = 'exit_plan_mode' as const
+export const ORCHESTRATOR_HAND_BACK_TOOL = 'hand_back_to_planner' as const
+export const ORCHESTRATOR_DEFAULT_MAX_STEPS = 30
+export const ORCHESTRATOR_MAX_STEPS_LIMIT = 100
+export const ORCHESTRATOR_NAME_MAX_LENGTH = 80
+export const ORCHESTRATOR_DESCRIPTION_MAX_LENGTH = 240
+export const ORCHESTRATOR_ID_REGEX = /^[a-z0-9][a-z0-9_-]{0,63}$/
 
-export type DuoPhase = 'planning' | 'execution'
-export type DuoRecipeAvailability = 'available' | 'disabled' | 'unavailable'
-export type DuoStatusFilter = 'all' | 'ready' | 'attention'
+export type OrchestratorPhase = 'planning' | 'execution'
+export type OrchestratorAvailability = 'available' | 'disabled' | 'unavailable'
+export type OrchestratorStatusFilter = 'all' | 'ready' | 'attention'
 
-export interface DuoRecipe {
+export interface OrchestratorItem {
   id: string
   name: string
   description?: string
@@ -33,21 +33,21 @@ export interface DuoRecipe {
   updatedAt: number
 }
 
-export interface DuoRecipeViewItem {
-  recipe: DuoRecipe
+export interface OrchestratorViewItem {
+  item: OrchestratorItem
   resolvedPlannerModel?: string
   resolvedPlannerThinkingLevel?: string
   resolvedExecutorModel?: string
   resolvedExecutorThinkingLevel?: string
-  status: DuoRecipeAvailability
+  status: OrchestratorAvailability
   unavailableReason?: string
 }
 
-export interface DuoSessionView {
+export interface OrchestratorSessionView {
   enabled: boolean
-  recipeId: string
-  recipeName: string
-  phase: DuoPhase
+  orchestratorId: string
+  orchestratorName: string
+  phase: OrchestratorPhase
   plannerModel: string
   plannerThinkingLevel?: string
   executorModel: string
@@ -59,20 +59,20 @@ export interface DuoSessionView {
   hasExecutorOverride: boolean
 }
 
-export interface DuoTransitionMeta {
-  tool: typeof DUO_EXIT_PLAN_MODE_TOOL | typeof DUO_HAND_BACK_TOOL
+export interface OrchestratorTransitionMeta {
+  tool: typeof ORCHESTRATOR_EXIT_PLAN_MODE_TOOL | typeof ORCHESTRATOR_HAND_BACK_TOOL
   fromModel: string
   toModel: string
-  fromPhase: DuoPhase
-  toPhase: DuoPhase
+  fromPhase: OrchestratorPhase
+  toPhase: OrchestratorPhase
   reason?: string
 }
 
-export interface DuoStateDocParsed {
-  recipes: Record<string, DuoRecipe>
+export interface OrchestratorStateDocParsed {
+  items: Record<string, OrchestratorItem>
 }
 
-export interface StarterDuoPreset {
+export interface StarterOrchestratorPreset {
   id: string
   name: string
   description: string
@@ -83,7 +83,7 @@ export interface StarterDuoPreset {
   maxExecutionSteps: number
 }
 
-export interface DuoRecipeDraft {
+export interface OrchestratorDraft {
   id: string
   name: string
   description: string
@@ -94,16 +94,16 @@ export interface DuoRecipeDraft {
   maxExecutionSteps: string
 }
 
-export type DuoDraftValidationError =
+export type OrchestratorDraftValidationError =
   | 'id_required'
   | 'id_invalid'
   | 'id_conflict'
   | 'name_required'
   | 'name_too_long'
   | 'planner_required'
-  | 'planner_duo_ref'
+  | 'planner_orchestrator_ref'
   | 'executor_required'
-  | 'executor_duo_ref'
+  | 'executor_orchestrator_ref'
   | 'steps_invalid'
   | 'description_too_long'
 
@@ -117,7 +117,7 @@ function normalizeOptionalString(raw: unknown): string | undefined {
   return typeof raw === 'string' && raw.trim() !== '' ? raw.trim() : undefined
 }
 
-export function isDuoEligibleConversation(
+export function isOrchestratorEligibleConversation(
   conversation: { parentConversationId?: number; ownedBy?: string } | undefined,
 ): boolean {
   if (!conversation) return false
@@ -132,12 +132,12 @@ export function parseTierRefId(ref: string | undefined): string | undefined {
   return id.length > 0 ? id : undefined
 }
 
-export function parseDuoStateDoc(raw: unknown): DuoStateDocParsed {
+export function parseOrchestratorStateDoc(raw: unknown): OrchestratorStateDocParsed {
   const obj = asRecord(raw)
-  const rawRecipes = obj !== null ? asRecord(obj['recipes']) : null
-  const recipes: Record<string, DuoRecipe> = {}
-  if (rawRecipes) {
-    for (const [key, val] of Object.entries(rawRecipes)) {
+  const rawItems = obj !== null ? asRecord(obj['items']) : null
+  const items: Record<string, OrchestratorItem> = {}
+  if (rawItems) {
+    for (const [key, val] of Object.entries(rawItems)) {
       const rec = asRecord(val)
       if (!rec) continue
       const id = normalizeOptionalString(rec['id']) ?? key
@@ -152,9 +152,9 @@ export function parseDuoStateDoc(raw: unknown): DuoStateDocParsed {
       const maxExecutionSteps =
         typeof rawSteps === 'number' && Number.isInteger(rawSteps) && rawSteps >= 0
           ? rawSteps
-          : DUO_DEFAULT_MAX_STEPS
+          : ORCHESTRATOR_DEFAULT_MAX_STEPS
       const updatedAt = typeof rec['updatedAt'] === 'number' ? rec['updatedAt'] : 0
-      recipes[id] = {
+      items[id] = {
         id,
         name,
         ...(description !== undefined ? { description } : {}),
@@ -167,28 +167,28 @@ export function parseDuoStateDoc(raw: unknown): DuoStateDocParsed {
       }
     }
   }
-  return { recipes }
+  return { items }
 }
 
-export function parseDuoSessionDoc(raw: unknown): DuoSessionView | null {
+export function parseOrchestratorSessionDoc(raw: unknown): OrchestratorSessionView | null {
   const obj = asRecord(raw)
   if (!obj || obj['enabled'] !== true) return null
   if (typeof obj['plannerModel'] !== 'string' || typeof obj['executorModel'] !== 'string') return null
-  const phase: DuoPhase = obj['phase'] === 'execution' ? 'execution' : 'planning'
-  const recipeId = typeof obj['recipeId'] === 'string' ? obj['recipeId'] : ''
-  const recipeName = typeof obj['recipeName'] === 'string' ? obj['recipeName'] : recipeId
+  const phase: OrchestratorPhase = obj['phase'] === 'execution' ? 'execution' : 'planning'
+  const orchestratorId = typeof obj['orchestratorId'] === 'string' ? obj['orchestratorId'] : ''
+  const orchestratorName = typeof obj['orchestratorName'] === 'string' ? obj['orchestratorName'] : orchestratorId
   const maxExecutionSteps =
     typeof obj['maxExecutionSteps'] === 'number' && Number.isInteger(obj['maxExecutionSteps'])
       ? obj['maxExecutionSteps']
-      : DUO_DEFAULT_MAX_STEPS
+      : ORCHESTRATOR_DEFAULT_MAX_STEPS
   const executionStepCount =
     typeof obj['executionStepCount'] === 'number' && Number.isInteger(obj['executionStepCount'])
       ? obj['executionStepCount']
       : 0
   return {
     enabled: true,
-    recipeId,
-    recipeName,
+    orchestratorId,
+    orchestratorName,
     phase,
     plannerModel: obj['plannerModel'],
     ...(typeof obj['plannerThinkingLevel'] === 'string'
@@ -220,11 +220,11 @@ export function extractFirstLine(raw: unknown): string | undefined {
   return line ? (line.length > 160 ? `${line.slice(0, 159)}…` : line) : undefined
 }
 
-export function parseDuoTransitionMeta(raw: unknown): DuoTransitionMeta | undefined {
+export function parseOrchestratorTransitionMeta(raw: unknown): OrchestratorTransitionMeta | undefined {
   const obj = asRecord(raw)
   if (!obj) return undefined
   const tool = obj['tool']
-  if (tool !== DUO_EXIT_PLAN_MODE_TOOL && tool !== DUO_HAND_BACK_TOOL) return undefined
+  if (tool !== ORCHESTRATOR_EXIT_PLAN_MODE_TOOL && tool !== ORCHESTRATOR_HAND_BACK_TOOL) return undefined
   const fromModel = typeof obj['fromModel'] === 'string' ? obj['fromModel'] : undefined
   const toModel = typeof obj['toModel'] === 'string' ? obj['toModel'] : undefined
   const fromPhase = obj['fromPhase']
@@ -246,7 +246,7 @@ export function parseDuoTransitionMeta(raw: unknown): DuoTransitionMeta | undefi
 export function collectExternalTierIds(hostModels: HostModelsSlice | null | undefined): Set<string> {
   const ids = new Set<string>()
   for (const tier of hostModels?.modelTiers ?? []) {
-    if (tier.displayGroup !== 'duo') {
+    if (tier.displayGroup !== 'orchestrator') {
       ids.add(tier.id)
     }
   }
@@ -260,7 +260,7 @@ export function resolveEndpointDisplay(
 ): {
   concreteModel?: string
   thinkingLevel?: string
-  status: DuoRecipeAvailability
+  status: OrchestratorAvailability
   reason?: string
 } {
   const tierId = parseTierRefId(ref)
@@ -269,7 +269,7 @@ export function resolveEndpointDisplay(
 
   if (tierId !== undefined) {
     const external = hostModels?.modelTiers?.find(
-      (t) => t.id === tierId && t.displayGroup !== 'duo',
+      (t) => t.id === tierId && t.displayGroup !== 'orchestrator',
     )
     if (!external) {
       return {
@@ -329,16 +329,16 @@ export function resolveEndpointDisplay(
   }
 }
 
-export function synthesizeDuoRecipeItems(
-  recipes: Readonly<Record<string, DuoRecipe>>,
+export function synthesizeOrchestratorItems(
+  items: Readonly<Record<string, OrchestratorItem>>,
   hostModels: HostModelsSlice | null | undefined,
-): DuoRecipeViewItem[] {
-  return Object.values(recipes)
+): OrchestratorViewItem[] {
+  return Object.values(items)
     .sort((a, b) => a.id.localeCompare(b.id))
-    .map((recipe) => {
-      const planner = resolveEndpointDisplay(recipe.plannerModel, recipe.plannerThinkingLevel, hostModels)
-      const executor = resolveEndpointDisplay(recipe.executorModel, recipe.executorThinkingLevel, hostModels)
-      let status: DuoRecipeAvailability = 'available'
+    .map((item) => {
+      const planner = resolveEndpointDisplay(item.plannerModel, item.plannerThinkingLevel, hostModels)
+      const executor = resolveEndpointDisplay(item.executorModel, item.executorThinkingLevel, hostModels)
+      let status: OrchestratorAvailability = 'available'
       let unavailableReason: string | undefined
       if (planner.status !== 'available') {
         status = planner.status
@@ -348,7 +348,7 @@ export function synthesizeDuoRecipeItems(
         unavailableReason = executor.reason
       }
       return {
-        recipe,
+        item,
         ...(planner.concreteModel !== undefined ? { resolvedPlannerModel: planner.concreteModel } : {}),
         ...(planner.thinkingLevel !== undefined ? { resolvedPlannerThinkingLevel: planner.thinkingLevel } : {}),
         ...(executor.concreteModel !== undefined ? { resolvedExecutorModel: executor.concreteModel } : {}),
@@ -359,8 +359,8 @@ export function synthesizeDuoRecipeItems(
     })
 }
 
-export function countDuoRecipeItemsByStatus(
-  items: ReadonlyArray<DuoRecipeViewItem>,
+export function countOrchestratorItemsByStatus(
+  items: ReadonlyArray<OrchestratorViewItem>,
 ): { all: number; ready: number; attention: number } {
   let ready = 0
   for (const item of items) {
@@ -373,23 +373,23 @@ export function countDuoRecipeItemsByStatus(
   }
 }
 
-export function filterDuoRecipeItems(
-  items: ReadonlyArray<DuoRecipeViewItem>,
+export function filterOrchestratorItems(
+  items: ReadonlyArray<OrchestratorViewItem>,
   search: string,
-  statusFilter: DuoStatusFilter = 'all',
-): DuoRecipeViewItem[] {
+  statusFilter: OrchestratorStatusFilter = 'all',
+): OrchestratorViewItem[] {
   const q = search.trim().toLowerCase()
-  return items.filter(({ recipe, resolvedPlannerModel, resolvedExecutorModel, status }) => {
+  return items.filter(({ item, resolvedPlannerModel, resolvedExecutorModel, status }) => {
     if (statusFilter === 'ready' && status !== 'available') return false
     if (statusFilter === 'attention' && status === 'available') return false
     if (!q) return true
     const fields = [
-      recipe.id,
-      `tier/${recipe.id}`,
-      recipe.name,
-      recipe.description ?? '',
-      recipe.plannerModel,
-      recipe.executorModel,
+      item.id,
+      `tier/${item.id}`,
+      item.name,
+      item.description ?? '',
+      item.plannerModel,
+      item.executorModel,
       resolvedPlannerModel ?? '',
       resolvedExecutorModel ?? '',
     ]
@@ -397,13 +397,13 @@ export function filterDuoRecipeItems(
   })
 }
 
-export function matchDuoRecipeFromModelRef(
+export function matchOrchestratorItemFromModelRef(
   modelRef: string | undefined,
-  recipes: Readonly<Record<string, DuoRecipe>>,
-): DuoRecipe | undefined {
+  items: Readonly<Record<string, OrchestratorItem>>,
+): OrchestratorItem | undefined {
   const tierId = parseTierRefId(modelRef)
   if (!tierId) return undefined
-  return Object.hasOwn(recipes, tierId) ? recipes[tierId] : undefined
+  return Object.hasOwn(items, tierId) ? items[tierId] : undefined
 }
 
 function resolvePresetEndpointShort(
@@ -419,12 +419,12 @@ function resolvePresetEndpointShort(
   return formatModelShortName(ref)
 }
 
-export function getStarterDuoPresets(
+export function getStarterOrchestratorPresets(
   locale: HelmxLocale,
   hostModels: HostModelsSlice | null | undefined,
-): StarterDuoPreset[] {
+): StarterOrchestratorPreset[] {
   const externalTiers = (hostModels?.modelTiers ?? []).filter(
-    (t) => t.displayGroup !== 'duo' && t.available && t.disabled !== true,
+    (t) => t.displayGroup !== 'orchestrator' && t.available && t.disabled !== true,
   )
   const hasTier = (id: string) => externalTiers.some((t) => t.id === id)
   const availableModels = (hostModels?.models ?? [])
@@ -446,15 +446,15 @@ export function getStarterDuoPresets(
   if (locale === 'zh-CN') {
     return [
       {
-        id: 'duo_architect',
+        id: 'orch_architect',
         name: `编排器（${plannerShort}）`,
         description: '高阶推理只读探索并撰写执行方案，交由主力工程模型落地修改与校验。',
         plannerModel: architectRef,
         executorModel: coderRef,
-        maxExecutionSteps: DUO_DEFAULT_MAX_STEPS,
+        maxExecutionSteps: ORCHESTRATOR_DEFAULT_MAX_STEPS,
       },
       {
-        id: 'duo_fast',
+        id: 'orch_fast',
         name: `编排器（${secondLabel}）`,
         description: '规划端聚焦约束与方案，高频局部改动由轻量高并发模型快速完成。',
         plannerModel: architectRef,
@@ -465,15 +465,15 @@ export function getStarterDuoPresets(
   }
   return [
     {
-      id: 'duo_architect',
+      id: 'orch_architect',
       name: `Orchestrator (${plannerShort})`,
       description: 'Explore read-only with a flagship planner, then hand execution edits and checks to your coder.',
       plannerModel: architectRef,
       executorModel: coderRef,
-      maxExecutionSteps: DUO_DEFAULT_MAX_STEPS,
+      maxExecutionSteps: ORCHESTRATOR_DEFAULT_MAX_STEPS,
     },
     {
-      id: 'duo_fast',
+      id: 'orch_fast',
       name: `Orchestrator (${secondLabel})`,
       description: 'Reserve reasoning capacity for design and reviews while a fast executor applies targeted edits.',
       plannerModel: architectRef,
@@ -483,7 +483,7 @@ export function getStarterDuoPresets(
   ]
 }
 
-export function createEmptyDuoDraft(preset?: StarterDuoPreset): DuoRecipeDraft {
+export function createEmptyOrchestratorDraft(preset?: StarterOrchestratorPreset): OrchestratorDraft {
   return {
     id: preset?.id ?? '',
     name: preset?.name ?? '',
@@ -492,24 +492,24 @@ export function createEmptyDuoDraft(preset?: StarterDuoPreset): DuoRecipeDraft {
     plannerThinkingLevel: preset?.plannerThinkingLevel ?? '',
     executorModel: preset?.executorModel ?? '',
     executorThinkingLevel: preset?.executorThinkingLevel ?? '',
-    maxExecutionSteps: String(preset?.maxExecutionSteps ?? DUO_DEFAULT_MAX_STEPS),
+    maxExecutionSteps: String(preset?.maxExecutionSteps ?? ORCHESTRATOR_DEFAULT_MAX_STEPS),
   }
 }
 
-export function recipeToDraft(recipe: DuoRecipe): DuoRecipeDraft {
+export function itemToDraft(item: OrchestratorItem): OrchestratorDraft {
   return {
-    id: recipe.id,
-    name: recipe.name,
-    description: recipe.description ?? '',
-    plannerModel: recipe.plannerModel,
-    plannerThinkingLevel: recipe.plannerThinkingLevel ?? '',
-    executorModel: recipe.executorModel,
-    executorThinkingLevel: recipe.executorThinkingLevel ?? '',
-    maxExecutionSteps: String(recipe.maxExecutionSteps),
+    id: item.id,
+    name: item.name,
+    description: item.description ?? '',
+    plannerModel: item.plannerModel,
+    plannerThinkingLevel: item.plannerThinkingLevel ?? '',
+    executorModel: item.executorModel,
+    executorThinkingLevel: item.executorThinkingLevel ?? '',
+    maxExecutionSteps: String(item.maxExecutionSteps),
   }
 }
 
-export function isDuoDraftDirty(draft: DuoRecipeDraft, baseline: DuoRecipeDraft): boolean {
+export function isOrchestratorDraftDirty(draft: OrchestratorDraft, baseline: OrchestratorDraft): boolean {
   return (
     draft.id !== baseline.id ||
     draft.name !== baseline.name ||
@@ -522,44 +522,44 @@ export function isDuoDraftDirty(draft: DuoRecipeDraft, baseline: DuoRecipeDraft)
   )
 }
 
-export function validateDuoDraft(
-  draft: DuoRecipeDraft,
+export function validateOrchestratorDraft(
+  draft: OrchestratorDraft,
   options: {
     mode: 'create' | 'edit'
-    existingRecipeIds: ReadonlySet<string>
+    existingItemIds: ReadonlySet<string>
     externalTierIds: ReadonlySet<string>
   },
-): DuoDraftValidationError | null {
+): OrchestratorDraftValidationError | null {
   const id = draft.id.trim()
   if (!id) return 'id_required'
-  if (!DUO_ID_REGEX.test(id)) return 'id_invalid'
+  if (!ORCHESTRATOR_ID_REGEX.test(id)) return 'id_invalid'
   if (options.externalTierIds.has(id)) return 'id_conflict'
-  if (options.mode === 'create' && options.existingRecipeIds.has(id)) return 'id_conflict'
+  if (options.mode === 'create' && options.existingItemIds.has(id)) return 'id_conflict'
 
   const name = draft.name.trim()
   if (!name) return 'name_required'
-  if (name.length > DUO_RECIPE_NAME_MAX_LENGTH) return 'name_too_long'
+  if (name.length > ORCHESTRATOR_NAME_MAX_LENGTH) return 'name_too_long'
 
   const planner = draft.plannerModel.trim()
   if (!planner) return 'planner_required'
   const plannerTier = parseTierRefId(planner)
-  if (plannerTier !== undefined && (plannerTier === id || options.existingRecipeIds.has(plannerTier))) {
-    return 'planner_duo_ref'
+  if (plannerTier !== undefined && (plannerTier === id || options.existingItemIds.has(plannerTier))) {
+    return 'planner_orchestrator_ref'
   }
 
   const executor = draft.executorModel.trim()
   if (!executor) return 'executor_required'
   const executorTier = parseTierRefId(executor)
-  if (executorTier !== undefined && (executorTier === id || options.existingRecipeIds.has(executorTier))) {
-    return 'executor_duo_ref'
+  if (executorTier !== undefined && (executorTier === id || options.existingItemIds.has(executorTier))) {
+    return 'executor_orchestrator_ref'
   }
 
   const parsedSteps = Number(draft.maxExecutionSteps.trim())
-  if (!Number.isInteger(parsedSteps) || parsedSteps < 0 || parsedSteps > DUO_MAX_STEPS_LIMIT) {
+  if (!Number.isInteger(parsedSteps) || parsedSteps < 0 || parsedSteps > ORCHESTRATOR_MAX_STEPS_LIMIT) {
     return 'steps_invalid'
   }
 
-  if (draft.description.trim().length > DUO_DESCRIPTION_MAX_LENGTH) {
+  if (draft.description.trim().length > ORCHESTRATOR_DESCRIPTION_MAX_LENGTH) {
     return 'description_too_long'
   }
 

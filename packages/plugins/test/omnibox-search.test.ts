@@ -25,7 +25,7 @@ import { createHubHandler } from '@helmx/kernel'
 import { createPluginBuildProvider } from '@helmx/plugin-build'
 import { createHelmx } from '../../hub/src/app.js'
 import { CHANGES_PLUGIN_ID, CHANGES_SCREEN_ID } from '../src/changes.js'
-import { DUO_PLUGIN_ID, DUO_SCREEN_ID } from '../src/duo.js'
+import { ORCHESTRATOR_PLUGIN_ID, ORCHESTRATOR_SCREEN_ID } from '../src/orchestrator.js'
 import { MAGPIE_PLUGIN_ID } from '../src/magpie.js'
 import { PORT_FORWARD_PLUGIN_ID, PORT_FORWARD_SCREEN_ID } from '../src/port-forward.js'
 import { compactOneLine, rankSearchCandidates, scoreSearchFields } from '../src/search-utils.js'
@@ -282,26 +282,35 @@ test('enriched UI specs: screens, settingsPanels, and navigation commands pass P
     assert.equal(tiersCreateCmd['target'], `screen:${TIERS_PLUGIN_ID}/${TIERS_SCREEN_ID}?create=1`)
     assertNoEmoji('tiers command.keywords', tiersCreateCmd['keywords'])
 
-    // 2b) builtin:duo (screen ID is 'main', createParam is 'create')
-    const duoScreen = findUi(DUO_PLUGIN_ID, 'screen', DUO_SCREEN_ID)
-    assert.ok(duoScreen, 'builtin:duo screen should register')
-    assertBilingualMetadata('duo screen.description', duoScreen['description'])
-    assert.ok(Array.isArray(duoScreen['keywords']) && (duoScreen['keywords'] as string[]).includes('orchestrator'))
-    assert.equal((duoScreen['keywords'] as string[]).includes('recipe'), false)
-    assertNoEmoji('duo screen.keywords', duoScreen['keywords'])
+    // 2b) builtin:orchestrator (screen ID is 'main', createParam is 'create')
+    const orchestratorScreen = findUi(ORCHESTRATOR_PLUGIN_ID, 'screen', ORCHESTRATOR_SCREEN_ID)
+    assert.ok(orchestratorScreen, 'builtin:orchestrator screen should register')
+    assertBilingualMetadata('orchestrator screen.description', orchestratorScreen['description'])
+    assert.ok(
+      Array.isArray(orchestratorScreen['keywords']) &&
+        (orchestratorScreen['keywords'] as string[]).includes('orchestrator'),
+    )
+    assert.equal((orchestratorScreen['keywords'] as string[]).includes('recipe'), false)
+    assertNoEmoji('orchestrator screen.keywords', orchestratorScreen['keywords'])
 
-    const duoSettings = findUi(DUO_PLUGIN_ID, 'settings.panel', 'duo-settings')
-    assert.ok(duoSettings, 'builtin:duo settingsPanel should register')
-    assertBilingualMetadata('duo settingsPanel.description', duoSettings['description'])
-    assert.ok(Array.isArray(duoSettings['keywords']) && (duoSettings['keywords'] as string[]).includes('planner'))
-    assertNoEmoji('duo settingsPanel.keywords', duoSettings['keywords'])
+    const orchestratorSettings = findUi(ORCHESTRATOR_PLUGIN_ID, 'settings.panel', 'orchestrator-settings')
+    assert.ok(orchestratorSettings, 'builtin:orchestrator settingsPanel should register')
+    assertBilingualMetadata('orchestrator settingsPanel.description', orchestratorSettings['description'])
+    assert.ok(
+      Array.isArray(orchestratorSettings['keywords']) &&
+        (orchestratorSettings['keywords'] as string[]).includes('planner'),
+    )
+    assertNoEmoji('orchestrator settingsPanel.keywords', orchestratorSettings['keywords'])
 
-    const duoCreateCmd = findUi(DUO_PLUGIN_ID, 'commandPalette', 'duo-create')
-    assert.ok(duoCreateCmd, 'builtin:duo create command should register')
-    assertBilingualMetadata('duo command.title', duoCreateCmd['title'])
-    assertBilingualMetadata('duo command.description', duoCreateCmd['description'])
-    assert.equal(duoCreateCmd['target'], `screen:${DUO_PLUGIN_ID}/${DUO_SCREEN_ID}?create=1`)
-    assertNoEmoji('duo command.keywords', duoCreateCmd['keywords'])
+    const orchestratorCreateCmd = findUi(ORCHESTRATOR_PLUGIN_ID, 'commandPalette', 'orchestrator-create')
+    assert.ok(orchestratorCreateCmd, 'builtin:orchestrator create command should register')
+    assertBilingualMetadata('orchestrator command.title', orchestratorCreateCmd['title'])
+    assertBilingualMetadata('orchestrator command.description', orchestratorCreateCmd['description'])
+    assert.equal(
+      orchestratorCreateCmd['target'],
+      `screen:${ORCHESTRATOR_PLUGIN_ID}/${ORCHESTRATOR_SCREEN_ID}?create=1`,
+    )
+    assertNoEmoji('orchestrator command.keywords', orchestratorCreateCmd['keywords'])
 
     // 3) builtin:port-forward (screen ID is 'main', createParam is 'create')
     const pfScreen = findUi(PORT_FORWARD_PLUGIN_ID, 'screen', PORT_FORWARD_SCREEN_ID)
@@ -619,49 +628,49 @@ test('builtin:port-forward helmx.search: searches rules by name/node/ports with 
   }
 })
 
-test('builtin:duo helmx.search: searches Orchestrators with valid ?edit= targets, respects limit/signal, and releases on disable', TIMEOUT, async () => {
+test('builtin:orchestrator helmx.search: searches Orchestrators with valid ?edit= targets, respects limit/signal, and releases on disable', TIMEOUT, async () => {
   const env = await openTestApp()
   try {
-    await env.app.kernel.plugins.invokeAction(DUO_PLUGIN_ID, 'set', {
+    await env.app.kernel.plugins.invokeAction(ORCHESTRATOR_PLUGIN_ID, 'set', {
       id: 'arch_pair',
       name: 'Architect & Coder',
       description: 'Read-only planning into fast code edits',
       plannerModel: 'faux/flagship',
       executorModel: 'faux/fast',
     })
-    await env.app.kernel.plugins.invokeAction(DUO_PLUGIN_ID, 'set', {
+    await env.app.kernel.plugins.invokeAction(ORCHESTRATOR_PLUGIN_ID, 'set', {
       id: 'missing_ext',
       name: 'Deferred Tier Pair',
       plannerModel: 'tier/unmounted_tier',
       executorModel: 'faux/fast',
     })
 
-    const provider = findProvider(env.app, DUO_PLUGIN_ID)
-    assert.ok(provider, 'builtin:duo should provide helmx.search')
+    const provider = findProvider(env.app, ORCHESTRATOR_PLUGIN_ID)
+    assert.ok(provider, 'builtin:orchestrator should provide helmx.search')
 
     const byName = await provider.search({ query: 'Architect', limit: 8 }, new AbortController().signal)
     assert.equal(byName.length, 1)
     const hit = byName[0]!
-    assert.equal(hit.id, 'recipe:arch_pair')
+    assert.equal(hit.id, 'orchestrator:arch_pair')
     assert.equal(hit.kind, 'resource')
     assert.equal(hit.title, 'Architect & Coder')
     assert.deepEqual(hit.breadcrumb, [{ en: 'Orchestrator', 'zh-CN': '编排器' }])
     assert.equal(hit.icon, 'git-pull-request')
     assert.equal(hit.badge, undefined)
-    const params = parseTargetQuery(hit.target, `screen:${DUO_PLUGIN_ID}/${DUO_SCREEN_ID}`)
+    const params = parseTargetQuery(hit.target, `screen:${ORCHESTRATOR_PLUGIN_ID}/${ORCHESTRATOR_SCREEN_ID}`)
     assert.equal(params.get('edit'), 'arch_pair')
-    assertNoEmoji('duo search hit', hit)
+    assertNoEmoji('orchestrator search hit', hit)
 
     const byKeyword = await provider.search({ query: '编排器', limit: 8 }, new AbortController().signal)
     assert.equal(byKeyword.length, 2)
 
     const byTierRef = await provider.search({ query: 'tier/arch_pair', limit: 8 }, new AbortController().signal)
     assert.equal(byTierRef.length, 1)
-    assert.equal(byTierRef[0]!.id, 'recipe:arch_pair')
+    assert.equal(byTierRef[0]!.id, 'orchestrator:arch_pair')
 
     const byUnavailable = await provider.search({ query: 'Deferred', limit: 8 }, new AbortController().signal)
     assert.equal(byUnavailable.length, 1)
-    assert.ok(byUnavailable[0]!.badge !== undefined, 'unresolved external tier recipe must surface Unavailable badge')
+    assert.ok(byUnavailable[0]!.badge !== undefined, 'unresolved external tier orchestrator must surface Unavailable badge')
 
     const limited = await provider.search({ query: 'fast', limit: 1 }, new AbortController().signal)
     assert.equal(limited.length, 1)
@@ -669,12 +678,12 @@ test('builtin:duo helmx.search: searches Orchestrators with valid ?edit= targets
     assert.deepEqual(await provider.search({ query: 'Architect', limit: 8 }, AbortSignal.abort()), [])
 
     const httpRes = await queryOmniboxHttp(env, 'arch_pair')
-    assert.ok(httpRes.pluginItems.some((i) => i.pluginId === DUO_PLUGIN_ID && i.target === hit.target))
+    assert.ok(httpRes.pluginItems.some((i) => i.pluginId === ORCHESTRATOR_PLUGIN_ID && i.target === hit.target))
 
-    await env.app.kernel.plugins.disable(DUO_PLUGIN_ID, { force: true })
-    assert.equal(findProvider(env.app, DUO_PLUGIN_ID), undefined)
+    await env.app.kernel.plugins.disable(ORCHESTRATOR_PLUGIN_ID, { force: true })
+    assert.equal(findProvider(env.app, ORCHESTRATOR_PLUGIN_ID), undefined)
     const afterDisable = await queryOmniboxHttp(env, 'arch_pair')
-    assert.equal(afterDisable.pluginItems.some((i) => i.pluginId === DUO_PLUGIN_ID), false)
+    assert.equal(afterDisable.pluginItems.some((i) => i.pluginId === ORCHESTRATOR_PLUGIN_ID), false)
   } finally {
     await env.close()
   }

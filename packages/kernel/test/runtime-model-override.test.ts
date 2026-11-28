@@ -528,12 +528,12 @@ describe('symbolic effectiveModelRef, preserveRef tiers & ModelTierSpec metadata
       definePlugin(ctx) {
         ctx.provide<ModelTiersCapability>('helmx.model-tiers', {
           getTiers: () => ({
-            duo: {
+            orchestrator: {
               model: 'faux/base',
               thinkingLevel: 'medium',
               description: 'Plan then verify',
-              displayGroup: '  duo  ',
-              displayLabel: '  Faux Duo  ',
+              displayGroup: '  orchestrator  ',
+              displayLabel: '  Faux Orchestrator  ',
               displayDetail: '  base -> alt  ',
               preserveRef: true,
               singleTurnEligible: false,
@@ -554,14 +554,14 @@ describe('symbolic effectiveModelRef, preserveRef tiers & ModelTierSpec metadata
     const res = await apiCall(kernel, 'GET', '/api/models')
     assert.equal(res.status, 200)
     const tiers = res.body.modelTiers as Array<Record<string, unknown>>
-    const duo = tiers.find((entry) => entry.id === 'duo')
-    assert.deepEqual(duo, {
-      id: 'duo',
+    const orchestrator = tiers.find((entry) => entry.id === 'orchestrator')
+    assert.deepEqual(orchestrator, {
+      id: 'orchestrator',
       model: 'faux/base',
       thinkingLevel: 'medium',
       description: 'Plan then verify',
-      displayGroup: 'duo',
-      displayLabel: 'Faux Duo',
+      displayGroup: 'orchestrator',
+      displayLabel: 'Faux Orchestrator',
       displayDetail: 'base -> alt',
       preserveRef: true,
       singleTurnEligible: false,
@@ -586,17 +586,17 @@ describe('symbolic effectiveModelRef, preserveRef tiers & ModelTierSpec metadata
       await cleanupDir(dir)
     }, { timeout: 60_000 })
 
-    let duoThinking = 'medium'
+    let orchThinking = 'medium'
     await kernel.plugins.register({
-      id: 'test:duo-tier',
+      id: 'test:orchestrator-tier',
       definePlugin(ctx) {
         ctx.provide<ModelTiersCapability>('helmx.model-tiers', {
           getTiers: () => ({
-            duo: {
+            orch: {
               model: 'faux/base',
-              thinkingLevel: duoThinking,
-              displayGroup: 'duo',
-              displayLabel: 'Faux Duo',
+              thinkingLevel: orchThinking,
+              displayGroup: 'orchestrator',
+              displayLabel: 'Faux Orchestrator',
               preserveRef: true,
               singleTurnEligible: false,
             },
@@ -611,17 +611,17 @@ describe('symbolic effectiveModelRef, preserveRef tiers & ModelTierSpec metadata
 
     // 1. Top-level human create keeps symbolic ref without freezing thinkingLevelOverride
     const humanTop = await kernel.conversations.createConversation({
-      title: 'human-duo',
-      model: 'tier/duo',
+      title: 'human-orch',
+      model: 'tier/orch',
     }) as ConversationSummary & { thinkingLevelOverride?: string }
     assert.equal(humanTop.model, 'faux/base')
-    assert.equal(humanTop.modelOverride, 'tier/duo')
-    assert.equal(humanTop.effectiveModelRef, 'tier/duo')
+    assert.equal(humanTop.modelOverride, 'tier/orch')
+    assert.equal(humanTop.effectiveModelRef, 'tier/orch')
     assert.equal(humanTop.thinkingLevel, 'medium')
     assert.equal(humanTop.thinkingLevelOverride, undefined)
 
     // Tier thinking update remains live for preserveRef top-level human conversation
-    duoThinking = 'high'
+    orchThinking = 'high'
     await kernel.conversations.alignAllConversations()
     assert.equal(kernel.conversations.getConversation(humanTop.id).thinkingLevel, 'high')
 
@@ -635,7 +635,7 @@ describe('symbolic effectiveModelRef, preserveRef tiers & ModelTierSpec metadata
     assert.equal(nonPreserve.effectiveModelRef, undefined)
     assert.equal(nonPreserve.thinkingLevelOverride, 'high')
 
-    // 2. Switching between concrete 'faux/base' (thinking=low) and 'tier/duo' (target 'faux/base', thinking=high)
+    // 2. Switching between concrete 'faux/base' (thinking=low) and 'tier/orch' (target 'faux/base', thinking=high)
     const patchedToConcrete = await kernel.conversations.updateConversation(humanTop.id, {
       model: 'faux/base',
       thinkingLevel: 'low',
@@ -646,20 +646,20 @@ describe('symbolic effectiveModelRef, preserveRef tiers & ModelTierSpec metadata
     assert.equal(patchedToConcrete.thinkingLevel, 'low')
     assert.equal(patchedToConcrete.thinkingLevelOverride, 'low')
 
-    const patchedBackToDuo = await kernel.conversations.updateConversation(humanTop.id, {
-      model: 'tier/duo',
+    const patchedBackToOrch = await kernel.conversations.updateConversation(humanTop.id, {
+      model: 'tier/orch',
     }) as ConversationSummary & { thinkingLevelOverride?: string }
-    assert.equal(patchedBackToDuo.model, 'faux/base')
-    assert.equal(patchedBackToDuo.modelOverride, 'tier/duo')
-    assert.equal(patchedBackToDuo.effectiveModelRef, 'tier/duo')
-    assert.equal(patchedBackToDuo.thinkingLevel, 'high')
-    assert.equal(patchedBackToDuo.thinkingLevelOverride, undefined)
+    assert.equal(patchedBackToOrch.model, 'faux/base')
+    assert.equal(patchedBackToOrch.modelOverride, 'tier/orch')
+    assert.equal(patchedBackToOrch.effectiveModelRef, 'tier/orch')
+    assert.equal(patchedBackToOrch.thinkingLevel, 'high')
+    assert.equal(patchedBackToOrch.thinkingLevelOverride, undefined)
 
-    // 3. Child conversation, helmx-owned conversation, and fork ALL freeze symbolic 'tier/duo' -> concrete 'faux/base'
+    // 3. Child conversation, helmx-owned conversation, and fork ALL freeze symbolic 'tier/orch' -> concrete 'faux/base'
     const child = await kernel.conversations.createConversation({
       title: 'child',
       parentConversationId: humanTop.id,
-      model: 'tier/duo',
+      model: 'tier/orch',
     })
     assert.equal(child.modelOverride, 'faux/base')
     assert.equal(child.effectiveModelRef, undefined)
@@ -667,7 +667,7 @@ describe('symbolic effectiveModelRef, preserveRef tiers & ModelTierSpec metadata
     const helmxTop = await kernel.conversations.createConversation({
       title: 'helmx-top',
       ownedBy: 'helmx',
-      model: 'tier/duo',
+      model: 'tier/orch',
     })
     assert.equal(helmxTop.modelOverride, 'faux/base')
     assert.equal(helmxTop.effectiveModelRef, undefined)
@@ -694,9 +694,9 @@ describe('symbolic effectiveModelRef, preserveRef tiers & ModelTierSpec metadata
     assert.equal(spawnedSummary.modelOverride, 'faux/base')
     assert.equal(spawnedSummary.effectiveModelRef, undefined)
 
-    // 4. Profile model switches between 'faux/base' and 'tier/duo' (same target) propagate effectiveModelRef & emit upsert
-    await kernel.services.profiles.save({ id: 'duo-prof', name: 'Duo Profile', model: 'faux/base' })
-    const inherited = await kernel.conversations.createConversation({ title: 'inherited', profileId: 'duo-prof' })
+    // 4. Profile model switches between 'faux/base' and 'tier/orch' (same target) propagate effectiveModelRef & emit upsert
+    await kernel.services.profiles.save({ id: 'orch-prof', name: 'Orchestrator Profile', model: 'faux/base' })
+    const inherited = await kernel.conversations.createConversation({ title: 'inherited', profileId: 'orch-prof' })
     assert.equal(inherited.effectiveModelRef, undefined)
 
     const upserts: ConversationSummary[] = []
@@ -707,16 +707,16 @@ describe('symbolic effectiveModelRef, preserveRef tiers & ModelTierSpec metadata
     })
     t.after(unsub, { timeout: 60_000 })
 
-    await kernel.services.profiles.save({ id: 'duo-prof', name: 'Duo Profile', model: 'tier/duo' })
-    await kernel.conversations.alignProfileConversations('duo-prof')
+    await kernel.services.profiles.save({ id: 'orch-prof', name: 'Orchestrator Profile', model: 'tier/orch' })
+    await kernel.conversations.alignProfileConversations('orch-prof')
     const afterProfileTier = kernel.conversations.getConversation(inherited.id)
     assert.equal(afterProfileTier.modelOverride, undefined)
     assert.equal(afterProfileTier.model, 'faux/base')
-    assert.equal(afterProfileTier.effectiveModelRef, 'tier/duo')
-    assert.equal(upserts.at(-1)?.effectiveModelRef, 'tier/duo')
+    assert.equal(afterProfileTier.effectiveModelRef, 'tier/orch')
+    assert.equal(upserts.at(-1)?.effectiveModelRef, 'tier/orch')
 
-    await kernel.services.profiles.save({ id: 'duo-prof', name: 'Duo Profile', model: 'faux/base' })
-    await kernel.conversations.alignProfileConversations('duo-prof')
+    await kernel.services.profiles.save({ id: 'orch-prof', name: 'Orchestrator Profile', model: 'faux/base' })
+    await kernel.conversations.alignProfileConversations('orch-prof')
     const afterProfileConcrete = kernel.conversations.getConversation(inherited.id)
     assert.equal(afterProfileConcrete.effectiveModelRef, undefined)
     assert.equal(upserts.at(-1)?.effectiveModelRef, undefined)
@@ -734,7 +734,7 @@ describe('symbolic effectiveModelRef, preserveRef tiers & ModelTierSpec metadata
         definePlugin(ctx) {
           ctx.provide<ModelTiersCapability>('helmx.model-tiers', {
             getTiers: () => ({
-              duo: { model: 'faux/base', preserveRef: true },
+              orch: { model: 'faux/base', preserveRef: true },
             }),
           })
         },
@@ -744,9 +744,9 @@ describe('symbolic effectiveModelRef, preserveRef tiers & ModelTierSpec metadata
     const first = buildFauxCatalog()
     const kernel1 = await KernelRuntime.open({ dataDir: dir, cwd: dir, model: 'faux/base', models: first.models as never })
     await registerTiers(kernel1)
-    await kernel1.services.profiles.save({ id: 'boot-prof', name: 'Boot Profile', model: 'tier/duo' })
-    const direct = await kernel1.conversations.createConversation({ title: 'direct-duo', model: 'tier/duo' })
-    const fromProfile = await kernel1.conversations.createConversation({ title: 'profile-duo', profileId: 'boot-prof' })
+    await kernel1.services.profiles.save({ id: 'boot-prof', name: 'Boot Profile', model: 'tier/orch' })
+    const direct = await kernel1.conversations.createConversation({ title: 'direct-orch', model: 'tier/orch' })
+    const fromProfile = await kernel1.conversations.createConversation({ title: 'profile-orch', profileId: 'boot-prof' })
     const directSeq = direct.stateChangeSeq
     const profileSeq = fromProfile.stateChangeSeq
     await kernel1.close()
@@ -767,10 +767,10 @@ describe('symbolic effectiveModelRef, preserveRef tiers & ModelTierSpec metadata
 
     const recoveredDirect = kernel2.conversations.getConversation(direct.id)
     const recoveredProfile = kernel2.conversations.getConversation(fromProfile.id)
-    assert.equal(recoveredDirect.modelOverride, 'tier/duo')
-    assert.equal(recoveredDirect.effectiveModelRef, 'tier/duo')
+    assert.equal(recoveredDirect.modelOverride, 'tier/orch')
+    assert.equal(recoveredDirect.effectiveModelRef, 'tier/orch')
     assert.equal(recoveredDirect.stateChangeSeq, directSeq)
-    assert.equal(recoveredProfile.effectiveModelRef, 'tier/duo')
+    assert.equal(recoveredProfile.effectiveModelRef, 'tier/orch')
     assert.equal(recoveredProfile.stateChangeSeq, profileSeq)
   })
 })
