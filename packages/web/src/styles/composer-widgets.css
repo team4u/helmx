@@ -285,6 +285,7 @@
   justify-content: flex-end;
   max-width: 100%;
   margin-left: auto;
+  border: none;
   background: color-mix(in srgb, var(--seg-track) 55%, transparent);
 }
 @media (hover: hover) {

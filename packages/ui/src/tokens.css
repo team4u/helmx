@@ -115,9 +115,9 @@
   --line-2: #ececf0;
 
   /* 分段控制器与导航滑轨阴影 */
-  --seg-track: #e6e6eb;
+  --seg-track: #efeff3;
   --seg-thumb: #ffffff;
-  --seg-edge: 0 1px 2px rgba(0, 0, 0, 0.12), 0 0 0 0.5px rgba(0, 0, 0, 0.08);
+  --seg-edge: 0 1px 1.5px rgba(0, 0, 0, 0.08), 0 0 0 0.5px rgba(0, 0, 0, 0.07);
 
   /* 侧栏交互与选中态色阶 */
   --nav-hover-bg: #eeeef3;
@@ -228,9 +228,9 @@
   --focus-ring-soft: rgba(255, 255, 255, 0.12);
   --line-2: #2c2c32;
 
-  --seg-track: rgba(255, 255, 255, 0.035);
-  --seg-thumb: rgba(255, 255, 255, 0.15);
-  --seg-edge: inset 0 0.5px 0 rgba(255, 255, 255, 0.12), 0 1px 2px rgba(0, 0, 0, 0.34), 0 0 0 0.5px rgba(255, 255, 255, 0.07);
+  --seg-track: rgba(255, 255, 255, 0.03);
+  --seg-thumb: rgba(255, 255, 255, 0.11);
+  --seg-edge: inset 0 0.5px 0 rgba(255, 255, 255, 0.1), 0 1px 2px rgba(0, 0, 0, 0.28), 0 0 0 0.5px rgba(255, 255, 255, 0.06);
 
   --nav-hover-bg: #2a2a31;
   --nav-list-hover-bg: #26262c;

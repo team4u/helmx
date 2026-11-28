@@ -116,10 +116,10 @@
   overflow-x: auto;
   scrollbar-width: none;
   background: var(--seg-track);
-  border: none;
+  border: 1px solid var(--border);
   border-radius: var(--control-radius-md);
   padding: 2px;
-  gap: 2px;
+  gap: 1px;
   box-sizing: border-box;
 }
 
@@ -131,15 +131,16 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 5px;
-  height: calc(var(--control-h-md) - 4px);
-  padding: 0 12px;
+  gap: 4px;
+  height: calc(var(--control-h-md) - 6px);
+  padding: 0 10px;
   font-size: var(--control-font-md);
-  font-weight: 500;
+  font-weight: 400;
+  line-height: 1;
   color: var(--fg-muted);
   background: transparent;
   border: none;
-  border-radius: var(--control-radius-sm);
+  border-radius: 4.5px;
   cursor: pointer;
   transition: background 120ms ease, color 120ms ease, box-shadow 120ms ease;
   white-space: nowrap;
@@ -172,6 +173,7 @@
   outline: none;
   background: var(--seg-thumb);
   color: var(--fg);
+  font-weight: 500;
   box-shadow: var(--seg-edge);
 }
 
@@ -186,10 +188,11 @@
 }
 
 .helmx-tabs-sm .segmented-control-btn {
-  height: calc(var(--control-h-sm) - 4px);
-  padding: 0 9px;
+  height: calc(var(--control-h-sm) - 6px);
+  padding: 0 8px;
+  gap: 4px;
   font-size: var(--control-font-sm);
-  border-radius: 3.5px;
+  border-radius: 3px;
 }
 
 .helmx-tabs-md .segmented-control {
@@ -197,10 +200,11 @@
 }
 
 .helmx-tabs-md .segmented-control-btn {
-  height: calc(var(--control-h-md) - 4px);
-  padding: 0 12px;
+  height: calc(var(--control-h-md) - 6px);
+  padding: 0 10px;
+  gap: 4px;
   font-size: var(--control-font-md);
-  border-radius: var(--control-radius-sm);
+  border-radius: 4.5px;
 }
 
 /* 分类胶囊原语（Tabs variant="pills"）与轻量计数（TabCount） */
@@ -226,13 +230,14 @@
 .tabs-pill {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: 4px;
   height: var(--control-h-md);
-  padding: 0 11px;
+  padding: 0 10px;
   border-radius: var(--radius-pill);
   border: 1px solid transparent;
   background: transparent;
   font-size: var(--control-font-md);
+  line-height: 1;
   color: var(--fg-muted);
   cursor: pointer;
   white-space: nowrap;
@@ -271,13 +276,13 @@
 
 .helmx-tabs-sm .tabs-pill {
   height: var(--control-h-sm);
-  padding: 0 9px;
+  padding: 0 8px;
   font-size: var(--control-font-sm);
 }
 
 .helmx-tabs-md .tabs-pill {
   height: var(--control-h-md);
-  padding: 0 11px;
+  padding: 0 10px;
   font-size: var(--control-font-md);
 }
 
@@ -288,12 +293,4 @@
   color: var(--fg-muted);
   opacity: 0.85;
   line-height: 1;
-}
-
-@media (pointer: coarse) {
-  .segmented-control-btn {
-    min-height: 32px;
-    padding-left: 10px;
-    padding-right: 10px;
-  }
 }
